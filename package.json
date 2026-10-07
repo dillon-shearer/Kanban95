@@ -1,0 +1,12 @@
+{
+  "name": "kanban95",
+  "private": true,
+  "version": "0.0.0",
+  "engines": { "node": ">=24" },
+  "workspaces": ["daemon"],
+  "scripts": {
+    "build": "npm run build -w daemon",
+    "test": "npm test -w daemon",
+    "dev": "npm run build && cargo run --manifest-path shell/Cargo.toml"
+  }
+}

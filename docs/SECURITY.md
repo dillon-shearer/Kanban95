@@ -1,0 +1,42 @@
+# Security
+
+Living document. Update it in the same change that moves a boundary described here.
+
+## What the board holds, and does not
+
+- **No provider API keys.** Claude Code and Codex CLI authenticate themselves in their own config. The board never asks for, reads, or stores a provider key, and never reads a `.env`.
+- **Its own grant tokens, hashed.** The only secrets the board creates are per-session bearer tokens. The database stores a SHA-256 of each; the raw token exists in memory at mint time and in the CLI process it is handed to (phase 4), nowhere else. It must never appear in logs, audit rows, or REST responses.
+- **Everything else is plain project data** (tickets, notes, brain, runs, audit) in `<repo>/.kanban95/board.db`, gitignored, never uploaded.
+
+## Grants
+
+`daemon/src/grants.ts`.
+
+- `mint({ ticket, role, ttlMs })` creates a row and returns `{ id, token }` once. `token` is 32 random bytes, base64url.
+- `verify(token)` hashes and looks up the row. Unknown, expired, or revoked all return `null`; the caller cannot tell which, and neither can a probing client.
+- `revoke(id)` stamps `revoked_at`. Every later `verify` fails. (Killing the agent's pty on revoke is wired in phase 4; today revoke only invalidates the token.)
+- Roles: `planner` (no ticket), `worker` and `tester` (bound to one ticket). The database `CHECK` enforces the pairing. Role scopes per tool are enforced by the MCP layer (phase 2).
+- Expiry is set at mint from a TTL. Grants also die with their ticket (`ON DELETE CASCADE`).
+
+## Audit
+
+Every REST mutation and (from phase 2) every MCP call writes one `audit` row: grant id (null for the operator), ticket id, tool, a 200-character JSON summary of the arguments, and `ok | denied | error`. Failed attempts are audited too. Audit is readable per ticket at `GET /api/tickets/:id/audit`.
+
+## Network
+
+- The daemon binds `127.0.0.1` on a kernel-chosen port. `validateConfig` throws on any other host; there is no flag to widen it.
+- Every request must carry `Host: 127.0.0.1:<port>`; a request with an `Origin` header must carry `Origin: http://127.0.0.1:<port>`. Anything else is `403` before routing. This blocks DNS-rebinding and cross-site requests from other pages running on the machine, including other localhost apps. The shell's webview is loaded from that exact origin, so it always passes.
+- Responses carry `Content-Security-Policy: default-src 'self'; img-src 'self' data:` and `X-Content-Type-Options: nosniff`.
+- REST (`/api/*`) is operator-facing and unauthenticated beyond the origin check: anything that can make a same-origin request already sits inside the webview. MCP (`/mcp`, phase 2) requires a bearer grant.
+- Request bodies over 1 MiB are refused.
+
+## Input
+
+- REST writes accept a whitelist of fields with type checks; values are then validated by the schema's `CHECK` and foreign-key constraints, so a bad status, effort, or dependency is refused by SQLite itself and surfaced as `400`.
+- Brain search quotes every term before handing it to FTS5, so query syntax cannot be injected.
+- Static file serving refuses any path that resolves outside `ui/` and any extension not in the MIME allowlist.
+
+## Threats this does not address yet
+
+- A hostile process on the same machine with the same user can read `board.db` and the agent's MCP config. Same-user isolation is out of scope; the worktree is the blast radius for agent actions, not for local malware.
+- Filesystem scoping of MCP tools to the ticket's worktree arrives with the tools (phase 2 and 4).

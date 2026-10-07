@@ -1,0 +1,8 @@
+node_modules/
+daemon/dist/
+.kanban95/board.db
+.kanban95/sessions/
+.worktrees/
+shell/target/
+shell/gen/
+.remember/
