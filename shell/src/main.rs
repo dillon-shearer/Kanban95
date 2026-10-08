@@ -5,8 +5,11 @@
 use std::io::{BufRead, BufReader};
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU16, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
-use tauri::{Manager, RunEvent, WebviewUrl, WebviewWindowBuilder};
+use tauri::webview::{PermissionKind, PermissionResponse};
+use tauri::{Manager, RunEvent, Runtime, Url, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 
 const NODE_DOWNLOAD: &str = "https://nodejs.org/en/download";
 
@@ -29,15 +32,24 @@ fn check_node() -> Result<(), String> {
     node_problem(version.as_deref()).map_or(Ok(()), Err)
 }
 
+/// 32 random bytes from the OS, hex: the shell-to-daemon secret for this run (docs/SECURITY.md).
+fn mint_secret() -> String {
+    let mut b = [0u8; 32];
+    getrandom::fill(&mut b).expect("OS random source");
+    b.iter().map(|x| format!("{x:02x}")).collect()
+}
+
 /// Starts `node daemon/dist/server.js` and returns the child plus the port from its first stdout line.
 /// The child's stdin stays piped and open for as long as this process lives: the daemon exits on stdin EOF.
-fn spawn_daemon() -> Result<(Child, u16), String> {
+/// The secret goes in the child's environment, never on its command line, which other processes can read.
+fn spawn_daemon(secret: &str) -> Result<(Child, u16), String> {
     // ponytail: dev mode runs `node` from PATH against the built daemon. Bundling Node as a sidecar is still open.
     let script = concat!(env!("CARGO_MANIFEST_DIR"), "/../daemon/dist/server.js");
     // The shell's first argument, if any, is the repo the board works on; the daemon defaults to the cwd.
     let mut child = Command::new("node")
         .arg(script)
         .args(std::env::args().nth(1))
+        .env("KANBAN95_SECRET", secret)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .spawn()
@@ -120,33 +132,60 @@ fn kill_children_with_us() {
 #[cfg(not(windows))]
 fn kill_children_with_us() {}
 
-fn url(port: u16) -> tauri::Url {
-    format!("http://127.0.0.1:{port}/").parse().expect("daemon url")
+/// The daemon swaps `?k95=` for an HttpOnly cookie and redirects to `/`, so the page never holds the secret.
+fn url(port: u16, secret: &str) -> Url {
+    format!("http://127.0.0.1:{port}/?k95={secret}").parse().expect("daemon url")
+}
+
+/// Whether `to` is on the daemon's origin, `http://127.0.0.1:<port>`.
+fn on_daemon(to: &Url, port: u16) -> bool {
+    to.scheme() == "http" && to.host_str() == Some("127.0.0.1") && to.port() == Some(port)
+}
+
+/// The board's only window, locked to the daemon's origin. It holds no Tauri capability (there is no `capabilities/`
+/// dir), so every IPC command is refused for it: the UI talks to the daemon over HTTP and never calls Tauri.
+fn window<R: Runtime, M: Manager<R>>(app: &M, url: Url, live: Arc<AtomicU16>) -> tauri::Result<WebviewWindow<R>> {
+    WebviewWindowBuilder::new(app, "main", WebviewUrl::External(url))
+        .title("Kanban95")
+        .inner_size(1280.0, 720.0)
+        // Any top-level navigation off the live daemon's origin (`http://127.0.0.1:<live port>`) is cancelled. New
+        // windows are already refused by wry when no handler is set, and the CSP keeps frames and fetches on the origin.
+        .on_navigation(move |to| on_daemon(to, live.load(Ordering::SeqCst)))
+        // Navigation is pinned to the daemon's origin, so every request here comes from it. Answering in code
+        // means no prompt, though the random port gives a new origin each start. Everything but the mic is denied.
+        .on_permission_request(|_, kind| match kind {
+            PermissionKind::Microphone => PermissionResponse::Allow,
+            _ => PermissionResponse::Deny,
+        })
+        .build()
 }
 
 fn main() {
     kill_children_with_us();
-    let (child, port) = match check_node().and_then(|_| spawn_daemon()) {
+    let secret = mint_secret();
+    let (child, port) = match check_node().and_then(|_| spawn_daemon(&secret)) {
         Ok(started) => started,
         Err(e) => {
             error_dialog(&e);
             std::process::exit(1);
         }
     };
+    // The port the window may be on. A restarted daemon has a new one, and the navigation lock follows it.
+    let live = Arc::new(AtomicU16::new(port));
 
     tauri::Builder::default()
         .manage(Daemon(Mutex::new(Some(child))))
         .setup(move |app| {
-            WebviewWindowBuilder::new(app, "main", WebviewUrl::External(url(port)))
-                .title("Kanban95")
-                .inner_size(1280.0, 720.0)
-                .build()?;
+            window(app, url(port, &secret), live.clone())?;
             let app = app.handle().clone();
             std::thread::spawn(move || {
                 let restart = || {
-                    let (child, port) = spawn_daemon()?;
+                    // A secret dies with its daemon (docs/SECURITY.md), so the new one gets its own.
+                    let secret = mint_secret();
+                    let (child, port) = spawn_daemon(&secret)?;
+                    live.store(port, Ordering::SeqCst); // before navigating, or the lock cancels the move
                     if let Some(w) = app.get_webview_window("main") {
-                        let _ = w.navigate(url(port));
+                        let _ = w.navigate(url(port, &secret));
                     }
                     Ok(child)
                 };
@@ -173,6 +212,8 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tauri::test::{get_ipc_response, mock_builder, INVOKE_KEY};
+    use tauri::webview::InvokeRequest;
 
     /// A stand-in daemon that crashes at once.
     fn crashing() -> Child {
@@ -216,5 +257,48 @@ mod tests {
         assert!(old.contains("v23.11.0") && old.contains(NODE_DOWNLOAD), "{old}");
         assert!(node_problem(Some("garbage")).unwrap().contains(NODE_DOWNLOAD));
         assert!(node_problem(None).unwrap().contains("not found"));
+    }
+
+
+    #[test]
+    fn the_navigation_lock_follows_a_restarted_daemon_to_its_new_port() {
+        let live = AtomicU16::new(41234);
+        let at = |u: &str| on_daemon(&u.parse().unwrap(), live.load(Ordering::SeqCst));
+        assert!(at("http://127.0.0.1:41234/?k95=x"));
+        assert!(!at("http://127.0.0.1:41235/") && !at("http://localhost:41234/") && !at("https://127.0.0.1:41234/"));
+        live.store(41235, Ordering::SeqCst); // what the restart does before it navigates
+        assert!(at("http://127.0.0.1:41235/?k95=y"));
+        assert!(!at("http://127.0.0.1:41234/"));
+    }
+
+    /// The UI calls no Tauri command, so none may answer it: core plugin commands and unknown names alike.
+    #[test]
+    fn webview_cannot_call_any_tauri_command() {
+        let app = mock_builder().build(tauri::generate_context!()).unwrap();
+        let origin: tauri::Url = "http://127.0.0.1:41234/".parse().unwrap();
+        let w = window(&app, origin.clone(), Arc::new(AtomicU16::new(41234))).unwrap();
+        for cmd in [
+            "plugin:app|version",
+            "plugin:window|close",
+            "plugin:webview|create_webview_window",
+            "plugin:event|emit",
+            "plugin:path|resolve_directory",
+            "spawn_daemon",
+        ] {
+            let err = get_ipc_response(
+                &w,
+                InvokeRequest {
+                    cmd: cmd.into(),
+                    callback: tauri::ipc::CallbackFn(0),
+                    error: tauri::ipc::CallbackFn(1),
+                    url: origin.clone(),
+                    body: Default::default(),
+                    headers: Default::default(),
+                    invoke_key: INVOKE_KEY.into(),
+                },
+            )
+            .expect_err(cmd);
+            assert!(err.to_string().contains("not allowed"), "{cmd}: {err}");
+        }
     }
 }

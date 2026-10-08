@@ -148,7 +148,8 @@ function spawnSession(d: Daemon, o: RunSettings, r: { runId: number | null; tick
     }
     const [cmd, ...args] = buildArgv({ ...o, role: r.role, repo: resolve(repo), promptPath, mcpConfigPath, mcpUrl, cwd: r.cwd });
     if (o.cli === 'claude') preTrustClaude(db, r.ticketId, repo);
-    const env = childEnv(o.cli === 'codex' ? { [TOKEN_ENV]: grant.token } : {});
+    // KANBAN95_AGENT makes `npm run dev` and Kanban95.cmd refuse to start: an agent must not open the board on the operator's desktop.
+    const env = childEnv({ KANBAN95_AGENT: '1', ...(o.cli === 'codex' ? { [TOKEN_ENV]: grant.token } : {}) });
     const { pty, scrollback } = spawnPty(o.path || cmd, args, { cwd: r.cwd, env });
 
     let finished!: () => void;

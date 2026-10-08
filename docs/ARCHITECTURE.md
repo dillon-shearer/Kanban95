@@ -24,26 +24,28 @@ Living document. Update it in the same change that alters the shape described he
 ## Port handshake
 
 1. Before spawning, the shell runs `node --version`. Missing or older than 24: a native error dialog names the problem and the Node download link, and the shell exits with code 1.
-2. Shell spawns the daemon with `stdin` and `stdout` piped.
+2. Shell mints a random secret and spawns the daemon with it in `KANBAN95_SECRET` (environment, never argv) and `stdin` and `stdout` piped.
 3. Daemon binds `127.0.0.1:0` (kernel-assigned port), then prints exactly one line to stdout: `KANBAN95 port=<n>`.
-4. Shell reads that line, builds `http://127.0.0.1:<n>/` and creates the main webview window on it. Any other first line is a handshake error; the shell kills the child, shows an error dialog and exits.
+4. Shell reads that line, builds `http://127.0.0.1:<n>/?k95=<secret>` and creates the main webview window on it; the daemon trades that for an HttpOnly cookie and redirects to `/`. Any other first line is a handshake error; the shell kills the child, shows an error dialog and exits.
 5. Shell keeps draining daemon stdout to its own stderr prefixed `[daemon]` so the pipe can never fill and block the daemon.
 
 ## Daemon lifetime
 
 - **Job object**: the shell's first act is to put itself in a Windows job with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`. The daemon and WebView2's `msedgewebview2.exe` processes inherit it, and only the shell holds the job handle, so when the shell process ends for any reason (window close, crash, `taskkill /f`, logoff, shutdown) Windows kills every process in the tree.
-- **Restart once**: a supervisor thread polls the daemon every 250 ms. The first unexpected exit starts a new daemon and navigates the window to its new port (a new origin, so the UI's `localStorage`, window positions included, starts empty). A second exit, or a failed restart, shows a native error dialog and closes the board. No loop. `cargo test --manifest-path shell/Cargo.toml` covers this with stand-in daemons that crash at once.
+- **Restart once**: a supervisor thread polls the daemon every 250 ms. The first unexpected exit starts a new daemon with a fresh secret, moves the navigation lock to its new port and navigates the window to `/?k95=<secret>` there (a new origin, so the UI's `localStorage`, window positions included, starts empty). A second exit, or a failed restart, shows a native error dialog and closes the board. No loop. `cargo test --manifest-path shell/Cargo.toml` covers this with stand-in daemons that crash at once.
 - **Kill on exit**: on Tauri's `RunEvent::Exit` the shell takes the child out of the supervisor's slot (which stops the supervisor) and calls `kill()` then `wait()` on it.
 - **Stdin EOF**: the daemon holds `process.stdin` open and exits with code 0 when it ends. The shell never writes to it; the pipe simply closes when the shell process dies, including on a crash. An orphaned daemon is therefore not possible. Consequence: if you start the daemon by hand with stdin closed (`< /dev/null`, `stdio: 'ignore'`), it exits immediately after printing the port. That is intended.
 
 ## Network boundary
 
 - `validateConfig` rejects any bind host other than `127.0.0.1`. There is no flag, env var or config key that can widen it; a different host is a code change, and the tests fail on it.
-- Every daemon response carries `Content-Security-Policy: default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data:` and `X-Content-Type-Options: nosniff`. `data:` images are 98.css's inline SVG icons; `'wasm-unsafe-eval'` lets the speech model's WebAssembly compile (it allows no JavaScript eval); inline styles are for xterm.js, which writes its theme into a `<style>` element. Inline and remote scripts stay blocked, and `connect-src` falls back to `'self'`, so the page cannot reach any other host. The window is loaded from the daemon's origin, so this header is the CSP that governs the UI; Tauri's own `app.security.csp` only applies to pages Tauri serves itself, which this app has none of.
+- Every daemon response carries `Content-Security-Policy: default-src 'self' http://127.0.0.1:<port> ws://127.0.0.1:<port>; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; frame-ancestors 'none'` and `X-Content-Type-Options: nosniff`. `data:` images are 98.css's inline SVG icons; `'wasm-unsafe-eval'` lets the speech model's WebAssembly compile (it allows no JavaScript eval); inline styles are for xterm.js, which writes its theme into a `<style>` element. Inline and remote scripts stay blocked, and `connect-src` falls back to the daemon's own HTTP and websocket origin, so the page cannot reach any other host; `frame-ancestors 'none'` keeps other pages from framing it. The window is loaded from the daemon's origin, so this header is the CSP that governs the UI; Tauri's own `app.security.csp` only applies to pages Tauri serves itself, which this app has none of.
 - Static serving only answers `GET`/`HEAD`, only for files inside `ui/` with a known extension. Path traversal (`..`, encoded dots, backslashes) resolves outside `ui/` and is refused.
-- The webview is an "external" URL to Tauri, so it has no IPC access and no capabilities. The UI talks to the daemon over plain HTTP, the `/events` websocket and a websocket per terminal. Tauri IPC is not used.
+- The webview is an "external" URL to Tauri and the shell declares no capabilities, so every Tauri command is refused for it (tested in `shell/`). The UI talks to the daemon over plain HTTP, the `/events` websocket and a websocket per terminal. The shell cancels navigation off the daemon's origin and answers permission requests itself: microphone yes, everything else no. See `SECURITY.md` → Webview.
 
 ## REST (operator UI only, same-origin)
+
+Every `/api/*` request needs the `k95` cookie holding the shell secret, or gets `401`; so do the `/events` and `/pty` websockets (`docs/SECURITY.md` → Shell secret).
 
 | method | path | notes |
 |---|---|---|
@@ -121,6 +123,7 @@ Any failure after the run row is written revokes the grant and removes the sessi
 
 `ui/`, plain ES modules, no build step. How to use it: `docs/OPERATOR.md`.
 
+- `icons/`: the desktop icons, self-drawn 32x32 SVGs served from the daemon's origin (`img-src 'self'`). The wallpaper is CSS gradients in `app.css`, no image.
 - `wm.js`: the window manager. Windows are 98.css `.window`s positioned on `#desktop`, dragged by the title bar (pointer events), resized by CSS (`resize: both`), minimized to a taskbar button, clamped so a title bar is always reachable. Windows opened with `persist` (Board, Brain, Inbox, Settings) keep position and size in `localStorage`. Also modal dialogs (`<dialog>`) and pop-up menus.
 - `app.js`: the data layer and every window. It loads tickets, sessions, the Inbox and both settings files once, then listens on `/events`: a `{ticket}` frame refetches that ticket, then the live sessions and the Inbox, and asks each open window to redraw; each window decides whether the event concerns it (a ticket window only for its own ticket; form tabs never, so typing is not lost). A new session opens its terminal window automatically, behind the focused window; a terminal whose run ended with a reported outcome (`submit`, `pass`, `fail`) closes itself after a moment, one that was revoked or died stays open, marked ended.
 - Board drag uses pointer events, not HTML5 drag and drop. Only operator moves are accepted (Backlog → In Progress; anything → Backlog, which also clears flags and retries and stops a live agent); an illegal drop snaps back and the status bar names the allowed columns.

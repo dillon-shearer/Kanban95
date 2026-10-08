@@ -1,14 +1,26 @@
 /* Kanban95 desktop on top of 98.css. Compact; nothing here is decoration. */
 html, body { height: 100%; margin: 0; overflow: hidden; }
-body { background: #008080; font-family: "Pixelated MS Sans Serif", Tahoma, sans-serif; font-size: 11px; }
+/* Wallpaper: the Win95 teal under a faint blueprint grid that darkens toward the taskbar. Windows and cards are opaque. */
+body { background: linear-gradient(transparent 55%, rgb(0 0 0 / 0.22)),
+  repeating-linear-gradient(0deg, rgb(0 0 0 / 0.07) 0 1px, transparent 1px 16px),
+  repeating-linear-gradient(90deg, rgb(0 0 0 / 0.07) 0 1px, transparent 1px 16px), #008080; font-family: "Pixelated MS Sans Serif", Tahoma, sans-serif; font-size: 11px; }
 [hidden] { display: none !important; }
 
 /* Desktop and windows */
 #desktop { position: fixed; inset: 0 0 28px 0; overflow: hidden; }
-.k95-win { position: absolute; display: flex; flex-direction: column; min-width: 220px; min-height: 120px; resize: both; overflow: hidden; }
+.k95-win { position: absolute; box-sizing: border-box; display: flex; flex-direction: column; min-width: 220px; min-height: 120px; resize: both; overflow: hidden; }
 .k95-win > .window-body { flex: 1; min-height: 0; overflow: auto; margin: 4px; display: flex; flex-direction: column; gap: 4px; }
 .k95-win .title-bar { touch-action: none; user-select: none; flex: none; }
 .k95-win.ended .title-bar { background: linear-gradient(90deg, #808080, #b5b5b5); }
+
+/* Desktop icons: a column down the left edge, below every window (windows start at z-index 1) */
+#icons { position: absolute; z-index: 0; left: 4px; top: 4px; display: flex; flex-direction: column; gap: 6px; }
+.k95-icon { width: 72px; display: flex; flex-direction: column; align-items: center; gap: 3px; color: #fff; text-align: center;
+  cursor: default; user-select: none; outline: none; }
+.k95-icon img { pointer-events: none; }
+.k95-icon span { padding: 1px 2px; border: 1px dotted transparent; }
+.k95-icon:focus img { filter: brightness(0.55) sepia(1) hue-rotate(180deg) saturate(4); }
+.k95-icon:focus span { background: navy; border-color: #fff; }
 
 /* Taskbar */
 #taskbar { position: fixed; left: 0; right: 0; bottom: 0; height: 28px; display: flex; align-items: center; gap: 3px; padding: 0 2px;
@@ -17,7 +29,7 @@ body { background: #008080; font-family: "Pixelated MS Sans Serif", Tahoma, sans
 #tasks { flex: 1; display: flex; gap: 3px; overflow: hidden; }
 #tasks .task { min-width: 0; max-width: 160px; flex: 0 1 160px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; text-align: left; }
 #tasks .task.active { box-shadow: inset -1px -1px #fff, inset 1px 1px #0a0a0a, inset -2px -2px #dfdfdf, inset 2px 2px grey; font-weight: bold; }
-#tray { display: flex; align-items: center; gap: 8px; height: 20px; padding: 0 6px; margin: 0; }
+#tray { flex: none; display: flex; align-items: center; gap: 8px; height: 23px; box-sizing: border-box; padding: 0 4px; margin: 0; font-size: 11px; white-space: nowrap; }
 .tray-button { min-width: 0; min-height: 0; padding: 0 4px; height: 18px; }
 .tray-button.flag { color: #a00; font-weight: bold; }
 

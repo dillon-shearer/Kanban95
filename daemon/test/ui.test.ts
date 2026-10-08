@@ -83,6 +83,9 @@ beforeAll(async () => {
   db = srv.db;
   base = `http://127.0.0.1:${srv.port}/`;
   page = await browser();
+  // As the shell does: open on ?k95=<secret>, which the daemon trades for a cookie and redirects to /.
+  await page.send('Page.navigate', { url: `${base}?k95=${srv.secret}` });
+  await until(() => page.evaluate(`document.readyState === 'complete' && location.href === ${JSON.stringify(base)}`), 'the redirect to /');
 }, 30_000);
 afterAll(async () => {
   await page?.close();
@@ -112,6 +115,23 @@ describe('ui', { timeout: 60_000 }, () => {
     db.prepare("UPDATE tickets SET status = 'done', merged_at = 'x' WHERE id = ?").run(id); // out of the way of the next tests
   });
 
+  it('keeps column scroll and the focused card across an event redraw', async () => {
+    const ids = Array.from({ length: 30 }, (_, i) => ticket(`Long ${i}`));
+    const last = ids.at(-1)!;
+    try {
+      await page.goto(base);
+      await until(() => column(last), 'the cards');
+      const top = await page.evaluate<number>(`(() => { const c = document.querySelector('[data-status="backlog"] .cards'); c.scrollTop = c.scrollHeight; document.querySelector('.card[data-id="${last}"]').focus(); return c.scrollTop; })()`);
+      expect(top).toBeGreaterThan(0);
+      await page.evaluate(`fetch('/api/tickets/${ids[0]}', { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ title: 'Renamed' }) })`);
+      await until(() => page.evaluate<boolean>(`document.querySelector('.card[data-id="${ids[0]}"]').textContent.includes('Renamed')`), 'the redraw');
+      expect(await page.evaluate<number>(`document.querySelector('[data-status="backlog"] .cards').scrollTop`)).toBe(top);
+      expect(await page.evaluate<string>(`document.activeElement.dataset.id`)).toBe(String(last));
+    } finally {
+      for (const id of ids) db.prepare("UPDATE tickets SET status = 'done', merged_at = 'x' WHERE id = ?").run(id);
+    }
+  });
+
   it('names the reason in the status bar when a launch is refused, not "launched"', async () => {
     const id = ticket('Refused');
     await page.goto(base);
@@ -133,7 +153,7 @@ describe('ui', { timeout: 60_000 }, () => {
     const id = ticket('Ask me', { model: 'ask' });
     await page.goto(base);
     await until(() => column(id), 'the card');
-    expect((await fetch(`${base}api/tickets/${id}/launch`, { method: 'POST' })).status).toBe(200);
+    expect((await fetch(`${base}api/tickets/${id}/launch`, { method: 'POST', headers: { cookie: `k95=${srv.secret}` } })).status).toBe(200);
     const flagged = `.card[data-id="${id}"] .badge.flag`;
     await until(() => page.evaluate(`!!document.querySelector('${flagged}')`), 'the needs human badge');
 
@@ -149,6 +169,24 @@ describe('ui', { timeout: 60_000 }, () => {
     expect(git('show', 'HEAD:answer.txt')).toBe('Navy blue');
   });
 
+  it('pins a compact tray right after Start on one taskbar row', async () => {
+    await page.goto(base);
+    await until(() => page.evaluate(`!!document.querySelector('#clock').textContent`), 'the clock');
+    const m = await page.evaluate<Record<string, number>>(`(() => {
+      const r = (s) => document.querySelector(s).getBoundingClientRect(), bar = document.getElementById('taskbar');
+      const start = r('#start'), tray = r('#tray'), tasks = r('#tasks');
+      return { gap: tray.left - start.right, trayH: tray.height, startH: start.height,
+        trayW: tray.width, tasksAfter: tasks.left - tray.right, overflow: bar.scrollWidth - bar.clientWidth,
+        font: parseFloat(getComputedStyle(document.getElementById('agents')).fontSize) };
+    })()`);
+    expect(m.gap).toBeLessThanOrEqual(4);
+    expect(m.tasksAfter).toBeGreaterThanOrEqual(0);
+    expect(m.trayH).toBeLessThanOrEqual(m.startH);
+    expect(m.trayW).toBeLessThan(300); // 98.css's .status-bar-field flex-grow stretched it across the bar
+    expect(m.font).toBe(11);
+    expect(m.overflow).toBe(0);
+  });
+
   it('keeps window positions across a reload', async () => {
     await page.goto(base);
     await until(() => page.evaluate(`!!document.querySelector('[data-win="board"]')`), 'the board');
@@ -161,6 +199,47 @@ describe('ui', { timeout: 60_000 }, () => {
     await page.goto(base + '?reloaded');
     await until(() => page.evaluate(`!!document.querySelector('[data-win="board"]')`), 'the board after reload');
     expect(await pos()).toEqual(moved);
+  });
+
+  it('opens Settings from a double-clicked desktop icon and Inbox from Enter; icons stay under windows', async () => {
+    await page.goto(base);
+    await until(() => page.evaluate(`!!document.querySelector('[data-win="board"]')`), 'the board');
+    expect(await page.evaluate(`[...document.querySelectorAll('#icons .k95-icon')].map((e) => e.textContent)`))
+      .toEqual(['Board', 'Inbox', 'Brain', 'Settings', 'New ticket', 'New brainstorm']);
+    await page.evaluate(`document.querySelector('[data-win="board"] [aria-label="Close"]').click()`); // the board may sit over the icons
+    // Every image loaded from our origin: a CSP block or a missing file leaves naturalWidth at 0.
+    await until(() => page.evaluate(`[...document.querySelectorAll('#icons img')].every((i) => i.complete && i.naturalWidth === 32)`), 'the icon images');
+
+    const { x, y } = await page.center('[data-icon="Settings"]');
+    expect(await page.evaluate(`document.elementFromPoint(${x}, ${y}).closest('.k95-icon')?.dataset.icon ?? null`)).toBe('Settings');
+    await page.send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', buttons: 1, clickCount: 1 });
+    await page.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', buttons: 0, clickCount: 1 });
+    expect(await page.evaluate(`document.activeElement.dataset.icon`)).toBe('Settings');
+    expect(await page.evaluate(`getComputedStyle(document.activeElement.querySelector('span')).backgroundColor`)).toBe('rgb(0, 0, 128)');
+    expect(await page.evaluate(`!!document.querySelector('[data-win="settings"]')`)).toBe(false); // one click only selects
+    await page.send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', buttons: 1, clickCount: 2 });
+    await page.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', buttons: 0, clickCount: 2 });
+    await until(() => page.evaluate(`!!document.querySelector('[data-win="settings"]')`), 'the Settings window');
+
+    await page.evaluate(`document.querySelector('[data-icon="Inbox"]').focus()`);
+    await page.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 });
+    await page.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 });
+    await until(() => page.evaluate(`!!document.querySelector('[data-win="inbox"]')`), 'the Inbox window');
+
+    // A window dragged over the icons covers them.
+    await page.evaluate(`Object.assign(document.querySelector('[data-win="settings"]').style, { left: '0px', top: '0px' })`);
+    const s = await page.center('[data-icon="Board"]');
+    expect(await page.evaluate(`!!document.elementFromPoint(${s.x}, ${s.y}).closest('[data-win]')`)).toBe(true);
+  });
+
+  it('keeps a window the same size while it is dragged', async () => {
+    await page.goto(base + '?resize');
+    await until(() => page.evaluate(`!!document.querySelector('[data-win="board"]')`), 'the board');
+    const size = () => page.evaluate<[number, number]>(`(() => { const e = document.querySelector('[data-win="board"]'); return [e.offsetWidth, e.offsetHeight]; })()`);
+    const before = await size();
+    const bar = await page.center('[data-win="board"] .title-bar-text');
+    await page.drag(bar, { x: bar.x + 200, y: bar.y });
+    expect(await size()).toEqual(before);
   });
 
   it('shows the download dialog on the first mic press and fetches nothing until OK', async () => {
@@ -182,7 +261,7 @@ describe('ui', { timeout: 60_000 }, () => {
   it('transcribes the bundled WAV with the local model', { timeout: 600_000 }, async () => {
     if (existsSync(CACHE)) cpSync(CACHE, modelDir(MANIFEST), { recursive: true });
     // The daemon verifies every file's SHA-256, cached or not; a missing or tampered file is fetched again.
-    const r = await fetch(`${base}api/voice/download`, { method: 'POST' });
+    const r = await fetch(`${base}api/voice/download`, { method: 'POST', headers: { cookie: `k95=${srv.secret}` } });
     expect(r.status, await r.clone().text()).toBe(200);
     expect(status().downloaded).toBe(true);
     if (!existsSync(CACHE)) cpSync(modelDir(MANIFEST), CACHE, { recursive: true });

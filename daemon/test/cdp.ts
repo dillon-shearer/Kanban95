@@ -30,8 +30,11 @@ export async function browser(args: string[] = []) {
   const exe = CANDIDATES.find((p) => p && existsSync(p));
   if (!exe) throw new Error('the UI tests need Edge or Chrome; set KANBAN95_BROWSER to its executable');
   const profile = mkdtempSync(join(tmpdir(), 'k95-browser-'));
-  const proc = spawn(exe, ['--headless=new', '--remote-debugging-port=0', `--user-data-dir=${profile}`, '--no-first-run',
-    '--no-default-browser-check', '--window-size=1280,720', ...args, 'about:blank'], { stdio: 'ignore' });
+  const argv = ['--headless=new', '--remote-debugging-port=0', `--user-data-dir=${profile}`, '--no-first-run',
+    '--no-default-browser-check', '--window-size=1280,720', ...args, 'about:blank'];
+  // A headed browser opens a window on the operator's desktop while they work; never allow one.
+  if (!argv.some((a) => a.startsWith('--headless'))) throw new Error('cdp.ts must start the browser with --headless');
+  const proc = spawn(exe, argv, { stdio: 'ignore' });
   const portFile = join(profile, 'DevToolsActivePort');
   const port = await until(() => existsSync(portFile) && readFileSync(portFile, 'utf8').split('\n')[0], 'the DevTools port');
   const targets = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json() as { type: string; webSocketDebuggerUrl: string }[];

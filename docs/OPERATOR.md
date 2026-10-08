@@ -32,7 +32,7 @@ The ticket moves on its own: In Progress → Testing → Done. A failed test sen
 
 ### 4. When the board needs you
 
-You hear the **chord** and a card turns red when an agent asks a question, exits without reporting, hits the retry cap, or its merge conflicts. The Board's status bar says why at that moment (`#n needs you: …`, the card's newest failure note or question; hover it for the whole text). A launch the board refuses outright (no models saved, uncommitted changes on the base branch) starts no agent and opens no terminal, so that line is where its reason shows. Questions land in the **Inbox** (the "Inbox n" button on the taskbar). Type the answer and press **Answer**; it is typed into the agent's terminal and the card's badge clears.
+You hear the **chord** and a card turns red when an agent asks a question, exits without reporting, hits the retry cap, or its merge conflicts. The Board's status bar says why at that moment (`#n needs you: …`, the card's newest failure note or question; hover it for the whole text). A launch the board refuses outright (no models saved, uncommitted changes on the base branch) starts no agent and opens no terminal, so that line is where its reason shows. Questions land in the **Inbox** (the "Inbox n" button in the taskbar tray, just right of Start). Type the answer and press **Answer**; it is typed into the agent's terminal and the card's badge clears.
 
 ![Inbox](img/inbox.png)
 
@@ -54,6 +54,8 @@ A merged ticket's worktree and branch are removed by the board. Every ten merged
 | Inbox | taskbar "Inbox n", Start → Inbox | open questions from agents |
 | Brain | Start → Brain | search what agents learned, add a note yourself |
 | Settings | Start → Settings | Models, CLI paths and trusted folders, Grants, Voice, sounds |
+
+The desktop has an icon for Board, Inbox, Brain, Settings, New ticket and New brainstorm down its left edge: click selects, double-click or Enter does what the Start menu entry does. Icons sit under every window.
 
 Windows can be dragged by the title bar, resized from the corner and minimized to the taskbar. Board, Brain, Inbox and Settings remember where you left them.
 
@@ -92,7 +94,7 @@ Transcription runs inside the board's window with a local Whisper model. Audio n
 
 ![Download dialog](img/voice-download.png)
 
-If the microphone is blocked, the board says how to allow it: Windows Settings → Privacy & security → Microphone, with "Microphone access" and "Let desktop apps access your microphone" on. The window may also ask once per start whether Kanban95 may use the microphone.
+If the microphone is blocked, the board says how to allow it: Windows Settings → Privacy & security → Microphone, with "Microphone access" and "Let desktop apps access your microphone" on. The board itself never asks: the window grants itself the microphone and nothing else.
 
 **Zero-code fallback: Win+H.** Windows' own dictation works in any field of the board, including the terminals, with nothing to set up. It is Windows' feature and its privacy terms, not the board's; the mic button is the board's own path.
 

@@ -36,6 +36,7 @@ Empty values render as `(none)`. Values are inserted literally: a brain note con
 
 **Worker (execute).**
 - Works only inside the current directory, the ticket's worktree.
+- Verify with `npm test` or a script built on `daemon/test/cdp.ts`, never by starting the app (`npm run dev`, `Kanban95.cmd`, `cargo run`) or a visible browser.
 - Records decisions with `add_note` kind `decision`, gotchas for future tickets with `brain_add`.
 - Asks with `ask_operator` instead of guessing, once, with the options it sees.
 - Never commits secrets and never reads a `.env`.

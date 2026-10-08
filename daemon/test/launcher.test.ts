@@ -161,6 +161,7 @@ describe('launch', () => {
     expect(keys).not.toContain('KANBAN95_CANARY');
     expect(keys).toContain('PATH');
     expect(env.KANBAN95_TOKEN).toMatch(/^[\w-]{43}$/); // codex reads its bearer token from here
+    expect(env.KANBAN95_AGENT).toBe('1'); // makes npm run dev and Kanban95.cmd refuse to start
     expect(existsSync(join(s.dir, 'mcp.json'))).toBe(false); // codex gets its MCP server through -c, not a file
   });
 
@@ -168,7 +169,7 @@ describe('launch', () => {
     const s = launch('claude');
     await waitFor(() => s.scrollback().includes('FAKE UP'));
     const t0 = Date.now();
-    const r = await fetch(`http://127.0.0.1:${srv.port}/api/grants/${s.grantId}`, { method: 'DELETE' });
+    const r = await fetch(`http://127.0.0.1:${srv.port}/api/grants/${s.grantId}`, { method: 'DELETE', headers: { cookie: `k95=${srv.secret}` } });
     expect(r.status).toBe(204);
     await s.done;
     expect(Date.now() - t0).toBeLessThan(1000);
@@ -206,18 +207,20 @@ describe('launch', () => {
 });
 
 describe('websocket /pty/<run-id>', () => {
-  const connect = (path: string, origin?: string) => new WebSocket(`ws://127.0.0.1:${srv.port}${path}`, origin ? { origin } : {});
+  const connect = (path: string, origin?: string, secret = srv.secret) =>
+    new WebSocket(`ws://127.0.0.1:${srv.port}${path}`, { ...(origin ? { origin } : {}), headers: { cookie: `k95=${secret}` } });
   const refused = (ws: WebSocket) => new Promise<number | undefined>((ok) => {
     ws.on('unexpected-response', (_req, res) => ok(res.statusCode));
     ws.on('open', () => ok(undefined));
     ws.on('error', () => {});
   });
 
-  it('refuses a missing or foreign origin and an unknown run', async () => {
+  it('refuses a missing or foreign origin, an unknown run and a wrong secret', async () => {
     const s = launch('claude');
     expect(await refused(connect(`/pty/${s.runId}`))).toBe(403);
     expect(await refused(connect(`/pty/${s.runId}`, 'http://evil.test'))).toBe(403);
     expect(await refused(connect('/pty/999', `http://127.0.0.1:${srv.port}`))).toBe(403);
+    expect(await refused(connect(`/pty/${s.runId}`, `http://127.0.0.1:${srv.port}`, 'stale'))).toBe(401);
   });
 
   it('streams scrollback and output out, typed input in, and closes when the pty exits', async () => {
