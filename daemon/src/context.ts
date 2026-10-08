@@ -12,7 +12,7 @@ const BRAIN_CHARS = 4000;
 export const BRAIN_TRUNCATED = '\n[brain truncated; search for more with brain_search]';
 
 interface ContextOpts {
-  /** Test phase only: the worktree and the branch the ticket forked from, for `git diff <base>...HEAD`. */
+  /** The worktree and the branch the ticket forked from: `{{base}}` in every ticket prompt, and `git diff <base>...HEAD` for the test phase. */
   worktree?: string;
   base?: string;
   brainLimit?: number;
@@ -55,7 +55,7 @@ export function buildContext(db: DatabaseSync, ticketId: number | null, role: Ro
     .map(([name, t]) => `- ${name} (${t.access[role]})`)
     .join('\n');
   const preferences = orNone(readPreferences());
-  if (ticketId === null) return { ticket: '(none)', criteria: '(none)', brain: '(none)', notes: '(none)', retry: '0', diff: '', tools, preferences };
+  if (ticketId === null) return { ticket: '(none)', criteria: '(none)', brain: '(none)', notes: '(none)', retry: '0', diff: '', tools, base: '(none)', preferences };
 
   const t = readTicket(db, ticketId);
   let diff = '';
@@ -70,6 +70,7 @@ export function buildContext(db: DatabaseSync, ticketId: number | null, role: Ro
     notes: orNone(failureNotes(db, t.id)),
     retry: String(t.retry),
     diff,
+    base: opts.base ?? '(none)',
     tools,
     preferences,
   };

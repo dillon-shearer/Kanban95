@@ -169,6 +169,29 @@ describe('ui', { timeout: 60_000 }, () => {
     expect(git('show', 'HEAD:answer.txt')).toBe('Navy blue');
   });
 
+  it('lists a failed merge in the Inbox with its note and the buttons that fix it, and counts it in the taskbar', async () => {
+    const id = ticket('Stuck merge', { status: 'done', needs_human: 1 });
+    const body = `merge conflict with main: CONFLICT (add/add) in shared.txt\nTo resolve: in .worktrees/t-${id} run git merge with the base branch, then Retry merge.`;
+    db.prepare("INSERT INTO notes (ticket_id, role, kind, body) VALUES (?, 'tester', 'failure', ?)").run(id, body);
+    try {
+      await page.goto(base);
+      await until(() => column(id), 'the card');
+      const n = (await (await fetch(`${base}api/inbox`, { headers: { cookie: `k95=${srv.secret}` } })).json()).length;
+      expect(await page.evaluate(`document.getElementById('inbox-count').textContent`)).toBe(`Inbox ${n}`);
+      await click('#inbox-count');
+      const box = `.k95-flag[data-ticket="${id}"]`;
+      await until(() => page.evaluate(`!!document.querySelector('${box}')`), 'the failure in the Inbox');
+      expect(await page.evaluate(`document.querySelector('${box} pre').textContent`)).toBe(body);
+      expect(await page.evaluate(`[...document.querySelectorAll('${box} button')].map((b) => b.textContent)`)).toEqual(['Open ticket', 'Retry merge']);
+      await click(`${box} button`);
+      const facts = `[data-win="ticket-${id}"] .k95-facts`;
+      await until(() => page.evaluate(`!!document.querySelector('${facts}')`), 'the ticket window');
+      expect(await page.evaluate(`document.querySelector('${facts}').textContent`)).toContain('needs human (the Inbox says why)');
+    } finally {
+      db.prepare("UPDATE tickets SET needs_human = 0, merged_at = 'x' WHERE id = ?").run(id);
+    }
+  });
+
   it('keeps an ended terminal open while its ticket exists; deleting the ticket closes its terminal and Ticket window', async () => {
     const id = ticket('Delete me');
     await page.goto(base);
@@ -211,11 +234,11 @@ describe('ui', { timeout: 60_000 }, () => {
       await page.evaluate(`document.querySelector('.k95-menu').remove()`);
 
       await click('#inbox-count');
-      const box = `.k95-question[data-ticket="${id}"]`;
+      const box = `.k95-flag[data-ticket="${id}"]`;
       await until(() => page.evaluate(`!!document.querySelector('${box} button')`), 'the failure in the Inbox');
       expect(await page.evaluate(`document.querySelector('${box} pre').textContent`)).toBe('agent exited without reporting');
-      expect(await page.evaluate(`document.querySelector('${box} button').textContent`)).toBe('Resume');
-      await click(`${box} button`);
+      expect(await page.evaluate(`[...document.querySelectorAll('${box} button')].map((b) => b.textContent)`)).toEqual(['Open ticket', 'Resume', 'Reset to Backlog']);
+      await click(`${box} button:nth-child(2)`);
       await until(() => !(db.prepare('SELECT needs_human FROM tickets WHERE id = ?').get(id) as { needs_human: number }).needs_human, 'the flag to clear', 5000);
       expect(db.prepare('SELECT status, retry FROM tickets WHERE id = ?').get(id)).toEqual({ status: 'in_progress', retry: 2 });
       expect((db.prepare("SELECT prompt_rendered FROM runs WHERE ticket_id = ? AND phase = 'execute'").get(id) as { prompt_rendered: string }).prompt_rendered)

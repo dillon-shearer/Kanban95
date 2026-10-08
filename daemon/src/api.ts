@@ -183,11 +183,11 @@ const routes: [method: string, path: RegExp, mutation: string | null, handler: (
     return { status: 200, body: { diff: ticketDiff(board.repo, Number(params[0])) } };
   }],
   // What a flagged ticket waits on: questions an agent asked with ask_operator that have no answer yet, and, when no newer
-  // question is open, the failure that flagged it.
+  // question is open, the failure that flagged it. `merged_at` tells the Inbox whether Retry merge applies.
   ['GET', /^\/api\/inbox$/, null, ({ db }) => ({
     status: 200,
     body: db.prepare(`
-      SELECT n.id, n.ticket_id, n.role, n.kind, n.body, n.created_at, t.title, t.status FROM notes n JOIN tickets t ON t.id = n.ticket_id
+      SELECT n.id, n.ticket_id, n.role, n.kind, n.body, n.created_at, t.title, t.status, t.merged_at FROM notes n JOIN tickets t ON t.id = n.ticket_id
       WHERE t.needs_human = 1 AND (
         (n.kind = 'question' AND NOT EXISTS (SELECT 1 FROM notes a WHERE a.ticket_id = n.ticket_id AND a.kind = 'answer' AND a.id > n.id))
         OR (n.kind = 'failure' AND n.id = (SELECT max(id) FROM notes m WHERE m.ticket_id = n.ticket_id AND m.kind IN ('failure', 'question'))))

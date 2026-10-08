@@ -16,7 +16,7 @@ export const TEMPLATES = {
 export type TemplateName = keyof typeof TEMPLATES;
 
 /** The only variables a template may use. Anything else is refused before a single value is substituted. */
-export const VARS = ['ticket', 'criteria', 'brain', 'notes', 'retry', 'diff', 'tools', 'preferences'] as const;
+export const VARS = ['ticket', 'criteria', 'brain', 'notes', 'retry', 'diff', 'tools', 'base', 'preferences'] as const;
 export type Ctx = Record<(typeof VARS)[number], string>;
 
 const PLACEHOLDER = /\{\{\s*([A-Za-z0-9_]+)\s*\}\}/g;

@@ -14,6 +14,7 @@ Each session starts from one rendered template. The board pushes only this; ever
 | `{{notes}}` | `failure` notes written since the latest execute run of this ticket started, i.e. what went wrong in the attempt being retried. Earlier cycles are left out |
 | `{{retry}}` | the ticket's retry count, `0` on the first attempt |
 | `{{diff}}` | test sessions only: `git diff <base>...HEAD` in the worktree. Empty in every other template |
+| `{{base}}` | the branch the ticket's worktree forked from and merges into (the main checkout's current branch); `(none)` for a brainstorm |
 | `{{tools}}` | the MCP tools this session's role may call, with the access cell from `docs/MCP.md` |
 | `{{preferences}}` | the operator's standing instructions, `~/.kanban95/preferences.md` as written (Settings → Prompts), under every template's "## Operator preferences" heading |
 
@@ -45,6 +46,7 @@ Empty values render as `(none)`. Values are inserted literally: a brain note con
 - Finishes with tests and build passing, a `summary` note, then `move_ticket(testing)`. Once the move is accepted the board ends the session and starts the tester; nothing after it is read.
 - An `ask_operator` keeps the session open: the operator's answer is typed into the terminal as one line.
 - On a retry, fixes the failure notes first.
+- When a failure note reports a merge conflict (`merge conflict with <base>: …`, written by the merge queue), runs `git merge {{base}}` in the worktree, resolves keeping both sides' intent (two tests added at one spot: keep both), runs the tests and the build, commits, and submits as usual. The tester runs again and the merge is queued again.
 
 **Tester (test).** Runs the suite and build, reviews `{{diff}}` against each criterion, writes and commits tests for new behaviour that has none, launches and screenshots the app for UI tickets and deletes every artefact not kept as evidence. May raise the model or effort with `set_model` when the work was too hard for it. Finishes with `report_test` (verdict, per-criterion summary, evidence), then `move_ticket(done)` or `move_ticket(in_progress)`. `done` is refused unless `report_test(passed: true)` was called in this test run; it ends the session and queues the merge. `in_progress` starts the next execute attempt, up to three retries (`docs/LIFECYCLE.md`).
 
