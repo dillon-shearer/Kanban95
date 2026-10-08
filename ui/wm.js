@@ -7,6 +7,14 @@ const wins = new Map(); // id → { el, task, onClose }
 let z = 10;
 let cascade = 0;
 
+// Taskbar overflow: once the buttons are at their 60px minimum, arrows at both ends scroll one button per click, as does the wheel.
+const arrows = [document.getElementById('tasks-left'), document.getElementById('tasks-right')];
+const step = () => (tasks.querySelector('.task')?.offsetWidth ?? 60) + 3; // + the 3px flex gap
+arrows.forEach((a, i) => a.addEventListener('click', () => { tasks.scrollLeft += (i ? 1 : -1) * step(); }));
+tasks.addEventListener('wheel', (e) => { e.preventDefault(); tasks.scrollLeft += e.deltaY || e.deltaX; }, { passive: false });
+const overflow = () => { for (const a of arrows) a.hidden = tasks.scrollWidth <= tasks.clientWidth; };
+new ResizeObserver(overflow).observe(tasks);
+
 const geo = {
   get: (id) => { try { return JSON.parse(localStorage.getItem(`k95.win.${id}`)); } catch { return null; } },
   set: (id, r) => { try { localStorage.setItem(`k95.win.${id}`, JSON.stringify(r)); } catch { /* storage off: positions reset */ } },
@@ -38,6 +46,7 @@ export function focus(id) {
   w.el.classList.add('active');
   w.el.querySelector('.title-bar').classList.remove('inactive');
   w.task.classList.add('active');
+  w.task.scrollIntoView({ block: 'nearest', inline: 'nearest' });
 }
 
 /**
@@ -67,6 +76,7 @@ export function open(id, { title, w = 480, h: height = 320, persist = false, bac
   wins.set(id, { el, task, onClose, api });
   desktop.append(el);
   tasks.append(task);
+  overflow(); // before focus() scrolls the button into view, so the arrows are already taking their room
   if (!saved?.max) clamp(el); // clamp reads the maximized box and would overwrite the restore geometry
 
   const save = () => {
@@ -135,6 +145,7 @@ export function close(id) {
   wins.delete(id);
   w.el.remove();
   w.task.remove();
+  overflow();
   w.onClose?.();
 }
 

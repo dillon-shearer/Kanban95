@@ -27,9 +27,11 @@ body { background: linear-gradient(transparent 55%, rgb(0 0 0 / 0.22)),
 #taskbar { position: fixed; left: 0; right: 0; bottom: 0; height: 28px; display: flex; align-items: center; gap: 3px; padding: 0 2px;
   background: silver; box-shadow: inset 0 1px #dfdfdf, inset 0 2px #fff; }
 #start { min-width: 54px; }
-#tasks { flex: 1; display: flex; gap: 3px; overflow: hidden; }
-#tasks .task { min-width: 0; max-width: 160px; flex: 0 1 160px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; text-align: left; }
+/* Buttons shrink to 60px, then #tasks scrolls (arrows, wheel); its scrollbar stays hidden. */
+#tasks { flex: 1; min-width: 0; display: flex; gap: 3px; overflow-x: auto; scrollbar-width: none; }
+#tasks .task { min-width: 60px; max-width: 160px; flex: 0 1 160px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; text-align: left; }
 #tasks .task.active { box-shadow: inset -1px -1px #fff, inset 1px 1px #0a0a0a, inset -2px -2px #dfdfdf, inset 2px 2px grey; font-weight: bold; }
+.task-scroll { flex: none; min-width: 0; width: 16px; padding: 0; font-size: 7px; }
 #tray { flex: none; display: flex; align-items: center; gap: 8px; height: 23px; box-sizing: border-box; padding: 0 4px; margin: 0; font-size: 11px; white-space: nowrap; }
 .tray-button { min-width: 0; min-height: 0; padding: 0 4px; height: 18px; }
 .tray-button.flag { color: #a00; font-weight: bold; }
