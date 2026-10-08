@@ -282,6 +282,31 @@ describe('ui', { timeout: 60_000 }, () => {
     }
   });
 
+  it('Ctrl+R in a focused Ticket window asks to restart a running ticket; the window button too; Cancel starts nothing', async () => {
+    const id = ticket('Stuck', { status: 'in_progress' });
+    try {
+      await page.goto(base);
+      await until(() => column(id), 'the card');
+      await page.evaluate(`document.querySelector('.card[data-id="${id}"]').dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))`);
+      const win = `[data-win="ticket-${id}"]`;
+      await until(() => page.evaluate(`!!document.querySelector('${win}')`), 'the Ticket window');
+      const confirm = `End the running agent for #${id} and start a new one in the same phase?`;
+      const cancel = async () => {
+        await until(() => page.evaluate(`!!document.querySelector('dialog[open]')`), 'the Restart confirm');
+        expect(await page.evaluate(`document.querySelector('dialog[open]').textContent`)).toContain(confirm);
+        await page.evaluate(`[...document.querySelectorAll('dialog[open] button')].find((b) => b.textContent === 'Cancel').click()`);
+        await until(() => page.evaluate(`!document.querySelector('dialog[open]')`), 'the confirm to close');
+      };
+      await page.evaluate(`dispatchEvent(new KeyboardEvent('keydown', { key: 'r', ctrlKey: true, bubbles: true }))`);
+      await cancel();
+      await page.evaluate(`[...document.querySelectorAll('${win} button')].find((b) => b.textContent === 'Restart').click()`);
+      await cancel();
+      expect(db.prepare('SELECT COUNT(*) AS n FROM runs WHERE ticket_id = ?').get(id)).toEqual({ n: 0 });
+    } finally {
+      db.prepare("UPDATE tickets SET status = 'done', merged_at = 'x' WHERE id = ?").run(id);
+    }
+  });
+
   it('pins a compact tray right after Start on one taskbar row', async () => {
     await page.goto(base);
     await until(() => page.evaluate(`!!document.querySelector('#clock').textContent`), 'the clock');
