@@ -4,10 +4,11 @@ import type { DatabaseSync } from 'node:sqlite';
 import { isConstraintError } from './db.js';
 import { audit, revoke } from './grants.js';
 import { killGrantSession } from './launcher.js';
+import { apply, launchAll, Refused, type Board } from './lifecycle.js';
 
 type Json = Record<string, unknown>;
 type Reply = { status: number; body?: unknown };
-type Ctx = { db: DatabaseSync; params: string[]; body: Json; url: URL };
+type Ctx = { board: Board; db: DatabaseSync; params: string[]; body: Json; url: URL };
 
 class HttpError extends Error {
   constructor(public status: number, message: string) {
@@ -46,7 +47,7 @@ function ticketColumns(body: Json): { cols: string[]; vals: unknown[]; deps?: nu
 
 export interface Ticket {
   id: number; title: string; body: string; criteria: string; status: string; cli: string | null; model: string | null;
-  effort: string | null; retry: number; created_at: string; updated_at: string;
+  effort: string | null; retry: number; template: string; merged_at: string | null; created_at: string; updated_at: string;
   flags: { needs_human: boolean; blocked_on_deps: boolean }; depends_on: number[];
 }
 
@@ -66,6 +67,13 @@ export function setDeps(db: DatabaseSync, id: number, deps: number[]) {
   db.prepare('DELETE FROM ticket_deps WHERE ticket_id = ?').run(id);
   const ins = db.prepare('INSERT INTO ticket_deps (ticket_id, depends_on_id) VALUES (?, ?)');
   for (const d of deps) ins.run(id, d);
+  // Callers run this in a transaction, so a cycle rolls the whole write back.
+  const cycle = db.prepare(`
+    WITH RECURSIVE reach(id) AS (
+      SELECT depends_on_id FROM ticket_deps WHERE ticket_id = ?
+      UNION SELECT d.depends_on_id FROM ticket_deps d JOIN reach r ON d.ticket_id = r.id)
+    SELECT 1 FROM reach WHERE id = ?`).get(id, id);
+  if (cycle) throw new HttpError(400, `dependency cycle: ticket ${id} would end up depending on itself`);
 }
 
 export function transaction<T>(db: DatabaseSync, fn: () => T): T {
@@ -144,6 +152,16 @@ const routes: [method: string, path: RegExp, mutation: string | null, handler: (
     killGrantSession(Number(params[0]));
     return { status: 204 };
   }],
+  // Lifecycle (docs/LIFECYCLE.md). A transition the table does not have is 409.
+  ['POST', /^\/api\/tickets\/(\d+)\/launch$/, 'tickets.launch', ({ board, params }) => ({ status: 200, body: apply(board, Number(params[0]), 'launch').ticket })],
+  ['POST', /^\/api\/tickets\/launch-all$/, 'tickets.launch_all', ({ board }) => ({ status: 200, body: launchAll(board) })],
+  ['POST', /^\/api\/tickets\/(\d+)\/answer$/, 'tickets.answer', ({ board, params, body }) => {
+    if (typeof body.answer !== 'string' || !body.answer.trim()) throw new HttpError(400, 'answer must be a non-empty string');
+    const id = Number(params[0]);
+    readTicket(board.db, id);
+    return { status: 200, body: apply(board, id, 'answer', { note: { role: 'operator', kind: 'answer', body: body.answer }, answer: body.answer }).ticket };
+  }],
+  ['POST', /^\/api\/tickets\/(\d+)\/merge$/, 'tickets.merge', ({ board, params }) => ({ status: 200, body: apply(board, Number(params[0]), 'merge').ticket })],
 ];
 
 async function readJson(req: IncomingMessage): Promise<Json> {
@@ -175,7 +193,8 @@ function reply(res: ServerResponse, r: Reply) {
   res.end(text);
 }
 
-export async function handleApi(db: DatabaseSync, req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
+export async function handleApi(board: Board, req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
+  const { db } = board;
   const route = routes.find(([m, p]) => m === req.method && p.test(url.pathname));
   if (!route) {
     const known = routes.some(([, p]) => p.test(url.pathname));
@@ -190,9 +209,9 @@ export async function handleApi(db: DatabaseSync, req: IncomingMessage, res: Ser
   let out: Reply;
   try {
     body = await readJson(req);
-    out = handler({ db, params, body, url });
+    out = handler({ board, db, params, body, url });
   } catch (e) {
-    const status = e instanceof HttpError ? e.status : isConstraintError(e) ? 400 : 500;
+    const status = e instanceof HttpError ? e.status : e instanceof Refused ? 409 : isConstraintError(e) ? 400 : 500;
     if (mutation) {
       // audit.ticket_id is a FK, so an attempt against a missing ticket is attributed by args only.
       const exists = ticketId !== null && db.prepare('SELECT 1 FROM tickets WHERE id = ?').get(ticketId) !== undefined;

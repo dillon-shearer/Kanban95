@@ -1,4 +1,4 @@
-// Kanban95 daemon: static UI, /health, /api (operator) and /mcp (agents) on 127.0.0.1:<random port>, backed by <repo>/.kanban95/board.db.
+// Kanban95 daemon: static UI, /health, /api (operator), /mcp (agents), /pty and /events websockets on 127.0.0.1:<random port>, backed by <repo>/.kanban95/board.db.
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
@@ -7,8 +7,11 @@ import type { DatabaseSync } from 'node:sqlite';
 import { WebSocketServer } from 'ws';
 import { handleApi } from './api.js';
 import { openDb } from './db.js';
+import { sweep, SWEEP_MS } from './janitor.js';
 import { killAll, launch, sessions } from './launcher.js';
+import { events, recover, type Board } from './lifecycle.js';
 import { handleMcp } from './mcp.js';
+import { idle } from './merge.js';
 import { initTemplates } from './templates.js';
 
 export const UI_DIR = resolve(import.meta.dirname, '../../ui');
@@ -52,7 +55,7 @@ function send(res: ServerResponse, status: number, body: string, type = 'text/pl
 const sameOrigin = (req: IncomingMessage, self: string) =>
   req.headers.host === self && (req.headers.origin === undefined || req.headers.origin === `http://${self}`);
 
-async function handle(db: DatabaseSync, self: string, req: IncomingMessage, res: ServerResponse) {
+async function handle(board: Board, self: string, req: IncomingMessage, res: ServerResponse) {
   // The shell loads the UI from this origin, so the CSP must come from here:
   // Tauri only injects its configured CSP into pages it serves itself.
   res.setHeader('Content-Security-Policy', "default-src 'self'; img-src 'self' data:");
@@ -60,8 +63,8 @@ async function handle(db: DatabaseSync, self: string, req: IncomingMessage, res:
   if (!sameOrigin(req, self)) return send(res, 403, 'forbidden origin');
 
   const url = new URL(req.url ?? '/', `http://${self}`);
-  if (url.pathname.startsWith('/api/')) return handleApi(db, req, res, url);
-  if (url.pathname === '/mcp') return handleMcp(db, req, res);
+  if (url.pathname.startsWith('/api/')) return handleApi(board, req, res, url);
+  if (url.pathname === '/mcp') return handleMcp(board, req, res);
   if (req.method !== 'GET' && req.method !== 'HEAD') return send(res, 405, 'method not allowed');
   if (url.pathname === '/health') return send(res, 200, JSON.stringify({ ok: true }), 'application/json');
 
@@ -89,6 +92,7 @@ type Launch = Parameters<typeof launch>[1];
 export function start(config: Config = {}): Promise<{
   port: number;
   db: DatabaseSync;
+  board: Board;
   launch: (o: Launch) => ReturnType<typeof launch>;
   close: () => Promise<void>;
 }> {
@@ -97,18 +101,28 @@ export function start(config: Config = {}): Promise<{
   const db = openDb(repo);
   initTemplates(repo);
   let self = '';
+  const board: Board = { db, repo, port: 0 };
   const server = createServer((req, res) => {
-    handle(db, self, req, res).catch(() => send(res, 500, 'internal error'));
+    handle(board, self, req, res).catch(() => send(res, 500, 'internal error'));
   });
 
   // /pty/<run-id>: the run's terminal for xterm.js. Output goes out as text frames, starting with the scrollback so far.
   // In: JSON `{"data": "..."}` is typed into the pty, `{"resize": [cols, rows]}` resizes it. A browser always sends
   // Origin on a websocket, so here it is required, not optional.
+  // /events: board events for the UI, one JSON text frame each (`{"sound": "ding" | "chord", "ticket": n}`). Nothing comes in.
   const wss = new WebSocketServer({ noServer: true, maxPayload: 1 << 16 });
   server.on('upgrade', (req, socket, head) => {
     const s = sessions.get(Number(/^\/pty\/(\d+)$/.exec(req.url ?? '')?.[1]));
-    if (!req.headers.origin || !sameOrigin(req, self) || !s) {
+    if (!req.headers.origin || !sameOrigin(req, self) || !(s || req.url === '/events')) {
       socket.end('HTTP/1.1 403 Forbidden\r\n\r\n');
+      return;
+    }
+    if (!s) {
+      wss.handleUpgrade(req, socket, head, (ws) => {
+        const forward = (e: unknown) => ws.send(JSON.stringify(e));
+        events.on('event', forward);
+        ws.on('close', () => events.off('event', forward));
+      });
       return;
     }
     wss.handleUpgrade(req, socket, head, (ws) => {
@@ -138,12 +152,21 @@ export function start(config: Config = {}): Promise<{
       const addr = server.address();
       if (!addr || typeof addr === 'string') return fail(new Error('no address'));
       self = `${LOOPBACK}:${addr.port}`;
+      board.port = addr.port;
+      // Janitor and recovery on start, the janitor again once a day (docs/LIFECYCLE.md).
+      sweep(board);
+      recover(board);
+      const daily = setInterval(() => sweep(board), SWEEP_MS).unref();
       ok({
         port: addr.port,
         db,
-        launch: (o) => launch({ db, repo, port: addr.port }, o),
+        board,
+        launch: (o) => launch(board, o),
         close: async () => {
-          await killAll(); // run rows are written before the db closes
+          board.closing = true; // nothing new is spawned from here on
+          clearInterval(daily);
+          await killAll(); // run rows and exit flags are written before the db closes
+          await idle(); // and every queued merge has finished
           for (const c of wss.clients) c.terminate();
           await new Promise<void>((r) => server.close(() => r()));
           db.close();

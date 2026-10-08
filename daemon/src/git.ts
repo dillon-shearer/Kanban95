@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { appendFileSync, existsSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 
-const git = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: 'pipe' }).trim();
+export const git = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: 'pipe' }).trim();
 
 export const worktreePath = (repo: string, ticketId: number) => join(repo, '.worktrees', `t-${ticketId}`);
 export const branchName = (ticketId: number) => `ticket/${ticketId}`;
@@ -34,10 +34,13 @@ export function createWorktree(repo: string, ticketId: number): { path: string; 
   return { path, branch, base };
 }
 
-/** Removes the worktree (git refuses if it holds uncommitted work) and deletes the branch only if it is merged. */
-export function removeWorktree(repo: string, ticketId: number): { branchDeleted: boolean } {
+/**
+ * Removes the worktree and deletes the branch only if it is merged. Without `force` git refuses a worktree holding uncommitted
+ * or untracked files; the janitor forces only once the branch has landed, when what is left is build output and test leftovers.
+ */
+export function removeWorktree(repo: string, ticketId: number, force = false): { branchDeleted: boolean } {
   const path = worktreePath(repo, ticketId);
-  if (existsSync(path)) git(repo, 'worktree', 'remove', path);
+  if (existsSync(path)) git(repo, 'worktree', 'remove', ...(force ? ['--force'] : []), path);
   try {
     git(repo, 'branch', '-d', branchName(ticketId));
     return { branchDeleted: true };

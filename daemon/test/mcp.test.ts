@@ -157,11 +157,15 @@ describe('move_ticket', () => {
     expect((await call(planner, 'get_ticket', { ticket_id: 3 })).json.status).toBe('backlog');
   });
 
-  it('lets the worker hand off to testing and the tester send it back or finish it', async () => {
-    expect((await call(worker3, 'move_ticket', { status: 'testing' })).json.status).toBe('testing');
+  it('goes through the lifecycle: a move the state machine does not have is denied, an allowed one moves the ticket', async () => {
+    // Ticket 3 is in backlog: only Launch moves it out. Lifecycle details are in lifecycle.test.ts.
+    expect(await call(worker3, 'move_ticket', { status: 'testing' })).toMatchObject({ denied: true, text: 'cannot submit a ticket in backlog' });
+    expect(lastAudit()).toMatchObject({ grant_id: grantIds.worker3, ticket_id: 3, tool: 'move_ticket', outcome: 'denied' });
+    srv.db.prepare("UPDATE tickets SET status = 'in_progress' WHERE id = 3").run();
+    // This repo is not a git repo, so the tester launch fails and flags the ticket instead of leaving it unattended.
+    expect((await call(worker3, 'move_ticket', { status: 'testing' })).json).toMatchObject({ status: 'testing', flags: { needs_human: true } });
     expect(lastAudit()).toMatchObject({ grant_id: grantIds.worker3, ticket_id: 3, tool: 'move_ticket', outcome: 'ok' });
-    expect((await call(tester3, 'move_ticket', { status: 'in_progress' })).json.status).toBe('in_progress');
-    expect((await call(tester3, 'move_ticket', { status: 'done' })).json.status).toBe('done');
+    expect((await call(tester3, 'move_ticket', { status: 'done' })).text).toBe('cannot pass a ticket in testing: call report_test with passed: true first');
   });
 });
 
@@ -178,7 +182,23 @@ describe('tools', () => {
     expect(lastAudit()).toMatchObject({ tool: 'set_model', outcome: 'error' });
   });
 
-  it('ask_operator writes a question note, flags needs_human and returns the question id', async () => {
+  it('refuses a dependency cycle at update_ticket, direct or through other tickets, and leaves the deps as they were', async () => {
+    // Fixture: 3 depends on 2. A new ticket cannot close a cycle at create_ticket: nothing depends on it yet.
+    expect((await call(planner, 'update_ticket', { ticket_id: 2, depends_on: [3] })).text).toBe('dependency cycle: ticket 2 would end up depending on itself');
+    expect(lastAudit()).toMatchObject({ grant_id: grantIds.planner, ticket_id: 2, tool: 'update_ticket', outcome: 'error' });
+    expect((await call(planner, 'update_ticket', { ticket_id: 1, depends_on: [3] })).json.depends_on).toEqual([3]);
+    expect((await call(planner, 'update_ticket', { ticket_id: 2, depends_on: [1] })).text).toMatch(/dependency cycle/); // 2 → 1 → 3 → 2
+    expect((await call(planner, 'get_ticket', { ticket_id: 2 })).json.depends_on).toEqual([]);
+    const rest = await fetch(`http://127.0.0.1:${srv.port}/api/tickets/2`, { method: 'PATCH', body: JSON.stringify({ depends_on: [1] }) });
+    expect(rest.status).toBe(400);
+    expect((await call(planner, 'update_ticket', { ticket_id: 1, depends_on: [] })).json.depends_on).toEqual([]);
+  });
+
+  it('ask_operator writes a question note, flags needs_human and returns the question id; refused on a ticket not running', async () => {
+    const idle = await call(worker4, 'ask_operator', { question: 'which port?' });
+    expect(idle).toMatchObject({ denied: true, text: 'cannot ask a ticket in backlog' });
+    expect(lastAudit()).toMatchObject({ grant_id: grantIds.worker4, tool: 'ask_operator', outcome: 'denied' });
+    srv.db.prepare("UPDATE tickets SET status = 'in_progress' WHERE id = 4").run();
     const { question_id } = (await call(worker4, 'ask_operator', { question: 'which port?' })).json;
     expect(srv.db.prepare('SELECT ticket_id, role, kind, body FROM notes WHERE id = ?').get(question_id)).toEqual({
       ticket_id: 4, role: 'worker', kind: 'question', body: 'which port?',

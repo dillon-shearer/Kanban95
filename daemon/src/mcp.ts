@@ -6,6 +6,7 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import * as z from 'zod';
 import { brainSearch, readTicket, setDeps, transaction } from './api.js';
 import { audit, verify, type Grant, type Role } from './grants.js';
+import { apply, Refused, type Board } from './lifecycle.js';
 
 export const EFFORT = ['low', 'medium', 'high', 'max'] as const;
 export const STATUS = ['backlog', 'in_progress', 'testing', 'done'] as const;
@@ -22,7 +23,7 @@ export const BRAIN_SEARCH_MAX = 20;
 /** A refusal. Audited as `denied`; anything else thrown is `error`. */
 class Deny extends Error {}
 
-type Call = { db: DatabaseSync; grant: Grant; ticket: number | null };
+type Call = { board: Board; db: DatabaseSync; grant: Grant; ticket: number | null };
 /** A role present in `access` may call the tool; the text is the matrix cell in docs/MCP.md. */
 type Access = Partial<Record<Role, string>>;
 interface Tool<S extends z.ZodRawShape> {
@@ -119,7 +120,7 @@ export const TOOLS: Record<string, Tool<z.ZodRawShape>> = {
   set_model: tool({
     description:
       'Change the model and/or effort a ticket runs with; give either or both. Lower effort for trivial work and raise it for hard work, do not only escalate. ' +
-      'A worker changing its own ticket is requeued with the new setting; a tester sets what the retry will run with. Returns the ticket.',
+      'The ticket\x27s model and effort apply to its execute runs: a worker or tester changing them sets what the next execute attempt (the retry) runs with. Returns the ticket.',
     access: { planner: 'any', worker: 'own', tester: 'own (for the retry)' },
     input: {
       ticket_id: ticketId,
@@ -141,16 +142,15 @@ export const TOOLS: Record<string, Tool<z.ZodRawShape>> = {
   move_ticket: tool({
     description:
       'Move a ticket to another column. A worker moves its ticket to testing when the work is committed in the worktree and ready to be checked. ' +
-      'A tester moves it to done when every acceptance criterion passes, or back to in_progress after report_test with the failure so the worker retries. Returns the ticket.',
+      'A tester moves it to done after report_test with passed true (the board then merges the branch), or back to in_progress after report_test with the failure so the worker retries. ' +
+      'Once the move is accepted your session is over: the board ends it and starts the next agent. Returns the ticket.',
     access: { worker: `own → ${MOVE_TARGETS.worker.join(' / ')}`, tester: `own → ${MOVE_TARGETS.tester.join(' / ')}` },
     input: { ticket_id: ticketId, status: z.enum(STATUS) },
     run(c, a) {
       const id = (c.ticket = own(c, a.ticket_id));
       const allowed = MOVE_TARGETS[c.grant.role];
       if (!allowed.includes(a.status)) throw new Deny(`a ${c.grant.role} may only move its ticket to: ${allowed.join(', ')}`);
-      readTicket(c.db, id);
-      update(c.db, id, { status: a.status });
-      return readTicket(c.db, id);
+      return apply(c.board, id, a.status === 'testing' ? 'submit' : a.status === 'done' ? 'pass' : 'fail').ticket;
     },
   }),
 
@@ -238,17 +238,13 @@ export const TOOLS: Record<string, Tool<z.ZodRawShape>> = {
   ask_operator: tool({
     description:
       'Ask the human operator a question you cannot resolve from the ticket, the brain or the code. The ticket is flagged needs_human and the operator is alerted; ' +
-      'the answer arrives as a note on the ticket and your session resumes. Ask once with full context and the options you see, rather than many small questions. Returns the question id.',
+      'the answer is typed into your session as one line and kept as a note on the ticket. Ask once with full context and the options you see, rather than many small questions. Returns the question id.',
     access: { planner: 'yes', worker: 'own', tester: 'own' },
     input: { ticket_id: ticketId, question: z.string().min(1) },
     run(c, a) {
       const id = (c.ticket = own(c, a.ticket_id));
-      readTicket(c.db, id);
-      return transaction(c.db, () => {
-        const { note_id } = addNote(c, id, 'question', a.question);
-        update(c.db, id, { needs_human: 1 });
-        return { question_id: note_id };
-      });
+      const { noteId } = apply(c.board, id, 'ask', { note: { role: c.grant.role, kind: 'question', body: a.question } });
+      return { question_id: noteId };
     },
   }),
 
@@ -292,18 +288,19 @@ export const TOOLS: Record<string, Tool<z.ZodRawShape>> = {
   }),
 };
 
-function registerTools(server: McpServer, db: DatabaseSync, grant: Grant) {
+function registerTools(server: McpServer, board: Board, grant: Grant) {
+  const { db } = board;
   for (const [name, t] of Object.entries(TOOLS)) {
     server.registerTool(name, { description: t.description, inputSchema: t.input }, (args) => {
       const a = args as Record<string, unknown>;
-      const c: Call = { db, grant, ticket: typeof a.ticket_id === 'number' ? a.ticket_id : grant.ticket_id };
+      const c: Call = { board, db, grant, ticket: typeof a.ticket_id === 'number' ? a.ticket_id : grant.ticket_id };
       let outcome: 'ok' | 'denied' | 'error' = 'ok';
       let text: string;
       try {
         if (!(grant.role in t.access)) throw new Deny(`a ${grant.role} may not call ${name}`);
         text = JSON.stringify(t.run(c, a), null, 2);
       } catch (e) {
-        outcome = e instanceof Deny ? 'denied' : 'error';
+        outcome = e instanceof Deny || e instanceof Refused ? 'denied' : 'error';
         text = (e as Error).message;
       }
       // audit.ticket_id is a FK: an attempt against a missing ticket is attributed by args only.
@@ -316,7 +313,8 @@ function registerTools(server: McpServer, db: DatabaseSync, grant: Grant) {
 const unauthorized = JSON.stringify({ jsonrpc: '2.0', error: { code: -32001, message: 'unauthorized: a live bearer grant is required' }, id: null });
 
 /** Mounted at /mcp. 401 before anything else when the bearer is missing, malformed, unknown, expired or revoked; no audit row, there is no grant to attribute. */
-export async function handleMcp(db: DatabaseSync, req: IncomingMessage, res: ServerResponse): Promise<void> {
+export async function handleMcp(board: Board, req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const { db } = board;
   const m = /^Bearer ([A-Za-z0-9_-]+)$/.exec(req.headers.authorization ?? '');
   const grant = m && verify(db, m[1]);
   if (!grant) {
@@ -326,7 +324,7 @@ export async function handleMcp(db: DatabaseSync, req: IncomingMessage, res: Ser
   }
   // ponytail: one stateless McpServer per request, closing over the grant. Sessions (GET streams, server pushes) when a tool needs them.
   const server = new McpServer({ name: 'kanban95', version: '0.0.0' });
-  registerTools(server, db, grant);
+  registerTools(server, board, grant);
   const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true, maxRequestBodySize: 1 << 20 });
   res.on('close', () => { void transport.close(); void server.close(); });
   await server.connect(transport);

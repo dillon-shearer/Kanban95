@@ -6,6 +6,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import WebSocket from 'ws';
 import { createWorktree, removeWorktree } from '../src/git.ts';
+import type { Role } from '../src/grants.ts';
 import { buildArgv, sessions, type ArgvIn, type Cli, type Effort, type Session } from '../src/launcher.ts';
 import { start } from '../src/server.ts';
 
@@ -76,17 +77,63 @@ afterEach(async () => {
 const launch = (cli: Cli, model = 'hang') => srv.launch({ ticketId: 7, template: 'execute', cli, model, effort: 'high' });
 
 describe('buildArgv', () => {
-  const base = { promptPath: 'C:/r/.kanban95/sessions/3/prompt.md', mcpConfigPath: 'C:/r/.kanban95/sessions/3/mcp.json', mcpUrl: 'http://127.0.0.1:5/mcp', cwd: 'C:/r/.worktrees/t-7' };
+  const base = { repo: 'C:\\r', promptPath: 'C:/r/.kanban95/sessions/3/prompt.md', mcpConfigPath: 'C:/r/.kanban95/sessions/3/mcp.json', mcpUrl: 'http://127.0.0.1:5/mcp', cwd: 'C:/r/.worktrees/t-7' };
   const msg = 'Read ../../.kanban95/sessions/3/prompt.md in full and follow it. It is your brief for this session.';
-  // Role never reaches the argv: it is carried by the grant behind the token.
-  const rows: [Cli, string, Effort, string[]][] = [
-    ['claude', 'claude-opus-5-5', 'low', ['claude', '--mcp-config', base.mcpConfigPath, '--strict-mcp-config', '--model', 'claude-opus-5-5', '--effort', 'low', '--dangerously-skip-permissions', msg]],
-    ['claude', 'claude-sonnet-5-5', 'max', ['claude', '--mcp-config', base.mcpConfigPath, '--strict-mcp-config', '--model', 'claude-sonnet-5-5', '--effort', 'max', '--dangerously-skip-permissions', msg]],
-    ['codex', 'gpt-5.6-terra', 'medium', ['codex', '--model', 'gpt-5.6-terra', '-c', 'model_reasoning_effort=medium', '-c', 'mcp_servers.kanban95.url=http://127.0.0.1:5/mcp', '-c', 'mcp_servers.kanban95.bearer_token_env_var=KANBAN95_TOKEN', '--dangerously-bypass-approvals-and-sandbox', msg]],
-    ['codex', 'gpt-5.6-luna', 'max', ['codex', '--model', 'gpt-5.6-luna', '-c', 'model_reasoning_effort=max', '-c', 'mcp_servers.kanban95.url=http://127.0.0.1:5/mcp', '-c', 'mcp_servers.kanban95.bearer_token_env_var=KANBAN95_TOKEN', '--dangerously-bypass-approvals-and-sandbox', msg]],
+  const claude = (model: string, effort: string, ...role: string[]) =>
+    ['claude', '--mcp-config', base.mcpConfigPath, '--strict-mcp-config', '--model', model, '--effort', effort, ...role, '--dangerously-skip-permissions', msg];
+  const codex = (model: string, effort: string, ...role: string[]) =>
+    ['codex', '--model', model, '-c', `model_reasoning_effort=${effort}`, '-c', 'mcp_servers.kanban95.url=http://127.0.0.1:5/mcp',
+      '-c', 'mcp_servers.kanban95.bearer_token_env_var=KANBAN95_TOKEN', '-c', "projects={'C:\\r'={trust_level='trusted'}}", ...role, msg];
+  // Reach by role: a planner cannot write files; workers and testers run with permissions off.
+  const rows: [Cli, Role, string, Effort, string[]][] = [
+    ['claude', 'worker', 'claude-opus-5-5', 'low', claude('claude-opus-5-5', 'low')],
+    ['claude', 'tester', 'claude-sonnet-5-5', 'max', claude('claude-sonnet-5-5', 'max')],
+    ['claude', 'planner', 'claude-fable-5-1', 'high', claude('claude-fable-5-1', 'high', '--disallowedTools', 'Edit', 'Write', 'NotebookEdit', 'Bash', 'PowerShell', 'Agent')],
+    ['codex', 'worker', 'gpt-5.6-terra', 'medium', codex('gpt-5.6-terra', 'medium', '--dangerously-bypass-approvals-and-sandbox')],
+    ['codex', 'tester', 'gpt-5.6-luna', 'max', codex('gpt-5.6-luna', 'max', '--dangerously-bypass-approvals-and-sandbox')],
+    ['codex', 'planner', 'gpt-5.6-sol', 'high', codex('gpt-5.6-sol', 'high', '-s', 'read-only', '-a', 'never')],
   ];
-  it.each(rows)('%s %s %s', (cli, model, effort, want) => {
-    expect(buildArgv({ ...base, cli, model, effort } as ArgvIn)).toEqual(want);
+  it.each(rows)('%s %s %s %s', (cli, role, model, effort, want) => {
+    expect(buildArgv({ ...base, cli, role, model, effort } as ArgvIn)).toEqual(want);
+  });
+
+  it('refuses a repo path Codex trust cannot quote', () => {
+    expect(() => buildArgv({ ...base, repo: "C:\\o'brien", cli: 'codex', role: 'worker', model: 'm', effort: 'low' })).toThrow(/containing '/);
+  });
+});
+
+describe('Claude Code pre-trust', () => {
+  const state = () => join(process.env.USERPROFILE!, '.claude.json');
+  const trustRows = () => db.prepare("SELECT ticket_id, args_summary FROM audit WHERE tool = 'trust.write'").all() as { ticket_id: number; args_summary: string }[];
+
+  it('trusts the repo root once, merged into the existing file, backed up first and audited', async () => {
+    const before = { numStartups: 7, projects: { 'D:/other': { hasTrustDialogAccepted: true, allowedTools: ['x'] } } };
+    writeFileSync(state(), JSON.stringify(before));
+    const s = launch('claude');
+    const key = repo.replaceAll('\\', '/');
+    const after = JSON.parse(readFileSync(state(), 'utf8'));
+    expect(after).toEqual({ ...before, projects: { ...before.projects, [key]: { hasTrustDialogAccepted: true } } });
+    expect(JSON.parse(readFileSync(state() + '.kanban95.bak', 'utf8'))).toEqual(before);
+    expect(trustRows()).toEqual([{ ticket_id: 7, args_summary: expect.stringContaining(`projects[\\"${key}\\"].hasTrustDialogAccepted`) }]);
+    s.pty.kill();
+    await s.done;
+    srv.launch({ ticketId: 7, template: 'test', cli: 'claude', model: 'hang', effort: 'low' }).pty.kill(); // second launch: no write
+    expect(trustRows()).toHaveLength(1);
+  });
+
+  it('writes nothing when an ancestor of the repo is already trusted', () => {
+    const parent = join(repo, '..').replaceAll('\\', '/');
+    writeFileSync(state(), JSON.stringify({ projects: { [parent]: { hasTrustDialogAccepted: true } } }));
+    launch('claude').pty.kill();
+    expect(trustRows()).toHaveLength(0);
+    expect(JSON.parse(readFileSync(state(), 'utf8')).projects).toEqual({ [parent]: { hasTrustDialogAccepted: true } });
+  });
+
+  it('Codex launches write no file at all', () => {
+    rmSync(state(), { force: true });
+    launch('codex').pty.kill();
+    expect(existsSync(state())).toBe(false);
+    expect(trustRows()).toHaveLength(0);
   });
 });
 

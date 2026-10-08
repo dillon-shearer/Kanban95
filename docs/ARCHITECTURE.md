@@ -13,10 +13,11 @@ Living document. Update it in the same change that alters the shape described he
                                             │  /api/*        → REST over <repo>/.kanban95/board.db (operator UI)
                                             │  POST /mcp     → MCP tools for agents, bearer grant required
                                             │  WS /pty/<run> → an agent's terminal, both ways (xterm.js)
+                                            │  WS /events    → board events for the UI (sounds)
 ```
 
 - **Shell** (`shell/`): owns the OS window and the daemon's lifetime. No app logic. In dev it runs `node daemon/dist/server.js` from PATH; packaging Node as a real sidecar is phase 7.
-- **Daemon** (`daemon/src/`): the only process with state. `server.ts` is the HTTP plumbing (bind, origin guard, static files, `/health`, routes `/api/*` to `api.ts`). `db.ts` opens and migrates the per-repo SQLite file (schema in `docs/DATA.md`). `grants.ts` mints, verifies, revokes bearer grants and writes audit rows (`docs/SECURITY.md`). `mcp.ts` is the agent-facing MCP server at `/mcp`: one table of tools, each with a description, a role access cell and a handler, enforced per grant and audited per call. `mcp-doc.ts` renders `docs/MCP.md` from that table. `templates.ts` copies the default prompt templates from `templates/` into `<repo>/.kanban95/templates/` once and renders them; `context.ts` builds the variables for a ticket and records the rendered prompt on a `runs` row (`startRun`) before anything is spawned (see Prompts below). `git.ts` creates and removes the per-ticket worktree. `launcher.ts` launches an agent (worktree, run row, grant, session dir, argv, pty) and tears it down (see Launch below); `pty.ts` spawns the CLI in a pseudo-terminal with an env allowlist and keeps a 2000-line scrollback. The repo it serves is `argv[2]`, defaulting to the cwd.
+- **Daemon** (`daemon/src/`): the only process with state. `server.ts` is the HTTP plumbing (bind, origin guard, static files, `/health`, routes `/api/*` to `api.ts`). `db.ts` opens and migrates the per-repo SQLite file (schema in `docs/DATA.md`). `grants.ts` mints, verifies, revokes bearer grants and writes audit rows (`docs/SECURITY.md`). `mcp.ts` is the agent-facing MCP server at `/mcp`: one table of tools, each with a description, a role access cell and a handler, enforced per grant and audited per call. `mcp-doc.ts` renders `docs/MCP.md` from that table. `templates.ts` copies the default prompt templates from `templates/` into `<repo>/.kanban95/templates/` once and renders them; `context.ts` builds the variables for a ticket and records the rendered prompt on a `runs` row (`startRun`) before anything is spawned (see Prompts below). `git.ts` creates and removes the per-ticket worktree. `launcher.ts` launches an agent (worktree, run row, grant, session dir, argv, pty) and tears it down (see Launch below); `pty.ts` spawns the CLI in a pseudo-terminal with an env allowlist and keeps a 2000-line scrollback. `trust.ts` pre-trusts the repo root for Claude Code before a launch. `lifecycle.ts` is the ticket state machine: one table of transitions, `apply(board, ticket, event)` and Launch all (`docs/LIFECYCLE.md`). `merge.ts` is the one serialized merge queue. `janitor.ts` removes worktrees, branches, session dirs, grants and old scrollback nobody needs any more. The repo it serves is `argv[2]`, defaulting to the cwd.
 - **UI** (`ui/`): plain files served by the daemon. No bundler. 98.css and its fonts are vendored in `ui/vendor/` so nothing loads from a CDN at runtime.
 
 ## Port handshake
@@ -48,8 +49,9 @@ Living document. Update it in the same change that alters the shape described he
 | GET | `/api/brain?q=&limit=` | FTS5 ranked search, limit at most 100; no `q` lists newest |
 | GET | `/api/grants` | all grants, never the hash |
 | DELETE | `/api/grants/:id` | revoke and kill the session's pty; 404 if not live |
+| POST | `/api/tickets/:id/launch` `/api/tickets/launch-all` `/api/tickets/:id/answer` `/api/tickets/:id/merge` | lifecycle events (`docs/LIFECYCLE.md`); `409` when the state machine has no such transition |
 
-Errors are `{ "error": "..." }`: 400 for bad input or a constraint violation, 404, 405, 413 for bodies over 1 MiB. Every POST/PATCH/DELETE writes an audit row, including failed ones.
+Errors are `{ "error": "..." }`: 400 for bad input, a constraint violation or a dependency cycle, 404, 405, 409 for a lifecycle refusal, 413 for bodies over 1 MiB. Every POST/PATCH/DELETE writes an audit row, including failed ones.
 
 ## MCP (agents only, bearer grant)
 
@@ -67,12 +69,13 @@ The template is read from disk on every render, so operator edits apply without 
 
 ```
 package.json      npm workspace root: build / test / dev scripts
-daemon/           src/{server,api,db,grants,mcp,mcp-doc,templates,context}.ts, migrations/*.sql, test/, tsconfig.json; compiled to dist/ (gitignored)
-ui/               index.html, app.js, app.css, vendor/98.css + fonts
+daemon/           src/{server,api,db,grants,mcp,mcp-doc,templates,context,git,pty,launcher,trust,lifecycle,merge,janitor}.ts, migrations/*.sql, test/, tsconfig.json; compiled to dist/ (gitignored)
+ui/               index.html, app.js, app.css, sounds/{ding,chord}.wav, vendor/98.css + fonts
 templates/        default prompt templates (brainstorm, plan, execute, test, housekeeping), copied into each repo once
 shell/            Cargo.toml, build.rs, tauri.conf.json, src/main.rs, icons/icon.ico
-docs/             this file, DATA.md (schema), AGENTS.md (what agents receive and how they behave), SECURITY.md (grants, audit, network), MCP.md (generated tool reference), handoffs/ (ephemeral) and handoffs/log/ (phase log)
-<repo>/.kanban95/ board.db (gitignored), .gitignore, templates/*.md (committed, operator-editable); created by the daemon on first start
+docs/             this file, LIFECYCLE.md (state machine, merge queue, janitor), CLIS.md (how each CLI is launched), DATA.md (schema), AGENTS.md (what agents receive and how they behave), SECURITY.md (grants, audit, network), MCP.md (generated tool reference), handoffs/ (ephemeral) and handoffs/log/ (phase log)
+<repo>/.kanban95/ board.db (gitignored), .gitignore, sessions/ (gitignored), templates/*.md (committed, operator-editable); created by the daemon on first start. config.json (optional, committed)
+~/.kanban95/      models.json: the operator's model catalog, read at each launch
 ```
 
 ## Launch
@@ -83,10 +86,12 @@ docs/             this file, DATA.md (schema), AGENTS.md (what agents receive an
 2. `startRun` renders the template and inserts the `runs` row (a bad template stops here, nothing is minted).
 3. `mint` a grant with the template's role (`TEMPLATES[template].role`).
 4. Session dir `.kanban95/sessions/<run-id>/`, owner-only, with `prompt.md` and (Claude Code) `mcp.json`.
-5. `buildArgv` (flags in `docs/CLIS.md`), then `spawnPty` with `cwd` = worktree and the env allowlist.
-6. The session is kept in `sessions` (by run id) until its pty exits. On exit, for any reason: `runs.ended_at` and `runs.scrollback` are written, the grant is revoked, the session dir is removed, `session.done` resolves.
+5. `buildArgv` with the role (flags and reach per role in `docs/CLIS.md`); for Claude Code, `preTrustClaude` makes sure the repo root is trusted; then `spawnPty` with `cwd` = worktree and the env allowlist.
+6. The session is kept in `sessions` (by run id) until its pty exits. On exit, for any reason: `runs.ended_at` and `runs.scrollback` are written, the grant is revoked, the session dir is removed, the lifecycle's exit hook runs (`runs.outcome`, and the `exit` event if the agent never reported), `session.done` resolves.
 
-Any failure after the run row is written revokes the grant and removes the session dir before the error is rethrown. Revoking the grant over REST kills the pty, which runs the same teardown. `close()` kills every live pty and waits for their teardown before closing the database.
+The lifecycle owns Launch: `POST /api/tickets/:id/launch` and the transitions after it call `launch` with the run settings from `~/.kanban95/models.json`.
+
+Any failure after the run row is written revokes the grant and removes the session dir before the error is rethrown. Revoking the grant over REST kills the pty, which runs the same teardown. `close()` stops new spawns, kills every live pty, waits for their teardown and for the merge queue to drain, then closes the database. On start the daemon runs the janitor sweep and the lifecycle's recovery (`docs/LIFECYCLE.md` → Restart), and the sweep again every 24 hours.
 
 ### Terminal websocket
 

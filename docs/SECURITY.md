@@ -16,7 +16,7 @@ Living document. Update it in the same change that moves a boundary described he
 - `verify(token)` hashes and looks up the row. Unknown, expired, or revoked all return `null`; the caller cannot tell which, and neither can a probing client.
 - `revoke(id)` stamps `revoked_at`. Every later `verify` fails. `DELETE /api/grants/:id` also kills the agent's pty, which tears its session down (see Agent sessions).
 - Roles: `planner` (no ticket), `worker` and `tester` (bound to one ticket). The database `CHECK` enforces the pairing. Role scopes per tool are enforced by the MCP layer (`daemon/src/mcp.ts`, matrix in `docs/MCP.md`).
-- Expiry is set at mint from a TTL. Grants also die with their ticket (`ON DELETE CASCADE`).
+- Expiry is set at mint from a TTL (24 h, a ceiling). In practice a grant lives exactly as long as its session: it is revoked the moment the agent's `move_ticket` is accepted (the board then ends the session), on every terminal exit, and by the janitor for any live grant without a live session on daemon start and once a day. Grants also die with their ticket (`ON DELETE CASCADE`).
 
 ## Audit
 
@@ -38,6 +38,7 @@ Every REST mutation and every MCP tool call writes one `audit` row: grant id (nu
 - A live grant scopes every tool. A role not listed for a tool, a worker or tester naming a ticket other than its own, a worker editing a field other than body/criteria, or a move to a target the role may not use is refused as a tool error (`denied` in audit). The refusal text says why but never reveals whether the other ticket exists.
 - The ticket id a worker or tester acts on comes from the grant, not from the request, so a compromised agent can at most damage its own ticket.
 - Arguments are the only thing summarised into `audit.args_summary`; the bearer never reaches a tool handler.
+- `move_ticket` and `ask_operator` go through the lifecycle state machine (`docs/LIFECYCLE.md`). A move the table does not have (a worker submitting a ticket that is not in progress, a tester passing a ticket without `report_test(passed: true)` in this test run) is refused as `denied` and changes nothing.
 
 ## Agent sessions
 
@@ -48,7 +49,20 @@ Every REST mutation and every MCP tool call writes one `audit` row: grant id (nu
 - **Teardown** happens on every pty exit, whatever the cause (agent done, crash, kill, revoke, daemon shutdown): the scrollback is written to `runs`, the grant is revoked, the session dir is deleted. Revoke to dead agent process and gone session dir takes under a second (tested). The worktree is left for the operator or the lifecycle to decide.
 - **Command line.** On Windows the CLI is started through `cmd.exe /d /s /c`; any argument with `"`, `%`, a newline or a trailing backslash is refused instead of escaped. `NoDefaultCurrentDirectoryInExePath` stops `cmd.exe` from resolving `claude` or `codex` to a script in the worktree.
 - **Terminal websocket** `/pty/<run-id>` requires `Host` and `Origin` to be the daemon's own (`Origin` is mandatory here, unlike plain HTTP, because every browser sends it on a websocket). Frames are capped at 64 KiB. It carries keystrokes, so it is exactly as trusted as the operator UI.
+- **Reach by role.** Approvals are off for every role (operator decision). A planner cannot write files: Claude Code runs it with `--disallowedTools Edit Write NotebookEdit Bash PowerShell Agent`, Codex with `-s read-only -a never`. Workers and testers run with permissions off in their worktree. Details and what was checked live: `docs/CLIS.md` → Reach by role.
 - **Worktrees** are only created from a base branch without uncommitted changes to tracked files; otherwise the launch is refused with the `git status` lines. `/.worktrees/` is added to the repo's `.git/info/exclude`, so an operator's `git add -A` cannot pick a worktree up as an embedded repo.
+
+## Operator files the board writes
+
+One, only for Claude Code launches: `~/.claude.json` (or `$CLAUDE_CONFIG_DIR/.claude.json`), key `projects["<repo root>"].hasTrustDialogAccepted = true`, so Claude Code does not stop at its workspace-trust prompt in the board's worktrees (operator decision, `PLAN.md` → Agents). `daemon/src/trust.ts`:
+
+- written only when neither the repo root nor an ancestor is already trusted; one entry per repo, never per worktree (`docs/CLIS.md` → First-run prompts);
+- merged: every other key in the file is preserved; the first write copies the original to `~/.claude.json.kanban95.bak` (same mode); the new content is written to an owner-only (0600) temp file and renamed over the original;
+- audited: `trust.write` with the file and the key, attributed to the launching ticket.
+
+Codex is trusted per process with `-c`, so `~/.codex/config.toml` is never written. Claude Code's one-time bypass-permissions warning (`skipDangerousModePermissionPrompt` in `~/.claude/settings.json`) is not written by the board: the operator accepts it once by hand.
+
+Tests run against a throwaway home directory (`daemon/test/home.ts`, which refuses to run if `os.homedir()` did not follow it), so the suite cannot write the operator's files. `daemon/test/real-home-guard.ts` checks the real home after every run and fails `npm test` if a test left a trust entry for a `k95-` temp repo, a `~/.claude.json.kanban95.bak` or a `~/.kanban95` that was not there before (proven by running the launcher tests with the redirect switched off against a fake home: exit 1, every entry named).
 
 ## Input
 
@@ -70,6 +84,7 @@ Every REST mutation and every MCP tool call writes one `audit` row: grant id (nu
 
 - A hostile process on the same machine with the same user can read `board.db` and a live agent's MCP config. Same-user isolation is out of scope; the worktree is the blast radius for agent actions, not for local malware.
 - No MCP tool touches the filesystem yet (`report_cleanup` records paths, it does not delete them).
-- Permissions are off inside the agent CLI. An agent can read anything the operator's user can, including its own session dir; the worktree bounds where it is told to work, not what it can reach.
-- If the daemon itself dies, its ptys die with it but their session dirs and grants are left until the janitor (phase 5) sweeps orphans. Grants still expire on their TTL (24 h today).
+- Permissions are off inside the worker and tester CLIs. Such an agent can read and write anything the operator's user can, including its own session dir; the worktree bounds where it is told to work, not what it can reach. Only the planner is confined (no file writes).
+- If the daemon itself dies, its ptys die with it; their session dirs (which hold a bearer for Claude Code) and grants stay until the next daemon start, when the janitor removes and revokes them. Grants still expire on their TTL (24 h) if the daemon never starts again.
+- An answer the operator types is written into the agent's terminal as keystrokes. It is the operator's own input to their own agent; the board only flattens it to one line.
 - A tool call whose arguments fail schema validation is answered by the MCP SDK before the tool wrapper runs, so it leaves no audit row. Only calls that reach a tool are audited.

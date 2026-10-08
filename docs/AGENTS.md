@@ -40,12 +40,13 @@ Empty values render as `(none)`. Values are inserted literally: a brain note con
 - Asks with `ask_operator` instead of guessing, once, with the options it sees.
 - Never commits secrets and never reads a `.env`.
 - Commits in the worktree with a plain imperative subject, no ticket or phase ids, no trailers.
-- Finishes with tests and build passing, a `summary` note, then `move_ticket(testing)`.
+- Finishes with tests and build passing, a `summary` note, then `move_ticket(testing)`. Once the move is accepted the board ends the session and starts the tester; nothing after it is read.
+- An `ask_operator` keeps the session open: the operator's answer is typed into the terminal as one line.
 - On a retry, fixes the failure notes first.
 
-**Tester (test).** Runs the suite and build, reviews `{{diff}}` against each criterion, writes and commits tests for new behaviour that has none, launches and screenshots the app for UI tickets and deletes every artefact not kept as evidence. May raise the model or effort with `set_model` when the work was too hard for it. Finishes with `report_test` (verdict, per-criterion summary, evidence), then `move_ticket(done)` or `move_ticket(in_progress)`.
+**Tester (test).** Runs the suite and build, reviews `{{diff}}` against each criterion, writes and commits tests for new behaviour that has none, launches and screenshots the app for UI tickets and deletes every artefact not kept as evidence. May raise the model or effort with `set_model` when the work was too hard for it. Finishes with `report_test` (verdict, per-criterion summary, evidence), then `move_ticket(done)` or `move_ticket(in_progress)`. `done` is refused unless `report_test(passed: true)` was called in this test run; it ends the session and queues the merge. `in_progress` starts the next execute attempt, up to three retries (`docs/LIFECYCLE.md`).
 
-**Housekeeper (housekeeping).** Finds stale docs, ephemeral docs that are superseded, modules with no importers, templates nothing renders, orphan worktrees, temp dirs and stray screenshots. Moves anything durable into the matching living doc, then deletes. Confirms "unused" by search. Changes no behaviour; tests and build must pass as before. Calls `report_cleanup` with every path and reason, then `move_ticket(testing)`. Its tester checks the build still passes and no living doc was removed.
+**Housekeeper (housekeeping).** Created by the board after every 10th merged ticket (`housekeeping_every`), and run through the same test and merge path as any ticket. Finds stale docs, ephemeral docs that are superseded, modules with no importers, templates nothing renders, orphan worktrees, temp dirs and stray screenshots. Moves anything durable into the matching living doc, then deletes. Confirms "unused" by search. Changes no behaviour; tests and build must pass as before. Calls `report_cleanup` with every path and reason, then `move_ticket(testing)`. Its tester checks the build still passes and no living doc was removed.
 
 ## Editing templates
 

@@ -59,7 +59,7 @@ Edit a ticket's title, body, criteria or dependencies. A worker may only refine 
 
 ### set_model
 
-Change the model and/or effort a ticket runs with; give either or both. Lower effort for trivial work and raise it for hard work, do not only escalate. A worker changing its own ticket is requeued with the new setting; a tester sets what the retry will run with. Returns the ticket.
+Change the model and/or effort a ticket runs with; give either or both. Lower effort for trivial work and raise it for hard work, do not only escalate. The ticket's model and effort apply to its execute runs: a worker or tester changing them sets what the next execute attempt (the retry) runs with. Returns the ticket.
 
 | argument | type | required | description |
 |---|---|---|---|
@@ -69,7 +69,7 @@ Change the model and/or effort a ticket runs with; give either or both. Lower ef
 
 ### move_ticket
 
-Move a ticket to another column. A worker moves its ticket to testing when the work is committed in the worktree and ready to be checked. A tester moves it to done when every acceptance criterion passes, or back to in_progress after report_test with the failure so the worker retries. Returns the ticket.
+Move a ticket to another column. A worker moves its ticket to testing when the work is committed in the worktree and ready to be checked. A tester moves it to done after report_test with passed true (the board then merges the branch), or back to in_progress after report_test with the failure so the worker retries. Once the move is accepted your session is over: the board ends it and starts the next agent. Returns the ticket.
 
 | argument | type | required | description |
 |---|---|---|---|
@@ -123,7 +123,7 @@ Full-text search the project brain, best match first. Search before making a dec
 
 ### ask_operator
 
-Ask the human operator a question you cannot resolve from the ticket, the brain or the code. The ticket is flagged needs_human and the operator is alerted; the answer arrives as a note on the ticket and your session resumes. Ask once with full context and the options you see, rather than many small questions. Returns the question id.
+Ask the human operator a question you cannot resolve from the ticket, the brain or the code. The ticket is flagged needs_human and the operator is alerted; the answer is typed into your session as one line and kept as a note on the ticket. Ask once with full context and the options you see, rather than many small questions. Returns the question id.
 
 | argument | type | required | description |
 |---|---|---|---|

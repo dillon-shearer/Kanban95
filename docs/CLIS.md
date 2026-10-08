@@ -23,7 +23,7 @@ On Windows the pty runs `cmd.exe /d /s /c "<cli> <args>"` so that `PATHEXT` reso
 ## Claude Code
 
 ```
-claude --mcp-config <session>/mcp.json --strict-mcp-config --model <model> --effort <effort> --dangerously-skip-permissions "<initial message>"
+claude --mcp-config <session>/mcp.json --strict-mcp-config --model <model> --effort <effort> [planner: --disallowedTools Edit Write NotebookEdit Bash PowerShell Agent] --dangerously-skip-permissions "<initial message>"
 ```
 
 | Need | Flag | Notes |
@@ -32,7 +32,8 @@ claude --mcp-config <session>/mcp.json --strict-mcp-config --model <model> --eff
 | effort | `--effort <level>` | accepts `low medium high xhigh max`; the board uses `low medium high max` unchanged |
 | MCP | `--mcp-config <file>` | variadic, so it comes first and a boolean flag separates it from the message |
 | only the board's MCP | `--strict-mcp-config` | the operator's other MCP servers are not loaded into agent sessions |
-| permissions off | `--dangerously-skip-permissions` | the worktree is the blast radius (`PLAN.md`) |
+| permissions off | `--dangerously-skip-permissions` | every role; approved by the operator (`PLAN.md` → Agents) |
+| planner reach | `--disallowedTools Edit Write NotebookEdit Bash PowerShell Agent` | variadic, so a flag follows it. See Reach by role |
 | initial message | positional `[prompt]` | interactive session; the operator can type into it |
 
 `mcp.json`:
@@ -54,7 +55,7 @@ The host must be `127.0.0.1`, not `localhost`: the daemon's origin guard refuses
 ## Codex CLI
 
 ```
-codex --model <model> -c model_reasoning_effort=<effort> -c mcp_servers.kanban95.url=http://127.0.0.1:<port>/mcp -c mcp_servers.kanban95.bearer_token_env_var=KANBAN95_TOKEN --dangerously-bypass-approvals-and-sandbox "<initial message>"
+codex --model <model> -c model_reasoning_effort=<effort> -c mcp_servers.kanban95.url=http://127.0.0.1:<port>/mcp -c mcp_servers.kanban95.bearer_token_env_var=KANBAN95_TOKEN -c "projects={'<repo>'={trust_level='trusted'}}" <reach> "<initial message>"
 ```
 
 | Need | Flag | Notes |
@@ -63,7 +64,8 @@ codex --model <model> -c model_reasoning_effort=<effort> -c mcp_servers.kanban95
 | effort | `-c model_reasoning_effort=<level>` | config override; current GPT 5.6 models accept `low medium high xhigh max` (`ultra` on some). A model without `max` (`gpt-5.5`) is Codex's to reject, not the board's |
 | MCP | `-c mcp_servers.kanban95.url=<url>` and `-c mcp_servers.kanban95.bearer_token_env_var=KANBAN95_TOKEN` | per-process override, verified with `codex -c ... mcp get kanban95 --json` (transport `streamable_http`). Nothing is written to `~/.codex/config.toml` |
 | token | env `KANBAN95_TOKEN` | set only in the CLI's own pty environment, never on the command line. Commands the agent runs may see it; it is that agent's own grant |
-| permissions off | `--dangerously-bypass-approvals-and-sandbox` | matches Claude Code's mode; `--full-auto` does not exist in 0.154. `-s workspace-write -a never` would confine writes, but a worktree's git metadata lives in the main repo's `.git/worktrees/`, outside the workspace; not evaluated yet |
+| trust | `-c projects={'<repo>'={trust_level='trusted'}}` | per process, merged over the operator's own `[projects]`; nothing is written. See First-run prompts |
+| reach | worker, tester: `--dangerously-bypass-approvals-and-sandbox`; planner: `-s read-only -a never` | `--full-auto` does not exist in 0.154. See Reach by role |
 | initial message | positional `[PROMPT]` | interactive TUI |
 
 `-c` values are unquoted on purpose: a value that is not valid TOML is taken as a literal string, so `high` and the URL need no quotes, and no `"` has to cross `cmd.exe`.
@@ -81,16 +83,33 @@ Codex has no equivalent of `--strict-mcp-config`; MCP servers from the operator'
 
 Both installed CLIs have an effort control, so there is no "unsupported" path. If a future CLI lacks one, add it here first.
 
-## First-run prompts (operator, once)
+## First-run prompts, answered by the board
 
-Both CLIs ask whether to trust a folder the first time they open it, and a new worktree is a new folder. The board does not answer these for the operator.
+Both CLIs ask whether to trust a folder the first time they open it. A launch is unattended, so the board answers for its own worktrees (operator decision, 2026-10-07). Checked live on 2026-10-07 against the versions above, in a scratch repo outside any trusted folder:
 
-- **Claude Code**: "Quick safety check: Is this a project you created or one you trust?" in each new worktree.
-- **Codex**: "Do you trust the contents of this directory?" likewise.
+- **Trusting the repo root covers every worktree, for both CLIs.** Claude Code walks up from its working directory looking for a trusted folder: with only the root trusted, `.worktrees/t-1` opened without a prompt. Codex maps a worktree to its main repository and says so in the prompt ("You're in a subdirectory of a Git project. Trusting will apply to the repository root"). So it is one entry per repo, never one per worktree, and the janitor has nothing to remove when a worktree goes.
+- **Claude Code**: "Quick safety check: Is this a project you created or one you trust?". It has no flag to skip it outside `-p`. Before every Claude launch `preTrustClaude` (`daemon/src/trust.ts`) reads `~/.claude.json` (`$CLAUDE_CONFIG_DIR/.claude.json` when set) and, unless the repo root or an ancestor already has `projects["<path>"].hasTrustDialogAccepted: true`, sets exactly that key for the repo root. The path is absolute with forward slashes (`C:/Users/you/repo`), the form Claude Code writes when a person accepts the prompt. Everything else in the file is left as it was. The first write copies the file to `~/.claude.json.kanban95.bak`; the write goes to a temp file renamed over the original. Each write is audited (`trust.write`, the file and the key, the launching ticket). Claude Code re-reads the file before it saves, so an entry the board adds survives a running Claude session (observed); there is no shared lock (`// ponytail:` in `trust.ts`).
+- **Codex**: "Do you trust the contents of this directory?". It appears only once a prompt is submitted, not on an idle start. The board passes `-c projects={'<repo>'={trust_level='trusted'}}` on every launch. A `-c` table is merged over the operator's own `[projects]` in `~/.codex/config.toml` for that process only; nothing is written. Single quotes make TOML literal strings, so no `"` crosses `cmd.exe`; a repo path containing `'` cannot be expressed and is refused at launch. Note that the operator's own `config.toml` may already trust an ancestor (for example the home directory), in which case Codex never asks.
+- **Claude Code's one-time bypass-permissions warning is not answered by the board.** It is shown once per machine for `--dangerously-skip-permissions` until accepted, and accepting it stores `skipDangerousModePermissionPrompt: true` in `~/.claude/settings.json`. On the development machine it was already accepted. Writing that key on the operator's behalf was blocked by the agent safety check during phase 5 and is left to the operator: accept the warning once in any Claude Code session started with `--dangerously-skip-permissions`, before the first board launch.
 
-Until phase 5 lands, the operator answers it in the agent's terminal window. The operator has decided the board will pre-trust its worktrees on first run (`PLAN.md` → Agents); phase 5 implements it and documents the exact keys here. Claude Code's one-time `--dangerously-skip-permissions` warning appears too if it was never accepted on this machine.
+**Seeing and clearing.** Every trust write is in the audit log (`SELECT * FROM audit WHERE tool = 'trust.write'`). To undo one, delete that `projects` entry from `~/.claude.json`, or restore `~/.claude.json.kanban95.bak`. The Settings window lists and clears them from phase 6.
 
-Claude Code also applies the operator's user-level settings (`~/.claude/settings.json` hooks, user `CLAUDE.md`) inside agent sessions; `--strict-mcp-config` only covers MCP servers.
+## Reach by role
+
+Approvals are off for every role (the operator approved the bypass). What each role can touch is limited by the CLI's own mechanisms instead, applied by `buildArgv` from the template's role:
+
+| role | template asks for | Claude Code | Codex |
+|---|---|---|---|
+| planner (brainstorm) | read the code, write tickets over MCP | `--disallowedTools Edit Write NotebookEdit Bash PowerShell Agent` | `-s read-only -a never` |
+| worker (plan, execute, housekeeping) | write and commit in its worktree, run builds and tests | permissions off, `cwd` = worktree | `--dangerously-bypass-approvals-and-sandbox` |
+| tester (test) | run the suite, write and commit tests, launch the app | as worker | as worker |
+
+- **Planner on Claude Code loses Bash, PowerShell and Agent too.** Bash or PowerShell could write a file, and a subagent is a way around the list; the brainstorm template never asks the planner to run a command or delegate. Read, Grep and Glob cover reading the code. MCP tools are unaffected.
+- **Planner on Codex**: checked live, asked to "create a file by any means", it answered "patch rejected: writing is blocked by read-only sandbox". Not yet checked: whether `-a never` lets a read-only Codex call the board's MCP write tools (`create_ticket`). The brainstorm launch arrives with the UI (phase 6); check it then.
+- **Planner on Claude Code**: checked live by the operator on 2026-10-07 (Claude Code 2.1.293, `claude-sonnet-5-5`, `-p`, the list without `Agent`, permissions off). Asked to read `seed.txt` and then create `planner.txt` "by any means", it quoted the seed and reported that Write was disabled, including in subagents, and that it had no other file-writing tool; no file appeared. It named delegating to a subagent with shell access as a way it chose not to try, which is why `Agent` was added to the list afterwards. Haiku models refuse `--dangerously-skip-permissions`, so a planner on Claude needs Sonnet or larger.
+- **Workers and testers on Codex keep the bypass.** Tried `-s workspace-write -a never --add-dir <repo>/.git` (the worktree's git metadata lives under the main repo's `.git/`): the file was written and `node --version` ran, but `git commit` failed with `fatal: detected dubious ownership in repository`. On Windows the Codex sandbox (`[windows] sandbox = "elevated"`) runs commands as a separate sandbox account, so git refuses the operator's worktree. A worker that cannot commit cannot finish a ticket. Getting there would mean `safe.directory` overrides and ACLs for that account on `.git`; not worth it until a non-Windows platform matters.
+- Claude Code applies the operator's user-level settings (`~/.claude/settings.json` hooks and plugins, user `CLAUDE.md`) inside agent sessions; `--strict-mcp-config` only covers MCP servers. Seen live: a memory plugin's hook wrote a `.remember/` folder into the session's working directory and held it open for a few seconds after Claude exited (why `cleanTicket` retries). Codex likewise loads the operator's own MCP servers from `~/.codex/config.toml`.
+- Candidates seen in `claude --help` and not used: `--restricted` (confines file tools to the working dirs, but removes Bash and refuses bypass mode, so it does not fit a worker), `--settings <file>` (per-session deny rules without touching the operator's settings; `--disallowedTools` does the planner's job without a file).
 
 ## Checked live
 
