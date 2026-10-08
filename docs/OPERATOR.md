@@ -68,7 +68,7 @@ A merged ticket's worktree and branch are removed by the board. Every ten merged
 | Ticket | double-click a card, **New ticket** | fields and attachments, notes timeline, runs and prompts, diff, live grants (Revoke), audit trail. Ctrl+V a screenshot (outside a text field) or drop a file on the window to attach it; the agents get its path. Images show a thumbnail and open in their own window, other files download, **Remove** deletes one. The form's **Depends on** field lists the tickets it waits for; a new ticket takes attachments once it is created |
 | Terminal | opens by itself; Ticket → Runs → Terminal | one agent session, keyboard and mic |
 | Inbox | taskbar "Inbox n", Start → Inbox | every ticket that needs you: questions to answer, and failures with what resolves them |
-| Brain | Start → Brain | search what agents learned, add a note yourself |
+| Brain | Start → Brain | search what agents learned (no query lists the newest), add a note yourself. Each row shows when it was written and from which ticket, with that ticket's status, so a row written for work that never landed stands out. **Edit** changes a row in place, **Delete** removes it after a confirm; merge rows by editing the survivor and deleting the rest. Agents name rows to delete in their summary notes, since only you and the planner can delete |
 | Settings | Start → Settings | Models, CLI paths and trusted folders (**Clear Claude trust**), Prompts (preferences), Grants, Voice, sounds |
 | Notepad | Start → Notepad | your own scratch notes for this repo, saved as you type |
 

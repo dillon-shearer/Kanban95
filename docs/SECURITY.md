@@ -120,7 +120,7 @@ The mic button's speech model is the only thing the board ever downloads, and th
 
 `daemon/src/templates.ts`, `daemon/src/context.ts`; what agents receive is listed in `docs/AGENTS.md`.
 
-- An agent is pushed only its ticket, criteria, up to 5 brain rows (4000 characters at most), the failure notes of the attempt being retried, the retry count, the base branch, the operator's preferences, the absolute paths of the ticket's attachments, the diff (test only), its tool list and, for an operator terminal, the mission the operator typed. No transcript, no other ticket, no environment, no file contents.
+- An agent is pushed only its ticket, criteria, up to 8 brain rows (2500 characters at most), the failure notes of the attempt being retried, the retry count, the base branch, the operator's preferences, the absolute paths of the ticket's attachments, the diff (test only), its tool list and, for an operator terminal, the mission the operator typed. No transcript, no other ticket, no environment, no file contents.
 - A template may only name the known variables (`VARS` in `daemon/src/templates.ts`, listed in `docs/AGENTS.md`), and every one it names must have a value. Anything else (for example `{{transcript}}`) is refused when the template is loaded, before any context is built or any run row is written.
 - Values are substituted in one pass, so text an agent wrote into the brain or a note (including `{{...}}`) is inserted literally and cannot pull in another variable.
 - The template name is checked against a fixed set before any path is built, so it cannot read a file outside `.kanban95/templates/`.

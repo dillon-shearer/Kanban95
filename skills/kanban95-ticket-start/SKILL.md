@@ -9,7 +9,7 @@ Your prompt carries the ticket, its criteria, matching brain rows and any failur
 
 1. **Read the ticket.** `get_ticket` (omit `ticket_id`; your grant is bound to one ticket). Read the body, every acceptance criterion and every note in order. On a retry (`retry` > 0) the `failure` notes are what you fix first.
 2. **Read the dependencies.** `list_tickets` shows your ticket and the ones it depends on. `get_ticket` on each dependency to see what it delivered: its `summary` note says what changed and where. A dependency not in `done` means its work may not be on your branch; check the code before relying on it.
-3. **Search the brain.** `brain_search` with the subsystem, file or tool names the ticket touches (each word must match, so use two or three keywords, not a sentence). Search again before any decision another ticket may already have made.
+3. **Search the brain.** `brain_search` with the subsystem, file or tool names the ticket touches (each word must match, so use two or three keywords, not a sentence). Search again before any decision another ticket may already have made. The rows in your prompt are picked by keyword overlap and most will not apply: use one only if it concerns what you are changing, and check it against the code. Rows listed by title only: fetch with `brain_search` and the row's `id`.
 4. **Read the code** the ticket touches, end to end, and the repo's own conventions (`CLAUDE.md`, `AGENTS.md`).
 5. **Post a plan.** One `add_note` with `kind: "plan"`: the files you will change, the steps, how each criterion will be proven, and the risks. Keep it short; it is shown to the operator and to later attempts.
 

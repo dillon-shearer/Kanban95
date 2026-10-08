@@ -12,6 +12,8 @@ You are designing the approach for one ticket before anyone builds it. Do not wr
 
 ## Brain notes that may apply
 
+Picked by keyword overlap, so most rows will not apply; use one only if it concerns what you are changing, and check it against the code. The first rows carry their body; fetch any other with `brain_search` and its `id`.
+
 {{brain}}
 
 ## What failed before
