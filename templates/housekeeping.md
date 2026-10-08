@@ -36,6 +36,10 @@ Retry count: {{retry}}.
 4. Run the tests and the build after the cleanup. They must pass exactly as before.
 5. Commit with a plain imperative message, no ticket ids, no trailers. Never commit secrets.
 
+## Operator preferences
+
+{{preferences}}
+
 ## Finish
 
 1. Call `report_cleanup` with every path you deleted or updated and the reason for each.

@@ -32,6 +32,10 @@ Retry count: {{retry}} (0 means first attempt; after 3 failed retries the ticket
 - Use `get_ticket` and `brain_search` when you need more context. Nothing else will be sent to you.
 - Commit your work in this worktree. Commit message: a plain imperative sentence saying what changed, no ticket or phase ids, no `Co-Authored-By` or other trailer. Add a body only when the why is not obvious.
 
+## Operator preferences
+
+{{preferences}}
+
 ## Finish
 
 1. Run the tests and the build. Fix what fails.

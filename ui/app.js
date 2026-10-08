@@ -490,7 +490,7 @@ function grantTable(grants) {
 function openSettings() {
   const w = open('settings', { title: 'Settings', w: 640, h: 440, persist: true, onClose: () => views.delete('settings') });
   if (w.body.firstChild) return;
-  const tb = tabs(['Models', 'CLIs', 'Grants', 'Voice', 'General'], async (tab, p, first) => {
+  const tb = tabs(['Models', 'CLIs', 'Prompts', 'Grants', 'Voice', 'General'], async (tab, p, first) => {
     if (tab === 'Grants') {
       const grants = (await api('GET', '/grants')).filter(liveGrant);
       return p.replaceChildren(h('p', {}, 'Every live agent grant. Revoke invalidates its token and stops its terminal.'), grants.length ? grantTable(grants) : h('p', {}, 'No live grants.'));
@@ -539,6 +539,14 @@ function openSettings() {
             : `Claude Code does not trust ${trust.key}; the board writes that entry before the next Claude launch.`),
           h('p', {}, 'Codex is told per launch that this repo is trusted; nothing is written to its config.'),
           h('button', { disabled: !trust.trusted, onclick: () => act(async () => { await api('DELETE', '/trust'); tb.show(); }, 'Claude trust entry cleared.') }, 'Clear Claude trust')));
+    } else if (tab === 'Prompts') {
+      const { path, value } = await api('GET', '/config/preferences');
+      const text = h('textarea', { id: 'preferences', rows: 10, placeholder: 'e.g. No em dashes or non-ASCII characters in output.' });
+      text.value = value;
+      p.replaceChildren(h('fieldset', {}, h('legend', {}, 'Preferences'),
+        h('p', {}, `Standing instructions every agent prompt gets under "Operator preferences". Up to 16 KB. ${path}`),
+        h('div', { class: 'field-row' }, text),
+        h('button', { onclick: () => act(() => api('PUT', '/config/preferences', { value: text.value }), `Saved ${path}.`) }, 'Save')));
     } else if (tab === 'Voice') {
       const s = await api('GET', '/voice');
       const mode = (v, label) => h('div', { class: 'field-row' }, h('input', { type: 'radio', id: `mode-${v}`, name: 'mode', checked: settings.voice.mode === v,

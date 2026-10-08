@@ -4,6 +4,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import { readTicket } from './api.js';
 import type { Role } from './grants.js';
 import { TOOLS } from './mcp.js';
+import { readPreferences } from './settings.js';
 import { fill, loadTemplate, TEMPLATES, type Ctx, type TemplateName } from './templates.js';
 
 const BRAIN_LIMIT = 5;
@@ -53,7 +54,8 @@ export function buildContext(db: DatabaseSync, ticketId: number | null, role: Ro
     .filter(([, t]) => role in t.access)
     .map(([name, t]) => `- ${name} (${t.access[role]})`)
     .join('\n');
-  if (ticketId === null) return { ticket: '(none)', criteria: '(none)', brain: '(none)', notes: '(none)', retry: '0', diff: '', tools };
+  const preferences = orNone(readPreferences());
+  if (ticketId === null) return { ticket: '(none)', criteria: '(none)', brain: '(none)', notes: '(none)', retry: '0', diff: '', tools, preferences };
 
   const t = readTicket(db, ticketId);
   let diff = '';
@@ -69,6 +71,7 @@ export function buildContext(db: DatabaseSync, ticketId: number | null, role: Ro
     retry: String(t.retry),
     diff,
     tools,
+    preferences,
   };
 }
 
