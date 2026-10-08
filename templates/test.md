@@ -34,7 +34,6 @@ Retry count: {{retry}} (after 3 failed retries the ticket stops and goes to the 
 2. Review the diff against each acceptance criterion, one by one. Note which pass and which fail, and why.
 3. Where the diff adds behaviour that no test covers, write the missing tests and commit them. Each test must be able to fail for a real reason.
 4. If the ticket changes the UI, screenshot the affected screens with a headless script built on `daemon/test/cdp.ts` (`Page.captureScreenshot`), and keep the screenshots you cite as evidence. Delete every other artefact you made (screenshots, temp dirs).
-5. If the work failed because the model or effort was too small for it, raise it with `set_model` before sending it back.
 
 ## Operator preferences
 

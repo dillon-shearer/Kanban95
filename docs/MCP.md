@@ -17,7 +17,7 @@ A refused call returns a tool error whose text says why and, for `move_ticket`, 
 |------|---|---|---|---|
 | create_ticket | yes | no | no | yes |
 | update_ticket | any ticket | own, body/criteria only | no | any ticket |
-| set_model | any | own | own (for the retry) | any |
+| set_model | any | no | no | any |
 | move_ticket | no | own → testing | own → done / in_progress | any → in_progress / testing / done |
 | add_note | any | own | own | any |
 | get_ticket | yes | own + its deps | own | yes |
@@ -60,7 +60,7 @@ Edit a ticket's title, body, criteria or dependencies. A worker may only refine 
 
 ### set_model
 
-Change the model and/or effort a ticket runs with; give either or both. Lower effort for trivial work and raise it for hard work, do not only escalate. The ticket's model and effort apply to its execute runs: a worker or tester changing them sets what the next execute attempt (the retry) runs with. Returns the ticket.
+Change the model and/or effort a ticket runs with; give either or both. Lower effort for trivial work and raise it for hard work, do not only escalate. The ticket's model and effort apply to all its execute runs, retries included. Returns the ticket.
 
 | argument | type | required | description |
 |---|---|---|---|

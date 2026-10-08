@@ -88,7 +88,7 @@ An agent the operator starts with a typed mission, for board work outside the ti
 
 ## Operator files the board writes
 
-In `~/.kanban95/`, only on an explicit operator action: `models.json`, `settings.json` and `preferences.md` when **Save** is pressed in Settings (the whole file is checked against its schema first and written through a temp file; a bad value is refused with the field named and the file is not touched), and `models/` when the speech model download is OK'd (see Voice model). No secrets go in `models.json` or `settings.json`; there is no field for one. `preferences.md` is free text copied into every prompt, so the operator is told not to put one there (`docs/DATA.md`).
+In `~/.kanban95/` (or `$KANBAN95_HOME` when set; the board writes operator config nowhere else), only on an explicit operator action: `models.json`, `settings.json` and `preferences.md` when **Save** is pressed in Settings (the whole file is checked against its schema first and written through a temp file; a bad value is refused with the field named and the file is not touched), and `models/` when the speech model download is OK'd (see Voice model). No secrets go in `models.json` or `settings.json`; there is no field for one. `preferences.md` is free text copied into every prompt, so the operator is told not to put one there (`docs/DATA.md`).
 
 In an agent CLI's config, one file, only for Claude Code launches: `~/.claude.json` (or `$CLAUDE_CONFIG_DIR/.claude.json`), key `projects["<repo root>"].hasTrustDialogAccepted = true`, so Claude Code does not stop at its workspace-trust prompt in the board's worktrees (operator decision, `PLAN.md` → Agents). `daemon/src/trust.ts`:
 
@@ -99,7 +99,7 @@ In an agent CLI's config, one file, only for Claude Code launches: `~/.claude.js
 
 Codex is trusted per process with `-c`, so `~/.codex/config.toml` is never written. Claude Code's one-time bypass-permissions warning (`skipDangerousModePermissionPrompt` in `~/.claude/settings.json`) is not written by the board: the operator accepts it once by hand.
 
-Tests run against a throwaway home directory (`daemon/test/home.ts`, which refuses to run if `os.homedir()` did not follow it), so the suite cannot write the operator's files. `daemon/test/real-home-guard.ts` checks the real home after every run and fails `npm test` if a test left a trust entry for a `k95-` temp repo, a `~/.claude.json.kanban95.bak` or a `~/.kanban95` that was not there before (proven by running the launcher tests with the redirect switched off against a fake home: exit 1, every entry named).
+Tests run against a throwaway home directory (`daemon/test/home.ts`, loaded as a `setupFiles` entry by `daemon/vitest.config.ts`, which the repo-root `vitest.config.mts` re-exports so a run from either directory is the same; it also sets `KANBAN95_HOME`, and the daemon throws on any `~/.kanban95` path under vitest without it; which refuses to run if `os.homedir()` did not follow it), so the suite cannot write the operator's files. `daemon/test/real-home-guard.ts` checks the real home after every run and fails `npm test` if a test left a trust entry for a `k95-` temp repo, a `~/.claude.json.kanban95.bak` or a `~/.kanban95` that was not there before (proven by running the launcher tests with the redirect switched off against a fake home: exit 1, every entry named).
 
 ## Voice model
 

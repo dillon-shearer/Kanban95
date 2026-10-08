@@ -4,7 +4,7 @@
 import { createHash } from 'node:crypto';
 import { createReadStream, createWriteStream, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync } from 'node:fs';
 import { once } from 'node:events';
-import { homedir } from 'node:os';
+import { boardHome } from './settings.js';
 import { dirname, join, resolve } from 'node:path';
 
 export interface Manifest {
@@ -16,7 +16,7 @@ export interface Manifest {
 }
 
 export const MANIFEST: Manifest = JSON.parse(readFileSync(resolve(import.meta.dirname, '../voice-model.json'), 'utf8'));
-export const modelDir = (m: Manifest) => join(homedir(), '.kanban95', 'models', m.id.split('/').pop()!);
+export const modelDir = (m: Manifest) => join(boardHome(), 'models', m.id.split('/').pop()!);
 const fileUrl = (m: Manifest, path: string) => `${m.source}/resolve/${m.revision}/${path}`;
 
 const present = (m: Manifest) => m.files.every((f) => statSync(join(modelDir(m), f.path), { throwIfNoEntry: false })?.size === f.size);
