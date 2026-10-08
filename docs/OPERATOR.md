@@ -30,7 +30,7 @@ It runs with the plan phase's model and effort, unless `.kanban95/config.json` h
 
 It skips what needs you: a red (needs human) ticket waits in the Inbox, and so does anything depending on it, while the runner moves on. When nothing is running and nothing is left it turns itself off with a ding and the status bar says "Runner stopped: nothing left to launch". **Stop** (or Ctrl+L again) starts nothing new; agents already running finish their step and merge. It stays on across a restart. To run two at once, put `{ "runner_concurrency": 2 }` in `.kanban95/config.json`.
 
-To start one ticket yourself, select it and press **Launch**, runner on or off. A ticket whose dependencies have not merged waits with a yellow "waits on #n" badge and starts by itself when they land.
+To start tickets yourself, select them and press **Launch**, runner on or off. A ticket whose dependencies have not merged waits with a yellow "waits on #n" badge and starts by itself when they land.
 
 ![The board](img/board.png)
 
@@ -82,7 +82,9 @@ A place to draft before you hand words to an agent or a ticket. One plain text a
 
 ## Cards
 
-Right-click a card for its menu: Open, Launch, Resume (a red running card whose agent is gone), Restart (any In progress or Testing card: replaces its agent), **Model**, **Effort** and **CLI** (set or clear this ticket's override without opening it), Retry merge (after you fixed a conflict or cleaned the main checkout), Reset to Backlog (also on a card waiting on a dependency: it cancels the wait, so it will not launch by itself), Delete.
+Click a card to select it, Ctrl+click to add or remove one, Shift+click to select the run of cards in the same column from the last one you clicked, Ctrl+A to select every card; click empty column space to clear the selection. Right-click a selected card and its menu acts on the whole selection: one confirmation for Reset to Backlog or Delete naming the count, Launch starts only the Backlog cards and says how many it skipped, Open opens at most 8 Ticket windows, and the status bar reports the outcome once ("Effort set to high on 4 tickets."), naming any ticket the daemon refused while the rest go ahead.
+
+Right-click a card for its menu: Open, Launch, Resume (a red running card whose agent is gone), Restart (one In progress or Testing card: replaces its agent), **Model**, **Effort** and **CLI** (set or clear this ticket's override without opening it), Retry merge (after you fixed a conflict or cleaned the main checkout), Reset to Backlog (also on a card waiting on a dependency: it cancels the wait, so it will not launch by itself), Delete.
 
 ![Card menu](img/card-menu.png)
 
@@ -100,6 +102,7 @@ Any other drop snaps back, and the status bar names where that card may go.
 | Esc | closes the focused window (or an open menu) |
 | Ctrl+L | Run / Stop the runner |
 | Ctrl+R | Restart the agent of the focused ticket window (after a confirm) |
+| Ctrl+A | select every card (on the Board, outside a text field) |
 | Ctrl+N | New brainstorm |
 | Ctrl+Shift+N | New operator terminal |
 
