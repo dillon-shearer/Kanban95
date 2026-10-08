@@ -6,7 +6,7 @@ import type { Role } from './grants.js';
 import { TOOLS } from './mcp.js';
 
 export const MCP_DOC = resolve(import.meta.dirname, '../../docs/MCP.md');
-const ROLES: Role[] = ['planner', 'worker', 'tester'];
+const ROLES: Role[] = ['planner', 'worker', 'tester', 'operator'];
 
 type Schema = { type?: string; enum?: unknown[]; items?: Schema; properties?: Record<string, Schema>; description?: string; default?: unknown };
 function typeOf(s: Schema): string {
@@ -37,7 +37,8 @@ export function renderMcpDoc(): string {
     `|------|${ROLES.map(() => '---').join('|')}|`,
     ...Object.entries(TOOLS).map(([name, t]) => `| ${name} | ${ROLES.map((r) => t.access[r] ?? 'no').join(' | ')} |`),
     '',
-    '"own" means the ticket the grant was minted for; a worker or tester may omit `ticket_id` and may not name another ticket. A planner grant has no ticket and must pass `ticket_id`.',
+    '"own" means the ticket the grant was minted for; a worker or tester may omit `ticket_id` and may not name another ticket. A planner or operator grant has no ticket and must pass `ticket_id`.',
+    'The operator role is an operator terminal: an agent the operator starts from the UI with a typed mission, holding the operator\'s own reach on the board. It never gets `report_test`; only a tester proves a ticket.',
     '',
     '## Tools',
   ];

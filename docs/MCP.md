@@ -13,22 +13,23 @@ A refused call returns a tool error whose text says why and, for `move_ticket`, 
 
 ## Role matrix
 
-| tool | planner | worker | tester |
-|------|---|---|---|
-| create_ticket | yes | no | no |
-| update_ticket | any ticket | own, body/criteria only | no |
-| set_model | any | own | own (for the retry) |
-| move_ticket | no | own → testing | own → done / in_progress |
-| add_note | any | own | own |
-| get_ticket | yes | own + its deps | own |
-| list_tickets | yes | own + its deps | own |
-| brain_add | yes | yes | yes |
-| brain_search | yes | yes | yes |
-| ask_operator | yes | own | own |
-| report_test | no | no | own |
-| report_cleanup | no | own | no |
+| tool | planner | worker | tester | operator |
+|------|---|---|---|---|
+| create_ticket | yes | no | no | yes |
+| update_ticket | any ticket | own, body/criteria only | no | any ticket |
+| set_model | any | own | own (for the retry) | any |
+| move_ticket | no | own → testing | own → done / in_progress | any → in_progress / testing / done |
+| add_note | any | own | own | any |
+| get_ticket | yes | own + its deps | own | yes |
+| list_tickets | yes | own + its deps | own | yes |
+| brain_add | yes | yes | yes | yes |
+| brain_search | yes | yes | yes | yes |
+| ask_operator | yes | own | own | yes |
+| report_test | no | no | own | no |
+| report_cleanup | no | own | no | any |
 
-"own" means the ticket the grant was minted for; a worker or tester may omit `ticket_id` and may not name another ticket. A planner grant has no ticket and must pass `ticket_id`.
+"own" means the ticket the grant was minted for; a worker or tester may omit `ticket_id` and may not name another ticket. A planner or operator grant has no ticket and must pass `ticket_id`.
+The operator role is an operator terminal: an agent the operator starts from the UI with a typed mission, holding the operator's own reach on the board. It never gets `report_test`; only a tester proves a ticket.
 
 ## Tools
 
@@ -51,7 +52,7 @@ Edit a ticket's title, body, criteria or dependencies. A worker may only refine 
 
 | argument | type | required | description |
 |---|---|---|---|
-| ticket_id | integer | no | Ticket id. Worker and tester grants are bound to one ticket and may omit it; a planner must give it. |
+| ticket_id | integer | no | Ticket id. Worker and tester grants are bound to one ticket and may omit it; a planner or operator must give it. |
 | title | string | no |  |
 | body | string | no |  |
 | criteria | string | no |  |
@@ -63,17 +64,17 @@ Change the model and/or effort a ticket runs with; give either or both. Lower ef
 
 | argument | type | required | description |
 |---|---|---|---|
-| ticket_id | integer | no | Ticket id. Worker and tester grants are bound to one ticket and may omit it; a planner must give it. |
+| ticket_id | integer | no | Ticket id. Worker and tester grants are bound to one ticket and may omit it; a planner or operator must give it. |
 | model | string | no | Model id as listed in the board's model catalog. |
 | effort | low \| medium \| high \| max | no |  |
 
 ### move_ticket
 
-Move a ticket to another column. A worker moves its ticket to testing when the work is committed in the worktree and ready to be checked. A tester moves it to done after report_test with passed true (the board then merges the branch), or back to in_progress after report_test with the failure so the worker retries. Once the move is accepted your session is over: the board ends it and starts the next agent. Returns the ticket.
+Move a ticket to another column. A worker moves its ticket to testing when the work is committed in the worktree and ready to be checked. A tester moves it to done after report_test with passed true (the board then merges the branch), or back to in_progress after report_test with the failure so the worker retries. Once the move is accepted your session is over: the board ends it and starts the next agent. An operator grant may move any ticket the same ways, which ends that ticket's agent, not its own session, and may launch a backlog ticket by moving it to in_progress; it still cannot finish a ticket the tester has not passed. Returns the ticket.
 
 | argument | type | required | description |
 |---|---|---|---|
-| ticket_id | integer | no | Ticket id. Worker and tester grants are bound to one ticket and may omit it; a planner must give it. |
+| ticket_id | integer | no | Ticket id. Worker and tester grants are bound to one ticket and may omit it; a planner or operator must give it. |
 | status | backlog \| in_progress \| testing \| done | yes |  |
 
 ### add_note
@@ -82,7 +83,7 @@ Attach a note to a ticket. Kinds: plan (how you intend to do the work, post it b
 
 | argument | type | required | description |
 |---|---|---|---|
-| ticket_id | integer | no | Ticket id. Worker and tester grants are bound to one ticket and may omit it; a planner must give it. |
+| ticket_id | integer | no | Ticket id. Worker and tester grants are bound to one ticket and may omit it; a planner or operator must give it. |
 | kind | plan \| decision \| failure \| summary | yes |  |
 | body | string | yes | Markdown. |
 
@@ -92,11 +93,11 @@ Read one ticket in full: title, body, acceptance criteria, status, flags, depend
 
 | argument | type | required | description |
 |---|---|---|---|
-| ticket_id | integer | no | Ticket id. Worker and tester grants are bound to one ticket and may omit it; a planner must give it. |
+| ticket_id | integer | no | Ticket id. Worker and tester grants are bound to one ticket and may omit it; a planner or operator must give it. |
 
 ### list_tickets
 
-List tickets with id, title, status, flags and dependencies, optionally filtered by status. A planner sees the whole board; a worker sees its own ticket and the ones it depends on; a tester sees its own. Use get_ticket for the body and notes.
+List tickets with id, title, status, flags and dependencies, optionally filtered by status. A planner or operator sees the whole board; a worker sees its own ticket and the ones it depends on; a tester sees its own. Use get_ticket for the body and notes.
 
 | argument | type | required | description |
 |---|---|---|---|
@@ -127,7 +128,7 @@ Ask the human operator a question you cannot resolve from the ticket, the brain 
 
 | argument | type | required | description |
 |---|---|---|---|
-| ticket_id | integer | no | Ticket id. Worker and tester grants are bound to one ticket and may omit it; a planner must give it. |
+| ticket_id | integer | no | Ticket id. Worker and tester grants are bound to one ticket and may omit it; a planner or operator must give it. |
 | question | string | yes |  |
 
 ### report_test
@@ -136,16 +137,16 @@ Record the structured result of testing a ticket against its acceptance criteria
 
 | argument | type | required | description |
 |---|---|---|---|
-| ticket_id | integer | no | Ticket id. Worker and tester grants are bound to one ticket and may omit it; a planner must give it. |
+| ticket_id | integer | no | Ticket id. Worker and tester grants are bound to one ticket and may omit it; a planner or operator must give it. |
 | passed | boolean | yes |  |
 | summary | string | yes |  |
 | evidence | string[] | default `[]` |  |
 
 ### report_cleanup
 
-Record what a housekeeping ticket removed or updated: one item per file or module with the action and the reason (superseded by X, no importers, references removed code). Used by housekeeping tickets only; the list is shown to the operator and kept with the ticket. Returns the note id.
+Record what a housekeeping ticket removed or updated: one item per file or module with the action and the reason (superseded by X, no importers, references removed code). Used by housekeeping tickets, and by an operator grant on any ticket; the list is shown to the operator and kept with the ticket. Returns the note id.
 
 | argument | type | required | description |
 |---|---|---|---|
-| ticket_id | integer | no | Ticket id. Worker and tester grants are bound to one ticket and may omit it; a planner must give it. |
+| ticket_id | integer | no | Ticket id. Worker and tester grants are bound to one ticket and may omit it; a planner or operator must give it. |
 | items | { path: string, action: deleted \| updated, reason: string }[] | yes |  |

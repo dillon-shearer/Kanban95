@@ -9,7 +9,7 @@ import WebSocket from 'ws';
 import { readTicket } from '../src/api.ts';
 import { createWorktree } from '../src/git.ts';
 import { mint } from '../src/grants.ts';
-import { sessionsOf } from '../src/launcher.ts';
+import { sessions, sessionsOf } from '../src/launcher.ts';
 import { DIRTY_WAIT, events, MAX_RETRY, Refused, RESTARTED, TABLE, TO_RESOLVE, transition, type Event, type Facts, type Status } from '../src/lifecycle.ts';
 import { start } from '../src/server.ts';
 
@@ -307,6 +307,30 @@ describe('lifecycle', { timeout: 60_000 }, () => {
     expect(runs(silent).map((x) => x.outcome)).toEqual(['exit']);
     expect(t(broken)).toMatchObject({ status: 'in_progress', flags: { needs_human: true } });
     expect(notes(broken, 'failure')[0]).toMatch(/^launch failed: unknown cli nope/);
+  });
+
+  it("the operator's X ends a session: a ticket's is flagged once with the operator note, a brainstorm's touches no ticket", async () => {
+    const del = (key: number) => fetch(`http://127.0.0.1:${srv.port}/api/sessions/${key}`, { method: 'DELETE', headers: { cookie: `k95=${srv.secret}` } });
+    expect((await del(9999)).status).toBe(404);
+    const id = ticket('Long one', { model: 'hang' });
+    await post(`/api/tickets/${id}/launch`);
+    await until(() => sessionsOf(id).length === 1, 'the agent');
+    expect((await del(sessionsOf(id)[0].key)).status).toBe(204);
+    await until(() => sessionsOf(id).length === 0 && runs(id)[0].outcome, 'the session gone');
+    expect(t(id)).toMatchObject({ status: 'in_progress', flags: { needs_human: true } });
+    expect(runs(id).map((x) => x.outcome)).toEqual(['closed']);
+    await new Promise((r) => setTimeout(r, 200)); // a late exit handler would have written its note by now
+    expect(notes(id, 'failure')).toEqual([`ended by the operator from the terminal window
+${TO_RESOLVE}`]);
+    expect((await post(`/api/tickets/${id}/resume`)).status).toBe(200);
+
+    writeFileSync(join(process.env.USERPROFILE!, '.kanban95', 'models.json'), JSON.stringify({ cli: 'claude', claude: { plan: { model: 'hang', effort: 'low' } } }));
+    const b = await (await post('/api/brainstorm')).json();
+    const before = db.prepare('SELECT count(*) n FROM notes').get();
+    expect((await del(b.id)).status).toBe(204);
+    await until(() => !sessions.has(b.id), 'the brainstorm gone');
+    expect(db.prepare('SELECT count(*) n FROM notes').get()).toEqual(before);
+    expect(db.prepare("SELECT tool, outcome FROM audit WHERE tool = 'sessions.end'").all()).toHaveLength(3);
   });
 
   it('merge conflict: the worker merges the base in its kept worktree and both tickets land with no operator action', async () => {
