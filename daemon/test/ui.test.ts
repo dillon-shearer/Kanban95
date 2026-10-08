@@ -297,9 +297,11 @@ describe('ui', { timeout: 60_000 }, () => {
     const id = ticket('Died', { status: 'in_progress', needs_human: 1, retry: 2 });
     db.prepare("INSERT INTO notes (ticket_id, role, kind, body) VALUES (?, 'worker', 'failure', 'agent exited without reporting')").run(id);
     try {
+      // Ids are reused: the previous test's deleted ticket may still have killed agents listed under this id.
+      await until(async () => !((await (await fetch(`${base}api/sessions`, { headers: { cookie: `k95=${srv.secret}` } })).json()) as { ticket_id: number }[]).some((s) => s.ticket_id === id), 'stale sessions to drop', 10000);
       await page.goto(base);
       await until(() => column(id), 'the card');
-      const item = (label: string) => `[...document.querySelectorAll('.k95-menu li')].find((li) => li.firstChild.textContent === '${label}')`;
+      const item =(label: string) => `[...document.querySelectorAll('.k95-menu li')].find((li) => li.firstChild.textContent === '${label}')`;
       await page.evaluate(`document.querySelector('.card[data-id="${id}"]').dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 50, clientY: 50 }))`);
       expect(await page.evaluate(`${item('Resume')}?.getAttribute('aria-disabled') ?? 'enabled'`)).toBe('enabled');
       expect(await page.evaluate(`${item('Launch')}?.getAttribute('aria-disabled') ?? 'enabled'`)).toBe('enabled');
