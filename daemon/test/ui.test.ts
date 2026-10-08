@@ -251,7 +251,10 @@ describe('ui', { timeout: 60_000 }, () => {
     await page.goto(base);
     await until(() => column(id), 'the card');
     expect((await fetch(`${base}api/tickets/${id}/launch`, { method: 'POST', headers: { cookie: `k95=${srv.secret}` } })).status).toBe(200);
-    const wid = await until(() => page.evaluate<string | undefined>(`document.querySelector('[data-win^="term-"]:not(.ended) .xterm')?.closest('[data-win]').dataset.win`), 'the terminal');
+    // By this ticket's session, not the first terminal: an earlier test's agent may still be dying (ticket ids are reused).
+    const key = await until(async () => (await (await fetch(`${base}api/sessions`, { headers: { cookie: `k95=${srv.secret}` } })).json()).find((x: { ticket_id: number }) => x.ticket_id === id)?.id, 'the session');
+    const wid = `term-${key}`;
+    await until(() => page.evaluate(`!!document.querySelector('[data-win="${wid}"] .xterm')`), 'the terminal');
     const live = async () => (await (await fetch(`${base}api/sessions`, { headers: { cookie: `k95=${srv.secret}` } })).json()).some((x: { id: number }) => `term-${x.id}` === wid);
     const press = (label: string) => page.evaluate(`[...document.querySelectorAll('dialog[open] button')].find((b) => b.textContent === '${label}').click()`);
     const x = `[data-win="${wid}"] [aria-label="Close"]`;
