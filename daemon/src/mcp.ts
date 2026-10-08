@@ -121,8 +121,8 @@ export const TOOLS: Record<string, Tool<z.ZodRawShape>> = {
   set_model: tool({
     description:
       'Change the model and/or effort a ticket runs with; give either or both. Lower effort for trivial work and raise it for hard work, do not only escalate. ' +
-      'The ticket\x27s model and effort apply to its execute runs: a worker or tester changing them sets what the next execute attempt (the retry) runs with. Returns the ticket.',
-    access: { planner: 'any', worker: 'own', tester: 'own (for the retry)' },
+      'The ticket\x27s model and effort apply to all its execute runs, retries included. Returns the ticket.',
+    access: { planner: 'any' },
     input: {
       ticket_id: ticketId,
       model: z.string().min(1).optional().describe('Model id as listed in the board\'s model catalog.'),
