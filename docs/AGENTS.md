@@ -18,14 +18,14 @@ Each session starts from one rendered template. The board pushes only this; ever
 | `{{tools}}` | the MCP tools this session's role may call, with the access cell from `docs/MCP.md` |
 | `{{preferences}}` | the operator's standing instructions, `~/.kanban95/preferences.md` as written (Settings → Prompts), under every template's "## Operator preferences" heading |
 
-Empty values render as `(none)`. Values are inserted literally: a brain note containing `{{ticket}}` stays that text.
+Empty values render as `(none)`, except `{{diff}}` outside a test session (empty) and the attachments block (left out when there are none). Values are inserted literally: a brain note containing `{{ticket}}` stays that text.
 
 ## Templates and roles
 
 | template | grant role | `runs.phase` | job |
 |---|---|---|---|
 | `brainstorm.md` | planner | no run (no ticket) | interview the operator, create tickets |
-| `plan.md` | worker | plan | design pass for one ticket, write a `plan` note |
+| `plan.md` | worker | plan | design pass for one ticket, write a `plan` note. The board does not launch it today: the lifecycle starts only `execute`, `housekeeping` and `test` sessions, and the `plan` phase settings in `models.json` are used by brainstorms |
 | `execute.md` | worker | execute | build the ticket in its worktree |
 | `housekeeping.md` | worker | execute | clean stale docs, dead modules, leftover artefacts |
 | `test.md` | tester | test | check the work against the criteria |
@@ -34,7 +34,7 @@ Empty values render as `(none)`. Values are inserted literally: a brain note con
 
 **Planner (brainstorm).** Interviews the operator before proposing anything, reads the code and brain, agrees the list with the operator, then calls `create_ticket` for each: imperative title, a body saying what and why, measurable acceptance criteria one per line, `depends_on`, and `model`/`effort` only when clearly warranted (`low` for trivial, `high` for hard). Writes no code. Ends by listing what it created.
 
-**Planner of one ticket (plan).** Reads the code, decides files, steps, how each criterion will be proven and the risks. Sharpens vague criteria with `update_ticket`. Writes one short `plan` note. Does not code or move the ticket.
+**Planner of one ticket (plan; not launched by the board today).** Reads the code, decides files, steps, how each criterion will be proven and the risks. Sharpens vague criteria with `update_ticket`. Writes one short `plan` note. Does not code or move the ticket.
 
 **Worker (execute).**
 - Works only inside the current directory, the ticket's worktree.
@@ -48,7 +48,7 @@ Empty values render as `(none)`. Values are inserted literally: a brain note con
 - On a retry, fixes the failure notes first.
 - When a failure note reports a merge conflict (`merge conflict with <base>: …`, written by the merge queue), runs `git merge {{base}}` in the worktree, resolves keeping both sides' intent (two tests added at one spot: keep both), runs the tests and the build, commits, and submits as usual. The tester runs again and the merge is queued again.
 
-**Tester (test).** Runs the suite and build, reviews `{{diff}}` against each criterion, writes and commits tests for new behaviour that has none, launches and screenshots the app for UI tickets and deletes every artefact not kept as evidence. Finishes with `report_test` (verdict, per-criterion summary, evidence), then `move_ticket(done)` or `move_ticket(in_progress)`. `done` is refused unless `report_test(passed: true)` was called in this test run; it ends the session and queues the merge. `in_progress` starts the next execute attempt, up to three retries (`docs/LIFECYCLE.md`).
+**Tester (test).** Runs the suite and build, reviews `{{diff}}` against each criterion, writes and commits tests for new behaviour that has none, for UI tickets takes screenshots with a headless script built on `daemon/test/cdp.ts` (never by starting the app or a visible browser), and deletes every artefact not kept as evidence. Finishes with `report_test` (verdict, per-criterion summary, evidence), then `move_ticket(done)` or `move_ticket(in_progress)`. `done` is refused unless `report_test(passed: true)` was called in this test run; it ends the session and queues the merge. `in_progress` starts the next execute attempt, up to three retries (`docs/LIFECYCLE.md`).
 
 **Housekeeper (housekeeping).** Created by the board after every 10th merged ticket (`housekeeping_every`), and run through the same test and merge path as any ticket. Finds stale docs, ephemeral docs that are superseded, modules with no importers, templates nothing renders, orphan worktrees, temp dirs and stray screenshots. Moves anything durable into the matching living doc, then deletes. Confirms "unused" by search. Changes no behaviour; tests and build must pass as before. Calls `report_cleanup` with every path and reason, then `move_ticket(testing)`. Its tester checks the build still passes and no living doc was removed.
 
@@ -66,4 +66,4 @@ Load it for a session with `claude --plugin-dir <kanban95 repo>/skills`; the ski
 
 ## Editing templates
 
-The defaults live in `templates/` in the Kanban95 repo. On first start in a repo the daemon copies them to `<repo>/.kanban95/templates/` (committed with the project) and never overwrites them after that, so an operator's edits stick. Every render reads the file again, so an edit applies to the next launch without a restart. A template that uses any variable outside the table above is refused, naming the variable and the template, before anything is launched.
+The defaults live in `templates/` in the Kanban95 repo. On every start the daemon copies any default missing from `<repo>/.kanban95/templates/` (committed with the project) and never overwrites one that exists, so an operator's edits stick. Every render reads the file again, so an edit applies to the next launch without a restart. A template that uses any variable outside the table above is refused, naming the variable and the template, before anything is launched.

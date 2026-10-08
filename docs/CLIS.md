@@ -13,7 +13,7 @@ The board never handles provider credentials. Each CLI logs in with its own comm
 1. `git worktree` `<repo>/.worktrees/t-<id>` on branch `ticket/<id>` (`daemon/src/git.ts`).
 2. `startRun` renders the template and writes the `runs` row.
 3. A grant is minted for the template's role.
-4. `<repo>/.kanban95/sessions/<run-id>/` is created owner-only (Windows: `icacls /inheritance:r /grant:r <user>:(OI)(CI)F`; POSIX: mode 0700) and gets `prompt.md` and, for Claude Code, `mcp.json`.
+4. `<repo>/.kanban95/sessions/<run-id>/` is created (for Claude Code owner-only, Windows: `icacls /inheritance:r /grant:r <user>:(OI)(CI)F`, POSIX: mode 0700; for Codex not, see Reach by role) and gets `prompt.md` and, for Claude Code, `mcp.json`.
 5. The CLI starts in a pty with `cwd` = the worktree. The **initial message** is one line:
    `Read ../../.kanban95/sessions/<run-id>/prompt.md in full and follow it. It is your brief for this session.`
    The prompt is not put on the command line: Windows caps a command line at 32 767 characters (a test prompt carries the whole diff) and `cmd.exe` cannot pass a newline inside an argument.
@@ -81,7 +81,7 @@ Both CLIs can continue an earlier conversation: Claude Code with `--resume <sess
 
 The ▾ beside each model box in Settings → Models lists every model the installed CLI knows (`GET /api/models`, `knownModels` in `daemon/src/settings.ts`); the box still takes any id typed by hand. Nothing is listed from the board's own code:
 
-- Codex: every entry of `~/.codex/models_cache.json`, which Codex refreshes itself, in its order, including the ones its own picker hides. No other file under `~/.codex/` is read.
+- Codex: every entry of `~/.codex/models_cache.json`, which Codex refreshes itself, ordered by each entry's `priority`, including the ones its own picker hides. No other file under `~/.codex/` is read.
 - Claude Code has no command that lists models. First come the "latest model" aliases its `claude --help` names on the `--model` line (for example `opus`, `sonnet`); each resolves to the newest model of its family at launch. Then every full model id compiled into the Claude Code executable (`claude-<family>-<version>`), newest version first. The executable is the path in Settings → CLIs, else `claude.exe` on PATH; it is read in 4 MB chunks and the result cached until the file changes. Families are the names that appear with a minor version (`opus-4-5`), which drops beta-header strings like `claude-code-20250219`. An npm-installed Claude Code (a `.cmd` shim) gives the aliases only.
 
 A missing cache, a failed `--help` or a reworded help text gives a shorter or empty list, never an error.
@@ -116,7 +116,7 @@ Approvals are off for every role (the operator approved the bypass). What each r
 |---|---|---|---|
 | planner (brainstorm) | read the code, write tickets over MCP | `--disallowedTools Edit Write NotebookEdit Bash PowerShell Agent` | `-s read-only -a never` |
 | worker (plan, execute, housekeeping) | write and commit in its worktree, run builds and tests | permissions off, `cwd` = worktree | `--dangerously-bypass-approvals-and-sandbox` |
-| tester (test) | run the suite, write and commit tests, launch the app | as worker | as worker |
+| tester (test) | run the suite, write and commit tests, screenshot UI changes headlessly (never by starting the app) | as worker | as worker |
 
 - **Planner on Claude Code loses Bash, PowerShell and Agent too.** Bash or PowerShell could write a file, and a subagent is a way around the list; the brainstorm template never asks the planner to run a command or delegate. Read, Grep and Glob cover reading the code. MCP tools are unaffected.
 - **Planner on Codex**: checked live, asked to "create a file by any means", it answered "patch rejected: writing is blocked by read-only sandbox". Brainstorm checked live on 2026-10-07 (Codex 0.154.0, `gpt-5.6-luna`, low, through `POST /api/brainstorm` on a scratch repo) and it found two problems, both fixed: the read-only sandbox runs as another Windows account, which could not open the owner-only session dir ("access-denied"), so a Codex session dir is no longer owner-only (it holds only `prompt.md`; Codex's token is in its environment); and every board tool was refused under `-a never` until `default_tools_approval_mode=approve` was passed for the board's server. After both, the planner read its brief, called `list_tickets` and `brain_search`, and created a ticket with `create_ticket`; nothing was written to the repo.

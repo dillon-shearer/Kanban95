@@ -1,5 +1,6 @@
 // The UI in headless Edge or Chrome against a running daemon. Only what the UI handoff asks to be automated; the rest of the
 // UI is checked by the dogfood cycle, not by DOM tests.
+import './home.ts'; // also here, not only in vitest.config.ts: a run from the repo root skips that config and wrote the real home
 import { execFileSync } from 'node:child_process';
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
