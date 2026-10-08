@@ -17,7 +17,7 @@ export function enqueue(job: () => Promise<void>): Promise<void> {
 /** Resolves when the queue is empty. */
 export const idle = () => tail;
 
-export type MergeResult = { ok: true } | { ok: false; reason: string };
+type MergeResult = { ok: true } | { ok: false; reason: string };
 
 /**
  * `git merge --no-ff ticket/<id>` into whatever branch the main working tree has checked out, authored by the repo's own

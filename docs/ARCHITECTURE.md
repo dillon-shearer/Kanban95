@@ -55,10 +55,10 @@ Every `/api/*` request needs the `k95` cookie holding the shell secret, or gets 
 | GET | `/api/brain?q=&limit=` | FTS5 ranked search, limit at most 100; no `q` lists newest |
 | GET | `/api/grants` | all grants, never the hash |
 | DELETE | `/api/grants/:id` | revoke and kill the session's pty; 404 if not live |
-| POST | `/api/tickets/:id/launch` `/api/tickets/launch-all` `/api/tickets/:id/answer` `/api/tickets/:id/merge` | lifecycle events (`docs/LIFECYCLE.md`); `409` when the state machine has no such transition |
+| POST | `/api/tickets/:id/launch` `/api/tickets/launch-all` `/api/tickets/:id/answer` `/api/tickets/:id/merge` `/api/tickets/:id/resume` | lifecycle events (`docs/LIFECYCLE.md`); `409` when the state machine has no such transition |
 | POST | `/api/tickets/housekeeping` | creates a housekeeping ticket and launches it (the Housekeeping button) |
 | GET | `/api/tickets/:id/diff` | `{diff}`: the worktree against its fork point, uncommitted tracked changes included; `null` without a worktree |
-| GET | `/api/inbox` | unanswered `question` notes on tickets still flagged `needs_human` |
+| GET | `/api/inbox` | what flagged tickets wait on: unanswered `question` notes, and the newest `failure` note when no newer question is open (`kind`, ticket `status`) |
 | POST | `/api/brain` | add a note: `title`, `body`, optional `tags` |
 | GET | `/api/sessions` | live agent sessions: `id` (the `/pty/<id>` key), `ticket_id`, `run_id`, `grant_id`, `role`, `phase`, `model` |
 | POST | `/api/brainstorm` | starts a brainstorm session (planner, repo root); returns it in the `/api/sessions` shape |
@@ -124,7 +124,7 @@ Any failure after the run row is written revokes the grant and removes the sessi
 `ui/`, plain ES modules, no build step. How to use it: `docs/OPERATOR.md`.
 
 - `icons/`: the desktop icons, self-drawn 32x32 SVGs served from the daemon's origin (`img-src 'self'`). The wallpaper is CSS gradients in `app.css`, no image.
-- `wm.js`: the window manager. Windows are 98.css `.window`s positioned on `#desktop`, dragged by the title bar (pointer events), resized by CSS (`resize: both`), minimized to a taskbar button, clamped so a title bar is always reachable. Windows opened with `persist` (Board, Brain, Inbox, Settings) keep position and size in `localStorage`. Also modal dialogs (`<dialog>`) and pop-up menus.
+- `wm.js`: the window manager. Windows are 98.css `.window`s positioned on `#desktop`, dragged by the title bar (pointer events), resized by CSS (`resize: both`), minimized to a taskbar button, maximized to fill `#desktop` (the `max` class overrides the inline geometry, which stays as the restore geometry; drag and resize are off), clamped so a title bar is always reachable. Windows opened with `persist` (Board, Brain, Inbox, Settings) keep position, size and maximized state in `localStorage`. Also modal dialogs (`<dialog>`) and pop-up menus.
 - `app.js`: the data layer and every window. It loads tickets, sessions, the Inbox and both settings files once, then listens on `/events`: a `{ticket}` frame refetches that ticket, then the live sessions and the Inbox, and asks each open window to redraw; each window decides whether the event concerns it (a ticket window only for its own ticket; form tabs never, so typing is not lost). A new session opens its terminal window automatically, behind the focused window; a terminal whose run ended with a reported outcome (`submit`, `pass`, `fail`) closes itself after a moment, one that was revoked or died stays open, marked ended.
 - Board drag uses pointer events, not HTML5 drag and drop. Only operator moves are accepted (Backlog → In Progress; anything → Backlog, which also clears flags and retries and stops a live agent); an illegal drop snaps back and the status bar names the allowed columns.
 - `voice.js`: the mic button and `transcribe(blob)` (see Voice).

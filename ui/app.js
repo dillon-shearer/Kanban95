@@ -177,6 +177,12 @@ const launch = (id) => act(async () => {
   await api('POST', `/tickets/${id}/launch`);
   await sayLaunched([id]);
 });
+// A running ticket whose agent is gone: the agent for its phase starts again in the same worktree.
+const resumable = (t) => (t.status === 'in_progress' || t.status === 'testing') && t.flags.needs_human && !live(t.id).length;
+const resume = (id) => act(async () => {
+  await api('POST', `/tickets/${id}/resume`);
+  await sayLaunched([id]);
+});
 const launchAll = () => act(async () => sayLaunched((await api('POST', '/tickets/launch-all')).map((t) => t.id)));
 const newBrainstorm = () => act(async () => openTerminal(await api('POST', '/brainstorm')), 'Brainstorm started.');
 const housekeeping = () => act(async () => {
@@ -190,7 +196,8 @@ function cardMenu(t, x, y) {
   const known = [...new Set(PHASES.map((p) => models?.[cli]?.[p]?.model).filter(Boolean))];
   menu(x, y, [
     { label: 'Open', run: () => openTicket(t.id) },
-    { label: 'Launch', disabled: t.status !== 'backlog', run: () => launch(t.id) },
+    { label: 'Launch', disabled: t.status !== 'backlog' && !resumable(t), run: () => launch(t.id) },
+    { label: 'Resume', disabled: !resumable(t), run: () => resume(t.id) },
     '-',
     { label: 'Model', items: [
       { label: `Phase default${t.model ? '' : ' ✓'}`, run: () => set({ model: null }) },
@@ -452,12 +459,17 @@ function openInbox() {
     if (ids === shown) return; // unchanged: keep whatever the operator is typing
     shown = ids;
     w.body.replaceChildren(...(inbox.length ? inbox.map((q) => {
+      if (q.kind === 'failure') {
+        return h('fieldset', { class: 'k95-question', 'data-ticket': q.ticket_id }, h('legend', {}, `#${q.ticket_id} ${q.title}`),
+          h('div', { class: 'note-head' }, `${fmt(q.created_at)} · the ${q.role}'s run failed:`), h('pre', {}, q.body),
+          (q.status === 'in_progress' || q.status === 'testing') && h('button', { onclick: () => resume(q.ticket_id) }, 'Resume'));
+      }
       const answer = h('textarea', { rows: 3, placeholder: 'Your answer' });
       return h('fieldset', { class: 'k95-question', 'data-ticket': q.ticket_id }, h('legend', {}, `#${q.ticket_id} ${q.title}`),
         h('div', { class: 'note-head' }, `${fmt(q.created_at)} · the ${q.role} asks:`), h('pre', {}, q.body),
         h('div', { class: 'field-row' }, answer),
         h('button', { onclick: () => act(() => api('POST', `/tickets/${q.ticket_id}/answer`, { answer: answer.value }), `Answer sent to #${q.ticket_id}.`) }, 'Answer'));
-    }) : [h('p', {}, 'No open questions.')]));
+    }) : [h('p', {}, 'Nothing needs you.')]));
   };
   views.set('inbox', draw);
   draw();

@@ -198,6 +198,33 @@ describe('ui', { timeout: 60_000 }, () => {
     expect(await tasks()).toBe(0);
   });
 
+  it('offers Resume in the card menu and the Inbox for a flagged running ticket whose agent is gone; Resume starts it again', async () => {
+    const id = ticket('Died', { status: 'in_progress', needs_human: 1, retry: 2 });
+    db.prepare("INSERT INTO notes (ticket_id, role, kind, body) VALUES (?, 'worker', 'failure', 'agent exited without reporting')").run(id);
+    try {
+      await page.goto(base);
+      await until(() => column(id), 'the card');
+      const item = (label: string) => `[...document.querySelectorAll('.k95-menu li')].find((li) => li.firstChild.textContent === '${label}')`;
+      await page.evaluate(`document.querySelector('.card[data-id="${id}"]').dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 50, clientY: 50 }))`);
+      expect(await page.evaluate(`${item('Resume')}?.getAttribute('aria-disabled') ?? 'enabled'`)).toBe('enabled');
+      expect(await page.evaluate(`${item('Launch')}?.getAttribute('aria-disabled') ?? 'enabled'`)).toBe('enabled');
+      await page.evaluate(`document.querySelector('.k95-menu').remove()`);
+
+      await click('#inbox-count');
+      const box = `.k95-question[data-ticket="${id}"]`;
+      await until(() => page.evaluate(`!!document.querySelector('${box} button')`), 'the failure in the Inbox');
+      expect(await page.evaluate(`document.querySelector('${box} pre').textContent`)).toBe('agent exited without reporting');
+      expect(await page.evaluate(`document.querySelector('${box} button').textContent`)).toBe('Resume');
+      await click(`${box} button`);
+      await until(() => !(db.prepare('SELECT needs_human FROM tickets WHERE id = ?').get(id) as { needs_human: number }).needs_human, 'the flag to clear', 5000);
+      expect(db.prepare('SELECT status, retry FROM tickets WHERE id = ?').get(id)).toEqual({ status: 'in_progress', retry: 2 });
+      expect((db.prepare("SELECT prompt_rendered FROM runs WHERE ticket_id = ? AND phase = 'execute'").get(id) as { prompt_rendered: string }).prompt_rendered)
+        .toContain('agent exited without reporting');
+    } finally {
+      db.prepare("UPDATE tickets SET status = 'done', merged_at = 'x', needs_human = 0 WHERE id = ?").run(id);
+    }
+  });
+
   it('pins a compact tray right after Start on one taskbar row', async () => {
     await page.goto(base);
     await until(() => page.evaluate(`!!document.querySelector('#clock').textContent`), 'the clock');
@@ -269,6 +296,33 @@ describe('ui', { timeout: 60_000 }, () => {
     const bar = await page.center('[data-win="board"] .title-bar-text');
     await page.drag(bar, { x: bar.x + 200, y: bar.y });
     expect(await size()).toEqual(before);
+  });
+
+  it('maximizes to the desktop, ignores drags, restores the exact geometry and survives a reload', async () => {
+    await page.goto(base + '?max');
+    await until(() => page.evaluate(`!!document.querySelector('[data-win="board"]')`), 'the board');
+    const box = () => page.evaluate<number[]>(`(() => { const e = document.querySelector('[data-win="board"]'); return [e.offsetLeft, e.offsetTop, e.offsetWidth, e.offsetHeight]; })()`);
+    const desk = await page.evaluate<number[]>(`(() => { const d = document.getElementById('desktop'); return [0, 0, d.clientWidth, d.clientHeight]; })()`);
+    expect(await page.evaluate(`[...document.querySelectorAll('[data-win="board"] .title-bar-controls button')].slice(-3).map((b) => b.getAttribute('aria-label'))`))
+      .toEqual(['Minimize', 'Maximize', 'Close']);
+    const before = await box();
+    await page.evaluate(`document.querySelector('[data-win="board"] [aria-label="Maximize"]').click()`);
+    expect(await box()).toEqual(desk);
+    expect(await page.evaluate(`!!document.querySelector('[data-win="board"] [aria-label="Restore"]')`)).toBe(true);
+    const bar = await page.center('[data-win="board"] .title-bar-text');
+    await page.drag(bar, { x: bar.x + 120, y: bar.y + 60 });
+    expect(await box()).toEqual(desk);
+
+    await page.goto(base + '?max-reload');
+    await until(() => page.evaluate(`!!document.querySelector('[data-win="board"]')`), 'the board after reload');
+    expect(await box()).toEqual(desk);
+
+    await page.evaluate(`document.querySelector('[data-win="board"] [aria-label="Restore"]').click()`);
+    expect(await box()).toEqual(before);
+    await page.evaluate(`document.querySelector('[data-win="board"] .title-bar-text').dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))`);
+    expect(await box()).toEqual(desk);
+    await page.evaluate(`document.querySelector('[data-win="board"] .title-bar-text').dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))`);
+    expect(await box()).toEqual(before);
   });
 
   it('shows the download dialog on the first mic press and fetches nothing until OK', async () => {

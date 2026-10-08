@@ -16,10 +16,10 @@ import { idle } from './merge.js';
 import { initTemplates } from './templates.js';
 import { voiceFile } from './voice.js';
 
-export const UI_DIR = resolve(import.meta.dirname, '../../ui');
+const UI_DIR = resolve(import.meta.dirname, '../../ui');
 const LOOPBACK = '127.0.0.1';
 /** `self` is `127.0.0.1:<port>`. frame-ancestors stops another local page from framing the board (its GET carries no Origin). */
-export const csp = (self: string) =>
+const csp = (self: string) =>
   `default-src 'self' http://${self} ws://${self}; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; frame-ancestors 'none'`;
 
 const MIME: Record<string, string> = {

@@ -41,7 +41,7 @@ function check<N extends ConfigName>(name: N, value: unknown, where: string): Co
 }
 
 /** models.json has no default (the operator picks the models); a missing settings.json is all defaults. */
-export function readConfig<N extends ConfigName>(name: N): Config<N> {
+function readConfig<N extends ConfigName>(name: N): Config<N> {
   const file = configPath(name);
   if (!existsSync(file)) {
     if (name === 'models') throw new BadConfig(`no model catalog at ${file}`);
