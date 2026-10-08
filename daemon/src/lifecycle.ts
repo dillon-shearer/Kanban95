@@ -5,6 +5,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { readTicket, transaction, type Ticket } from './api.js';
+import { syncWorktree } from './git.js';
 import { revoke, type Role } from './grants.js';
 import { cleanTicket } from './janitor.js';
 import { launch, launchRoot, sessionsOf, type Session } from './launcher.js';
@@ -24,7 +25,8 @@ export type Event =
   | 'ask' // ask_operator
   | 'answer' // the operator answers over REST
   | 'exit' // the agent's pty exited without a move_ticket, or its launch failed
-  | 'merged' | 'conflict' // the merge queue's verdict
+  | 'merged' // the merge queue's verdict
+  | 'conflict' // the base would not merge into the worktree (on submit or in the merge queue), or the worktree was dirty
   | 'dirty' // the merge queue gave up waiting for the main checkout to be clean (DIRTY_WAIT)
   | 'merge' // the operator retries a merge that failed
   | 'resume' // the operator restarts the agent of a flagged running ticket whose agent is gone
@@ -91,7 +93,10 @@ export const TABLE: Row[] = [
   { from: RUNNING, event: 'exit', set: { needs_human: 1 }, effects: ['note', 'chord'],
     resolve: () => RESUME },
   { from: ['done'], event: 'merged', set: { merged: true, needs_human: 0 }, effects: ['ding', 'remove_worktree', 'release_dependents', 'housekeeping'] },
-  { from: ['done'], event: 'conflict', when: (f) => f.retry < MAX_RETRY, to: 'in_progress', set: { retry: '+1' }, effects: ['note', 'spawn_execute'] },
+  // A submit whose base will not merge in (lifecycle submit) and a merge-queue conflict share the way back to the worker.
+  { from: ['in_progress', 'done'], event: 'conflict', when: (f) => f.retry < MAX_RETRY, to: 'in_progress', set: { retry: '+1' }, effects: ['end_session', 'note', 'spawn_execute'] },
+  { from: ['in_progress'], event: 'conflict', when: (f) => f.retry >= MAX_RETRY, set: { needs_human: 1 }, effects: ['end_session', 'note', 'chord'],
+    resolve: (id) => `in .worktrees/t-${id} commit or discard any uncommitted changes, run git merge with the base branch, fix the conflicting files keeping both sides' intent, run the tests, commit, then Resume; the worker submits again.` },
   { from: ['done'], event: 'conflict', when: (f) => f.retry >= MAX_RETRY, set: { needs_human: 1 }, effects: ['note', 'chord'],
     resolve: (id) => `in .worktrees/t-${id} run git merge with the base branch, fix the conflicting files keeping both sides' intent, run the tests, commit, then Retry merge.` },
   { from: ['done'], event: 'dirty', set: { needs_human: 1 }, effects: ['note', 'chord'],
@@ -159,6 +164,11 @@ type Note = { role: Role | 'operator'; kind: 'question' | 'answer' | 'failure'; 
 export function apply(b: Board, id: number, event: Event, x: { note?: Note; answer?: string } = {}) {
   const t = readTicket(b.db, id);
   const row = pick(facts(b, t), event);
+  if (event === 'submit') {
+    // The tester tests the branch with the base merged in, so stale code never spends a tester round.
+    const s = syncWorktree(b.repo, id);
+    if (!s.ok) return apply(b, id, 'conflict', { note: { role: 'worker', kind: 'failure', body: s.reason } });
+  }
   const { to = t.status as Status, set = {}, effects } = row;
   let note = x.note ?? (row.says ? ({ role: 'tester', kind: 'failure', body: row.says } as Note) : undefined);
   if (event === 'restart') note = { role: 'operator', kind: 'failure', body: RESTART_NOTE };
@@ -238,8 +248,9 @@ export const DIRTY_WAIT = { every: 30_000, max: 600_000 };
 const waiting = new Map<number, NodeJS.Timeout>();
 
 /**
- * A conflict goes back to the worker (TABLE). A dirty base is the operator's own edits in the main checkout, not the ticket's
- * fault: the merge waits for them to be committed, and only a base still dirty after DIRTY_WAIT.max is flagged.
+ * A conflict goes back to the worker (TABLE); it is met in the ticket's worktree, never in the main checkout. A dirty base is the
+ * operator's own edits in the main checkout, not the ticket's fault: the merge waits for them to be committed, and only a base
+ * still dirty after DIRTY_WAIT.max is flagged.
  */
 function queueMerge(b: Board, id: number, since = Date.now()) {
   clearTimeout(waiting.get(id)); // the operator's Retry merge restarts a wait
@@ -248,6 +259,12 @@ function queueMerge(b: Board, id: number, since = Date.now()) {
     await Promise.all(sessionsOf(id).map((s) => s.done)); // the tester's pty is still closing
     const t = readTicket(b.db, id);
     if (t.status !== 'done' || t.merged_at) return; // reset or moved by hand while it waited
+    // Main is merged into the worktree first, so the merge into the main checkout is conflict-free by construction; merge.ts's
+    // abort stays as a safety net.
+    // ponytail: lands even when the sync brought in new commits (the worker merged and the tester tested at submit); upgrade is
+    // to send it back to testing when the sync touched files the ticket also touched.
+    const s = syncWorktree(b.repo, id);
+    if (!s.ok) return void (await Promise.all(apply(b, id, 'conflict', { note: { role: 'tester', kind: 'failure', body: s.reason } }).pending));
     const r = await merge(b.repo, id, t.title);
     let out;
     if (r.ok) out = apply(b, id, 'merged');
