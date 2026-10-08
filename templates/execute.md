@@ -27,7 +27,6 @@ If a failure note reports a merge conflict, `{{base}}` has moved on and no longe
 ## Rules
 
 - Work only inside the current directory. It is this ticket's git worktree. Do not touch files outside it.
-- Read the repo's own conventions (`CLAUDE.md`, `AGENTS.md`, `README.md`) before changing code.
 - Verify with `npm test` or a script built on `daemon/test/cdp.ts`, never by starting the app (`npm run dev`, `Kanban95.cmd`, `cargo run`) or a visible browser.
 - Record decisions as you make them with `add_note` kind `decision`: what you chose and why.
 - Record gotchas a future ticket would trip on with `brain_add`, written for a reader with no context: one fact per row, never ticket status or plans. `brain_search` the subject first and `brain_update` a row that already covers it instead of adding a near-duplicate.

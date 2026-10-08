@@ -78,18 +78,21 @@ afterEach(async () => {
 const launch = (cli: Cli, model = 'hang') => srv.launch({ ticketId: 7, template: 'execute', cli, model, effort: 'high' });
 
 describe('buildArgv', () => {
-  const base = { repo: 'C:\\r', promptPath: 'C:/r/.kanban95/sessions/3/prompt.md', mcpConfigPath: 'C:/r/.kanban95/sessions/3/mcp.json', mcpUrl: 'http://127.0.0.1:5/mcp', cwd: 'C:/r/.worktrees/t-7' };
+  const base = { repo: 'C:\\r', promptPath: 'C:/r/.kanban95/sessions/3/prompt.md', mcpConfigPath: 'C:/r/.kanban95/sessions/3/mcp.json', settingsPath: 'C:/r/.kanban95/sessions/3/settings.json', mcpUrl: 'http://127.0.0.1:5/mcp', cwd: 'C:/r/.worktrees/t-7' };
   const msg = 'Read ../../.kanban95/sessions/3/prompt.md in full and follow it. It is your brief for this session.';
   const claude = (model: string, effort: string, ...role: string[]) =>
     ['claude', '--mcp-config', base.mcpConfigPath, '--strict-mcp-config', ...(model ? ['--model', model] : []), '--effort', effort, ...role, '--dangerously-skip-permissions', msg];
   const codex = (model: string, effort: string, ...role: string[]) =>
     ['codex', ...(model ? ['--model', model] : []), '-c', `model_reasoning_effort=${effort}`, '-c', 'mcp_servers.kanban95.url=http://127.0.0.1:5/mcp',
       '-c', 'mcp_servers.kanban95.bearer_token_env_var=KANBAN95_TOKEN', '-c', 'mcp_servers.kanban95.default_tools_approval_mode=approve', '-c', "projects={'C:\\r'={trust_level='trusted'}}", ...role, msg];
+  // Workers and testers drop the operator's user settings (plugin hooks) and skills; planner and operator sessions keep them.
+  const lean = ['--setting-sources', 'project,local', '--settings', 'C:/r/.kanban95/sessions/3/settings.json', '--disable-slash-commands'];
   // Reach by role: a planner cannot write files; workers and testers run with permissions off.
   const rows: [Cli, Role, string, Effort, string[]][] = [
-    ['claude', 'worker', 'claude-opus-5-5', 'low', claude('claude-opus-5-5', 'low')],
-    ['claude', 'tester', 'claude-sonnet-5-5', 'max', claude('claude-sonnet-5-5', 'max')],
+    ['claude', 'worker', 'claude-opus-5-5', 'low', claude('claude-opus-5-5', 'low', ...lean)],
+    ['claude', 'tester', 'claude-sonnet-5-5', 'max', claude('claude-sonnet-5-5', 'max', ...lean)],
     ['claude', 'planner', 'claude-fable-5-1', 'high', claude('claude-fable-5-1', 'high', '--disallowedTools', 'Edit', 'Write', 'NotebookEdit', 'Bash', 'PowerShell', 'Agent')],
+    ['claude', 'operator', 'claude-opus-5-5', 'high', claude('claude-opus-5-5', 'high')],
     ['codex', 'worker', 'gpt-5.6-terra', 'medium', codex('gpt-5.6-terra', 'medium', '--dangerously-bypass-approvals-and-sandbox')],
     ['codex', 'tester', 'gpt-5.6-luna', 'max', codex('gpt-5.6-luna', 'max', '--dangerously-bypass-approvals-and-sandbox')],
     ['codex', 'planner', 'gpt-5.6-sol', 'high', codex('gpt-5.6-sol', 'high', '-s', 'read-only', '-a', 'never')],
