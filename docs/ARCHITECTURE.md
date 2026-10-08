@@ -118,7 +118,7 @@ templates/        default prompt templates (brainstorm, operator, plan, execute,
 skills/           the Claude Code plugin `kanban95` (.claude-plugin/plugin.json and one folder per skill; docs/AGENTS.md)
 Kanban95.cmd      double-click launcher: finds Node 24, installs, builds, runs the shell on a repo
 shell/            Cargo.toml, build.rs, tauri.conf.json, tauri.bundle.json (installer overlay), stage.mjs (stages the installed daemon), src/main.rs, icons/icon.ico
-docs/             this file, LEARNING.md (guided tour for newcomers), OPERATOR.md (driving the board), img/ (its screenshots), LIFECYCLE.md (state machine, merge queue, janitor), CLIS.md (how each CLI is launched), DATA.md (schema), AGENTS.md (what agents receive and how they behave), SECURITY.md (grants, audit, network), MCP.md (generated tool reference), handoffs/ (ephemeral) and handoffs/log/ (phase log)
+docs/             this file, LEARNING.md (guided tour for newcomers), OPERATOR.md (driving the board), img/ (its screenshots), LIFECYCLE.md (state machine, merge queue, janitor), CLIS.md (how each CLI is launched), DATA.md (schema), AGENTS.md (what agents receive and how they behave), SECURITY.md (grants, audit, network), MCP.md (generated tool reference)
 <repo>/.kanban95/ board.db (gitignored), .gitignore, sessions/ (gitignored), attachments/ (gitignored), templates/*.md (committed, operator-editable); created by the daemon on first start. config.json (optional, committed)
 ~/.kanban95/      models.json (model catalog, read at each launch), settings.json (CLI paths, sounds, voice), preferences.md (operator's standing instructions for agents), models/ (the downloaded speech model); written only from Settings or the download dialog
 ```
@@ -167,3 +167,56 @@ A mic button sits beside every text field (added by a `MutationObserver`, so new
 The model is pinned in `daemon/voice-model.json`: `onnx-community/whisper-base.en` at one Hugging Face revision, seven files (configs, tokenizer, q8 encoder and merged decoder, 79.6 MB), each with size and SHA-256. The UI shows that manifest before anything is fetched; on OK, `POST /api/voice/download` fetches each file from `<source>/resolve/<revision>/<path>`, refuses more bytes than pinned, checks size and hash, and renames it into `~/.kanban95/models/whisper-base.en/`; a mismatch deletes the file and fails the download. transformers.js is set to local models only (`/voice-model/<id>/…`, which serves manifest-listed files and nothing else), no browser cache, and no WASM preload cache (its preload imports the runtime from a `blob:` URL, which the CSP refuses).
 
 Checked on Windows 11, WebView2 154 inside the Tauri window: `navigator.gpu` gives an adapter and the model runs on **WebGPU**; the bundled fixture transcribes correctly, about 7 s for the first call (model load included) and 3 s after. In headless Edge (no adapter) it runs on WASM.
+
+## Working on the board
+
+Gotchas collected while the board was built. Each one cost a phase some time.
+
+**Node and the daemon**
+- `node` on PATH may still be an older Node. On Node 22 `import.meta.main` is `undefined`, so the daemon prints nothing and the shell fails with `bad daemon handshake ""`. `Kanban95.cmd` finds Node 24 through fnm; in a bare shell run `fnm env --use-on-cd | Out-String | Invoke-Expression` first, or put the Node 24 install dir first on PATH. `fnm exec` cannot start `npm` (a `.cmd` shim), and Node 24 throws on `process.exit(true)`.
+- The daemon's first stdout line is the handshake. Anything printed before it breaks the shell; log to stderr.
+- A daemon started with stdin closed exits right after printing its port (Daemon lifetime). Spawn it with a held-open stdin pipe.
+- `DatabaseSync.exec` with several statements leaves a transaction open if a middle one throws. `migrate` and `api.ts`'s `transaction()` use explicit `BEGIN` / `COMMIT` / `ROLLBACK`; do the same anywhere else.
+- `audit.ticket_id` is a foreign key: attributing an audit row to a ticket that does not exist throws. Check existence or pass `null`.
+- `apply` is synchronous and may spawn agents (`execFileSync git`, a pty) inside an MCP request. Effects run after the transaction commits, so a failing effect (a launch) re-enters `apply` with `exit`.
+- `sessions` in `launcher.ts` is module-level, shared by every `start()` in one process: one daemon per process.
+- A merge that touches `daemon/` or `shell/` takes effect only after a board restart (`Kanban95.cmd` rebuilds); `ui/` changes show at once.
+
+**MCP**
+- `TOOLS` in `mcp.ts` is the only place a tool is defined. After changing its `access` or `description`, run `npm run docs:mcp` or the doc test fails. `MOVE_TARGETS` and `WORKER_FIELDS` feed both enforcement and the matrix text.
+- A handler refuses by throwing the module-private `Deny`; anything else thrown is audited as `error` and its message goes back to the agent verbatim.
+- `enableJsonResponse: true` returns each tool result as one JSON body. A tool that needs progress notifications would need that switched off for its server.
+- The MCP SDK pulls in express, hono and ajv transitively. Nothing imports them; `node:http` is the only server.
+
+**Templates**
+- Operator edits to `<repo>/.kanban95/templates/` survive restarts, and a changed default in `templates/` only reaches repos that lack the file.
+- Running the daemon on this repo creates `./.kanban95/templates/` (untracked, not ignored: in a target repo they are meant to be committed).
+- The test diff is injected whole (`// ponytail:` in `context.ts`).
+
+**Windows**
+- node-pty prints `Error: AttachConsole failed` to stderr on `kill()`. It is harmless (the process is gone). `useConptyDll: true` silences it at about 3 s per spawn, so it is off. A one-off node script using node-pty does not exit by itself after the pty ends: call `process.exit`.
+- A test must close its database before `rmSync`, or it gets `EPERM`.
+- The repo is LF (`.gitattributes`), except `.cmd` files, which are CRLF because cmd.exe misreads labels with LF. Python on Windows writes CRLF in text mode: open files with `newline=''` when scripting edits.
+- A stale `shell/target` from another checkout path fails the Tauri build reading permission files; `cargo clean` fixes it.
+- Do not redirect `USERPROFILE` for the Tauri shell: WebView2 fails to start. Killing the shell with `kill()` alone can leave `msedgewebview2.exe` children; the job object (Daemon lifetime) handles a normal exit.
+- Probing a second shell beside a live board: set `WEBVIEW2_USER_DATA_FOLDER` to a scratch dir, find your processes by walking `ParentProcessId` from your shell's pid, and kill only those, never by name. `taskkill /F /PID <shell>` without `/T` is enough. `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=<n>` exposes the webview to DevTools (`http://127.0.0.1:<n>/json/list`).
+- Never rebuild or run the installer while the operator's board is live: a rebuild replaces `daemon/dist` under the running daemon, and NSIS closes the app. Test on a second instance.
+
+**Tests**
+- Imports between `src/` files use `.js` extensions; tests import `../src/x.ts`.
+- Node's `fetch` strips a caller-set `Host` header; a test that needs a foreign `Host` uses `node:http.request`.
+- An unclosed MCP SDK client keeps vitest alive; close every client in `afterAll`.
+- Every test file runs with a throwaway home (`daemon/test/home.ts`), and `daemon/test/real-home-guard.ts` fails the run if the real home was touched (`docs/SECURITY.md` → Operator files the board writes). Keep it that way.
+- Headless Edge resizes its window to `--window-size` minus chrome; `cdp.ts` sets the viewport with `Emulation.setDeviceMetricsOverride` to get an exact size.
+- `/events` carries several frame shapes; anything listening must ignore frames it does not know.
+- The suite is load-sensitive (ptys, headless browsers, real git). Rerun a failing file alone before treating it as a regression.
+
+## How the board was built
+
+Planned on 2026-10-07 as nine phases, each a handoff prompt run by a fresh agent that wrote a log entry for the next. Phases 0 to 2 (scaffold, daemon core and grants, MCP) were built by hand with Claude Code; from phase 3 (templates) on the board built itself, ticket by ticket. Phase 8 (2026-10-08) shipped the agent skills, finished `docs/`, and ran two dogfood cycles: a throwaway sample repo brainstormed into five dependent tickets that all merged with no `needs_human` flag (the walkthrough and its manual touches are in `docs/OPERATOR.md` → Dogfood walkthrough), then this repo, whose improvements are now brainstormed and launched on its own board.
+
+What changed when the build plan was retired:
+
+- The build plan (the spec) and the phase handoffs with their log are deleted. Everything still true moved into the living docs: the design principles and conventions into `CLAUDE.md`; decisions into the doc of the part they shape (`SECURITY.md`, `CLIS.md`, `LIFECYCLE.md`, `AGENTS.md`); the gotchas from the phase log into Working on the board above, `SECURITY.md` and `CLIS.md`. Per-phase deviations that the docs already describe as the current design were not repeated.
+- New knowledge goes where it applies: a behaviour change into its living doc in the same ticket, a gotcha a future ticket would trip on into the brain (`brain_add`) and, when it is about the code itself, into Working on the board. There is no phase log any more; the board's notes, runs and brain are the record.
+- Housekeeping now has only the living docs, plans and proposals to judge: with no build plan or handoff left, a run on a clean repo should report nothing to change.

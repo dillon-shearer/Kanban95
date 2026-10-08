@@ -6,7 +6,7 @@ Verified 2026-10-07 on Windows 11 against **Claude Code 2.1.293** and **codex-cl
 
 ## What the board does not do
 
-The board never handles provider credentials. Each CLI logs in with its own command (`claude` then `/login`, `codex login`) and keeps its auth under the operator's home directory (`~/.claude/`, `~/.codex/`). The pty environment passes the home and app-data variables through so the CLI finds it; nothing else.
+The board makes no model calls of its own: being provider-agnostic means it only picks a CLI and its flags. It never handles provider credentials. Each CLI logs in with its own command (`claude` then `/login`, `codex login`) and keeps its auth under the operator's home directory (`~/.claude/`, `~/.codex/`). The pty environment passes the home and app-data variables through so the CLI finds it; nothing else.
 
 ## Launch, common to both
 
@@ -32,7 +32,7 @@ claude --mcp-config <session>/mcp.json --strict-mcp-config --model <model> --eff
 | effort | `--effort <level>` | accepts `low medium high xhigh max`; the board uses `low medium high max` unchanged |
 | MCP | `--mcp-config <file>` | variadic, so it comes first and a boolean flag separates it from the message |
 | only the board's MCP | `--strict-mcp-config` | the operator's other MCP servers are not loaded into agent sessions |
-| permissions off | `--dangerously-skip-permissions` | every role; approved by the operator (`PLAN.md` → Agents) |
+| permissions off | `--dangerously-skip-permissions` | every role; approved by the operator (2026-10-07): the board trusts agent actions and limits reach per role with each CLI's own scoping instead of approvals |
 | planner reach | `--disallowedTools Edit Write NotebookEdit Bash PowerShell Agent` | variadic, so a flag follows it. See Reach by role |
 | initial message | positional `[prompt]` | interactive session; the operator can type into it |
 
@@ -125,6 +125,12 @@ Approvals are off for every role (the operator approved the bypass). What each r
 - **Workers and testers on Codex keep the bypass.** Tried `-s workspace-write -a never --add-dir <repo>/.git` (the worktree's git metadata lives under the main repo's `.git/`): the file was written and `node --version` ran, but `git commit` failed with `fatal: detected dubious ownership in repository`. On Windows the Codex sandbox (`[windows] sandbox = "elevated"`) runs commands as a separate sandbox account, so git refuses the operator's worktree. A worker that cannot commit cannot finish a ticket. Getting there would mean `safe.directory` overrides and ACLs for that account on `.git`; not worth it until a non-Windows platform matters.
 - Claude Code applies the operator's user-level settings (`~/.claude/settings.json` hooks and plugins, user `CLAUDE.md`) inside agent sessions; `--strict-mcp-config` only covers MCP servers. Seen live: a memory plugin's hook wrote a `.remember/` folder into the session's working directory and held it open for a few seconds after Claude exited (why `cleanTicket` retries). Codex likewise loads the operator's own MCP servers from `~/.codex/config.toml`.
 - Candidates seen in `claude --help` and not used: `--restricted` (confines file tools to the working dirs, but removes Bash and refuses bypass mode, so it does not fit a worker), `--settings <file>` (per-session deny rules without touching the operator's settings; `--disallowedTools` does the planner's job without a file).
+
+## Gotchas
+
+- Both CLIs run interactive sessions and do not exit by themselves when the agent is done. The board ends the session once the agent's `move_ticket` is accepted (`docs/LIFECYCLE.md`).
+- A CLI started with a model id it does not know may print an error and sit at its prompt without exiting. The board does not flag that yet (`docs/OPERATOR.md` → Dogfood walkthrough, touch 3).
+- node-pty's `Error: AttachConsole failed` on kill is harmless (`docs/ARCHITECTURE.md` → Working on the board).
 
 ## Checked live
 
