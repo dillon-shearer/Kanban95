@@ -169,6 +169,35 @@ describe('ui', { timeout: 60_000 }, () => {
     expect(git('show', 'HEAD:answer.txt')).toBe('Navy blue');
   });
 
+  it('keeps an ended terminal open while its ticket exists; deleting the ticket closes its terminal and Ticket window', async () => {
+    const id = ticket('Delete me');
+    await page.goto(base);
+    await until(() => column(id), 'the card');
+    const win = (wid: string) => page.evaluate<boolean>(`!!document.querySelector('[data-win="${wid}"]')`);
+    const tasks = () => page.evaluate<number>(`[...document.querySelectorAll('#tasks .task')].filter((b) => /#${id}\\b/.test(b.textContent)).length`);
+    const launchAgent = async () => {
+      expect((await fetch(`${base}api/tickets/${id}/launch`, { method: 'POST', headers: { cookie: `k95=${srv.secret}` } })).status).toBe(200);
+      await until(() => page.evaluate(`!!document.querySelector('[data-win^="term-"]:not(.ended) .xterm')`), 'the terminal');
+      return page.evaluate<string>(`document.querySelector('[data-win^="term-"]:not(.ended)').dataset.win`);
+    };
+
+    const first = await launchAgent();
+    const grant = (db.prepare('SELECT id FROM grants WHERE ticket_id = ? AND revoked_at IS NULL').get(id) as { id: number }).id;
+    await fetch(`${base}api/grants/${grant}`, { method: 'DELETE', headers: { cookie: `k95=${srv.secret}` } });
+    await until(() => page.evaluate(`document.querySelector('[data-win="${first}"]').classList.contains('ended')`), 'the ended terminal');
+    expect(await page.evaluate<string>(`document.querySelector('[data-win="${first}"] .title-bar-text').textContent`)).toMatch(/\(ended\)$/);
+
+    db.prepare("UPDATE tickets SET status = 'backlog' WHERE id = ?").run(id);
+    const second = await launchAgent();
+    await page.evaluate(`document.querySelector('.card[data-id="${id}"]').dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))`);
+    await until(() => win(`ticket-${id}`), 'the Ticket window');
+    expect(await tasks()).toBe(3);
+
+    expect((await fetch(`${base}api/tickets/${id}`, { method: 'DELETE', headers: { cookie: `k95=${srv.secret}` } })).status).toBe(204);
+    await until(async () => !(await win(`ticket-${id}`)) && !(await win(first)) && !(await win(second)), 'the windows to close', 5000);
+    expect(await tasks()).toBe(0);
+  });
+
   it('pins a compact tray right after Start on one taskbar row', async () => {
     await page.goto(base);
     await until(() => page.evaluate(`!!document.querySelector('#clock').textContent`), 'the clock');

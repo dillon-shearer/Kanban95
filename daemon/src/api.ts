@@ -5,7 +5,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import { isConstraintError } from './db.js';
 import { ticketDiff } from './git.js';
 import { audit, revoke } from './grants.js';
-import { killGrantSession, sessions, type Session } from './launcher.js';
+import { killGrantSession, sessions, sessionsOf, type Session } from './launcher.js';
 import { apply, brainstorm, changed, housekeeping, launchAll, Refused, type Board } from './lifecycle.js';
 import { BadConfig, CONFIGS, configPath, knownModels, writeConfig, type ConfigName } from './settings.js';
 import { trustStatus, untrustClaude } from './trust.js';
@@ -134,7 +134,14 @@ const routes: [method: string, path: RegExp, mutation: string | null, handler: (
     return { status: 200, body: readTicket(db, id) };
   }],
   ['DELETE', /^\/api\/tickets\/(\d+)$/, 'tickets.delete', ({ db, params }) => {
-    const r = db.prepare('DELETE FROM tickets WHERE id = ?').run(Number(params[0]));
+    const id = Number(params[0]);
+    // Its agents stop with it. The outcome makes their exit expected, so it flags nothing on a ticket that is gone.
+    for (const s of sessionsOf(id)) {
+      s.outcome = 'deleted';
+      revoke(db, s.grantId);
+      s.pty.kill();
+    }
+    const r = db.prepare('DELETE FROM tickets WHERE id = ?').run(id);
     if (r.changes === 0) throw new HttpError(404, 'no such ticket');
     return { status: 204 };
   }],
