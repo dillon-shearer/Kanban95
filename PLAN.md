@@ -37,7 +37,7 @@ Fire and forget. Planning closed 2026-10-07. This file is the spec; it is a livi
 - **Git worktree per ticket** at `.worktrees/t-<id>`, branch `ticket/<id>`.
 - Concurrency unlimited. **Merges are serialized** through one queue regardless.
 - **Commits carry the operator's identity.** Agent commits in a worktree and the merge commit are authored with the operator's git `user.name`/`user.email`, never a bot and never a `Co-Authored-By` trailer. Subject is a plain imperative sentence saying what changed, no ticket or phase ids (those live in the board); body only when the why is not obvious.
-- Dependencies: `depends_on`. Dependents are held until deps are Done. **Launch all** respects this.
+- Dependencies: `depends_on`. Dependents are held until deps are Done. The runner (**Run**) respects this.
 
 ### Models
 Models live in `~/.kanban95/models.json`, editable in the board's Settings window. Nothing in code names a model.
@@ -102,7 +102,7 @@ Overrides, all through MCP (`set_model` takes `model` and/or `effort`):
 
 ```
 Backlog
-  │ Launch / Launch all   (held if depends_on not Done)
+  │ Launch / Run          (held if depends_on not Done)
   ▼
 git worktree .worktrees/t-014 (branch ticket/014)
 mint grant{ticket:14, role:worker}
@@ -147,7 +147,7 @@ Each phase is a set of tickets with acceptance criteria. Phases 0 to 2 are built
 2. **MCP server.** All tools, scoped by role. Tests: worker cannot touch another ticket, planner cannot move tickets, every tool self-describes.
 3. **Templates + context assembly.** Render with variables, brain FTS top-N, rendered-prompt preview stored per run. Tests: deterministic render, no transcript leakage, unknown variable fails loudly.
 4. **Launcher.** Worktree create/remove, argv builders for Claude Code and Codex (model, MCP config, permissions flag), pty + websocket stream. Tests: argv per CLI/model/role, worktree cleanup on kill.
-5. **Lifecycle.** State machine, retry cap, escalation, dependencies, launch all, merge queue, ask_operator round trip, sounds, janitor, housekeeping auto-trigger. Tests: every transition table row, retry cap, conflict → needs_human, dep hold released on Done, janitor leaves nothing behind.
+5. **Lifecycle.** State machine, retry cap, escalation, dependencies, merge queue, ask_operator round trip, sounds, janitor, housekeeping auto-trigger. Tests: every transition table row, retry cap, conflict → needs_human, dep hold released on Done, janitor leaves nothing behind.
 6. **UI.** MDI window manager, board with drag between columns, ticket window (context viewer), terminal windows, brain window, settings (models, CLIs, grants, voice), inbox for ask_operator, mic button with local transcription.
 7. **Tauri hardening + packaging.** Sidecar lifecycle, CSP, capability allowlist, installer. Tests: daemon dies with the window, no external origins allowed.
-8. **Skills + docs pass.** Ship agent skills, finish `docs/`, dogfood a full brainstorm → launch all → done cycle on a sample repo. Retire `PLAN.md` and the handoffs into living docs.
+8. **Skills + docs pass.** Ship agent skills, finish `docs/`, dogfood a full brainstorm → Run → done cycle on a sample repo. Retire `PLAN.md` and the handoffs into living docs.

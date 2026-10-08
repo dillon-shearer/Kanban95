@@ -10,7 +10,7 @@ Status is one of **backlog → in_progress → testing → done**. Two flags sit
 
 | event | raised by |
 |---|---|
-| `launch` | the operator (Launch, Launch all), or the board when the last dependency of a held ticket merges |
+| `launch` | the operator (Launch), the runner, or the board when the last dependency of a held ticket merges |
 | `submit` | the worker's `move_ticket(testing)` |
 | `pass` | the tester's `move_ticket(done)` |
 | `fail` | the tester's `move_ticket(in_progress)` |
@@ -21,6 +21,7 @@ Status is one of **backlog → in_progress → testing → done**. Two flags sit
 | `dirty` | the merge queue, once the main checkout has had uncommitted changes for the whole wait (10 min) |
 | `merge` | the operator retrying a failed merge, `POST /api/tickets/:id/merge` |
 | `resume` | the operator, Resume in the card menu or the Inbox, `POST /api/tickets/:id/resume` |
+| `restart` | the operator, Restart in the card menu, the ticket window (Ctrl+R) or the Inbox, `POST /api/tickets/:id/restart` |
 
 ## The table
 
@@ -34,12 +35,14 @@ Status is one of **backlog → in_progress → testing → done**. Two flags sit
 | testing | launch | no live agent session | testing | `needs_human` off | test agent again in the same worktree, `retry` unchanged. Refused while an agent is live, as above |
 | in_progress | resume | `needs_human` on and no live agent session | in_progress | `needs_human` off | execute agent again, as for launch |
 | testing | resume | `needs_human` on and no live agent session | testing | `needs_human` off | test agent again, as for launch |
+| in_progress | restart | | in_progress | `needs_human` off | end every live session (outcome `restart`, grant revoked, pty killed), operator failure note, execute agent again |
+| testing | restart | | testing | `needs_human` off | as above, then test agent again (the diff is re-rendered from the worktree) |
 | in_progress | submit | | testing | | worker session ended (grant revoked, pty killed), tester grant, test agent |
 | testing | pass | the tester called `report_test(passed: true)` during this test run | done | | tester session ended, merge queued |
 | testing | fail | `retry` < 3 | in_progress | `retry` + 1 | tester session ended, execute agent again, with the failure notes and the ticket's (possibly escalated) model |
 | testing | fail | `retry` = 3 | in_progress | `retry` + 1, `needs_human` on | tester session ended, failure note "stopped after 4 failed tests", chord. Stops |
 | running | ask | | same | `needs_human` on | question note, chord. The agent's terminal stays open |
-| running | answer | `needs_human` on and an agent session is live | same | `needs_human` off | answer note; the answer typed into the agent's terminal as one line + Enter |
+| running | answer | `needs_human` on and an agent session is live | same | `needs_human` off | answer note; the answer typed into the agent's terminal as one line, then Enter as a separate keystroke 300 ms later (one burst would read as a paste, leaving the answer unsubmitted) |
 | running | exit | | same | `needs_human` on | failure note ("agent exited without reporting" or "launch failed: …", then a "To resolve:" line naming Resume and Reset to Backlog), chord |
 | done | merged | | done | `merged_at` set, `needs_human` off | ding, worktree and branch removed, held dependents launched, housekeeping check |
 | done | conflict | `retry` < 3 | in_progress | `retry` + 1 | failure note "merge conflict with <base>: <git output>", execute agent again in the kept worktree. It merges the base in, resolves, and submits; the tester runs and the merge is queued again |
@@ -48,6 +51,16 @@ Status is one of **backlog → in_progress → testing → done**. Two flags sit
 | done | merge | not merged yet | done | | merge queued again |
 
 Resume and launch on a running ticket are not in the original spec. Before them, the only way past a silent exit was Reset to Backlog and Launch, which threw away `retry` and the phase. The new prompt carries the exit's failure note like any retry (`failureNotes` in `daemon/src/context.ts`: failure notes since the latest execute run). Resume is the strict form (only a flagged ticket); Launch on a running ticket also starts an unflagged one with no agent, such as one dragged by hand into a running column.
+
+### Resume, Restart and Reset
+
+| | When | Agent | Phase, worktree, `retry` |
+|---|---|---|---|
+| Resume | flagged running ticket, no live agent | starts one | kept |
+| Restart | any running ticket, live agent or not, flagged or not | ends the live one, starts a new one | kept |
+| Reset to Backlog | any ticket | ends the live one, starts none | back to Backlog, `retry` 0 |
+
+Restart is for an agent that is live but stuck: idle, hung, or its CLI died without the pty closing. The old session's outcome is set to `restart` before the kill (as `end_session` does for a reported move), so its exit is expected and does not raise the `exit` row's flag. The operator note ("restarted by the operator; the previous session was ended without reporting. Continue from the state of this worktree: read `git status` and `git log` first") lands under "What failed on the last attempt" in the new prompt. Restart has no `done` row: a done ticket that did not merge has Retry merge (`merge`).
 
 The `merge` row is not in the original spec: it is how the operator finishes a flagged merge. They fix the branch in its worktree (merge the base into it and commit) or clean the main checkout, then retry the merge.
 
@@ -59,7 +72,7 @@ Every row that turns `needs_human` on writes exactly one note in the same transa
 |---|---|---|
 | fail at the cap | `stopped after 4 failed tests` | read the tester's notes, fix the ticket if it asks for the wrong thing, Reset to Backlog and Launch |
 | ask | the question | (the Answer box) |
-| exit | `agent exited without reporting` / `launch failed: …` | Resume (the agent starts again in the same worktree), or Reset to Backlog to start over |
+| exit | `agent exited without reporting` / `launch failed: …` / `ended by the operator from the terminal window` | Resume (the agent starts again in the same worktree), or Reset to Backlog to start over |
 | conflict at the cap | `merge conflict with <base>: …` | in `.worktrees/t-<id>` merge the base, fix, test, commit, Retry merge |
 | dirty | the `git status` lines | commit or stash in the main checkout, Retry merge |
 
@@ -69,11 +82,11 @@ The first execute run is attempt 0. Each failed test adds one to `retry` and run
 
 ### Escalation
 
-A tester that thinks the work needs a bigger model calls `set_model` before sending the ticket back. The ticket's `model` and `effort` override the execute phase only, so the retry runs with them; test runs keep the phase default.
+The ticket's `model` and `effort` override the execute phase only, so a retry runs with the same ones; test runs keep the phase default. Only the planner (`set_model`, `create_ticket`) and the operator (UI or the operator terminal) set them; a worker or tester that thinks the work needs a bigger model says so in its note.
 
 ### Ending a session
 
-Both CLIs run interactive sessions that never exit by themselves. When an agent's `move_ticket` is accepted, the board revokes its grant and kills its terminal; that exit is expected (`runs.outcome` = the event: `submit`, `pass`, `fail`). Any other exit, including the operator revoking a grant and the daemon shutting down, is the `exit` event (`runs.outcome` = `exit`), so a ticket can never sit in a running column with no agent and no flag.
+Both CLIs run interactive sessions that never exit by themselves. When an agent's `move_ticket` is accepted, the board revokes its grant and kills its terminal; that exit is expected (`runs.outcome` = the event: `submit`, `pass`, `fail`). The operator's X on a terminal (`DELETE /api/sessions/:id`) sets `runs.outcome` = `closed`, revokes the grant and kills the pty, then applies `exit` itself with the failure note "ended by the operator from the terminal window" (role `operator`), so the ticket is flagged with the usual "To resolve:" line and offers Resume; the exit handler sees `closed` and writes no second note. A brainstorm has no ticket, so ending one only stops it. Any other exit, including the operator revoking a grant and the daemon shutting down, is the `exit` event (`runs.outcome` = `exit`), so a ticket can never sit in a running column with no agent and no flag.
 
 ### Restart
 
@@ -81,9 +94,19 @@ No agent survives a daemon restart, and an agent killed by one did nothing wrong
 
 There is no Pause yet; when it exists, a paused board flags these tickets (`exit`, with the "To resolve:" line) instead of resuming them.
 
-## Launch all
+## The runner
 
-`POST /api/tickets/launch-all` takes every backlog ticket, orders them so a dependency comes before its dependents (ids ascending otherwise) and applies `launch` to each. Tickets whose dependencies have not merged are held with `blocked_on_deps`. Dependency cycles cannot exist: `create_ticket`, `update_ticket` and `PATCH /api/tickets/:id` refuse a dependency list that would make a ticket depend on itself through any chain.
+**Run** (Board toolbar, Start menu, Ctrl+L) lets the board work the backlog by itself, one ticket start to finish (execute, test, merge) before the next. `tick` in `daemon/src/lifecycle.ts` runs after every `apply` and once on daemon start, after `recover`. While the runner is on and fewer than `runner_concurrency` tickets are running (`<repo>/.kanban95/config.json`, default 1), it applies `launch` to the next candidate.
+
+- **Running** means not flagged and in `in_progress` or `testing`, or in `done` and not merged yet: the next ticket starts only once the previous one has merged. A flagged ticket does not count; it waits for the operator in the Inbox while the runner goes on.
+- **A candidate** is a backlog ticket with `needs_human = 0` whose every dependency is merged. The runner never launches a flagged ticket or one whose dependency has not merged; it takes the next one instead.
+- **Order**: effort `low` < `medium` < `high` < `max` (unset counts as `medium`), then fewer non-blank acceptance-criteria lines, then lower id. It is a rough size; a size estimate from the planner would replace it.
+- **It stops itself** when nothing is running and no candidate is left: the flag goes off with `why: "nothing left to launch"`, a `ding` (`ticket: null`) plays and the status bar says "Runner stopped: nothing left to launch". A backlog ticket held only on a running ticket's merge is not "nothing left": the runner waits for that merge. Tickets that stay behind (flagged, or held on a flagged ticket) wait for the operator.
+- **Stop** turns the flag off. Running agents finish their current phase and their merges land, but nothing new starts. The operator's own Launch on a card works either way. A ticket that hits the retry cap and flags never stops the runner.
+- **A restart** keeps the flag (`<repo>/.kanban95/runner.json`, git-ignored); `recover` resumes the running tickets and the runner carries on from there.
+- **Housekeeping** tickets created after every `housekeeping_every` merges are candidates like any other and sort by their effort.
+
+Tickets held with `blocked_on_deps` by a manual Launch keep their own path: the board launches them when their last dependency merges, runner or not. Dependency cycles cannot exist: `create_ticket`, `update_ticket` and `PATCH /api/tickets/:id` refuse a dependency list that would make a ticket depend on itself through any chain.
 
 ## The merge queue
 
@@ -136,7 +159,7 @@ A repo's prompts come from its own `.kanban95/templates/`, copied from `template
 
 ## Housekeeping
 
-Every time the number of merged tickets (housekeeping tickets not counted) reaches a multiple of `housekeeping_every`, the board creates a ticket that runs the `housekeeping.md` template and launches it like any other: same worktree, test, retry and merge path. The interval lives in `<repo>/.kanban95/config.json` and defaults to 10:
+Every time the number of merged tickets (housekeeping tickets not counted) reaches a multiple of `housekeeping_every`, the board creates a ticket that runs the `housekeeping.md` template and leaves it in Backlog, where the runner picks it up like any other (or the operator launches it): same worktree, test, retry and merge path. The **Housekeeping** button creates one and launches it at once. The interval lives in `<repo>/.kanban95/config.json` and defaults to 10:
 
 ```json
 { "housekeeping_every": 10 }
@@ -149,9 +172,11 @@ The count is derived from the database (`template = 'execute' AND merged_at IS N
 | method | path | event |
 |---|---|---|
 | POST | `/api/tickets/:id/launch` | `launch` |
-| POST | `/api/tickets/launch-all` | `launch` on every backlog ticket, in dependency order; returns them |
 | POST | `/api/tickets/:id/answer` | `answer`; body `{ "answer": "..." }`, non-empty |
 | POST | `/api/tickets/:id/merge` | `merge` |
 | POST | `/api/tickets/:id/resume` | `resume` |
+| POST | `/api/tickets/:id/restart` | `restart` |
 
-Each returns the ticket (`200`), `409` with the refusal when the table has no row, and is audited like every REST mutation (`tickets.launch`, `tickets.launch_all`, `tickets.answer`, `tickets.merge`, `tickets.resume`).
+Each returns the ticket (`200`), `409` with the refusal when the table has no row, and is audited like every REST mutation (`tickets.launch`, `tickets.answer`, `tickets.merge`, `tickets.resume`, `tickets.restart`).
+
+`GET /api/runner` returns `{on, why?, running: [ids], left, backlog}`: the flag, why it last stopped itself, the tickets it waits on, the candidates left and the number of backlog tickets. `PUT /api/runner` with `{"on": true | false}` turns it on (and launches at once) or off and returns the same; audited as `runner.set`.

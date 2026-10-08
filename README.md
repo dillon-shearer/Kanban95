@@ -1,42 +1,68 @@
 # Kanban95
 
-Retro Win95-styled desktop kanban that launches, tests, retries and merges AI agent work per ticket. Fire and forget.
+A Windows 95-styled desktop kanban that runs AI coding agents for you. Write tickets (or talk them through with a planner agent), press **Run**, and walk away: the board takes the tickets one at a time, smallest first, starts Claude Code or Codex CLI for each in its own git worktree, has a second agent test the work against the acceptance criteria, retries failures, and merges what passes. It calls you only when it is stuck, with a ding, a red card and an Inbox entry saying what to do.
 
-The board holds no provider API keys. Claude Code and Codex CLI authenticate themselves; the board only mints scoped, revocable session tokens of its own. Everything runs on `127.0.0.1`.
+![The board](docs/img/board.png)
 
-Spec: `PLAN.md`. Design: `docs/ARCHITECTURE.md`, schema `docs/DATA.md`, security model `docs/SECURITY.md`, agent tool reference `docs/MCP.md`, how each agent CLI is launched `docs/CLIS.md`, how a ticket moves from Launch to merged `docs/LIFECYCLE.md`, what agents receive and how they behave `docs/AGENTS.md`, how to drive the board `docs/OPERATOR.md`. Conventions for agents working here: `CLAUDE.md`.
+## Why
 
-## Requirements (Windows is the primary platform)
+Running one coding agent is easy; running five at once on one repository is not. They overwrite each other's files, mark their own work done, need someone to check each result, and leave branches and temp files behind. Kanban95 is the supervisor that does that work:
 
-- Node 24+ (`.node-version` is set; `fnm use` picks it up). `npm install` refuses older Node.
-- Rust stable with the MSVC toolchain (Visual Studio 2022 Build Tools, "Desktop development with C++").
-- WebView2 runtime (ships with Windows 11).
-- To launch agents: Claude Code and/or Codex CLI, logged in with their own commands; a model per CLI and phase, saved in Settings → Models (`~/.kanban95/models.json`, `docs/LIFECYCLE.md` → Run settings); for Claude Code, its one-time `--dangerously-skip-permissions` warning accepted once by hand (`docs/CLIS.md`).
+- **One worktree per ticket**, so agents never share files, and one merge queue, so merges land one at a time.
+- **A tester for every ticket**, a different session from the worker, which must report a pass before the ticket can be done.
+- **Scoped, revocable grants**: each agent can act only on its own ticket, only through the board's tools, and only while its session lives.
+- **Your keys stay yours.** The board holds no provider API key; the agent CLIs log in themselves. Everything runs on `127.0.0.1`.
+- **Self-cleaning.** Worktrees, branches, session files and grants are removed when a ticket merges, and a janitor sweeps up after crashes.
 
-## Install or run from source
+New to worktrees, MCP or agent tooling? Start with [docs/LEARNING.md](docs/LEARNING.md).
 
-**Use the installer** to use Kanban95 on a machine: it needs only Node 24+ on PATH and the WebView2 runtime, no Rust, no clone. Build it with `npm run installer` (from a source checkout, Rust required) → `shell/target/release/bundle/nsis/Kanban95_<version>_x64-setup.exe`. It installs for the current user, no admin prompt, with a Start menu entry. The installed `Kanban95.exe` opens the board on the folder passed as its argument (a git repository; drop the project folder on it or put the path in a shortcut's target), else on its working directory. Without Node 24 the first run shows a dialog with the download link. How it is packaged: `docs/ARCHITECTURE.md` → Packaging.
+## Quickstart
 
-**Use `Kanban95.cmd`** when developing Kanban95 itself: it builds the checkout you are editing and shows the daemon's log.
+You need Windows 11, [Node 24+](https://nodejs.org/), [Rust](https://rustup.rs/) with the MSVC build tools (Visual Studio 2022 Build Tools, "Desktop development with C++"), and Claude Code and/or Codex CLI installed and logged in.
 
-## Run
+```
+git clone https://github.com/dillon-shearer/Kanban95.git
+cd Kanban95
+.\Kanban95.cmd C:\path\to\your\project
+```
 
-**One click: `Kanban95.cmd`.** Double-click it to open the board on this repo, or drop a project folder (a git repository) onto it to open the board on that project; `Kanban95.cmd C:\path\to\project` does the same from a terminal, and a desktop shortcut to it works too. It finds Node 24 even when an older Node is first on PATH (through fnm), runs `npm install` the first time, builds and starts the window. Its console window shows the daemon's log; closing the board window ends both.
+The project must be a git repository. `Kanban95.cmd` finds Node 24 (through fnm if an older Node is first on PATH), installs, builds and opens the board; double-clicking it opens the board on Kanban95 itself, and dropping a project folder onto it opens that project. Then, once:
 
-By hand (Node 24 must be the `node` on PATH, because the shell starts the daemon with it; otherwise the shell shows an error dialog naming the Node it found and the download link):
+1. **Start → Settings → Models**: pick a CLI, model and effort per phase and press **Save** (writes `~/.kanban95/models.json`; nothing launches without it).
+2. For Claude Code, accept its one-time `--dangerously-skip-permissions` warning by hand ([docs/CLIS.md](docs/CLIS.md) → First-run prompts).
+
+[docs/OPERATOR.md](docs/OPERATOR.md) walks through a full cycle from brainstorm to merge.
+
+## Documentation
+
+| doc | what it covers |
+|---|---|
+| [docs/LEARNING.md](docs/LEARNING.md) | a guided tour for newcomers: worktrees, MCP tools, grants, and why the board uses them |
+| [docs/OPERATOR.md](docs/OPERATOR.md) | driving the board: brainstorm, operator terminals, launch, the Inbox, settings, voice input |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | shell, daemon and UI; REST, events, launch, packaging, repo map |
+| [docs/LIFECYCLE.md](docs/LIFECYCLE.md) | the ticket state machine, retries, the merge queue, the janitor |
+| [docs/AGENTS.md](docs/AGENTS.md) | what an agent receives, how each role is expected to behave, the skills plugin |
+| [docs/MCP.md](docs/MCP.md) | every agent tool, who may call it, its arguments (generated) |
+| [docs/CLIS.md](docs/CLIS.md) | how Claude Code and Codex are started: flags, first-run prompts, reach by role |
+| [docs/SECURITY.md](docs/SECURITY.md) | grants, audit, the shell secret, the webview, the threat model |
+| [docs/DATA.md](docs/DATA.md) | the per-repo SQLite schema, migrations, and every file the board writes |
+| [CLAUDE.md](CLAUDE.md) | conventions for agents working on this repo |
+
+## Install without Rust
+
+`npm run installer` (from a source checkout, Rust required) builds a per-user NSIS installer at `shell/target/release/bundle/nsis/Kanban95_<version>_x64-setup.exe`. It needs no admin prompt and installs a Start menu entry; the installed app needs only Node 24+ on PATH and the WebView2 runtime, and shows a download dialog when Node is missing. `Kanban95.exe` opens the board on the folder passed as its argument, else on its working directory. Details: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) → Packaging.
+
+## Developing Kanban95
 
 ```
 npm install
-npm run build     # compiles daemon/ to daemon/dist
-npm test          # daemon and UI tests (builds first; the UI tests drive headless Edge or Chrome, or KANBAN95_BROWSER, and download the 80 MB speech model once into daemon/test/.cache/)
-npm run test:shell # the Tauri shell's tests (cargo test: no Tauri command reachable from the webview)
-npm run docs:mcp  # regenerate docs/MCP.md from the MCP tool table (a test fails if it drifts)
-npm run dev       # builds, then cargo-runs the Tauri shell, which spawns the daemon and opens the window on the cwd
-npm run dev -- C:\path\to\project   # the same, on another repo
+npm run build        # compiles daemon/ to daemon/dist
+npm test             # daemon and UI tests; the UI tests drive headless Edge or Chrome (or KANBAN95_BROWSER) and download the 80 MB speech model once into daemon/test/.cache/
+npm run test:shell   # the Tauri shell's tests (cargo test)
+npm run docs:mcp     # regenerate docs/MCP.md from the MCP tool table; a test fails if it drifts
+npm run dev -- C:\path\to\project   # build, then cargo-run the shell on that repo (default: the cwd)
 ```
 
-The daemon alone: set `KANBAN95_SECRET` to a random string of 32+ characters (it refuses to start without one), then `node daemon/dist/server.js [repo]` prints `KANBAN95 port=<n>`; open the UI at `http://127.0.0.1:<n>/?k95=<secret>` (`docs/SECURITY.md` → Shell secret). It creates `<repo>/.kanban95/board.db` and `<repo>/.kanban95/templates/` (default repo: the cwd). It exits when its stdin closes, so run it from a parent that holds the pipe (the shell does).
+`npm run dev` and the shell start the daemon with the `node` on PATH, which must be Node 24. The daemon alone: set `KANBAN95_SECRET` to a random string of 32+ characters, run `node daemon/dist/server.js [repo]`, and open `http://127.0.0.1:<port>/?k95=<secret>` with the port it prints ([docs/SECURITY.md](docs/SECURITY.md) → Shell secret). It exits when its stdin closes, so run it from a parent that holds the pipe.
 
-## Layout
-
-`daemon/` TypeScript daemon (HTTP, SQLite, REST, grants, MCP, prompt rendering, worktrees, agent launch in a pty streamed over websocket, the ticket lifecycle, merge queue and janitor). `templates/` default agent prompts, copied into `<repo>/.kanban95/templates/` on first start and editable there. `ui/` static Win95 UI (window manager, board, ticket, terminals, brain, settings, inbox, voice input), no build step, 98.css, xterm.js and transformers.js vendored in `ui/vendor/`. `shell/` Tauri 2 shell. `docs/` living documentation and the phase log in `docs/handoffs/log/`.
+Layout: `daemon/` the TypeScript daemon (HTTP, SQLite, REST, MCP, grants, prompts, worktrees, agent ptys, lifecycle, merge queue, janitor). `ui/` the static Win95 UI, no build step, with 98.css, xterm.js and transformers.js vendored. `shell/` the Tauri 2 shell. `templates/` the default agent prompts. `skills/` a Claude Code plugin with the agent skills. `docs/` the documentation above.

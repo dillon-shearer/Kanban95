@@ -1,3 +1,4 @@
+import './home.ts'; // also here, not only in vitest.config.ts: a run from the repo root skips that config and wrote the real home
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -259,5 +260,19 @@ describe('operator preferences', () => {
     expect(readFileSync(file(), 'utf8')).toBe('x'.repeat(16 * 1024));
     expect((await call('PUT', '/api/config/preferences', { value: 3 })).status).toBe(400);
     expect(existsSync(`${file()}.tmp`)).toBe(false);
+  });
+});
+
+describe('notepad', () => {
+  it('reads empty when absent, saves the whole text, refuses over 256 KB with 413 without touching the file', async () => {
+    const file = join(repo, '.kanban95', 'notepad.md');
+    expect(await (await call('GET', '/api/notepad')).json()).toEqual({ value: '' });
+    expect((await call('PUT', '/api/notepad', { value: 'x'.repeat(256 * 1024) })).status).toBe(200);
+    expect(readFileSync(file, 'utf8')).toBe('x'.repeat(256 * 1024));
+    const big = await call('PUT', '/api/notepad', { value: 'é'.repeat(128 * 1024 + 1) }); // 256 KB + 2 bytes in UTF-8
+    expect(big.status).toBe(413);
+    expect((await big.json()).error).toMatch(/256 KB/);
+    expect(readFileSync(file, 'utf8')).toBe('x'.repeat(256 * 1024));
+    expect((await call('PUT', '/api/notepad', { value: null })).status).toBe(400);
   });
 });

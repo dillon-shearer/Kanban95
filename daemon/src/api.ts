@@ -1,14 +1,14 @@
 // UI-facing REST under /api. Operator-only (no grant); every mutation writes an audit row.
-import { existsSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { extname, join } from 'node:path';
+import { dirname, extname, join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { attachmentDir, attachments, MAX_ATTACHMENT, safeName, saveAttachment } from './attachments.js';
 import { isConstraintError } from './db.js';
 import { ticketDiff } from './git.js';
 import { audit, revoke } from './grants.js';
 import { killGrantSession, sessions, sessionsOf, type Session } from './launcher.js';
-import { apply, brainstorm, changed, housekeeping, launchAll, Refused, type Board } from './lifecycle.js';
+import { apply, brainstorm, changed, housekeeping, operator, Refused, runnerState, setRunner, type Board } from './lifecycle.js';
 import { BadConfig, CONFIGS, configPath, knownModels, preferencesPath, readPreferences, writeConfig, writePreferences, type ConfigName } from './settings.js';
 import { trustStatus, untrustClaude } from './trust.js';
 import { download, status as voiceStatus } from './voice.js';
@@ -107,6 +107,9 @@ function ftsQuery(q: string): string {
   return q.split(/\s+/).filter(Boolean).map((t) => `"${t.replaceAll('"', '""')}"`).join(' ');
 }
 
+const NOTEPAD_MAX = 256 * 1024;
+const notepadPath = (board: Board) => join(board.repo, '.kanban95', 'notepad.md');
+
 const UPLOAD = /^\/api\/tickets\/(\d+)\/attachments$/;
 const ATTACHMENT = /^\/api\/tickets\/(\d+)\/attachments\/([^/]+)$/;
 
@@ -202,12 +205,19 @@ const routes: [method: string, path: RegExp, mutation: string | null, handler: (
   // Lifecycle (docs/LIFECYCLE.md). A transition the table does not have is 409.
   ['POST', /^\/api\/tickets\/(\d+)\/launch$/, 'tickets.launch', ({ board, params }) => ({ status: 200, body: apply(board, Number(params[0]), 'launch').ticket })],
   ['POST', /^\/api\/tickets\/(\d+)\/resume$/, 'tickets.resume', ({ board, params }) => ({ status: 200, body: apply(board, Number(params[0]), 'resume').ticket })],
-  ['POST', /^\/api\/tickets\/launch-all$/, 'tickets.launch_all', ({ board }) => ({ status: 200, body: launchAll(board) })],
+  ['POST', /^\/api\/tickets\/(\d+)\/restart$/, 'tickets.restart', ({ board, params }) => ({ status: 200, body: apply(board, Number(params[0]), 'restart').ticket })],
   ['POST', /^\/api\/tickets\/(\d+)\/answer$/, 'tickets.answer', ({ board, params, body }) => {
     if (typeof body.answer !== 'string' || !body.answer.trim()) throw new HttpError(400, 'answer must be a non-empty string');
     const id = Number(params[0]);
     readTicket(board.db, id);
     return { status: 200, body: apply(board, id, 'answer', { note: { role: 'operator', kind: 'answer', body: body.answer }, answer: body.answer }).ticket };
+  }],
+  // The runner (docs/LIFECYCLE.md → The runner): `{on}` turns it on or off; both return what the status bar shows.
+  ['GET', /^\/api\/runner$/, null, ({ board }) => ({ status: 200, body: runnerState(board) })],
+  ['PUT', /^\/api\/runner$/, 'runner.set', ({ board, body }) => {
+    if (typeof body.on !== 'boolean') throw new HttpError(400, 'on must be a boolean');
+    setRunner(board, body.on);
+    return { status: 200, body: runnerState(board) };
   }],
   ['POST', /^\/api\/tickets\/(\d+)\/merge$/, 'tickets.merge', ({ board, params }) => ({ status: 200, body: apply(board, Number(params[0]), 'merge').ticket })],
   ['POST', /^\/api\/tickets\/housekeeping$/, 'tickets.housekeeping', ({ board }) => ({
@@ -236,7 +246,48 @@ const routes: [method: string, path: RegExp, mutation: string | null, handler: (
   }],
   // Live agent terminals, for the UI's terminal windows and the taskbar count. `id` is the /pty/<id> key.
   ['GET', /^\/api\/sessions$/, null, () => ({ status: 200, body: [...sessions.values()].map(sessionView) })],
+  // The operator's X on a terminal: the agent stops for good. A ticket's is flagged so it can be resumed; `closed` keeps
+  // the exit handler from writing a second note.
+  ['DELETE', /^\/api\/sessions\/(-?\d+)$/, 'sessions.end', ({ board, db, params }) => {
+    const s = sessions.get(Number(params[0]));
+    if (!s) throw new HttpError(404, 'no such session');
+    s.outcome = 'closed';
+    revoke(db, s.grantId);
+    s.pty.kill();
+    if (s.ticketId !== null) {
+      try {
+        apply(board, s.ticketId, 'exit', { note: { role: 'operator', kind: 'failure', body: 'ended by the operator from the terminal window' } });
+      } catch (e) {
+        if (!(e instanceof Refused)) throw e; // the ticket has moved on; nothing to flag
+      }
+    }
+    return { status: 204 };
+  }],
   ['POST', /^\/api\/brainstorm$/, 'brainstorm.launch', ({ board }) => ({ status: 201, body: sessionView(brainstorm(board)) })],
+  // An operator terminal: the typed mission goes into its brief verbatim (docs/SECURITY.md → Operator terminal).
+  ['POST', /^\/api\/operator$/, 'operator.launch', ({ board, body }) => {
+    if (typeof body.mission !== 'string' || !body.mission.trim()) throw new HttpError(400, 'mission must be a non-empty string');
+    return { status: 201, body: sessionView(operator(board, body.mission)) };
+  }],
+  // <repo>/.kanban95/notepad.md, the operator's scratch notes, whole file in `value` both ways ('' when absent).
+  // Not audited: it autosaves every pause in typing and is nothing an agent reads.
+  ['GET', /^\/api\/notepad$/, null, ({ board }) => {
+    try {
+      return { status: 200, body: { value: readFileSync(notepadPath(board), 'utf8') } };
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code === 'ENOENT') return { status: 200, body: { value: '' } };
+      throw e;
+    }
+  }],
+  ['PUT', /^\/api\/notepad$/, null, ({ board, body }) => {
+    if (typeof body.value !== 'string') throw new HttpError(400, 'value must be a string');
+    if (Buffer.byteLength(body.value) > NOTEPAD_MAX) throw new HttpError(413, `notepad over ${NOTEPAD_MAX / 1024} KB`);
+    const file = notepadPath(board);
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(`${file}.tmp`, body.value);
+    renameSync(`${file}.tmp`, file);
+    return { status: 200, body: { value: body.value } };
+  }],
   // ~/.kanban95/preferences.md, plain text in `value` both ways ('' when absent). Matched before the JSON config routes.
   ['GET', /^\/api\/config\/preferences$/, null, () => ({ status: 200, body: { path: preferencesPath(), value: readPreferences() } })],
   ['PUT', /^\/api\/config\/preferences$/, 'config.write', ({ body }) => ({ status: 200, body: { path: preferencesPath(), value: writePreferences(body.value) } })],
