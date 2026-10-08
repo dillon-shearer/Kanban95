@@ -108,7 +108,7 @@ Errors are `{ "error": "..." }`: 400 for bad input, a constraint violation or a 
 ## Prompts
 
 1. `startRun(db, repo, {ticketId, template, cli, model, effort, worktree?, base?})` loads `<repo>/.kanban95/templates/<template>.md`. A placeholder outside `VARS` throws here, naming it.
-2. `buildContext` reads the ticket, the brain (FTS5 `OR` of the ticket's title and body words, top 8, bodies for the top 2 and an index line for the rest, 2500-char budget cut between rows), the failure notes of the last cycle, the retry count, the base branch, the operator's `preferences.md`, the absolute paths of the ticket's attachments (appended to `{{ticket}}`), the role's tool list from the MCP table, and for a tester `git diff --no-color --no-ext-diff <base>...HEAD` in the worktree.
+2. `buildContext` reads the ticket, the brain (FTS5 `OR` of the ticket's title and body words, top 8, bodies for the top 2 and an index line for the rest, 2500-char budget cut between rows), the failure notes of the last cycle, the retry count, the base branch, the operator's `preferences.md`, the absolute paths of the ticket's attachments (appended to `{{ticket}}`), the role's tool list from the MCP table, and for a tester `git diff --stat` of the change plus its code diff without markdown, `docs/` and lockfiles, capped at 32 000 characters (`docs/AGENTS.md` → `{{diff}}`).
 3. The template is filled in a single pass and the result inserted into `runs.prompt_rendered`. Same ticket and same database give byte-identical output: every query has a total order and nothing reads the clock.
 
 The template is read from disk on every render, so operator edits apply without a restart. Template-to-role and template-to-phase mapping is the `TEMPLATES` table in `templates.ts`; agent-facing behaviour is in `docs/AGENTS.md`.
@@ -135,7 +135,7 @@ docs/             this file, LEARNING.md (guided tour for newcomers), OPERATOR.m
 1. `createWorktree` → `.worktrees/t-<id>` on `ticket/<id>` from the repo's current branch, reused if it exists; refused if the base branch has uncommitted tracked changes.
 2. `startRun` renders the template and inserts the `runs` row (a bad template stops here, nothing is minted).
 3. `mint` a grant with the template's role (`TEMPLATES[template].role`).
-4. Session dir `.kanban95/sessions/<run-id>/`, owner-only, with `prompt.md` and (Claude Code) `mcp.json`.
+4. Session dir `.kanban95/sessions/<run-id>/`, owner-only, with `prompt.md` and (Claude Code) `mcp.json`, plus `settings.json` for a Claude worker or tester (`docs/CLIS.md`).
 5. `buildArgv` with the role (flags and reach per role in `docs/CLIS.md`); for Claude Code, `preTrustClaude` makes sure the repo root is trusted; then `spawnPty` with `cwd` = worktree and the env allowlist.
 6. The session is kept in `sessions` (by run id) until its pty exits. On exit, for any reason: `runs.ended_at` and `runs.scrollback` are written, the grant is revoked, the session dir is removed, the lifecycle's exit hook runs (`runs.outcome`, and the `exit` event if the agent never reported), `session.done` resolves.
 
@@ -196,7 +196,6 @@ Gotchas collected while the board was built. Each one cost a phase some time.
 **Templates**
 - Operator edits to `<repo>/.kanban95/templates/` survive restarts, and a changed default in `templates/` only reaches repos that lack the file.
 - Running the daemon on this repo creates `./.kanban95/templates/` (untracked, not ignored: in a target repo they are meant to be committed).
-- The test diff is injected whole (`// ponytail:` in `context.ts`).
 
 **Windows**
 - node-pty prints `Error: AttachConsole failed` to stderr on `kill()`. It is harmless (the process is gone). `useConptyDll: true` silences it at about 3 s per spawn, so it is off. A one-off node script using node-pty does not exit by itself after the pty ends: call `process.exit`.

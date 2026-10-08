@@ -1,6 +1,6 @@
 # Kanban95 — agent conventions
 
-Read `README.md` and `docs/ARCHITECTURE.md` first, including its Working on the board section, then the living doc for each part you touch. Search the board's brain (`brain_search`) for gotchas.
+Read `docs/ARCHITECTURE.md` → Working on the board, the section of `docs/ARCHITECTURE.md` for the part you touch, and the living doc for that part. Search the board's brain (`brain_search`) for gotchas.
 
 ## Principles, in priority order
 1. Security and the operator's keys/data above every feature. The board never holds provider API keys. Never read a `.env` implicitly. Never log a token in the clear.
