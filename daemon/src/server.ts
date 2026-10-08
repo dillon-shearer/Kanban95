@@ -224,17 +224,28 @@ if (import.meta.main) {
   // From the shell's environment, never argv (another process can read a command line). Dropped from ours at once so
   // nothing we spawn (git, hooks, agent CLIs) inherits it.
   const secret = process.env.KANBAN95_SECRET;
+  const shell = process.env.KANBAN95_SHELL === '1';
   delete process.env.KANBAN95_SECRET;
+  delete process.env.KANBAN95_SHELL;
   if (!secret || secret.length < 32) {
     console.error('KANBAN95_SECRET is missing or shorter than 32 characters: start the board through the shell (Kanban95.cmd)');
     process.exit(1);
   }
-  const { port } = await start({
+  const { port, board, close } = await start({
     secret,
     port: process.env.KANBAN95_PORT ? Number(process.env.KANBAN95_PORT) : 0,
     repo: process.argv[2],
   });
   console.log(`KANBAN95 port=${port}`);
+  board.shell = shell;
+  // Restart board (POST /api/restart): the same shutdown as close(), so killed agents stay unflagged and recover() resumes
+  // them, then exit 75, which the shell takes as "start me again" (docs/ARCHITECTURE.md -> Restart board).
+  board.shutdown = (code) => {
+    if (board.closing) return;
+    // ponytail: a session whose pty never exits would hold close() forever; 15 s cap, a per-step timeout if that bites.
+    setTimeout(() => process.exit(code), 15_000).unref();
+    close().finally(() => process.exit(code));
+  };
   // The parent (Tauri shell) holds our stdin. When it dies the pipe closes and we leave with it.
   process.stdin.on('end', () => process.exit(0));
   process.stdin.resume();

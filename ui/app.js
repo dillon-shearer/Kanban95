@@ -22,7 +22,7 @@ async function api(method, path, body) {
 const COLUMNS = [['backlog', 'Backlog'], ['in_progress', 'In Progress'], ['testing', 'Testing'], ['done', 'Done']];
 const LABEL = Object.fromEntries(COLUMNS);
 const EFFORTS = ['low', 'medium', 'high', 'max'];
-const PHASES = ['plan', 'execute', 'test'];
+const PHASES = ['plan', 'execute', 'test', 'operator'];
 const CLIS = ['claude', 'codex'];
 /** Where the operator may drag a ticket. Everything onward is the agents' job; anything may go back to Backlog (reset). */
 const MOVES = { backlog: ['in_progress'], in_progress: ['backlog'], testing: ['backlog'], done: ['backlog'] };
@@ -30,7 +30,7 @@ const MOVES = { backlog: ['in_progress'], in_progress: ['backlog'], testing: ['b
 const tickets = new Map();
 let sessions = [];
 let inbox = [];
-let runner = { on: false, running: [], left: 0, backlog: 0 }; // GET /api/runner: the Run button and its status-bar line
+let runner = { on: false, concurrency: 3, running: [], left: 0, backlog: 0, waits: [] }; // GET /api/runner: the Run button and its status-bar line
 let models = null; // ~/.kanban95/models.json as written, for the cards' default model and effort
 let settings = { paths: {}, sounds: true, voice: { backend: 'local', mode: 'push' } };
 const views = new Map(); // open window id → redraw(ticketId | null)
@@ -68,9 +68,14 @@ function listen() {
     await refreshShared();
     redraw(e.ticket);
   };
-  // ponytail: no reconnect; the daemon lives exactly as long as the window (shell sidecar).
-  ws.onclose = () => say('Lost the connection to the daemon. Restart Kanban95.');
+  // Only Restart board reconnects: the shell navigates this window to the new daemon, which reloads the page.
+  ws.onclose = () => {
+    if (!restarting) return say('Lost the connection to the daemon. Restart Kanban95.');
+    say('Restarting…');
+    setTimeout(listen, 1000);
+  };
 }
+let restarting = false;
 
 // ---- board ----
 
@@ -234,9 +239,9 @@ const toggleRunner = () => act(async () => {
   runner = await api('PUT', '/runner', { on: !runner.on });
   drawBoard();
 });
-/** While on: what it waits on and what is left. Off by itself: why. Off by Stop: nothing. */
+/** While on: what it waits on against the limit, what is left, and who waits on shared files. Off by itself: why. Off by Stop: nothing. */
 const runnerLine = (r) => r.on
-  ? `Running: ${r.running.map((id) => `#${id}`).join(', ') || 'nothing yet'} (${r.left} of ${r.backlog} candidates left)`
+  ? `Running: ${r.running.map((id) => `#${id}`).join(', ') || 'nothing yet'} (${r.running.length} of ${r.concurrency}; ${r.left} of ${r.backlog} candidates left)${r.waits.map((w) => `; #${w.id} waits: shares files with #${w.on}`).join('')}`
   : r.why ? `Runner stopped: ${r.why}` : '';
 // Replaces a running ticket's agent, live or hung, with a fresh one in the same phase and worktree (docs/LIFECYCLE.md).
 const restartable = (t) => t?.status === 'in_progress' || t?.status === 'testing';
@@ -255,6 +260,30 @@ async function newOperator() {
   const body = h('div', { class: 'field-row-stacked' }, h('label', {}, 'Mission'), mission);
   if ((await dialog('New operator terminal', body, ['Start', 'Cancel'])) !== 'Start') return;
   await act(async () => openTerminal(await api('POST', '/operator', { mission: mission.value })), 'Operator terminal started.');
+}
+/** Start → Restart board: the daemon rebuilds, exits 75, and the shell starts it again (docs/OPERATOR.md → Restart board). */
+async function restartBoard() {
+  const agents = sessions.filter((s) => s.ticket_id !== null).length;
+  const terminals = sessions.length - agents;
+  const body = h('div', {},
+    h('p', {}, agents ? `${agents} agent${agents === 1 ? ' is' : 's are'} running; they are resumed after the restart.` : 'No agents are running.'),
+    terminals > 0 && h('p', {}, `${terminals} brainstorm or operator terminal${terminals === 1 ? '' : 's'} will close.`),
+    h('p', {}, 'The daemon is rebuilt and the UI reloads. Shell changes need a full relaunch (close Kanban95 and start it again).'));
+  if ((await dialog('Restart board', body, ['Restart', 'Cancel'])) !== 'Restart') return;
+  say('Building…');
+  try {
+    restarting = true;
+    const r = await api('POST', '/restart');
+    if (!r.shell) {
+      restarting = false;
+      say('The daemon stopped. No shell is running it: start it again by hand.');
+    } else say('Restarting…');
+  } catch (e) {
+    restarting = false;
+    say(`Board not restarted: ${e.status === 409 ? 'see the dialog' : e.message}`);
+    // 409: the compiler output (the board keeps running the code it has), or a restart already under way.
+    if (e.status === 409) await dialog('Board not restarted', h('pre', { class: 'k95-pre' }, e.message));
+  }
 }
 const housekeeping = () => act(async () => {
   const t = await api('POST', '/tickets/housekeeping');
@@ -525,7 +554,7 @@ function openTerminal(s, auto = false) {
   seen.add(s.id);
   const wid = `term-${s.id}`;
   if (isOpen(wid)) return focus(wid);
-  const title = s.ticket_id === null ? `${s.role === 'operator' ? 'Operator' : 'Brainstorm'} — ${s.model}` : `#${s.ticket_id} — ${s.phase} — ${s.model}`;
+  const title = s.ticket_id === null ? `${s.role === 'operator' ? 'Operator' : 'Brainstorm'} — ${s.model || 'CLI default'}` : `#${s.ticket_id} — ${s.phase} — ${s.model}`;
   const ws = new WebSocket(`ws://${location.host}/pty/${s.id}`);
   const send = (msg) => ws.readyState === WebSocket.OPEN && ws.send(JSON.stringify(msg));
   const term = new Terminal({ fontFamily: 'Consolas, "Courier New", monospace', fontSize: 13, scrollback: 5000 });
@@ -577,8 +606,28 @@ function openBrain() {
   const search = async () => {
     const rows = await api('GET', `/brain?q=${encodeURIComponent(q.value)}`);
     results.replaceChildren(...(rows.length ? rows.map((b) => h('li', { class: 'note' },
-      h('div', { class: 'note-head' }, `#${b.id} ${b.title}`, b.ticket_id && ` · ticket #${b.ticket_id}`, b.tags && ` · ${b.tags}`),
+      h('div', { class: 'note-head' }, `#${b.id} ${b.title}`, b.tags && ` · ${b.tags}`),
+      // Provenance: a row from a ticket that never landed may describe code that does not exist.
+      h('div', { class: 'note-meta' }, fmt(b.created_at), b.ticket_id && ` · ticket #${b.ticket_id} (${b.ticket_status ?? 'deleted'})`,
+        h('button', { onclick: () => edit(b) }, 'Edit'), h('button', { onclick: () => remove(b) }, 'Delete')),
       h('pre', {}, b.body))) : [h('li', {}, 'Nothing found.')]));
+  };
+  // Merge = edit the survivor, delete the rest.
+  const edit = async (b) => {
+    const f = { title: h('input', { type: 'text', value: b.title }), tags: h('input', { type: 'text', 'data-mic': 'off', value: b.tags }), body: h('textarea', { rows: 10 }, b.body) };
+    const form = h('div', { class: 'k95-brain-edit' }, ...Object.entries(f).map(([k, el]) => h('div', { class: 'field-row-stacked' }, h('label', {}, k), el)));
+    if ((await dialog(`Edit brain #${b.id}`, form, ['Save', 'Cancel'])) !== 'Save') return;
+    act(async () => {
+      await api('PATCH', `/brain/${b.id}`, { title: f.title.value, body: f.body.value, tags: f.tags.value });
+      await search();
+    }, `Brain #${b.id} saved.`);
+  };
+  const remove = async (b) => {
+    if ((await dialog('Delete brain note', `Delete #${b.id} "${b.title}"? No agent will see it again.`, ['Delete', 'Cancel'])) !== 'Delete') return;
+    act(async () => {
+      await api('DELETE', `/brain/${b.id}`);
+      await search();
+    }, `Brain #${b.id} deleted.`);
   };
   const title = h('input', { type: 'text', placeholder: 'Title' });
   const tags = h('input', { type: 'text', 'data-mic': 'off', placeholder: 'tags' });
@@ -682,7 +731,7 @@ function openSettings() {
         models = (await api('PUT', '/config/models', out)).value;
         drawBoard();
       }, `Saved ${path}.`);
-      p.replaceChildren(h('p', {}, `Which CLI runs agents, and the model and effort per phase (plan is the brainstorm). A ticket's own model and effort override execute. ${path}`),
+      p.replaceChildren(h('p', {}, `Which CLI runs agents, and the model and effort per phase (plan is the brainstorm; operator is the operator terminal, the CLI's default model when blank). A ticket's own model and effort override execute. ${path}`),
         h('div', { class: 'field-row' }, h('label', {}, 'Default CLI'), cli),
         h('table', { class: 'k95-models' }, h('thead', {}, h('tr', {}, h('th', {}), CLIS.flatMap((c) => [h('th', {}, `${c} model`), h('th', {}, 'effort')]))), h('tbody', {}, rows)),
         h('button', { onclick: save }, 'Save'));
@@ -718,8 +767,16 @@ function openSettings() {
           h('p', {}, 'Local: transcription runs inside this window. Audio is never sent anywhere.')),
         h('fieldset', {}, h('legend', {}, 'Mic button'), mode('push', 'Push to talk (hold the button)'), mode('toggle', 'Toggle (click to start, click to stop)')));
     } else if (tab === 'General') {
+      const at = h('input', { type: 'number', id: 'concurrency', min: 1, max: 10, step: 1, value: runner.concurrency });
+      const saveRunner = () => act(async () => {
+        runner = await api('PUT', '/runner', { concurrency: Number(at.value) });
+        drawBoard();
+      }, 'Saved.');
       p.replaceChildren(h('div', { class: 'field-row' }, h('input', { type: 'checkbox', id: 'sounds', checked: settings.sounds,
-        onchange: (e) => act(() => saveSettings({ sounds: e.target.checked }), 'Saved.') }), h('label', { for: 'sounds' }, 'Sounds: ding when a ticket merges, chord when the board needs you')));
+        onchange: (e) => act(() => saveSettings({ sounds: e.target.checked }), 'Saved.') }), h('label', { for: 'sounds' }, 'Sounds: ding when a ticket merges, chord when the board needs you')),
+        h('fieldset', {}, h('legend', {}, 'Runner'),
+          h('div', { class: 'field-row' }, h('label', { for: 'concurrency' }, 'Tickets running at once'), at),
+          h('button', { onclick: saveRunner }, 'Save')));
     }
   });
   w.body.append(...tb.el);
@@ -777,6 +834,8 @@ const START = [
   { label: 'New operator terminal', run: newOperator },
   { get label() { return runner.on ? 'Stop' : 'Run'; }, run: toggleRunner },
   { label: 'Housekeeping', run: housekeeping },
+  '-',
+  { label: 'Restart board', run: restartBoard },
 ];
 
 /** Desktop icons for the Start menu's first entries, under every window. Click selects; double-click or Enter opens. */

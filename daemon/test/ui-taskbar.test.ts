@@ -1,18 +1,22 @@
-// In headless Edge or Chrome against a running daemon (setup in ui.ts): the taskbar and desktop icons.
+// In headless Edge or Chrome against a running daemon (setup in ui.ts): the taskbar, the Start menu and desktop icons.
 import './home.ts'; // also here, not only in vitest.config.ts: a run from the repo root skips that config and wrote the real home
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { sessions } from '../src/launcher.ts';
 import { until } from './cdp.ts';
-import { page, base, ticket, click } from './ui.ts';
+import { srv, page, base, ticket, statusBar, click } from './ui.ts';
 
 describe('ui-taskbar', { timeout: 60_000 }, () => {
-  it('pins a compact tray right after Start on one taskbar row', async () => {
+  it('pins a compact tray at the far right of one taskbar row', async () => {
     await page.goto(base);
     await until(() => page.evaluate(`!!document.querySelector('#clock').textContent`), 'the clock');
     const m = await page.evaluate<Record<string, number>>(`(() => {
       const r = (s) => document.querySelector(s).getBoundingClientRect(), bar = document.getElementById('taskbar');
       const start = r('#start'), tray = r('#tray'), tasks = r('#tasks');
-      return { gap: tray.left - start.right, trayH: tray.height, startH: start.height,
-        trayW: tray.width, tasksAfter: tasks.left - tray.right, overflow: bar.scrollWidth - bar.clientWidth,
+      return { gap: bar.getBoundingClientRect().right - tray.right, trayH: tray.height, startH: start.height,
+        trayW: tray.width, tasksAfter: tray.left - tasks.right, overflow: bar.scrollWidth - bar.clientWidth,
         font: parseFloat(getComputedStyle(document.getElementById('agents')).fontSize) };
     })()`);
     expect(m.gap).toBeLessThanOrEqual(4);
@@ -91,5 +95,33 @@ describe('ui-taskbar', { timeout: 60_000 }, () => {
     await page.evaluate(`Object.assign(document.querySelector('[data-win="settings"]').style, { left: '0px', top: '0px' })`);
     const s = await page.center('[data-icon="Board"]');
     expect(await page.evaluate(`!!document.elementFromPoint(${s.x}, ${s.y}).closest('[data-win]')`)).toBe(true);
+  });
+
+  it('Start → Restart board confirms with the agent count and the shell caveat, and shows a failed build in a dialog', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'k95-root-'));
+    mkdirSync(join(root, 'daemon', 'src'), { recursive: true });
+    writeFileSync(join(root, 'package.json'), JSON.stringify({ scripts: { build: `node -e "console.log('error TS2322: nope'); process.exit(2)"` } }));
+    let shutdowns = 0;
+    Object.assign(srv.board, { root, shutdown: () => shutdowns++ });
+    await page.goto(base);
+    await until(() => page.evaluate(`!!document.querySelector('[data-win="board"]')`), 'the board');
+    const dialog = (title: string) => page.evaluate<string | null>(`[...document.querySelectorAll('dialog[open]')].find((d) => d.querySelector('.title-bar-text').textContent === '${title}')?.querySelector('.window-body').textContent ?? null`);
+    const press = (button: string) => page.evaluate(`[...document.querySelectorAll('dialog[open] button')].find((b) => b.textContent === '${button}').click()`);
+
+    await click('#start');
+    await page.evaluate(`[...document.querySelectorAll('.k95-menu li')].find((li) => li.textContent === 'Restart board').click()`);
+    await until(() => dialog('Restart board'), 'the confirm');
+    const text = (await dialog('Restart board'))!;
+    const agents = [...sessions.values()].filter((s) => s.ticketId !== null).length; // earlier tests may leave some running
+    expect(text).toContain(agents ? `${agents} agent${agents === 1 ? ' is' : 's are'} running; they are resumed after the restart.` : 'No agents are running.');
+    expect(text).toContain('Shell changes need a full relaunch');
+    await press('Restart');
+    await until(() => dialog('Board not restarted'), 'the build error', 30_000);
+    expect(await dialog('Board not restarted')).toContain('error TS2322: nope');
+    await press('OK');
+    expect(await statusBar()).toBe('Board not restarted: see the dialog');
+    expect(shutdowns).toBe(0);
+    Object.assign(srv.board, { root: undefined, shutdown: undefined });
+    rmSync(root, { recursive: true, force: true });
   });
 });

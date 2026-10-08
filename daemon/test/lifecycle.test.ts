@@ -194,10 +194,8 @@ const until = async (f: () => unknown, what: string, ms = 30_000) => {
   }
 };
 // Every backlog ticket at once, in one request (so none can finish before the last starts): the runner with room for all.
-const launchTogether = (n: number) => {
-  writeFileSync(join(repo, '.kanban95', 'config.json'), JSON.stringify({ runner_concurrency: n }));
-  return fetch(`http://127.0.0.1:${srv.port}/api/runner`, { method: 'PUT', headers: { 'content-type': 'application/json', cookie: `k95=${srv.secret}` }, body: '{"on":true}' });
-};
+const launchTogether = (n: number) =>
+  fetch(`http://127.0.0.1:${srv.port}/api/runner`, { method: 'PUT', headers: { 'content-type': 'application/json', cookie: `k95=${srv.secret}` }, body: JSON.stringify({ on: true, concurrency: n }) });
 const mergeInProgress = (dir: string) => {
   try {
     execFileSync('git', ['rev-parse', '-q', '--verify', 'MERGE_HEAD'], { cwd: dir, stdio: 'ignore' });
@@ -656,6 +654,20 @@ describe('resume', { timeout: 60_000 }, () => {
       expect((await r.json()).error).toContain(why);
     }
     expect(runs(unflagged)).toEqual([]);
+  });
+
+  it('an agent killed by the board shutting down is not flagged, so the next start resumes it (Restart board)', async () => {
+    models({ execute: 'hang' });
+    const id = ticket('Live');
+    expect((await post(`/api/tickets/${id}/launch`)).status).toBe(200);
+    await until(() => sessionsOf(id).length, 'the agent');
+    await srv.close();
+    srv = await start({ repo });
+    db = srv.db;
+    expect(notes(id, 'failure')).toEqual([RESTARTED]); // no 'agent exited without reporting' from the shutdown
+    expect(t(id).flags.needs_human).toBe(false);
+    expect(runs(id)).toHaveLength(2);
+    expect(runs(id)[1].prompt_rendered).toContain(RESTARTED);
   });
 
   it('restart resumes a running ticket once by itself; an agent that then exits silently flags it with what to do', async () => {

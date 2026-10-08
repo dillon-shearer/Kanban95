@@ -133,7 +133,7 @@ describe('ui-terminal', { timeout: 60_000 }, () => {
     const mission = 'Rename the janitor log & keep {{tools}} literal.';
     await page.evaluate(`document.querySelector('dialog[open] textarea').value = ${JSON.stringify(mission)}`);
     await press('Start');
-    await until(() => page.evaluate(`[...document.querySelectorAll('[data-win^="term-"] .title-bar-text')].some((t) => t.textContent === 'Operator — plan')`), 'the Operator terminal');
+    await until(() => page.evaluate(`[...document.querySelectorAll('[data-win^="term-"] .title-bar-text')].some((t) => t.textContent === 'Operator — CLI default')`), 'the Operator terminal');
     const g = db.prepare("SELECT id FROM grants WHERE role = 'operator' AND revoked_at IS NULL").get() as { id: number };
     expect(readFileSync(join(repo, '.kanban95', 'sessions', String(-g.id), 'prompt.md'), 'utf8')).toContain(`## Mission\n\n${mission}\n`);
     await fetch(`${base}api/grants/${g.id}`, { method: 'DELETE', headers: { cookie: `k95=${srv.secret}` } });

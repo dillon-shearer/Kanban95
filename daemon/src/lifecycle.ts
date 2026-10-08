@@ -5,7 +5,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { readTicket, transaction, type Ticket } from './api.js';
-import { syncWorktree } from './git.js';
+import { branchName, git, syncWorktree } from './git.js';
 import { revoke, type Role } from './grants.js';
 import { cleanTicket } from './janitor.js';
 import { launch, launchRoot, sessionsOf, type Session } from './launcher.js';
@@ -127,8 +127,14 @@ export interface Board {
   db: DatabaseSync;
   repo: string;
   port: number;
-  /** Set by close(): nothing new is spawned. */
+  /** Set by close(): nothing new is spawned, and agents killed by the shutdown are not flagged, so `recover` resumes them. */
   closing?: boolean;
+  /** Kanban95's own install root (the repo checkout or the installer's `app/`). Defaults to the one this code runs from. */
+  root?: string;
+  /** Closes the board and exits the process with `code`. Set only when the daemon runs as its own process. */
+  shutdown?: (code: number) => void;
+  /** The Tauri shell started this daemon and restarts it on exit code 75. */
+  shell?: boolean;
 }
 
 /**
@@ -235,7 +241,7 @@ function spawn(b: Board, id: number, template: 'execute' | 'housekeeping' | 'tes
 function exited(b: Board, s: Session) {
   b.db.prepare('UPDATE runs SET outcome = ? WHERE id = ?').run(s.outcome ?? 'exit', s.runId);
   changed(s.ticketId);
-  if (s.outcome) return;
+  if (s.outcome || b.closing) return;
   try {
     apply(b, s.ticketId!, 'exit', { note: { role: s.role, kind: 'failure', body: 'agent exited without reporting' } });
   } catch (e) {
@@ -330,21 +336,22 @@ function rootSession(b: Board, o: Parameters<typeof launchRoot>[1]): Session {
 /** A brainstorm session: a planner with plan-phase settings. */
 export const brainstorm = (b: Board) => rootSession(b, { ...runSettings(null, 'plan'), template: 'brainstorm' });
 
-/** An operator terminal: plan-phase settings unless `.kanban95/config.json` has `operator: { model, effort }` (either or both). */
+/** An operator terminal: the operator phase (Settings → Models; the CLI's default model when unset) unless `.kanban95/config.json` has `operator: { model, effort }` (either or both). */
 export function operator(b: Board, mission: string): Session {
   const o = repoConfig(b.repo).operator ?? {};
   const where = `${repoConfigPath(b.repo)} operator`;
   if (typeof o !== 'object' || Array.isArray(o)) throw new BadConfig(`${where} must be an object`);
   if (o.model !== undefined && (typeof o.model !== 'string' || !o.model)) throw new BadConfig(`${where}.model must be a non-empty string`);
   if (o.effort !== undefined && !EFFORT.includes(o.effort)) throw new BadConfig(`${where}.effort must be one of ${EFFORT.join(', ')}`);
-  const plan = runSettings(null, 'plan');
+  const plan = runSettings(null, 'operator');
   return rootSession(b, { ...plan, model: o.model ?? plan.model, effort: (o.effort as Effort) ?? plan.effort, template: 'operator', mission });
 }
 
 // ---- the runner (docs/LIFECYCLE.md → The runner) ----
 
-/** `.kanban95/runner.json`, git-ignored: whether the runner is on, and why it last stopped itself. Absent means off. */
-export type Runner = { on: boolean; why?: string };
+/** `.kanban95/runner.json`, git-ignored: whether the runner is on, why it last stopped itself, how many tickets it keeps running. Absent means off. */
+export type Runner = { on: boolean; why?: string; concurrency?: number };
+export const CONCURRENCY = 3;
 const runnerFile = (b: Board) => join(b.repo, '.kanban95', 'runner.json');
 export function runner(b: Board): Runner {
   try {
@@ -354,10 +361,11 @@ export function runner(b: Board): Runner {
     throw e;
   }
 }
+const limit = (b: Board) => runner(b).concurrency ?? CONCURRENCY;
 
-/** Turns the runner on (and launches at once) or off. Off lets running agents finish; nothing new starts. */
-export function setRunner(b: Board, on: boolean, why?: string) {
-  writeFileSync(runnerFile(b), JSON.stringify(why ? { on, why } : { on }));
+/** Turns the runner on (and launches at once) or off, keeping the concurrency unless given. Off lets running agents finish; nothing new starts. */
+export function setRunner(b: Board, on: boolean, why?: string, concurrency = runner(b).concurrency) {
+  writeFileSync(runnerFile(b), JSON.stringify({ on, ...(why && { why }), ...(concurrency && { concurrency }) }));
   changed(null);
   if (on) tick(b);
 }
@@ -383,28 +391,62 @@ export function candidates(b: Board): number[] {
   return rows.sort((x, y) => rank(x) - rank(y) || lines(x.criteria) - lines(y.criteria) || x.id - y.id).map((r) => r.id);
 }
 
-/** What the status bar shows: the flag, the tickets it waits on, candidates left of everything in Backlog. */
+/**
+ * The repo files a ticket touches, docs and markdown left out (every ticket touches those; the merge sync handles them):
+ * paths its body or criteria names that exist in the repo, plus, once it has a branch, what that branch changed.
+ * ponytail: names in prose are a guess; upgrade to a files list the planner writes on each ticket.
+ */
+function files(b: Board, id: number): string[] {
+  const t = b.db.prepare('SELECT body, criteria FROM tickets WHERE id = ?').get(id) as { body: string; criteria: string };
+  const named = `${t.body}\n${t.criteria}`.match(/[\w./-]+\.\w+/g) ?? [];
+  let diff: string[] = [];
+  try {
+    diff = git(b.repo, 'diff', '--name-only', `${git(b.repo, 'rev-parse', '--abbrev-ref', 'HEAD')}...${branchName(id)}`).split('\n');
+  } catch { /* no branch yet */ }
+  const inRepo = (f: string) => !f.split('/').includes('..') && existsSync(join(b.repo, f));
+  const all = [...named.map((f) => f.replace(/^\.\//, '')).filter(inRepo), ...diff];
+  return [...new Set(all.filter((f) => f && !f.startsWith('docs/') && !f.endsWith('.md')))];
+}
+
+/** Each candidate that shares a file with a running ticket, mapped to the first running ticket it shares one with. */
+function overlaps(b: Board, cs: number[]): Map<number, number> {
+  const owner = new Map<string, number>();
+  for (const id of running(b)) for (const f of files(b, id)) if (!owner.has(f)) owner.set(f, id);
+  const out = new Map<number, number>();
+  if (!owner.size) return out;
+  for (const c of cs) {
+    const f = files(b, c).find((x) => owner.has(x));
+    if (f) out.set(c, owner.get(f)!);
+  }
+  return out;
+}
+
+/** What the status bar shows: the flag, the limit, the tickets it waits on, candidates left of everything in Backlog, deferrals. */
 export function runnerState(b: Board) {
   const { n } = b.db.prepare("SELECT count(*) AS n FROM tickets WHERE status = 'backlog'").get() as { n: number };
-  return { ...runner(b), running: running(b), left: candidates(b).length, backlog: n };
+  const cs = candidates(b);
+  const waits = [...overlaps(b, cs)].map(([id, on]) => ({ id, on }));
+  return { ...runner(b), concurrency: limit(b), running: running(b), left: cs.length, backlog: n, waits };
 }
 
 let ticking = false;
 
 /**
- * Runs after every apply and on daemon start: while the runner is on and fewer than `runner_concurrency` (config.json,
- * default 1) tickets are running, launch the next candidate. Nothing running and nothing to launch: it turns itself off.
+ * Runs after every apply and on daemon start: while the runner is on and fewer than `concurrency` (runner.json, default 3)
+ * tickets are running, launch the next candidate that shares no file with a running ticket, or the first candidate when all
+ * do (the merge sync resolves it; waiting forever would be worse). Nothing running and nothing to launch: it turns itself off.
  * A ticket held on a running one is not "nothing": the runner waits for that merge.
  */
 export function tick(b: Board) {
   if (ticking || b.closing || !runner(b).on) return;
   ticking = true; // its own launches call apply, which calls tick
   try {
-    const max = config(b, 'runner_concurrency', 1);
+    const max = limit(b);
     while (running(b).length < max) {
-      const next = candidates(b)[0];
-      if (next === undefined) break;
-      apply(b, next, 'launch');
+      const cs = candidates(b);
+      if (!cs.length) break;
+      const busy = overlaps(b, cs);
+      apply(b, cs.find((c) => !busy.has(c)) ?? cs[0], 'launch');
     }
     if (running(b).length === 0 && candidates(b).length === 0) {
       setRunner(b, false, 'nothing left to launch');

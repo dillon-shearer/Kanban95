@@ -119,7 +119,7 @@ describe('ui-board', { timeout: 60_000 }, () => {
     expect(await label()).toBe('Run');
 
     await page.evaluate(`${button}.click()`);
-    await until(async () => (await line()) === `Running: #${id} (0 of 0 candidates left)`, 'the running line');
+    await until(async () => (await line()) === `Running: #${id} (1 of 3; 0 of 0 candidates left)`, 'the running line');
     expect(await label()).toBe('Stop');
     // Stopped from outside the page: only /events can tell it.
     await fetch(`${base}api/runner`, { method: 'PUT', headers: { 'content-type': 'application/json', cookie: `k95=${srv.secret}` }, body: '{"on":false}' });

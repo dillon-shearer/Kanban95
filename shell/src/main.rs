@@ -55,6 +55,7 @@ fn spawn_daemon(secret: &str) -> Result<(Child, u16), String> {
         .arg(daemon_script())
         .args(std::env::args().nth(1))
         .env("KANBAN95_SECRET", secret)
+        .env("KANBAN95_SHELL", "1")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .spawn()
@@ -78,8 +79,12 @@ fn spawn_daemon(secret: &str) -> Result<(Child, u16), String> {
     Ok((child, port))
 }
 
-/// Watches the daemon in `slot`. The first unexpected exit calls `restart` for a replacement; the second exit, or a
-/// failed restart, returns the reason to show the operator. Returns `None` when the shell empties the slot to exit.
+/// The daemon's exit code for Start -> Restart board (daemon/src/api.ts): restart it, it did not crash.
+const RESTART_REQUESTED: i32 = 75;
+
+/// Watches the daemon in `slot`. Exit code 75 always calls `restart`. The first other exit also calls it; the second
+/// other exit, or any failed restart, returns the reason to show the operator. Returns `None` when the shell empties
+/// the slot to exit.
 fn supervise(slot: &Mutex<Option<Child>>, mut restart: impl FnMut() -> Result<Child, String>) -> Option<String> {
     let mut restarted = false;
     loop {
@@ -88,6 +93,14 @@ fn supervise(slot: &Mutex<Option<Child>>, mut restart: impl FnMut() -> Result<Ch
         let mut guard = slot.lock().unwrap_or_else(|e| e.into_inner());
         let Some(child) = guard.as_mut() else { return None };
         let Ok(Some(status)) = child.try_wait() else { continue };
+        if status.code() == Some(RESTART_REQUESTED) {
+            eprintln!("[shell] daemon asked to be restarted");
+            match restart() {
+                Ok(c) => *guard = Some(c),
+                Err(e) => return Some(e),
+            }
+            continue;
+        }
         if restarted {
             return Some(format!("The Kanban95 daemon stopped again ({status}) after one restart.\n\nThe board will close."));
         }
@@ -259,6 +272,24 @@ mod tests {
             Ok(crashing())
         });
         assert_eq!(restarts, 1);
+        assert!(reason.unwrap().contains("stopped again"));
+    }
+
+    /// A stand-in daemon that exits 75, as after Start -> Restart board.
+    fn restart_requested() -> Child {
+        Command::new("cmd").args(["/c", "exit", "75"]).spawn().unwrap()
+    }
+
+    #[test]
+    fn a_requested_restart_does_not_spend_the_crash_budget() {
+        let slot = Mutex::new(Some(restart_requested()));
+        let mut restarts = 0;
+        let reason = supervise(&slot, || {
+            restarts += 1;
+            // Three requested restarts, then a crash that is restarted once, then a second crash that gives up.
+            Ok(if restarts < 3 { restart_requested() } else { crashing() })
+        });
+        assert_eq!(restarts, 4);
         assert!(reason.unwrap().contains("stopped again"));
     }
 

@@ -94,17 +94,20 @@ Both CLIs run interactive sessions that never exit by themselves. When an agent'
 
 ### Restart
 
-No agent survives a daemon restart, and an agent killed by one did nothing wrong. On start, every running ticket without a live session and without `needs_human` gets a failure note ("agent exited without reporting (the daemon restarted)") and the running-ticket `launch` row: the agent for its phase starts again in the same worktree with that note in its prompt, `retry` unchanged, no operator action. If that agent then exits without reporting, the ordinary `exit` row flags the ticket. A ticket already flagged before the restart stays flagged until the operator resumes it. Every done ticket that never merged and is not flagged is queued for merge again.
+No agent survives a daemon restart, and an agent killed by one did nothing wrong. While the daemon shuts down (`close()`, as Start → Restart board does), an agent's exit writes its run row but does not apply the `exit` row, so the ticket stays unflagged. On start, every running ticket without a live session and without `needs_human` gets a failure note ("agent exited without reporting (the daemon restarted)") and the running-ticket `launch` row: the agent for its phase starts again in the same worktree with that note in its prompt, `retry` unchanged, no operator action. If that agent then exits without reporting, the ordinary `exit` row flags the ticket. A ticket already flagged before the restart stays flagged until the operator resumes it. Every done ticket that never merged and is not flagged is queued for merge again.
 
 There is no Pause yet; when it exists, a paused board flags these tickets (`exit`, with the "To resolve:" line) instead of resuming them.
 
 ## The runner
 
-**Run** (Board toolbar, Start menu, Ctrl+L) lets the board work the backlog by itself, one ticket start to finish (execute, test, merge) before the next. `tick` in `daemon/src/lifecycle.ts` runs after every `apply` and once on daemon start, after `recover`. While the runner is on and fewer than `runner_concurrency` tickets are running (`<repo>/.kanban95/config.json`, default 1), it applies `launch` to the next candidate.
+**Run** (Board toolbar, Start menu, Ctrl+L) lets the board work the backlog by itself, up to `concurrency` tickets start to finish (execute, test, merge) at a time. `tick` in `daemon/src/lifecycle.ts` runs after every `apply` and once on daemon start, after `recover`. While the runner is on and fewer than `concurrency` tickets are running, it applies `launch` to the next candidate.
+
+- **Concurrency** lives in `<repo>/.kanban95/runner.json` next to the flag, default **3** when absent, set from Settings → General → Runner (`PUT /api/runner {concurrency}`, an integer 1 to 10). A new value while the runner is on ticks at once: a raise launches straight away, a cut stops new launches until running drops below it; nothing running is stopped.
 
 - **Running** means not flagged and in `in_progress` or `testing`, or in `done` and not merged yet: the next ticket starts only once the previous one has merged. A flagged ticket does not count; it waits for the operator in the Inbox while the runner goes on.
 - **A candidate** is a backlog ticket with `needs_human = 0` whose every dependency is merged. The runner never launches a flagged ticket or one whose dependency has not merged; it takes the next one instead.
 - **Order**: effort `low` < `medium` < `high` < `max` (unset counts as `medium`), then fewer non-blank acceptance-criteria lines, then lower id. It is a rough size; a size estimate from the planner would replace it.
+- **Shared files**: while tickets are running, a candidate that shares a file with one of them is deferred and the runner takes the next candidate that shares none. A ticket names a file when its body or criteria contains a path (`[w./-]+.w+`) that exists in the repo; a running ticket also touches what `git diff --name-only <base>...ticket/<id>` lists. `docs/**` and `*.md` never count: every ticket touches docs and the merge sync handles them. When every remaining candidate shares a file, the first launches anyway (the merge sync below resolves it; waiting forever would be worse). `GET /api/runner` lists the deferrals as `waits: [{id, on}]` and the status bar says "#id waits: shares files with #n". It is a heuristic; a files list the planner writes on each ticket would replace it.
 - **It stops itself** when nothing is running and no candidate is left: the flag goes off with `why: "nothing left to launch"`, a `ding` (`ticket: null`) plays and the status bar says "Runner stopped: nothing left to launch". A backlog ticket held only on a running ticket's merge is not "nothing left": the runner waits for that merge. Tickets that stay behind (flagged, or held on a flagged ticket) wait for the operator.
 - **Stop** turns the flag off. Running agents finish their current phase and their merges land, but nothing new starts. The operator's own Launch on a card works either way. A ticket that hits the retry cap and flags never stops the runner.
 - **A restart** keeps the flag (`<repo>/.kanban95/runner.json`, git-ignored); `recover` resumes the running tickets and the runner carries on from there.
@@ -143,7 +146,8 @@ The board names no model. Each run's CLI, model and effort come from `~/.kanban9
   "claude": {
     "plan": { "model": "<model id>", "effort": "medium" },
     "execute": { "model": "<model id>", "effort": "medium" },
-    "test": { "model": "<model id>", "effort": "medium" }
+    "test": { "model": "<model id>", "effort": "medium" },
+    "operator": { "model": "<model id>", "effort": "medium" }
   },
   "codex": {
     "execute": { "model": "<model id>", "effort": "medium" },
@@ -152,7 +156,7 @@ The board names no model. Each run's CLI, model and effort come from `~/.kanban9
 }
 ```
 
-The ticket's `cli` overrides `cli`; its `model` and `effort` override the execute phase. `plan` is the brainstorm's phase. Effort defaults to `medium`. A missing file, CLI, model or a bad effort fails the launch, which flags the ticket with the reason. Settings → CLIs can name the executable per CLI (`~/.kanban95/settings.json` → `paths`); unset, the CLI is found on `PATH`.
+The ticket's `cli` overrides `cli`; its `model` and `effort` override the execute phase. `plan` is the brainstorm's phase; `operator` the operator terminal's, and the only one that may be absent (the CLI then runs its own default model). Effort defaults to `medium`. A missing file, CLI, model or a bad effort fails the launch, which flags the ticket with the reason. Settings → CLIs can name the executable per CLI (`~/.kanban95/settings.json` → `paths`); unset, the CLI is found on `PATH`.
 
 ## Operator preferences
 

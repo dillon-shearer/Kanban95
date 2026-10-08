@@ -14,7 +14,7 @@ export const EFFORT = ['low', 'medium', 'high', 'max'] as const;
 export type Effort = (typeof EFFORT)[number];
 
 const phase = z.object({ model: z.string().trim().min(1), effort: z.enum(EFFORT).default('medium') }).strict();
-const perCli = z.object({ plan: phase, execute: phase, test: phase }).partial().strict();
+const perCli = z.object({ plan: phase, execute: phase, test: phase, operator: phase }).partial().strict();
 const exe = z.string().refine((p) => p === '' || (isAbsolute(p) && existsSync(p)), 'must be empty or an absolute path to an existing file');
 const FILES = {
   models: z.object({ cli: z.enum(CLIS), claude: perCli.optional(), codex: perCli.optional() }).strict(),
@@ -132,9 +132,9 @@ async function claudeIds(exe: string): Promise<string[]> {
 
 /**
  * cli, model, effort and executable for a run. The ticket's cli wins; its model and effort override the execute phase only.
- * A brainstorm (no ticket) runs the plan phase.
+ * A brainstorm (no ticket) runs the plan phase; an operator terminal the operator phase, whose model may be unset (''): the CLI's own default.
  */
-export function runSettings(t: Ticket | null, phase: 'plan' | 'execute' | 'test'): { cli: Cli; model: string; effort: Effort; path?: string } {
+export function runSettings(t: Ticket | null, phase: 'plan' | 'execute' | 'test' | 'operator'): { cli: Cli; model: string; effort: Effort; path?: string } {
   const file = configPath('models');
   if (!existsSync(file)) throw new Error(`no model catalog at ${file}`);
   const cfg = JSON.parse(readFileSync(file, 'utf8'));
@@ -142,9 +142,9 @@ export function runSettings(t: Ticket | null, phase: 'plan' | 'execute' | 'test'
   if (!CLIS.includes(cli)) throw new Error(`unknown cli ${cli} in ${file}; expected ${CLIS.join(' or ')}`);
   const d = cfg[cli]?.[phase] ?? {};
   const own = phase === 'execute';
-  const model = (own && t?.model) || d.model;
+  const model = (own && t?.model) || d.model || '';
   const effort = (own && t?.effort) || d.effort || 'medium';
-  if (!model) throw new Error(`no ${phase} model for ${cli} in ${file}`);
+  if (!model && phase !== 'operator') throw new Error(`no ${phase} model for ${cli} in ${file}`);
   if (!EFFORT.includes(effort)) throw new Error(`bad effort ${effort} for ${cli} ${phase} in ${file}`);
   return { cli, model, effort, path: readConfig('settings').paths[cli as Cli] || undefined };
 }

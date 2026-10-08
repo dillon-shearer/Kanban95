@@ -24,6 +24,10 @@ const GRANT_TTL_MS = 24 * 60 * 60 * 1000;
  */
 const PLANNER_DENY = ['Edit', 'Write', 'NotebookEdit', 'Bash', 'PowerShell', 'Agent'];
 
+/** Workers and testers run without the operator at the keyboard; planner and operator sessions are interactive. */
+const unattended = (role: Role) => role === 'worker' || role === 'tester';
+const BOARD_SETTINGS = { attribution: { commit: '', pr: '' } };
+
 export interface ArgvIn {
   cli: Cli;
   role: Role;
@@ -34,6 +38,8 @@ export interface ArgvIn {
   promptPath: string;
   /** Claude Code: the session's mcp.json (URL + bearer header). */
   mcpConfigPath: string;
+  /** Claude Code, workers and testers: the board's own settings file, which replaces the operator's user settings. */
+  settingsPath: string;
   /** Codex: the daemon's /mcp URL, passed as a per-process config override. */
   mcpUrl: string;
   cwd: string;
@@ -51,15 +57,20 @@ export function buildArgv(a: ArgvIn): string[] {
   switch (a.cli) {
     case 'claude':
       // --mcp-config and --disallowedTools are variadic, so each is followed by another flag, never by the message.
-      return ['claude', '--mcp-config', a.mcpConfigPath, '--strict-mcp-config', '--model', a.model, '--effort', a.effort,
-        ...(planner ? ['--disallowedTools', ...PLANNER_DENY] : []), '--dangerously-skip-permissions', message];
+      // An empty model (an operator terminal with no operator row in models.json) runs the CLI's own default model.
+      // Workers and testers load no user settings, so none of the operator's plugin hooks, and no skills: none was invoked in
+      // 113 measured runs, while the hooks and skill listing cost ~15k tokens on every call (ticket #43, operator approved).
+      return ['claude', '--mcp-config', a.mcpConfigPath, '--strict-mcp-config', ...(a.model ? ['--model', a.model] : []), '--effort', a.effort,
+        ...(planner ? ['--disallowedTools', ...PLANNER_DENY] : []),
+        ...(unattended(a.role) ? ['--setting-sources', 'project,local', '--settings', a.settingsPath, '--disable-slash-commands'] : []),
+        '--dangerously-skip-permissions', message];
     case 'codex': {
       // Unquoted -c values fail TOML parsing and are taken as literal strings, which keeps `"` out of the cmd.exe line.
       // The trust table is a TOML literal-string key, which cannot hold a single quote.
       if (a.repo.includes("'")) throw new Error(`cannot pre-trust a repo path containing ' for Codex: ${a.repo}`);
       // Workers and testers keep the bypass: under -s workspace-write Codex on Windows runs commands as a sandbox account
       // and git refuses the worktree ("dubious ownership"), so an agent could not commit (docs/CLIS.md).
-      return ['codex', '--model', a.model, '-c', `model_reasoning_effort=${a.effort}`,
+      return ['codex', ...(a.model ? ['--model', a.model] : []), '-c', `model_reasoning_effort=${a.effort}`,
         '-c', `mcp_servers.kanban95.url=${a.mcpUrl}`, '-c', `mcp_servers.kanban95.bearer_token_env_var=${TOKEN_ENV}`,
         // The board's own tools are pre-approved (`approve`; `auto` still asks); the grant already scopes them. Without this a
         // planner under -a never is refused every MCP call ("requires approval, but approval policy is never"; checked live).
@@ -147,15 +158,24 @@ function spawnSession(d: Daemon, o: RunSettings, r: { runId: number | null; tick
     else mkdirSync(dir, { recursive: true });
     const promptPath = join(dir, 'prompt.md');
     const mcpConfigPath = join(dir, 'mcp.json');
+    const settingsPath = join(dir, 'settings.json');
     writeFileSync(promptPath, r.prompt, { mode: o.cli === 'claude' ? 0o600 : 0o644 });
     if (o.cli === 'claude') {
       const cfg = { mcpServers: { kanban95: { type: 'http', url: mcpUrl, headers: { Authorization: `Bearer ${grant.token}` } } } };
       writeFileSync(mcpConfigPath, JSON.stringify(cfg, null, 2), { mode: 0o600 });
+      // No commit or PR trailer (CLAUDE.md), held by the board now that the operator's own attribution setting is not loaded.
+      if (unattended(r.role)) writeFileSync(settingsPath, JSON.stringify(BOARD_SETTINGS), { mode: 0o600 });
     }
-    const [cmd, ...args] = buildArgv({ ...o, role: r.role, repo: resolve(repo), promptPath, mcpConfigPath, mcpUrl, cwd: r.cwd });
+    const [cmd, ...args] = buildArgv({ ...o, role: r.role, repo: resolve(repo), promptPath, mcpConfigPath, settingsPath, mcpUrl, cwd: r.cwd });
     if (o.cli === 'claude') preTrustClaude(db, r.ticketId, repo);
     // KANBAN95_AGENT makes `npm run dev` and Kanban95.cmd refuse to start: an agent must not open the board on the operator's desktop.
-    const env = childEnv({ KANBAN95_AGENT: '1', ...(o.cli === 'codex' ? { [TOKEN_ENV]: grant.token } : {}) });
+    // A 5 min cache TTL writes at 1.25x instead of the subscription's 1 h at 2x; an unattended session rarely idles 5 min
+    // (8 of 2,161 measured call gaps). Interactive sessions keep the 1 h TTL, since they wait on the operator.
+    const env = childEnv({
+      KANBAN95_AGENT: '1',
+      ...(o.cli === 'codex' ? { [TOKEN_ENV]: grant.token } : {}),
+      ...(o.cli === 'claude' && unattended(r.role) ? { CLAUDE_CODE_PROMPT_CACHE_TTL: '5m' } : {}),
+    });
     const { pty, scrollback } = spawnPty(o.path || cmd, args, { cwd: r.cwd, env });
 
     let finished!: () => void;

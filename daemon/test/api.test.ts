@@ -186,6 +186,45 @@ describe('brain', () => {
     expect((await call('GET', '/api/brain?q=' + encodeURIComponent('"unbalanced OR (x'))).status).toBe(200);
     expect((await (await call('GET', '/api/brain')).json()).length).toBe(3);
   });
+
+  it('a title or tag hit outranks the same word repeated in a long body', async () => {
+    const ins = srv.db.prepare('INSERT INTO brain (title, body, tags) VALUES (?, ?, ?)');
+    const body = Number(ins.run('misc', 'xterm '.repeat(4) + 'filler '.repeat(40), '').lastInsertRowid);
+    const tag = Number(ins.run('terminal resize', 'fit the pane on resize', 'xterm').lastInsertRowid);
+    const hits = await (await call('GET', '/api/brain?q=xterm')).json();
+    expect(hits.map((h: { id: number }) => h.id)).toEqual([tag, body]);
+  });
+
+  it('edits and deletes in place: the next search sees it, the index follows, each is audited', async () => {
+    const t = await (await call('POST', '/api/tickets', { title: 'source' })).json();
+    const row = Number(srv.db.prepare("INSERT INTO brain (title, body, tags, ticket_id) VALUES ('pty resize', 'old fact', 'pty', ?)").run(t.id).lastInsertRowid);
+    const search = async (q: string) => (await (await call('GET', `/api/brain?q=${q}`)).json()) as { id: number; ticket_status: string | null }[];
+    expect((await search('pty'))[0]).toMatchObject({ id: row, ticket_status: 'backlog' });
+
+    const r = await call('PATCH', `/api/brain/${row}`, { body: 'conpty eats the first resize' });
+    expect(r.status).toBe(200);
+    expect(await r.json()).toMatchObject({ id: row, title: 'pty resize', body: 'conpty eats the first resize', tags: 'pty' });
+    expect((await search('conpty')).map((h) => h.id)).toEqual([row]);
+    expect(await search('old')).toEqual([]);
+
+    expect((await call('DELETE', `/api/brain/${row}`)).status).toBe(204);
+    expect(await search('conpty')).toEqual([]);
+    expect((auditRows() as { tool: string; outcome: string }[]).slice(-2).map((a) => `${a.tool}:${a.outcome}`)).toEqual(['brain.update:ok', 'brain.delete:ok']);
+  });
+
+  it('refuses unknown ids, empty edits and oversized bodies at the boundary', async () => {
+    const row = Number(srv.db.prepare("INSERT INTO brain (title, body) VALUES ('keep', 'me')").run().lastInsertRowid);
+    expect((await call('PATCH', '/api/brain/99999', { body: 'x' })).status).toBe(404);
+    expect((await call('DELETE', '/api/brain/99999')).status).toBe(404);
+    expect((await call('PATCH', `/api/brain/${row}`, {})).status).toBe(400);
+    expect((await call('PATCH', `/api/brain/${row}`, { title: '  ' })).status).toBe(400);
+    expect((await call('PATCH', `/api/brain/${row}`, { tags: 3 })).status).toBe(400);
+    expect((await call('PATCH', `/api/brain/${row}`, { body: 'x'.repeat(1501) })).status).toBe(400);
+    expect((await call('POST', '/api/brain', { title: 'big', body: 'x'.repeat(1501) })).status).toBe(400);
+    expect((await call('POST', '/api/brain', { title: 'no body' })).status).toBe(400);
+    expect(srv.db.prepare('SELECT title, body FROM brain WHERE id = ?').get(row)).toEqual({ title: 'keep', body: 'me' });
+    expect((await call('POST', '/api/brain', { title: 'fits', body: 'x'.repeat(1500) })).status).toBe(201);
+  });
 });
 
 describe('grants over REST', () => {

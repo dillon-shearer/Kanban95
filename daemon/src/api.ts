@@ -1,14 +1,15 @@
 // UI-facing REST under /api. Operator-only (no grant); every mutation writes an audit row.
+import { exec } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { dirname, extname, join } from 'node:path';
+import { dirname, extname, join, resolve } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { attachmentDir, attachments, MAX_ATTACHMENT, safeName, saveAttachment } from './attachments.js';
-import { isConstraintError } from './db.js';
+import { BRAIN_BODY_MAX, BRAIN_RANK, isConstraintError } from './db.js';
 import { ticketDiff } from './git.js';
 import { audit, revoke } from './grants.js';
 import { killGrantSession, sessions, sessionsOf, type Session } from './launcher.js';
-import { apply, brainstorm, changed, housekeeping, operator, Refused, runnerState, setRunner, type Board } from './lifecycle.js';
+import { apply, brainstorm, changed, housekeeping, operator, Refused, runner, runnerState, setRunner, type Board } from './lifecycle.js';
 import { BadConfig, CONFIGS, configPath, knownModels, preferencesPath, readPreferences, writeConfig, writePreferences, type ConfigName } from './settings.js';
 import { trustStatus, untrustClaude } from './trust.js';
 import { download, status as voiceStatus } from './voice.js';
@@ -98,8 +99,34 @@ export function transaction<T>(db: DatabaseSync, fn: () => T): T {
 /** Ranked FTS5 search over the brain; an empty query lists the newest rows. Shared by REST and MCP. */
 export function brainSearch(db: DatabaseSync, q: string, limit: number) {
   return q.trim()
-    ? db.prepare('SELECT b.* FROM brain_fts f JOIN brain b ON b.id = f.rowid WHERE brain_fts MATCH ? ORDER BY rank LIMIT ?').all(ftsQuery(q), limit)
+    ? db.prepare(`SELECT b.* FROM brain_fts f JOIN brain b ON b.id = f.rowid WHERE brain_fts MATCH ? ORDER BY ${BRAIN_RANK}, b.id LIMIT ?`).all(ftsQuery(q), limit)
     : db.prepare('SELECT * FROM brain ORDER BY id DESC LIMIT ?').all(limit);
+}
+
+type BrainFields = { title?: string; body?: string; tags?: string };
+/** Rows are edited in place, no history: the audit log says who changed what. Unknown id is 404. Shared by REST and MCP. */
+export function brainUpdate(db: DatabaseSync, id: number, fields: BrainFields) {
+  const set = Object.entries(fields).filter(([, v]) => v !== undefined);
+  if (set.length === 0) throw new HttpError(400, 'give title, body and/or tags');
+  const r = db.prepare(`UPDATE brain SET ${set.map(([k]) => `${k} = ?`).join(', ')} WHERE id = ?`).run(...set.map(([, v]) => v!), id);
+  if (r.changes === 0) throw new HttpError(404, 'no such brain row');
+  return db.prepare('SELECT * FROM brain WHERE id = ?').get(id);
+}
+
+export function brainDelete(db: DatabaseSync, id: number) {
+  if (db.prepare('DELETE FROM brain WHERE id = ?').run(id).changes === 0) throw new HttpError(404, 'no such brain row');
+}
+
+/** REST body check for POST (all of title and body) and PATCH (any subset). */
+function brainFields(body: Record<string, unknown>, partial: boolean): BrainFields {
+  const { title, body: text, tags } = body;
+  for (const [k, v] of Object.entries({ title, body: text, tags })) {
+    if (v === undefined ? !partial && k !== 'tags' : typeof v !== 'string' || (k !== 'tags' && !v.trim())) {
+      throw new HttpError(400, 'title and body must be non-empty strings, tags a string');
+    }
+  }
+  if (typeof text === 'string' && text.length > BRAIN_BODY_MAX) throw new HttpError(400, `body over ${BRAIN_BODY_MAX} characters: one fact per row`);
+  return { title, body: text, tags } as BrainFields;
 }
 
 function ftsQuery(q: string): string {
@@ -108,6 +135,7 @@ function ftsQuery(q: string): string {
 }
 
 const NOTEPAD_MAX = 256 * 1024;
+const BUILD_TIMEOUT = 120_000;
 const notepadPath = (board: Board) => join(board.repo, '.kanban95', 'notepad.md');
 
 const UPLOAD = /^\/api\/tickets\/(\d+)\/attachments$/;
@@ -190,8 +218,16 @@ const routes: [method: string, path: RegExp, mutation: string | null, handler: (
   ['GET', /^\/api\/brain$/, null, ({ db, url }) => {
     const q = url.searchParams.get('q') ?? '';
     const limit = Math.min(Number(url.searchParams.get('limit') ?? 20) || 20, 100);
-    const rows = brainSearch(db, q, limit);
+    // The source ticket's status, so the Brain window shows rows written for work that never landed.
+    const status = db.prepare('SELECT status FROM tickets WHERE id = ?');
+    const rows = (brainSearch(db, q, limit) as { ticket_id: number | null }[])
+      .map((r) => ({ ...r, ticket_status: r.ticket_id === null ? null : (status.get(r.ticket_id) as { status: string } | undefined)?.status ?? null }));
     return { status: 200, body: rows };
+  }],
+  ['PATCH', /^\/api\/brain\/(\d+)$/, 'brain.update', ({ db, params, body }) => ({ status: 200, body: brainUpdate(db, Number(params[0]), brainFields(body, true)) })],
+  ['DELETE', /^\/api\/brain\/(\d+)$/, 'brain.delete', ({ db, params }) => {
+    brainDelete(db, Number(params[0]));
+    return { status: 204 };
   }],
   ['GET', /^\/api\/grants$/, null, ({ db }) => ({
     status: 200,
@@ -212,11 +248,16 @@ const routes: [method: string, path: RegExp, mutation: string | null, handler: (
     readTicket(board.db, id);
     return { status: 200, body: apply(board, id, 'answer', { note: { role: 'operator', kind: 'answer', body: body.answer }, answer: body.answer }).ticket };
   }],
-  // The runner (docs/LIFECYCLE.md → The runner): `{on}` turns it on or off; both return what the status bar shows.
+  // The runner (docs/LIFECYCLE.md → The runner): `{on?, concurrency?}` turns it on or off and sets how many tickets it keeps
+  // running; both return what the status bar shows. A new concurrency while on launches at once if there is room.
   ['GET', /^\/api\/runner$/, null, ({ board }) => ({ status: 200, body: runnerState(board) })],
   ['PUT', /^\/api\/runner$/, 'runner.set', ({ board, body }) => {
-    if (typeof body.on !== 'boolean') throw new HttpError(400, 'on must be a boolean');
-    setRunner(board, body.on);
+    const { on, concurrency: c } = body;
+    if (on !== undefined && typeof on !== 'boolean') throw new HttpError(400, 'on must be a boolean');
+    if (c !== undefined && !(typeof c === 'number' && Number.isInteger(c) && c >= 1 && c <= 10)) throw new HttpError(400, 'concurrency must be an integer from 1 to 10');
+    if (on === undefined && c === undefined) throw new HttpError(400, 'send on, concurrency or both');
+    const cur = runner(board);
+    setRunner(board, on ?? cur.on, on === undefined ? cur.why : undefined, (c as number | undefined) ?? cur.concurrency);
     return { status: 200, body: runnerState(board) };
   }],
   ['POST', /^\/api\/tickets\/(\d+)\/merge$/, 'tickets.merge', ({ board, params }) => ({ status: 200, body: apply(board, Number(params[0]), 'merge').ticket })],
@@ -239,9 +280,8 @@ const routes: [method: string, path: RegExp, mutation: string | null, handler: (
       ORDER BY n.id`).all(),
   })],
   ['POST', /^\/api\/brain$/, 'brain.add', ({ db, body }) => {
-    const { title, body: text, tags = '' } = body;
-    if (typeof title !== 'string' || typeof text !== 'string' || typeof tags !== 'string') throw new HttpError(400, 'title, body and tags must be strings');
-    const r = db.prepare('INSERT INTO brain (title, body, tags) VALUES (?, ?, ?)').run(title, text, tags);
+    const { title, body: text, tags = '' } = brainFields(body, false);
+    const r = db.prepare('INSERT INTO brain (title, body, tags) VALUES (?, ?, ?)').run(title!, text!, tags);
     return { status: 201, body: db.prepare('SELECT * FROM brain WHERE id = ?').get(Number(r.lastInsertRowid)) };
   }],
   // Live agent terminals, for the UI's terminal windows and the taskbar count. `id` is the /pty/<id> key.
@@ -268,6 +308,24 @@ const routes: [method: string, path: RegExp, mutation: string | null, handler: (
   ['POST', /^\/api\/operator$/, 'operator.launch', ({ board, body }) => {
     if (typeof body.mission !== 'string' || !body.mission.trim()) throw new HttpError(400, 'mission must be a non-empty string');
     return { status: 201, body: sessionView(operator(board, body.mission)) };
+  }],
+  // Rebuild (from a repo checkout; an installed app/ has no daemon/src and nothing to build), then close and exit 75. The
+  // shell restarts the daemon on 75 and the window follows it to the new port (docs/ARCHITECTURE.md -> Restart board).
+  ['POST', /^\/api\/restart$/, 'board.restart', async ({ board }) => {
+    if (board.closing || !board.shutdown) throw new HttpError(409, board.closing ? 'the board is already shutting down' : 'restart needs the daemon running as its own process');
+    const root = board.root ?? resolve(import.meta.dirname, '../..');
+    if (existsSync(join(root, 'daemon', 'src'))) {
+      const failed = await new Promise<string | null>((ok) => {
+        // Through a shell, since npm is npm.cmd on Windows. The command is fixed; nothing from the request reaches it.
+        exec('npm run build', { cwd: root, timeout: BUILD_TIMEOUT, windowsHide: true }, (e, out, err) =>
+          ok(e ? `${out}${err}`.trim() || e.message : null));
+      });
+      if (failed !== null) throw new HttpError(409, failed);
+    }
+    if (board.closing) throw new HttpError(409, 'the board is already shutting down');
+    const shutdown = board.shutdown;
+    setTimeout(() => shutdown(75), 50); // after the reply is on its way
+    return { status: 202, body: { restarting: true, shell: board.shell === true } };
   }],
   // <repo>/.kanban95/notepad.md, the operator's scratch notes, whole file in `value` both ways ('' when absent).
   // Not audited: it autosaves every pause in typing and is nothing an agent reads.
