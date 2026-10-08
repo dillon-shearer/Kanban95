@@ -8,16 +8,25 @@ use tauri::{Manager, RunEvent, WebviewUrl, WebviewWindowBuilder};
 
 struct Daemon(Mutex<Child>);
 
+/// 32 random bytes from the OS, hex: the shell-to-daemon secret for this run (docs/SECURITY.md).
+fn mint_secret() -> String {
+    let mut b = [0u8; 32];
+    getrandom::fill(&mut b).expect("OS random source");
+    b.iter().map(|x| format!("{x:02x}")).collect()
+}
+
 /// Starts `node daemon/dist/server.js` and returns the child plus the port from its first stdout line.
 /// The child's stdin stays piped and open for as long as this process lives: the daemon exits on stdin EOF,
 /// so even if we crash without reaching `kill`, it cannot be orphaned.
-fn spawn_daemon() -> (Child, u16) {
+/// The secret goes in the child's environment, never on its command line, which other processes can read.
+fn spawn_daemon(secret: &str) -> (Child, u16) {
     // ponytail: dev mode runs `node` from PATH against the built daemon. Phase 7 bundles Node as a real sidecar.
     let script = concat!(env!("CARGO_MANIFEST_DIR"), "/../daemon/dist/server.js");
     // The shell's first argument, if any, is the repo the board works on; the daemon defaults to the cwd.
     let mut child = Command::new("node")
         .arg(script)
         .args(std::env::args().nth(1))
+        .env("KANBAN95_SECRET", secret)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .spawn()
@@ -42,8 +51,10 @@ fn spawn_daemon() -> (Child, u16) {
 }
 
 fn main() {
-    let (child, port) = spawn_daemon();
-    let url = format!("http://127.0.0.1:{port}/").parse().expect("daemon url");
+    let secret = mint_secret();
+    let (child, port) = spawn_daemon(&secret);
+    // The daemon swaps `?k95=` for an HttpOnly cookie and redirects to `/`, so the page never holds the secret.
+    let url = format!("http://127.0.0.1:{port}/?k95={secret}").parse().expect("daemon url");
 
     tauri::Builder::default()
         .manage(Daemon(Mutex::new(child)))
