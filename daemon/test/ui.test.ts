@@ -112,6 +112,23 @@ describe('ui', { timeout: 60_000 }, () => {
     db.prepare("UPDATE tickets SET status = 'done', merged_at = 'x' WHERE id = ?").run(id); // out of the way of the next tests
   });
 
+  it('names the reason in the status bar when a launch is refused, not "launched"', async () => {
+    const id = ticket('Refused');
+    await page.goto(base);
+    await until(() => column(id), 'the card');
+    writeFileSync(join(repo, 'a.txt'), 'dirty\n'); // the board refuses to launch from a dirty base
+    try {
+      await click(`.card[data-id="${id}"]`);
+      await page.evaluate(`[...document.querySelectorAll('.k95-board button')].find((b) => b.textContent === 'Launch').click()`);
+      await until(async () => (await statusBar()).startsWith(`#${id} needs you:`), 'the reason in the status bar');
+      await new Promise((r) => setTimeout(r, 300)); // a late "launched" would land here
+      expect(await statusBar()).toMatch(new RegExp(`^#${id} needs you: launch failed: base branch main has uncommitted changes`));
+    } finally {
+      git('checkout', 'a.txt');
+      db.prepare("UPDATE tickets SET status = 'done', merged_at = 'x' WHERE id = ?").run(id);
+    }
+  });
+
   it('clears the needs_human badge on the card when the Inbox answer is sent', async () => {
     const id = ticket('Ask me', { model: 'ask' });
     await page.goto(base);

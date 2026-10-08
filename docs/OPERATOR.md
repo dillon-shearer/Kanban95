@@ -32,7 +32,7 @@ The ticket moves on its own: In Progress → Testing → Done. A failed test sen
 
 ### 4. When the board needs you
 
-You hear the **chord** and a card turns red when an agent asks a question, exits without reporting, hits the retry cap, or its merge conflicts. Questions land in the **Inbox** (the "Inbox n" button on the taskbar). Type the answer and press **Answer**; it is typed into the agent's terminal and the card's badge clears.
+You hear the **chord** and a card turns red when an agent asks a question, exits without reporting, hits the retry cap, or its merge conflicts. The Board's status bar says why at that moment (`#n needs you: …`, the card's newest failure note or question; hover it for the whole text). A launch the board refuses outright (no models saved, uncommitted changes on the base branch) starts no agent and opens no terminal, so that line is where its reason shows. Questions land in the **Inbox** (the "Inbox n" button on the taskbar). Type the answer and press **Answer**; it is typed into the agent's terminal and the card's badge clears.
 
 ![Inbox](img/inbox.png)
 

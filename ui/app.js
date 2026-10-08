@@ -36,7 +36,10 @@ const views = new Map(); // open window id → redraw(ticketId | null)
 
 async function refreshTicket(id) {
   try {
-    tickets.set(id, await api('GET', `/tickets/${id}`));
+    const was = tickets.get(id)?.flags.needs_human;
+    const t = await api('GET', `/tickets/${id}`);
+    tickets.set(id, t);
+    if (t.flags.needs_human && !was) say(await flagReason(id));
   } catch (e) {
     if (e.status !== 404) throw e;
     tickets.delete(id); // deleted: it leaves the board
@@ -156,11 +159,23 @@ async function act(fn, ok) {
   }
 }
 
-const launch = (id) => act(() => api('POST', `/tickets/${id}/launch`), `#${id} launched.`);
-const launchAll = () => act(async () => {
-  const r = await api('POST', '/tickets/launch-all');
-  say(r.length ? `Launched ${r.map((t) => `#${t.id}`).join(', ')}.` : 'Nothing in Backlog.');
+// Why a card is red: its newest failure or question note. The status bar shows it the moment the card turns red.
+async function flagReason(id) {
+  const n = (await api('GET', `/tickets/${id}/notes`)).findLast((x) => x.kind === 'failure' || x.kind === 'question');
+  return `#${id} needs you: ${n ? n.body.replace(/\s+/g, ' ') : 'open the ticket for details'}`;
+}
+// A launch can be refused at once (no models, dirty base); the refusal then wins over "launched".
+async function sayLaunched(ids) {
+  for (const id of ids) await refreshTicket(id);
+  const flagged = ids.find((id) => tickets.get(id)?.flags.needs_human);
+  if (flagged != null) return say(await flagReason(flagged));
+  say(ids.length ? `Launched ${ids.map((id) => `#${id}`).join(', ')}.` : 'Nothing in Backlog.');
+}
+const launch = (id) => act(async () => {
+  await api('POST', `/tickets/${id}/launch`);
+  await sayLaunched([id]);
 });
+const launchAll = () => act(async () => sayLaunched((await api('POST', '/tickets/launch-all')).map((t) => t.id)));
 const newBrainstorm = () => act(async () => openTerminal(await api('POST', '/brainstorm')), 'Brainstorm started.');
 const housekeeping = () => act(async () => {
   const t = await api('POST', '/tickets/housekeeping');
