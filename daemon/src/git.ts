@@ -48,3 +48,14 @@ export function removeWorktree(repo: string, ticketId: number, force = false): {
     return { branchDeleted: false }; // unmerged or absent: the operator decides
   }
 }
+
+/**
+ * For the ticket window: what the ticket's worktree holds (commits and uncommitted tracked changes) against the point where it
+ * forked from the repo's current branch. Null when there is no worktree (never launched, or merged and cleaned up).
+ */
+export function ticketDiff(repo: string, ticketId: number): string | null {
+  const path = worktreePath(repo, ticketId);
+  if (!existsSync(path)) return null;
+  const fork = git(path, 'merge-base', 'HEAD', git(repo, 'rev-parse', '--abbrev-ref', 'HEAD'));
+  return execFileSync('git', ['diff', '--no-color', '--no-ext-diff', fork], { cwd: path, encoding: 'utf8', maxBuffer: 16 << 20 });
+}

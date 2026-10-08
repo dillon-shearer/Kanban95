@@ -6,3 +6,4 @@ daemon/dist/
 shell/target/
 shell/gen/
 .remember/
+daemon/test/.cache/

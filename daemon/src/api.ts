@@ -1,10 +1,15 @@
 // UI-facing REST under /api. Operator-only (no grant); every mutation writes an audit row.
+import { readFileSync } from 'node:fs';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { DatabaseSync } from 'node:sqlite';
 import { isConstraintError } from './db.js';
+import { ticketDiff } from './git.js';
 import { audit, revoke } from './grants.js';
-import { killGrantSession } from './launcher.js';
-import { apply, launchAll, Refused, type Board } from './lifecycle.js';
+import { killGrantSession, sessions, type Session } from './launcher.js';
+import { apply, brainstorm, changed, housekeeping, launchAll, Refused, type Board } from './lifecycle.js';
+import { BadConfig, CONFIGS, configPath, writeConfig, type ConfigName } from './settings.js';
+import { trustStatus, untrustClaude } from './trust.js';
+import { download, status as voiceStatus } from './voice.js';
 
 type Json = Record<string, unknown>;
 type Reply = { status: number; body?: unknown };
@@ -100,7 +105,7 @@ function ftsQuery(q: string): string {
   return q.split(/\s+/).filter(Boolean).map((t) => `"${t.replaceAll('"', '""')}"`).join(' ');
 }
 
-const routes: [method: string, path: RegExp, mutation: string | null, handler: (c: Ctx) => Reply][] = [
+const routes: [method: string, path: RegExp, mutation: string | null, handler: (c: Ctx) => Reply | Promise<Reply>][] = [
   ['GET', /^\/api\/tickets$/, null, ({ db }) => ({
     status: 200,
     body: (db.prepare('SELECT id FROM tickets ORDER BY id').all() as { id: number }[]).map((r) => readTicket(db, r.id)),
@@ -162,7 +167,71 @@ const routes: [method: string, path: RegExp, mutation: string | null, handler: (
     return { status: 200, body: apply(board, id, 'answer', { note: { role: 'operator', kind: 'answer', body: body.answer }, answer: body.answer }).ticket };
   }],
   ['POST', /^\/api\/tickets\/(\d+)\/merge$/, 'tickets.merge', ({ board, params }) => ({ status: 200, body: apply(board, Number(params[0]), 'merge').ticket })],
+  ['POST', /^\/api\/tickets\/housekeeping$/, 'tickets.housekeeping', ({ board }) => ({
+    status: 201, body: housekeeping(board, 'Started by the operator from the Housekeeping button. Follow the housekeeping brief.'),
+  })],
+  ['GET', /^\/api\/tickets\/(\d+)\/diff$/, null, ({ board, params }) => {
+    readTicket(board.db, Number(params[0]));
+    return { status: 200, body: { diff: ticketDiff(board.repo, Number(params[0])) } };
+  }],
+  // Questions an agent asked with ask_operator that have no answer yet, on tickets still flagged.
+  ['GET', /^\/api\/inbox$/, null, ({ db }) => ({
+    status: 200,
+    body: db.prepare(`
+      SELECT n.id, n.ticket_id, n.role, n.body, n.created_at, t.title FROM notes n JOIN tickets t ON t.id = n.ticket_id
+      WHERE n.kind = 'question' AND t.needs_human = 1
+        AND NOT EXISTS (SELECT 1 FROM notes a WHERE a.ticket_id = n.ticket_id AND a.kind = 'answer' AND a.id > n.id)
+      ORDER BY n.id`).all(),
+  })],
+  ['POST', /^\/api\/brain$/, 'brain.add', ({ db, body }) => {
+    const { title, body: text, tags = '' } = body;
+    if (typeof title !== 'string' || typeof text !== 'string' || typeof tags !== 'string') throw new HttpError(400, 'title, body and tags must be strings');
+    const r = db.prepare('INSERT INTO brain (title, body, tags) VALUES (?, ?, ?)').run(title, text, tags);
+    return { status: 201, body: db.prepare('SELECT * FROM brain WHERE id = ?').get(Number(r.lastInsertRowid)) };
+  }],
+  // Live agent terminals, for the UI's terminal windows and the taskbar count. `id` is the /pty/<id> key.
+  ['GET', /^\/api\/sessions$/, null, () => ({ status: 200, body: [...sessions.values()].map(sessionView) })],
+  ['POST', /^\/api\/brainstorm$/, 'brainstorm.launch', ({ board }) => ({ status: 201, body: sessionView(brainstorm(board)) })],
+  // ~/.kanban95/models.json and settings.json. GET shows the file as it is (null when absent); PUT checks it whole, then writes.
+  ['GET', /^\/api\/config\/(\w+)$/, null, ({ params }) => {
+    const name = configName(params[0]);
+    let value = null;
+    try {
+      value = JSON.parse(readFileSync(configPath(name), 'utf8'));
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw new HttpError(400, `${configPath(name)}: ${(e as Error).message}`);
+    }
+    return { status: 200, body: { path: configPath(name), value } };
+  }],
+  ['PUT', /^\/api\/config\/(\w+)$/, 'config.write', ({ params, body }) => {
+    const name = configName(params[0]);
+    return { status: 200, body: { path: configPath(name), value: writeConfig(name, body) } };
+  }],
+  ['GET', /^\/api\/trust$/, null, ({ board }) => ({ status: 200, body: trustStatus(board.db, board.repo) })],
+  ['DELETE', /^\/api\/trust$/, 'trust.clear', ({ board }) => {
+    untrustClaude(board.db, board.repo);
+    return { status: 200, body: trustStatus(board.db, board.repo) };
+  }],
+  ['GET', /^\/api\/voice$/, null, () => ({ status: 200, body: voiceStatus() })],
+  // The board's only network call, started by the operator's OK in the download dialog (docs/SECURITY.md → Voice model).
+  ['POST', /^\/api\/voice\/download$/, 'voice.download', async () => {
+    try {
+      await download();
+    } catch (e) {
+      throw new HttpError(502, `voice model download failed: ${(e as Error).message}`);
+    }
+    return { status: 200, body: voiceStatus() };
+  }],
 ];
+
+function sessionView(s: Session) {
+  return { id: s.key, ticket_id: s.ticketId, run_id: s.runId, grant_id: s.grantId, role: s.role, phase: s.phase, model: s.model };
+}
+
+function configName(s: string): ConfigName {
+  if (!(CONFIGS as string[]).includes(s)) throw new HttpError(404, 'not found');
+  return s as ConfigName;
+}
 
 async function readJson(req: IncomingMessage): Promise<Json> {
   const chunks: Buffer[] = [];
@@ -209,9 +278,9 @@ export async function handleApi(board: Board, req: IncomingMessage, res: ServerR
   let out: Reply;
   try {
     body = await readJson(req);
-    out = handler({ board, db, params, body, url });
+    out = await handler({ board, db, params, body, url });
   } catch (e) {
-    const status = e instanceof HttpError ? e.status : e instanceof Refused ? 409 : isConstraintError(e) ? 400 : 500;
+    const status = e instanceof HttpError ? e.status : e instanceof Refused ? 409 : isConstraintError(e) || e instanceof BadConfig ? 400 : 500;
     if (mutation) {
       // audit.ticket_id is a FK, so an attempt against a missing ticket is attributed by args only.
       const exists = ticketId !== null && db.prepare('SELECT 1 FROM tickets WHERE id = ?').get(ticketId) !== undefined;
@@ -221,8 +290,10 @@ export async function handleApi(board: Board, req: IncomingMessage, res: ServerR
     return;
   }
   if (mutation) {
-    const id = mutation === 'tickets.create' ? (out.body as { id: number }).id : mutation === 'tickets.delete' ? null : ticketId;
+    const created = mutation === 'tickets.create' || mutation === 'tickets.housekeeping';
+    const id = created ? (out.body as { id: number }).id : mutation === 'tickets.delete' ? null : ticketId;
     audit(db, { grant_id: null, ticket_id: id, tool: mutation, args: args(body), outcome: 'ok' });
+    changed(mutation === 'tickets.delete' ? ticketId : id); // the UI refetches it (a deleted ticket answers 404 and leaves the board)
   }
   reply(res, out);
 }

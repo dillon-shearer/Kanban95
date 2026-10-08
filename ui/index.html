@@ -5,22 +5,20 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Kanban95</title>
   <link rel="stylesheet" href="/vendor/98.css">
+  <link rel="stylesheet" href="/vendor/xterm/xterm.css">
   <link rel="stylesheet" href="/app.css">
 </head>
 <body>
-  <div class="window" role="dialog" aria-labelledby="title">
-    <div class="title-bar">
-      <div class="title-bar-text" id="title">Kanban95</div>
-      <div class="title-bar-controls">
-        <button aria-label="Minimize"></button>
-        <button aria-label="Maximize"></button>
-        <button aria-label="Close"></button>
-      </div>
+  <main id="desktop"></main>
+  <footer id="taskbar">
+    <button id="start"><b>Start</b></button>
+    <div id="tasks"></div>
+    <div id="tray" class="status-bar-field">
+      <button id="inbox-count" class="tray-button">Inbox 0</button>
+      <span id="agents">0 agents</span>
+      <span id="clock"></span>
     </div>
-    <div class="window-body">
-      <p id="status" role="status">connecting…</p>
-    </div>
-  </div>
-  <script src="/app.js"></script>
+  </footer>
+  <script type="module" src="/app.js"></script>
 </body>
 </html>

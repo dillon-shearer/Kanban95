@@ -5,16 +5,14 @@ import { userInfo } from 'node:os';
 import { join, relative, resolve } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import type { IPty } from 'node-pty';
-import { startRun } from './context.js';
+import { buildContext, startRun } from './context.js';
 import { createWorktree } from './git.js';
 import { mint, revoke, type Role } from './grants.js';
 import { childEnv, spawnPty } from './pty.js';
-import { TEMPLATES, type TemplateName } from './templates.js';
+import { render, TEMPLATES, type TemplateName } from './templates.js';
+import type { Cli, Effort } from './settings.js';
 import { preTrustClaude } from './trust.js';
 
-export const CLIS = ['claude', 'codex'] as const;
-export type Cli = (typeof CLIS)[number];
-export type Effort = 'low' | 'medium' | 'high' | 'max';
 /** Codex reads the bearer token for the board's MCP server from this variable; it is set only in the CLI's own environment. */
 export const TOKEN_ENV = 'KANBAN95_TOKEN';
 // ponytail: a grant outlives its session by at most 24 h; in practice teardown revokes it when the pty exits.
@@ -63,6 +61,9 @@ export function buildArgv(a: ArgvIn): string[] {
       // and git refuses the worktree ("dubious ownership"), so an agent could not commit (docs/CLIS.md).
       return ['codex', '--model', a.model, '-c', `model_reasoning_effort=${a.effort}`,
         '-c', `mcp_servers.kanban95.url=${a.mcpUrl}`, '-c', `mcp_servers.kanban95.bearer_token_env_var=${TOKEN_ENV}`,
+        // The board's own tools are pre-approved (`approve`; `auto` still asks); the grant already scopes them. Without this a
+        // planner under -a never is refused every MCP call ("requires approval, but approval policy is never"; checked live).
+        '-c', 'mcp_servers.kanban95.default_tools_approval_mode=approve',
         '-c', `projects={'${a.repo}'={trust_level='trusted'}}`,
         ...(planner ? ['-s', 'read-only', '-a', 'never'] : ['--dangerously-bypass-approvals-and-sandbox']), message];
     }
@@ -70,10 +71,15 @@ export function buildArgv(a: ArgvIn): string[] {
 }
 
 export interface Session {
-  runId: number;
+  /** The key in `sessions` and in `/pty/<key>`: the run id, or minus the grant id for a brainstorm (it has no ticket, so no run). */
+  key: number;
+  runId: number | null;
   grantId: number;
-  ticketId: number;
+  ticketId: number | null;
   role: Role;
+  /** For the terminal title: the run's phase (`brainstorm` for a brainstorm) and model. */
+  phase: string;
+  model: string;
   /** Set by the lifecycle when it ends the session after the agent reported (a move_ticket); its exit is then expected. */
   outcome?: string;
   dir: string;
@@ -83,11 +89,11 @@ export interface Session {
   done: Promise<void>;
 }
 
-/** Live sessions by run id. */
+/** Live sessions by key. */
 export const sessions = new Map<number, Session>();
 export const sessionsOf = (ticketId: number) => [...sessions.values()].filter((s) => s.ticketId === ticketId);
 
-export const sessionDir = (repo: string, runId: number) => join(repo, '.kanban95', 'sessions', String(runId));
+export const sessionDir = (repo: string, key: number) => join(repo, '.kanban95', 'sessions', String(key));
 
 /** Owner-only: mode 0700 on POSIX; on Windows inheritance is cut and only the current user is granted access. */
 function privateDir(dir: string) {
@@ -97,19 +103,30 @@ function privateDir(dir: string) {
   }
 }
 
-export function launch(
-  d: { db: DatabaseSync; repo: string; port: number; onExit?: (s: Session) => void },
-  o: { ticketId: number; template: Exclude<TemplateName, 'brainstorm'>; cli: Cli; model: string; effort: Effort },
-): Session {
+type Daemon = { db: DatabaseSync; repo: string; port: number; onExit?: (s: Session) => void };
+/** `path`: the operator's configured executable for the CLI (Settings); the bare name, resolved through PATH, when unset. */
+type RunSettings = { cli: Cli; model: string; effort: Effort; path?: string };
+
+export function launch(d: Daemon, o: { ticketId: number; template: Exclude<TemplateName, 'brainstorm'> } & RunSettings): Session {
+  const wt = createWorktree(d.repo, o.ticketId);
+  const run = startRun(d.db, d.repo, { ...o, worktree: wt.path, base: wt.base });
+  return spawnSession(d, o, { runId: run.id, ticketId: o.ticketId, role: TEMPLATES[o.template].role, phase: TEMPLATES[o.template].phase, cwd: wt.path, prompt: run.prompt });
+}
+
+/** A planner session in the repo root with the brainstorm brief. No ticket, so no worktree and no run row. */
+export function launchBrainstorm(d: Daemon, o: RunSettings): Session {
+  const prompt = render(d.repo, 'brainstorm', buildContext(d.db, null, 'planner'));
+  return spawnSession(d, o, { runId: null, ticketId: null, role: 'planner', phase: 'brainstorm', cwd: d.repo, prompt });
+}
+
+function spawnSession(d: Daemon, o: RunSettings, r: { runId: number | null; ticketId: number | null; role: Role; phase: string; cwd: string; prompt: string }): Session {
   const { db, repo } = d;
-  const role = TEMPLATES[o.template].role;
-  const wt = createWorktree(repo, o.ticketId);
-  const run = startRun(db, repo, { ...o, worktree: wt.path, base: wt.base });
-  const grant = mint(db, { ticket: o.ticketId, role, ttlMs: GRANT_TTL_MS });
-  const dir = sessionDir(repo, run.id);
+  const grant = mint(db, { ticket: r.ticketId, role: r.role, ttlMs: GRANT_TTL_MS });
+  const key = r.runId ?? -grant.id;
+  const dir = sessionDir(repo, key);
   const teardown = (scrollback: string | null) => {
     try {
-      db.prepare("UPDATE runs SET ended_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), scrollback = ? WHERE id = ?").run(scrollback, run.id);
+      if (r.runId !== null) db.prepare("UPDATE runs SET ended_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), scrollback = ? WHERE id = ?").run(scrollback, r.runId);
       revoke(db, grant.id);
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -118,27 +135,30 @@ export function launch(
 
   try {
     const mcpUrl = `http://127.0.0.1:${d.port}/mcp`;
-    privateDir(dir);
+    // Owner-only when the dir holds a bearer (Claude Code's mcp.json). A Codex session keeps its token in the pty env and
+    // its dir holds only prompt.md, which its read-only sandbox (another Windows account) must be able to read.
+    if (o.cli === 'claude') privateDir(dir);
+    else mkdirSync(dir, { recursive: true });
     const promptPath = join(dir, 'prompt.md');
     const mcpConfigPath = join(dir, 'mcp.json');
-    writeFileSync(promptPath, run.prompt, { mode: 0o600 });
+    writeFileSync(promptPath, r.prompt, { mode: o.cli === 'claude' ? 0o600 : 0o644 });
     if (o.cli === 'claude') {
       const cfg = { mcpServers: { kanban95: { type: 'http', url: mcpUrl, headers: { Authorization: `Bearer ${grant.token}` } } } };
       writeFileSync(mcpConfigPath, JSON.stringify(cfg, null, 2), { mode: 0o600 });
     }
-    const [cmd, ...args] = buildArgv({ ...o, role, repo: resolve(repo), promptPath, mcpConfigPath, mcpUrl, cwd: wt.path });
-    if (o.cli === 'claude') preTrustClaude(db, o.ticketId, repo);
+    const [cmd, ...args] = buildArgv({ ...o, role: r.role, repo: resolve(repo), promptPath, mcpConfigPath, mcpUrl, cwd: r.cwd });
+    if (o.cli === 'claude') preTrustClaude(db, r.ticketId, repo);
     const env = childEnv(o.cli === 'codex' ? { [TOKEN_ENV]: grant.token } : {});
-    const { pty, scrollback } = spawnPty(cmd, args, { cwd: wt.path, env });
+    const { pty, scrollback } = spawnPty(o.path || cmd, args, { cwd: r.cwd, env });
 
     let finished!: () => void;
     const s: Session = {
-      runId: run.id, grantId: grant.id, ticketId: o.ticketId, role, dir, pty, scrollback,
-      done: new Promise((r) => (finished = r)),
+      key, runId: r.runId, grantId: grant.id, ticketId: r.ticketId, role: r.role, phase: r.phase, model: o.model, dir, pty, scrollback,
+      done: new Promise((ok) => (finished = ok)),
     };
-    sessions.set(run.id, s);
+    sessions.set(key, s);
     pty.onExit(() => {
-      sessions.delete(run.id);
+      sessions.delete(key);
       try {
         teardown(scrollback());
         d.onExit?.(s);

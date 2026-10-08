@@ -6,9 +6,9 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import * as z from 'zod';
 import { brainSearch, readTicket, setDeps, transaction } from './api.js';
 import { audit, verify, type Grant, type Role } from './grants.js';
-import { apply, Refused, type Board } from './lifecycle.js';
+import { apply, changed, Refused, type Board } from './lifecycle.js';
+import { EFFORT } from './settings.js';
 
-export const EFFORT = ['low', 'medium', 'high', 'max'] as const;
 export const STATUS = ['backlog', 'in_progress', 'testing', 'done'] as const;
 /** Where each role may move its own ticket. The planner never moves anything. */
 export const MOVE_TARGETS: Record<Role, readonly (typeof STATUS)[number][]> = {
@@ -304,7 +304,9 @@ function registerTools(server: McpServer, board: Board, grant: Grant) {
         text = (e as Error).message;
       }
       // audit.ticket_id is a FK: an attempt against a missing ticket is attributed by args only.
-      audit(db, { grant_id: grant.id, ticket_id: c.ticket !== null && exists(db, c.ticket) ? c.ticket : null, tool: name, args: a, outcome });
+      const ticket = c.ticket !== null && exists(db, c.ticket) ? c.ticket : null;
+      audit(db, { grant_id: grant.id, ticket_id: ticket, tool: name, args: a, outcome });
+      if (outcome === 'ok') changed(ticket); // the UI refetches that ticket (notes, flags, a new card)
       return { content: [{ type: 'text', text }], ...(outcome === 'ok' ? {} : { isError: true }) };
     });
   }

@@ -14,8 +14,10 @@ struct Daemon(Mutex<Child>);
 fn spawn_daemon() -> (Child, u16) {
     // ponytail: dev mode runs `node` from PATH against the built daemon. Phase 7 bundles Node as a real sidecar.
     let script = concat!(env!("CARGO_MANIFEST_DIR"), "/../daemon/dist/server.js");
+    // The shell's first argument, if any, is the repo the board works on; the daemon defaults to the cwd.
     let mut child = Command::new("node")
         .arg(script)
+        .args(std::env::args().nth(1))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .spawn()
@@ -28,7 +30,7 @@ fn spawn_daemon() -> (Child, u16) {
         .and_then(|p| p.trim().parse().ok())
         .unwrap_or_else(|| {
             let _ = child.kill();
-            panic!("bad daemon handshake {first:?} (expected `KANBAN95 port=<n>`; the daemon needs Node 24+)")
+            panic!("bad daemon handshake {first:?} (expected `KANBAN95 port=<n>`; the daemon needs Node 24+ on PATH; start the board with Kanban95.cmd)")
         });
     // Drain the rest so the daemon never blocks on a full stdout pipe.
     std::thread::spawn(move || {
@@ -48,7 +50,7 @@ fn main() {
         .setup(move |app| {
             WebviewWindowBuilder::new(app, "main", WebviewUrl::External(url))
                 .title("Kanban95")
-                .inner_size(1024.0, 720.0)
+                .inner_size(1280.0, 720.0)
                 .build()?;
             Ok(())
         })

@@ -174,7 +174,7 @@ afterEach(async () => {
 describe('lifecycle', { timeout: 60_000 }, () => {
   it('launch → execute → test → merge: one plain merge commit by the operator, a ding, and nothing left behind', async () => {
     const ws = new WebSocket(`ws://127.0.0.1:${srv.port}/events`, { origin: `http://127.0.0.1:${srv.port}` });
-    const frames: unknown[] = [];
+    const frames: { sound?: string; ticket: number | null }[] = [];
     ws.on('message', (m) => frames.push(JSON.parse(String(m))));
     await new Promise((r) => ws.on('open', r));
 
@@ -200,8 +200,11 @@ describe('lifecycle', { timeout: 60_000 }, () => {
     expect(db.prepare('SELECT count(*) AS n FROM grants WHERE ticket_id = ? AND revoked_at IS NULL').get(id)).toEqual({ n: 0 });
     expect(db.prepare("SELECT outcome FROM audit WHERE tool = 'janitor.worktree' AND ticket_id = ?").all(id)).toEqual([{ outcome: 'ok' }]);
 
-    await until(() => frames.length, 'the ding frame');
-    expect(frames).toEqual([{ sound: 'ding', ticket: id }]);
+    await until(() => frames.some((f) => 'sound' in f), 'the ding frame');
+    expect(frames.filter((f) => 'sound' in f)).toEqual([{ sound: 'ding', ticket: id }]);
+    // A change frame for every transition, so the UI refetches the card instead of reloading.
+    expect(frames.filter((f) => !('sound' in f)).length).toBeGreaterThanOrEqual(5);
+    expect(frames.every((f) => f.ticket === id)).toBe(true);
     ws.close();
   });
 

@@ -34,7 +34,7 @@ describe('daemon process', () => {
     expect(port).toBeGreaterThan(0);
 
     const res = await fetch(`http://127.0.0.1:${port}/health`);
-    expect(res.headers.get('content-security-policy')).toBe("default-src 'self'; img-src 'self' data:");
+    expect(res.headers.get('content-security-policy')).toBe("default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data:");
     expect(await res.json()).toEqual({ ok: true });
 
     child.stdin.end();

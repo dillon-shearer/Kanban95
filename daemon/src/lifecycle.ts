@@ -2,15 +2,14 @@
 // picks a row or refuses, apply() writes the row and runs its effects. Nothing else changes a ticket's status or flags.
 import { EventEmitter } from 'node:events';
 import { existsSync, readFileSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { readTicket, transaction, type Ticket } from './api.js';
 import { revoke, type Role } from './grants.js';
 import { cleanTicket } from './janitor.js';
-import { CLIS, launch, sessionsOf, type Cli, type Effort, type Session } from './launcher.js';
-import { EFFORT } from './mcp.js';
+import { launch, launchBrainstorm, sessionsOf, type Session } from './launcher.js';
 import { enqueue, merge } from './merge.js';
+import { runSettings } from './settings.js';
 import { TEMPLATES } from './templates.js';
 
 export const MAX_RETRY = 3;
@@ -88,8 +87,12 @@ export interface Board {
   closing?: boolean;
 }
 
-/** Sounds and other board events for the UI's /events websocket: `{ sound: 'ding' | 'chord', ticket }`. */
+/**
+ * Board events for the UI's /events websocket. `event`: a sound, `{ sound: 'ding' | 'chord', ticket }`. `change`: something about
+ * a ticket (`ticket` = its id) or the set of live sessions (`ticket` = null) changed; the UI refetches just that.
+ */
 export const events = new EventEmitter().setMaxListeners(0);
+export const changed = (ticket: number | null) => events.emit('change', { ticket });
 
 function facts(b: Board, t: Ticket): Facts {
   const merged = (id: number) => (b.db.prepare('SELECT merged_at FROM tickets WHERE id = ?').get(id) as { merged_at: string | null }).merged_at !== null;
@@ -152,30 +155,12 @@ export function apply(b: Board, id: number, event: Event, x: { note?: Note; answ
       case 'housekeeping': maybeHousekeeping(b, t); break;
     }
   }
+  changed(id);
   return { ticket: readTicket(b.db, id), noteId, pending };
 }
 
 /** An answer is typed into a terminal: a newline would submit half of it, so it becomes one line. */
 export const oneLine = (s: string) => s.replace(/\s*[\r\n]+\s*/g, ' ').trim();
-
-/** Where the run settings come from: `~/.kanban95/models.json` (docs/LIFECYCLE.md). The board never names a model. */
-export const modelsPath = () => join(homedir(), '.kanban95', 'models.json');
-
-/** cli, model and effort for a run. The ticket's cli wins; its model and effort override the execute phase only. */
-export function runSettings(t: Ticket, phase: 'execute' | 'test'): { cli: Cli; model: string; effort: Effort } {
-  const file = modelsPath();
-  if (!existsSync(file)) throw new Error(`no model catalog at ${file}`);
-  const cfg = JSON.parse(readFileSync(file, 'utf8'));
-  const cli = t.cli ?? cfg.cli;
-  if (!CLIS.includes(cli)) throw new Error(`unknown cli ${cli} in ${file}; expected ${CLIS.join(' or ')}`);
-  const d = cfg[cli]?.[phase] ?? {};
-  const own = phase === 'execute';
-  const model = (own && t.model) || d.model;
-  const effort = (own && t.effort) || d.effort || 'medium';
-  if (!model) throw new Error(`no ${phase} model for ${cli} in ${file}`);
-  if (!EFFORT.includes(effort)) throw new Error(`bad effort ${effort} for ${cli} ${phase} in ${file}`);
-  return { cli, model, effort };
-}
 
 /** Launches the phase's agent. A launch that fails is an agent that exited without reporting: the ticket is flagged. */
 function spawn(b: Board, id: number, template: 'execute' | 'housekeeping' | 'test') {
@@ -190,9 +175,10 @@ function spawn(b: Board, id: number, template: 'execute' | 'housekeeping' | 'tes
 
 function exited(b: Board, s: Session) {
   b.db.prepare('UPDATE runs SET outcome = ? WHERE id = ?').run(s.outcome ?? 'exit', s.runId);
+  changed(s.ticketId);
   if (s.outcome) return;
   try {
-    apply(b, s.ticketId, 'exit', { note: { role: s.role, kind: 'failure', body: 'agent exited without reporting' } });
+    apply(b, s.ticketId!, 'exit', { note: { role: s.role, kind: 'failure', body: 'agent exited without reporting' } });
   } catch (e) {
     if (!(e instanceof Refused)) throw e; // the ticket has moved on (operator edit); nothing to flag
   }
@@ -224,12 +210,25 @@ function maybeHousekeeping(b: Board, t: Ticket) {
   if (!Number.isInteger(every) || every < 1) throw new Error(`housekeeping_every in ${file} must be a positive integer`);
   const { n } = b.db.prepare("SELECT count(*) AS n FROM tickets WHERE template = 'execute' AND merged_at IS NOT NULL").get() as { n: number };
   if (n % every !== 0) return;
+  housekeeping(b, `Scheduled after ${n} tickets reached Done. Follow the housekeeping brief.`);
+}
+
+/** Creates a housekeeping ticket and launches it like any other. The Housekeeping button and the automatic trigger both land here. */
+export function housekeeping(b: Board, body: string): Ticket {
   const r = b.db.prepare("INSERT INTO tickets (title, body, criteria, template) VALUES (?, ?, ?, 'housekeeping')").run(
     'Clean up stale docs, unused modules and leftover artefacts',
-    `Scheduled after ${n} tickets reached Done. Follow the housekeeping brief.`,
+    body,
     'The tests and the build pass exactly as before.\nNo living document is removed.\nEvery deleted or updated path is listed with report_cleanup and a reason.',
   );
-  apply(b, Number(r.lastInsertRowid), 'launch');
+  return apply(b, Number(r.lastInsertRowid), 'launch').ticket;
+}
+
+/** A brainstorm session: a planner in the repo root, plan-phase settings. It touches no ticket, so the lifecycle has no row for it. */
+export function brainstorm(b: Board): Session {
+  if (b.closing) throw new Error('the daemon is shutting down');
+  const s = launchBrainstorm({ ...b, onExit: () => changed(null) }, runSettings(null, 'plan'));
+  changed(null);
+  return s;
 }
 
 /** Launch all: every backlog ticket, dependencies before dependents, ids ascending otherwise. Those waiting on a dependency are held. */

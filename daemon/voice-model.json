@@ -1,0 +1,15 @@
+{
+  "id": "onnx-community/whisper-base.en",
+  "source": "https://huggingface.co/onnx-community/whisper-base.en",
+  "revision": "51eefc0af78b103839eda9e7e4f4186acc6517fe",
+  "license": "Apache-2.0 (OpenAI Whisper weights, MIT)",
+  "files": [
+    { "path": "config.json", "size": 2197, "sha256": "c8a0de5ed8a083565a4319db29d0c210fda35b4d6076c2d711cae53ae00f3cb1" },
+    { "path": "generation_config.json", "size": 1556, "sha256": "3479b1f44a07e41db799e22599222fee5816738036def94a39841cb9cdbb4120" },
+    { "path": "preprocessor_config.json", "size": 339, "sha256": "a6a76d28c93edb273669eb9e0b0636a2bddbb1272c3261e47b7ca6dfdbac1b8d" },
+    { "path": "tokenizer.json", "size": 2405679, "sha256": "5eb60cec1e77aeeb6869a2bb5a8e01a84c3fe5d072d75369343021fe6f5310d0" },
+    { "path": "tokenizer_config.json", "size": 282662, "sha256": "93879c3dccdd4b976f709acd85b44778873f30c275e67026f30ca1e4c975230c" },
+    { "path": "onnx/encoder_model_quantized.onnx", "size": 23201320, "sha256": "6e8001198c490bbae018c0044f630c2915efb826bad957006ce36152d0ab2a10" },
+    { "path": "onnx/decoder_model_merged_quantized.onnx", "size": 53692803, "sha256": "dd4761a3f7add26afda3512abff4706920404c2517e85a9f2ff090b0c0987909" }
+  ]
+}

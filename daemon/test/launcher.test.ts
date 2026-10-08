@@ -83,7 +83,7 @@ describe('buildArgv', () => {
     ['claude', '--mcp-config', base.mcpConfigPath, '--strict-mcp-config', '--model', model, '--effort', effort, ...role, '--dangerously-skip-permissions', msg];
   const codex = (model: string, effort: string, ...role: string[]) =>
     ['codex', '--model', model, '-c', `model_reasoning_effort=${effort}`, '-c', 'mcp_servers.kanban95.url=http://127.0.0.1:5/mcp',
-      '-c', 'mcp_servers.kanban95.bearer_token_env_var=KANBAN95_TOKEN', '-c', "projects={'C:\\r'={trust_level='trusted'}}", ...role, msg];
+      '-c', 'mcp_servers.kanban95.bearer_token_env_var=KANBAN95_TOKEN', '-c', 'mcp_servers.kanban95.default_tools_approval_mode=approve', '-c', "projects={'C:\\r'={trust_level='trusted'}}", ...role, msg];
   // Reach by role: a planner cannot write files; workers and testers run with permissions off.
   const rows: [Cli, Role, string, Effort, string[]][] = [
     ['claude', 'worker', 'claude-opus-5-5', 'low', claude('claude-opus-5-5', 'low')],

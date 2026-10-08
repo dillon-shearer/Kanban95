@@ -13,9 +13,11 @@ import { events, recover, type Board } from './lifecycle.js';
 import { handleMcp } from './mcp.js';
 import { idle } from './merge.js';
 import { initTemplates } from './templates.js';
+import { voiceFile } from './voice.js';
 
 export const UI_DIR = resolve(import.meta.dirname, '../../ui');
 const LOOPBACK = '127.0.0.1';
+export const CSP = "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data:";
 
 const MIME: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -27,6 +29,8 @@ const MIME: Record<string, string> = {
   '.woff': 'font/woff',
   '.woff2': 'font/woff2',
   '.wav': 'audio/wav',
+  '.mjs': 'text/javascript; charset=utf-8',
+  '.wasm': 'application/wasm',
 };
 
 export interface Config {
@@ -58,7 +62,9 @@ const sameOrigin = (req: IncomingMessage, self: string) =>
 async function handle(board: Board, self: string, req: IncomingMessage, res: ServerResponse) {
   // The shell loads the UI from this origin, so the CSP must come from here:
   // Tauri only injects its configured CSP into pages it serves itself.
-  res.setHeader('Content-Security-Policy', "default-src 'self'; img-src 'self' data:");
+  // 'wasm-unsafe-eval' lets the local speech model's WebAssembly compile (no JS eval). Inline styles are for xterm.js, which
+  // writes its theme into a <style> element; inline scripts stay blocked.
+  res.setHeader('Content-Security-Policy', CSP);
   res.setHeader('X-Content-Type-Options', 'nosniff');
   if (!sameOrigin(req, self)) return send(res, 403, 'forbidden origin');
 
@@ -67,6 +73,11 @@ async function handle(board: Board, self: string, req: IncomingMessage, res: Ser
   if (url.pathname === '/mcp') return handleMcp(board, req, res);
   if (req.method !== 'GET' && req.method !== 'HEAD') return send(res, 405, 'method not allowed');
   if (url.pathname === '/health') return send(res, 200, JSON.stringify({ ok: true }), 'application/json');
+
+  if (url.pathname.startsWith('/voice-model/')) {
+    const file = voiceFile(url.pathname);
+    return file ? serveFile(req, res, file, 'application/octet-stream') : send(res, 404, 'not found');
+  }
 
   let pathname: string;
   try {
@@ -79,9 +90,12 @@ async function handle(board: Board, self: string, req: IncomingMessage, res: Ser
   if (!file.startsWith(UI_DIR + sep)) return send(res, 403, 'forbidden');
   const type = MIME[extname(file)];
   if (!type) return send(res, 404, 'not found');
+  return serveFile(req, res, file, type);
+}
+
+async function serveFile(req: IncomingMessage, res: ServerResponse, file: string, type: string) {
   const info = await stat(file).catch(() => null);
   if (!info?.isFile()) return send(res, 404, 'not found');
-
   res.writeHead(200, { 'Content-Type': type, 'Content-Length': info.size });
   if (req.method === 'HEAD') return res.end();
   createReadStream(file).pipe(res);
@@ -106,13 +120,14 @@ export function start(config: Config = {}): Promise<{
     handle(board, self, req, res).catch(() => send(res, 500, 'internal error'));
   });
 
-  // /pty/<run-id>: the run's terminal for xterm.js. Output goes out as text frames, starting with the scrollback so far.
+  // /pty/<key>: a session's terminal for xterm.js (key = run id, or minus the grant id for a brainstorm). Output goes out as text frames, starting with the scrollback so far.
   // In: JSON `{"data": "..."}` is typed into the pty, `{"resize": [cols, rows]}` resizes it. A browser always sends
   // Origin on a websocket, so here it is required, not optional.
-  // /events: board events for the UI, one JSON text frame each (`{"sound": "ding" | "chord", "ticket": n}`). Nothing comes in.
+  // /events: board events for the UI, one JSON text frame each: `{"sound": "ding" | "chord", "ticket": n}`, or
+  // `{"ticket": n | null}` when that ticket (or, for null, the set of live sessions) changed. Nothing comes in.
   const wss = new WebSocketServer({ noServer: true, maxPayload: 1 << 16 });
   server.on('upgrade', (req, socket, head) => {
-    const s = sessions.get(Number(/^\/pty\/(\d+)$/.exec(req.url ?? '')?.[1]));
+    const s = sessions.get(Number(/^\/pty\/(-?\d+)$/.exec(req.url ?? '')?.[1]));
     if (!req.headers.origin || !sameOrigin(req, self) || !(s || req.url === '/events')) {
       socket.end('HTTP/1.1 403 Forbidden\r\n\r\n');
       return;
@@ -120,8 +135,8 @@ export function start(config: Config = {}): Promise<{
     if (!s) {
       wss.handleUpgrade(req, socket, head, (ws) => {
         const forward = (e: unknown) => ws.send(JSON.stringify(e));
-        events.on('event', forward);
-        ws.on('close', () => events.off('event', forward));
+        events.on('event', forward).on('change', forward);
+        ws.on('close', () => events.off('event', forward).off('change', forward));
       });
       return;
     }
