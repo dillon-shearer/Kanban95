@@ -159,6 +159,7 @@ Permissions are off and the agent is the operator's user, so the worktree is whe
 - **Use the network** with no egress filter: exfiltrate what it reads, push with the operator's git credentials.
 - **Change git directly**: commit to the base branch in the main checkout or rewrite other branches; the merge queue only orders the board's own merges.
 - **As a tester, pass bad work**: the board trusts the tester's verdict.
+- **Plant code the board runs**: what it writes into the main checkout (`daemon/`, `package.json` scripts) runs at the next Start → Restart board (`npm run build`, then the rebuilt daemon), as it would at the next `Kanban95.cmd`.
 
 Ceiling and upgrade path: run worker and tester CLIs as a separate low-privilege Windows account (or an AppContainer) with only its worktree ACL'd to it, and an egress allowlist for the provider's API. Then owner-only session dirs, `board.db` and the WebView2 profile become real boundaries and the rows above are the whole reach.
 

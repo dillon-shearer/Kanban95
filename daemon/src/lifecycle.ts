@@ -122,8 +122,14 @@ export interface Board {
   db: DatabaseSync;
   repo: string;
   port: number;
-  /** Set by close(): nothing new is spawned. */
+  /** Set by close(): nothing new is spawned, and agents killed by the shutdown are not flagged, so `recover` resumes them. */
   closing?: boolean;
+  /** Kanban95's own install root (the repo checkout or the installer's `app/`). Defaults to the one this code runs from. */
+  root?: string;
+  /** Closes the board and exits the process with `code`. Set only when the daemon runs as its own process. */
+  shutdown?: (code: number) => void;
+  /** The Tauri shell started this daemon and restarts it on exit code 75. */
+  shell?: boolean;
 }
 
 /**
@@ -225,7 +231,7 @@ function spawn(b: Board, id: number, template: 'execute' | 'housekeeping' | 'tes
 function exited(b: Board, s: Session) {
   b.db.prepare('UPDATE runs SET outcome = ? WHERE id = ?').run(s.outcome ?? 'exit', s.runId);
   changed(s.ticketId);
-  if (s.outcome) return;
+  if (s.outcome || b.closing) return;
   try {
     apply(b, s.ticketId!, 'exit', { note: { role: s.role, kind: 'failure', body: 'agent exited without reporting' } });
   } catch (e) {

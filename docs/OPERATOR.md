@@ -50,6 +50,8 @@ You hear the **chord** and a card turns red when an agent asks a question, exits
 
 When the board restarts, every agent it was running is killed. Tickets that were running and not flagged are resumed by themselves, once; you only hear the chord if a resumed agent then exits without reporting. A ticket that was already red before the restart stays red until you resume it.
 
+**Start → Restart board** picks up daemon and UI changes (after a merge into `daemon/` or `ui/`, say) without closing the window. The confirm says how many agents are running (they are resumed after the restart, as above) and how many brainstorm or operator terminals will close. On **Restart** the board runs `npm run build` in the Kanban95 checkout, the status bar says "Restarting…", the daemon starts again on a new port and the window reloads there. If the build fails, nothing restarts: a dialog shows the compiler output and the board keeps running. An installed board has nothing to build and just restarts. It does not pick up changes to `shell/` (those need `cargo build` and closing and starting Kanban95 again), nor a new `npm install`.
+
 ![Inbox](img/inbox.png)
 
 For anything else, open the ticket (double-click the card): the Notes tab has the failure notes, Runs has each run's exact prompt and terminal output, Diff shows what the worktree changed.

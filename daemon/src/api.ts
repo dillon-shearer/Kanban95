@@ -1,7 +1,8 @@
 // UI-facing REST under /api. Operator-only (no grant); every mutation writes an audit row.
+import { exec } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { dirname, extname, join } from 'node:path';
+import { dirname, extname, join, resolve } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { attachmentDir, attachments, MAX_ATTACHMENT, safeName, saveAttachment } from './attachments.js';
 import { isConstraintError } from './db.js';
@@ -108,6 +109,7 @@ function ftsQuery(q: string): string {
 }
 
 const NOTEPAD_MAX = 256 * 1024;
+const BUILD_TIMEOUT = 120_000;
 const notepadPath = (board: Board) => join(board.repo, '.kanban95', 'notepad.md');
 
 const UPLOAD = /^\/api\/tickets\/(\d+)\/attachments$/;
@@ -268,6 +270,24 @@ const routes: [method: string, path: RegExp, mutation: string | null, handler: (
   ['POST', /^\/api\/operator$/, 'operator.launch', ({ board, body }) => {
     if (typeof body.mission !== 'string' || !body.mission.trim()) throw new HttpError(400, 'mission must be a non-empty string');
     return { status: 201, body: sessionView(operator(board, body.mission)) };
+  }],
+  // Rebuild (from a repo checkout; an installed app/ has no daemon/src and nothing to build), then close and exit 75. The
+  // shell restarts the daemon on 75 and the window follows it to the new port (docs/ARCHITECTURE.md -> Restart board).
+  ['POST', /^\/api\/restart$/, 'board.restart', async ({ board }) => {
+    if (board.closing || !board.shutdown) throw new HttpError(409, board.closing ? 'the board is already shutting down' : 'restart needs the daemon running as its own process');
+    const root = board.root ?? resolve(import.meta.dirname, '../..');
+    if (existsSync(join(root, 'daemon', 'src'))) {
+      const failed = await new Promise<string | null>((ok) => {
+        // Through a shell, since npm is npm.cmd on Windows. The command is fixed; nothing from the request reaches it.
+        exec('npm run build', { cwd: root, timeout: BUILD_TIMEOUT, windowsHide: true }, (e, out, err) =>
+          ok(e ? `${out}${err}`.trim() || e.message : null));
+      });
+      if (failed !== null) throw new HttpError(409, failed);
+    }
+    if (board.closing) throw new HttpError(409, 'the board is already shutting down');
+    const shutdown = board.shutdown;
+    setTimeout(() => shutdown(75), 50); // after the reply is on its way
+    return { status: 202, body: { restarting: true, shell: board.shell === true } };
   }],
   // <repo>/.kanban95/notepad.md, the operator's scratch notes, whole file in `value` both ways ('' when absent).
   // Not audited: it autosaves every pause in typing and is nothing an agent reads.

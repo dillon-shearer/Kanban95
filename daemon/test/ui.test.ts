@@ -514,6 +514,34 @@ describe('ui', { timeout: 60_000 }, () => {
     writeFileSync(models, before);
   });
 
+  it('Start → Restart board confirms with the agent count and the shell caveat, and shows a failed build in a dialog', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'k95-root-'));
+    mkdirSync(join(root, 'daemon', 'src'), { recursive: true });
+    writeFileSync(join(root, 'package.json'), JSON.stringify({ scripts: { build: `node -e "console.log('error TS2322: nope'); process.exit(2)"` } }));
+    let shutdowns = 0;
+    Object.assign(srv.board, { root, shutdown: () => shutdowns++ });
+    await page.goto(base);
+    await until(() => page.evaluate(`!!document.querySelector('[data-win="board"]')`), 'the board');
+    const dialog = (title: string) => page.evaluate<string | null>(`[...document.querySelectorAll('dialog[open]')].find((d) => d.querySelector('.title-bar-text').textContent === '${title}')?.querySelector('.window-body').textContent ?? null`);
+    const press = (button: string) => page.evaluate(`[...document.querySelectorAll('dialog[open] button')].find((b) => b.textContent === '${button}').click()`);
+
+    await click('#start');
+    await page.evaluate(`[...document.querySelectorAll('.k95-menu li')].find((li) => li.textContent === 'Restart board').click()`);
+    await until(() => dialog('Restart board'), 'the confirm');
+    const text = (await dialog('Restart board'))!;
+    const agents = [...sessions.values()].filter((s) => s.ticketId !== null).length; // earlier tests may leave some running
+    expect(text).toContain(agents ? `${agents} agent${agents === 1 ? ' is' : 's are'} running; they are resumed after the restart.` : 'No agents are running.');
+    expect(text).toContain('Shell changes need a full relaunch');
+    await press('Restart');
+    await until(() => dialog('Board not restarted'), 'the build error', 30_000);
+    expect(await dialog('Board not restarted')).toContain('error TS2322: nope');
+    await press('OK');
+    expect(await statusBar()).toBe('Board not restarted: see the dialog');
+    expect(shutdowns).toBe(0);
+    Object.assign(srv.board, { root: undefined, shutdown: undefined });
+    rmSync(root, { recursive: true, force: true });
+  });
+
   it('keeps a window the same size while it is dragged', async () => {
     await page.goto(base + '?resize');
     await until(() => page.evaluate(`!!document.querySelector('[data-win="board"]')`), 'the board');

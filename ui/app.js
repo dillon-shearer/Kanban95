@@ -67,9 +67,14 @@ function listen() {
     await refreshShared();
     redraw(e.ticket);
   };
-  // ponytail: no reconnect; the daemon lives exactly as long as the window (shell sidecar).
-  ws.onclose = () => say('Lost the connection to the daemon. Restart Kanban95.');
+  // Only Restart board reconnects: the shell navigates this window to the new daemon, which reloads the page.
+  ws.onclose = () => {
+    if (!restarting) return say('Lost the connection to the daemon. Restart Kanban95.');
+    say('Restarting…');
+    setTimeout(listen, 1000);
+  };
 }
+let restarting = false;
 
 // ---- board ----
 
@@ -209,6 +214,30 @@ async function newOperator() {
   const body = h('div', { class: 'field-row-stacked' }, h('label', {}, 'Mission'), mission);
   if ((await dialog('New operator terminal', body, ['Start', 'Cancel'])) !== 'Start') return;
   await act(async () => openTerminal(await api('POST', '/operator', { mission: mission.value })), 'Operator terminal started.');
+}
+/** Start → Restart board: the daemon rebuilds, exits 75, and the shell starts it again (docs/OPERATOR.md → Restart board). */
+async function restartBoard() {
+  const agents = sessions.filter((s) => s.ticket_id !== null).length;
+  const terminals = sessions.length - agents;
+  const body = h('div', {},
+    h('p', {}, agents ? `${agents} agent${agents === 1 ? ' is' : 's are'} running; they are resumed after the restart.` : 'No agents are running.'),
+    terminals > 0 && h('p', {}, `${terminals} brainstorm or operator terminal${terminals === 1 ? '' : 's'} will close.`),
+    h('p', {}, 'The daemon is rebuilt and the UI reloads. Shell changes need a full relaunch (close Kanban95 and start it again).'));
+  if ((await dialog('Restart board', body, ['Restart', 'Cancel'])) !== 'Restart') return;
+  say('Building…');
+  try {
+    restarting = true;
+    const r = await api('POST', '/restart');
+    if (!r.shell) {
+      restarting = false;
+      say('The daemon stopped. No shell is running it: start it again by hand.');
+    } else say('Restarting…');
+  } catch (e) {
+    restarting = false;
+    say(`Board not restarted: ${e.status === 409 ? 'see the dialog' : e.message}`);
+    // 409: the compiler output (the board keeps running the code it has), or a restart already under way.
+    if (e.status === 409) await dialog('Board not restarted', h('pre', { class: 'k95-pre' }, e.message));
+  }
 }
 const housekeeping = () => act(async () => {
   const t = await api('POST', '/tickets/housekeeping');
@@ -718,6 +747,8 @@ const START = [
   { label: 'New operator terminal', run: newOperator },
   { get label() { return runner.on ? 'Stop' : 'Run'; }, run: toggleRunner },
   { label: 'Housekeeping', run: housekeeping },
+  '-',
+  { label: 'Restart board', run: restartBoard },
 ];
 
 /** Desktop icons for the Start menu's first entries, under every window. Click selects; double-click or Enter opens. */

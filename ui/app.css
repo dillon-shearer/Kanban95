@@ -48,6 +48,7 @@ body { background: linear-gradient(transparent 55%, rgb(0 0 0 / 0.22)),
 /* Dialogs */
 .k95-dialog { padding: 0; border: 0; max-width: min(640px, 90vw); }
 .k95-dialog::backdrop { background: transparent; }
+.k95-dialog .k95-pre { max-height: 50vh; }
 .k95-buttons { justify-content: flex-end; margin-top: 10px; }
 .k95-download th { text-align: left; padding-right: 8px; }
 .k95-download td { word-break: break-all; }
