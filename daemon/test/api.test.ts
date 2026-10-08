@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { request } from 'node:http';
@@ -145,5 +145,42 @@ describe('grants over REST', () => {
       { tool: 'grants.revoke', outcome: 'ok', args_summary: `{"id":${id}}` },
       { tool: 'grants.revoke', outcome: 'error' },
     ]);
+  });
+});
+
+describe('model lists for the Settings dropdowns', () => {
+  const home = process.env.USERPROFILE!;
+  const cache = join(home, '.codex', 'models_cache.json');
+  beforeAll(() => {
+    // node --help has no Claude Code alias line, so the claude list is empty and the test never runs the real CLI.
+    mkdirSync(join(home, '.kanban95'), { recursive: true });
+    writeFileSync(join(home, '.kanban95', 'settings.json'), JSON.stringify({ paths: { claude: process.execPath } }));
+    mkdirSync(join(home, '.codex'), { recursive: true });
+  });
+  afterAll(() => rmSync(join(home, '.kanban95', 'settings.json'), { force: true }));
+
+  it('lists every Codex model, hidden ones too, in its order', async () => {
+    writeFileSync(cache, JSON.stringify({ models: [
+      { slug: 'b', visibility: 'list', priority: 5 }, { slug: 'hidden', visibility: 'hide', priority: 1 }, { slug: 'a', visibility: 'list', priority: 2 },
+    ] }));
+    expect(await (await call('GET', '/api/models')).json()).toEqual({ claude: [], codex: ['hidden', 'a', 'b'] });
+  });
+
+  it('lists the model ids inside the Claude executable newest first, without beta headers', async () => {
+    // Not runnable, so --help gives no aliases; the 4 MB of padding puts one id across a read-chunk boundary.
+    const exe = join(home, 'fake-claude.exe');
+    const pad = 'x'.repeat((4 << 20) - 10);
+    writeFileSync(exe, `claude-code-20250219 claude-opus-4-1-20250805 claude-opus-4-1 ${pad}claude-sonnet-4-5 claude-opus-4-10 claude-eval-9`);
+    writeFileSync(join(home, '.kanban95', 'settings.json'), JSON.stringify({ paths: { claude: exe } }));
+    expect((await (await call('GET', '/api/models')).json()).claude)
+      .toEqual(['claude-opus-4-10', 'claude-sonnet-4-5', 'claude-opus-4-1', 'claude-opus-4-1-20250805']);
+    writeFileSync(join(home, '.kanban95', 'settings.json'), JSON.stringify({ paths: { claude: process.execPath } }));
+  });
+
+  it('answers empty lists when the cache is missing or unreadable', async () => {
+    writeFileSync(cache, '{not json');
+    expect(await (await call('GET', '/api/models')).json()).toEqual({ claude: [], codex: [] });
+    rmSync(cache);
+    expect(await (await call('GET', '/api/models')).json()).toEqual({ claude: [], codex: [] });
   });
 });

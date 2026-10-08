@@ -1,9 +1,10 @@
 // The operator's own settings in ~/.kanban95/, edited in the Settings window. No secrets live here.
 // models.json: which CLI, and the model and effort per phase (docs/LIFECYCLE.md → Run settings). settings.json: CLI paths,
 // sounds, voice. Both are read on every use, so an edit applies to the next run without a restart.
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { execFile } from 'node:child_process';
+import { createReadStream, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, isAbsolute, join } from 'node:path';
+import { delimiter, dirname, isAbsolute, join } from 'node:path';
 import * as z from 'zod';
 import type { Ticket } from './api.js';
 
@@ -57,6 +58,66 @@ export function writeConfig<N extends ConfigName>(name: N, value: unknown): Conf
   writeFileSync(`${file}.tmp`, JSON.stringify(data, null, 2) + '\n');
   renameSync(`${file}.tmp`, file);
   return data;
+}
+
+/**
+ * Every model each installed CLI knows, for the Settings dropdowns; free text stays allowed. Nothing is named here.
+ * Codex: every entry of ~/.codex/models_cache.json (its own picker hides some), in its order. Claude Code has no list command:
+ * its "latest model" aliases from `claude --help` come first, then every full id compiled into its executable, newest first.
+ * Any failure is an empty list.
+ */
+export async function knownModels(): Promise<Record<Cli, string[]>> {
+  const codex = (() => {
+    try {
+      const { models } = JSON.parse(readFileSync(join(homedir(), '.codex', 'models_cache.json'), 'utf8'));
+      return models.sort((a: { priority: number }, b: { priority: number }) => a.priority - b.priority).map((m: { slug: string }) => m.slug);
+    } catch {
+      return [];
+    }
+  })();
+  const exe = (() => { try { return readConfig('settings').paths.claude; } catch { return ''; } })()
+    || process.env.PATH?.split(delimiter).map((d) => join(d, process.platform === 'win32' ? 'claude.exe' : 'claude')).find((p) => existsSync(p));
+  if (!exe) return { claude: [], codex };
+  const [aliases, ids] = await Promise.all([
+    new Promise<string[]>((done) => execFile(exe, ['--help'], { timeout: 10_000, windowsHide: true }, (err, out) => {
+      // ponytail: parses the --model help line; when Claude Code rewords it the aliases are missing and the full ids remain.
+      const line = /alias for the latest model \(e\.g\.([^)]*)\)/.exec(String(out).replace(/\s+/g, ' '))?.[1] ?? '';
+      done(err ? [] : [...line.matchAll(/'([\w.-]+)'/g)].map((m) => m[1]));
+    })).catch(() => []), // execFile throws instead of calling back when the file is not an executable at all
+    claudeIds(exe).catch(() => []),
+  ]);
+  return { claude: [...aliases, ...ids], codex };
+}
+
+const scanned = new Map<string, { mtime: number; ids: string[] }>();
+const version = (id: string) => id.replace(/^claude-[a-z]+-/, '').replace(/-\d{8}$/, ''); // a release date does not make it newer
+
+/**
+ * Model ids compiled into the Claude Code executable, newest version first. Read in chunks (it is ~250 MB) and cached per
+ * file and mtime, so it is scanned again only after Claude Code updates itself.
+ * ponytail: string scan of the native build. An npm-installed Claude Code (a .cmd shim) gives none; scan its cli.js if needed.
+ */
+async function claudeIds(exe: string): Promise<string[]> {
+  const mtime = statSync(exe).mtimeMs;
+  const hit = scanned.get(exe);
+  if (hit?.mtime === mtime) return hit.ids;
+  const found = new Set<string>();
+  let tail = '';
+  const scan = (text: string, upTo: number) => {
+    for (const m of text.matchAll(/claude-[a-z]+-\d+(?:-\d+)*/g)) if (m.index < upTo) found.add(m[0]);
+  };
+  // A match starting in the last 64 characters may be cut off; it is counted with the next chunk, which starts with them.
+  for await (const chunk of createReadStream(exe, { encoding: 'latin1', highWaterMark: 4 << 20 })) {
+    const text = tail + chunk;
+    scan(text, text.length - 64);
+    tail = text.slice(-64);
+  }
+  scan(tail, Infinity);
+  // Model families are the ones with a minor version (opus-4-5); that drops beta headers and the like (code-20250219, eval-9).
+  const families = new Set([...found].filter((id) => /^claude-[a-z]+-\d-\d+$/.test(id)).map((id) => id.replace(/-\d.*$/, '')));
+  const ids = [...found].filter((id) => families.has(id.replace(/-\d.*$/, ''))).sort((a, b) => version(b).localeCompare(version(a), 'en', { numeric: true }) || a.localeCompare(b));
+  scanned.set(exe, { mtime, ids });
+  return ids;
 }
 
 /**

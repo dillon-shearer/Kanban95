@@ -86,6 +86,7 @@ menu[role=tablist] { flex: none; margin-bottom: -2px !important; }
 .field-row-stacked { position: relative; }
 .k95-label { width: 50px; }
 .k95-models td, .k95-models th { padding: 1px 3px; text-align: left; }
+.k95-pick { min-width: 0; padding: 0 4px; margin-left: 2px; }
 .k95-brain .k95-notes { flex: 1; overflow: auto; min-height: 60px; }
 .k95-brain input[type=search] { flex: 1; }
 .k95-brain textarea { flex: 1; }

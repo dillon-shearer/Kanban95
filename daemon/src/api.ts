@@ -7,7 +7,7 @@ import { ticketDiff } from './git.js';
 import { audit, revoke } from './grants.js';
 import { killGrantSession, sessions, type Session } from './launcher.js';
 import { apply, brainstorm, changed, housekeeping, launchAll, Refused, type Board } from './lifecycle.js';
-import { BadConfig, CONFIGS, configPath, writeConfig, type ConfigName } from './settings.js';
+import { BadConfig, CONFIGS, configPath, knownModels, writeConfig, type ConfigName } from './settings.js';
 import { trustStatus, untrustClaude } from './trust.js';
 import { download, status as voiceStatus } from './voice.js';
 
@@ -207,6 +207,7 @@ const routes: [method: string, path: RegExp, mutation: string | null, handler: (
     const name = configName(params[0]);
     return { status: 200, body: { path: configPath(name), value: writeConfig(name, body) } };
   }],
+  ['GET', /^\/api\/models$/, null, async () => ({ status: 200, body: await knownModels() })],
   ['GET', /^\/api\/trust$/, null, ({ board }) => ({ status: 200, body: trustStatus(board.db, board.repo) })],
   ['DELETE', /^\/api\/trust$/, 'trust.clear', ({ board }) => {
     untrustClaude(board.db, board.repo);

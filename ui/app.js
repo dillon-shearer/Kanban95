@@ -455,7 +455,7 @@ function openSettings() {
     }
     if (!first) return; // the other tabs are forms; events leave them alone
     if (tab === 'Models') {
-      const { path, value } = await api('GET', '/config/models');
+      const [{ path, value }, known] = await Promise.all([api('GET', '/config/models'), api('GET', '/models')]);
       const m = value ?? { cli: 'claude' };
       const cli = h('select', {}, CLIS.map((c) => h('option', { selected: m.cli === c }, c)));
       const cells = {};
@@ -463,7 +463,14 @@ function openSettings() {
         const model = h('input', { type: 'text', 'data-mic': 'off', size: 16, value: m[c]?.[ph]?.model ?? '' });
         const effort = h('select', {}, EFFORTS.map((e) => h('option', { selected: (m[c]?.[ph]?.effort ?? 'medium') === e }, e)));
         cells[`${c}.${ph}`] = { model, effort };
-        return [h('td', {}, model), h('td', {}, effort)];
+        // Free text, or ▾ for what the installed CLI offers now (plus the ids already saved for it).
+        const pick = h('button', { class: 'k95-pick', title: `Models ${c} offers`, onclick: () => {
+          const ids = [...new Set([...known[c], ...PHASES.map((q) => m[c]?.[q]?.model).filter(Boolean)])];
+          const r = pick.getBoundingClientRect();
+          menu(r.left, r.bottom, ids.length ? ids.map((id) => ({ label: id, run: () => { model.value = id; } }))
+            : [{ label: `${c} lists no models: type the id`, disabled: true }]);
+        } }, '▾');
+        return [h('td', {}, model, pick), h('td', {}, effort)];
       })));
       const save = () => act(async () => {
         const out = { cli: cli.value };

@@ -73,6 +73,15 @@ codex --model <model> -c model_reasoning_effort=<effort> -c mcp_servers.kanban95
 
 Codex has no equivalent of `--strict-mcp-config`; MCP servers from the operator's own `~/.codex/config.toml` still load in agent sessions.
 
+## Model lists
+
+The ▾ beside each model box in Settings → Models lists every model the installed CLI knows (`GET /api/models`, `knownModels` in `daemon/src/settings.ts`); the box still takes any id typed by hand. Nothing is listed from the board's own code:
+
+- Codex: every entry of `~/.codex/models_cache.json`, which Codex refreshes itself, in its order, including the ones its own picker hides. No other file under `~/.codex/` is read.
+- Claude Code has no command that lists models. First come the "latest model" aliases its `claude --help` names on the `--model` line (for example `opus`, `sonnet`); each resolves to the newest model of its family at launch. Then every full model id compiled into the Claude Code executable (`claude-<family>-<version>`), newest version first. The executable is the path in Settings → CLIs, else `claude.exe` on PATH; it is read in 4 MB chunks and the result cached until the file changes. Families are the names that appear with a minor version (`opus-4-5`), which drops beta-header strings like `claude-code-20250219`. An npm-installed Claude Code (a `.cmd` shim) gives the aliases only.
+
+A missing cache, a failed `--help` or a reworded help text gives a shorter or empty list, never an error.
+
 ## Effort
 
 | Board effort | Claude Code | Codex |
