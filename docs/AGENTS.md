@@ -43,6 +43,7 @@ Empty values render as `(none)`, except `{{diff}}` outside a test session (empty
 **Worker (execute).**
 - Works only inside the current directory, the ticket's worktree.
 - Verify with `npm test` or a script built on `daemon/test/cdp.ts`, never by starting the app (`npm run dev`, `Kanban95.cmd`, `cargo run`) or a visible browser.
+- Puts new tests in a new file named for the feature (`daemon/test/<feature>.test.ts`) unless it is extending an existing test's scenario: several tickets run at once and appending to a shared test file is the most common merge conflict.
 - Records decisions with `add_note` kind `decision`, gotchas for future tickets with `brain_add`.
 - Asks with `ask_operator` instead of guessing, once, with the options it sees.
 - Never commits secrets and never reads a `.env`.
@@ -52,7 +53,7 @@ Empty values render as `(none)`, except `{{diff}}` outside a test session (empty
 - On a retry, fixes the failure notes first.
 - When a failure note reports a merge conflict (`merge conflict with <base>: …`, written by the merge queue), runs `git merge {{base}}` in the worktree, resolves keeping both sides' intent (two tests added at one spot: keep both), runs the tests and the build, commits, and submits as usual. The tester runs again and the merge is queued again.
 
-**Tester (test).** Runs the suite and build, reviews `{{diff}}` against each criterion, writes and commits tests for new behaviour that has none, for UI tickets takes screenshots with a headless script built on `daemon/test/cdp.ts` (never by starting the app or a visible browser), and deletes every artefact not kept as evidence. Finishes with `report_test` (verdict, per-criterion summary, evidence), then `move_ticket(done)` or `move_ticket(in_progress)`. `done` is refused unless `report_test(passed: true)` was called in this test run; it ends the session and queues the merge. `in_progress` starts the next execute attempt, up to three retries (`docs/LIFECYCLE.md`).
+**Tester (test).** Runs the suite and build, reviews `{{diff}}` against each criterion, writes and commits tests for new behaviour that has none (in a new file named for the feature, as the worker does), for UI tickets takes screenshots with a headless script built on `daemon/test/cdp.ts` (never by starting the app or a visible browser), and deletes every artefact not kept as evidence. Finishes with `report_test` (verdict, per-criterion summary, evidence), then `move_ticket(done)` or `move_ticket(in_progress)`. `done` is refused unless `report_test(passed: true)` was called in this test run; it ends the session and queues the merge. `in_progress` starts the next execute attempt, up to three retries (`docs/LIFECYCLE.md`).
 
 **Housekeeper (housekeeping).** Created by the board after every 10th merged ticket (`housekeeping_every`), and run through the same test and merge path as any ticket. Finds stale docs, ephemeral docs that are superseded, modules with no importers, templates nothing renders, orphan worktrees, temp dirs and stray screenshots. Moves anything durable into the matching living doc, then deletes. Confirms "unused" by search. Changes no behaviour; tests and build must pass as before. Calls `report_cleanup` with every path and reason, then `move_ticket(testing)`. Its tester checks the build still passes and no living doc was removed.
 

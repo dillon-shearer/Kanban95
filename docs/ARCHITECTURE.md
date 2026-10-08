@@ -113,7 +113,7 @@ The template is read from disk on every render, so operator edits apply without 
 
 ```
 package.json      npm workspace root: build / test / dev scripts
-daemon/           src/{server,api,db,grants,mcp,mcp-doc,templates,context,git,pty,launcher,trust,lifecycle,merge,janitor,settings,attachments,voice}.ts, voice-model.json (the pinned speech model), migrations/*.sql, test/ (test/cdp.ts drives headless Edge/Chrome; test/.cache/ is gitignored), tsconfig.json, vitest.config.ts; compiled to dist/ (gitignored)
+daemon/           src/{server,api,db,grants,mcp,mcp-doc,templates,context,git,pty,launcher,trust,lifecycle,merge,janitor,settings,attachments,voice}.ts, voice-model.json (the pinned speech model), migrations/*.sql, test/ (test/cdp.ts drives headless Edge/Chrome, test/ui.ts is the shared daemon-plus-browser setup of the ui-<area>.test.ts files, which vitest.config.ts runs as a second group after the rest; test/.cache/ is gitignored), tsconfig.json, vitest.config.ts; compiled to dist/ (gitignored)
 ui/               index.html, app.js (data layer and windows), wm.js (window manager), voice.js (mic and transcription), app.css, icons/*.svg (desktop icons), sounds/{ding,chord}.wav, vendor/{98.css and fonts, xterm/, transformers/}
 templates/        default prompt templates (brainstorm, operator, plan, execute, test, housekeeping), copied into each repo once
 skills/           the Claude Code plugin `kanban95` (.claude-plugin/plugin.json and one folder per skill; docs/AGENTS.md)
@@ -211,6 +211,7 @@ Gotchas collected while the board was built. Each one cost a phase some time.
 - Headless Edge resizes its window to `--window-size` minus chrome; `cdp.ts` sets the viewport with `Emulation.setDeviceMetricsOverride` to get an exact size.
 - `/events` carries several frame shapes; anything listening must ignore frames it does not know.
 - The suite is load-sensitive (ptys, headless browsers, real git). Rerun a failing file alone before treating it as a regression.
+- Several tickets run at once and every branch merges into the same files. Put a new test in its own `daemon/test/<feature>.test.ts`; a new UI test goes in a `ui-<area>.test.ts` and imports `./ui.ts` for the daemon and browser. Every ui-*.test.ts file starts its own daemon and browser, which is why `vitest.config.ts` runs them after the other files: run together, they time out unrelated tests. In the other hot files (`daemon/src/api.ts` route table, `ui/app.js`, `docs/*.md`) add new routes and UI blocks next to related ones rather than at the end, and new doc content as its own section.
 
 ## How the board was built
 
