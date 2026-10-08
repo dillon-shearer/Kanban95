@@ -61,7 +61,7 @@ Overrides, all through MCP (`set_model` takes `model` and/or `effort`):
 - Agents report only through MCP. The board never parses terminal output.
 - Retry limit 3, then `needs_human` + chord.wav. Done + merge → ding.wav.
 - `ask_operator`: agent asks a question, ticket flags, chord plays, operator answers in the board, agent resumes.
-- Templates: `brainstorm.md`, `plan.md`, `execute.md`, `test.md`. Variables: `{{ticket}}`, `{{criteria}}`, `{{brain}}`, `{{notes}}`, `{{retry}}`, `{{diff}}`. Editable in the board; rendered prompt is previewable.
+- Templates: `brainstorm.md`, `plan.md`, `execute.md`, `test.md`, `housekeeping.md`. Variables: `{{ticket}}`, `{{criteria}}`, `{{brain}}`, `{{notes}}`, `{{retry}}`, `{{diff}}`, `{{tools}}` (see `docs/AGENTS.md`). Editable in the board; rendered prompt is previewable.
 
 ### Testing standard (the test agent, and the board's own tests)
 - Test agent: runs the suite/build, reviews the diff against acceptance criteria, writes tests for new behaviour that has none, launches and screenshots the app for UI tickets.

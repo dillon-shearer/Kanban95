@@ -15,7 +15,7 @@ Living document. Update it in the same change that alters the shape described he
 ```
 
 - **Shell** (`shell/`): owns the OS window and the daemon's lifetime. No app logic. In dev it runs `node daemon/dist/server.js` from PATH; packaging Node as a real sidecar is phase 7.
-- **Daemon** (`daemon/src/`): the only process with state. `server.ts` is the HTTP plumbing (bind, origin guard, static files, `/health`, routes `/api/*` to `api.ts`). `db.ts` opens and migrates the per-repo SQLite file (schema in `docs/DATA.md`). `grants.ts` mints, verifies, revokes bearer grants and writes audit rows (`docs/SECURITY.md`). `mcp.ts` is the agent-facing MCP server at `/mcp`: one table of tools, each with a description, a role access cell and a handler, enforced per grant and audited per call. `mcp-doc.ts` renders `docs/MCP.md` from that table. The repo it serves is `argv[2]`, defaulting to the cwd. Later phases add websocket, pty and git here.
+- **Daemon** (`daemon/src/`): the only process with state. `server.ts` is the HTTP plumbing (bind, origin guard, static files, `/health`, routes `/api/*` to `api.ts`). `db.ts` opens and migrates the per-repo SQLite file (schema in `docs/DATA.md`). `grants.ts` mints, verifies, revokes bearer grants and writes audit rows (`docs/SECURITY.md`). `mcp.ts` is the agent-facing MCP server at `/mcp`: one table of tools, each with a description, a role access cell and a handler, enforced per grant and audited per call. `mcp-doc.ts` renders `docs/MCP.md` from that table. `templates.ts` copies the default prompt templates from `templates/` into `<repo>/.kanban95/templates/` once and renders them; `context.ts` builds the variables for a ticket and records the rendered prompt on a `runs` row (`startRun`) before anything is spawned (see Prompts below). The repo it serves is `argv[2]`, defaulting to the cwd. Later phases add websocket, pty and git here.
 - **UI** (`ui/`): plain files served by the daemon. No bundler. 98.css and its fonts are vendored in `ui/vendor/` so nothing loads from a CDN at runtime.
 
 ## Port handshake
@@ -54,13 +54,22 @@ Errors are `{ "error": "..." }`: 400 for bad input or a constraint violation, 40
 
 `POST /mcp` is a stateless Streamable HTTP MCP endpoint (no session id, JSON responses). `handleMcp` reads `Authorization: Bearer <token>`, resolves it with `grants.verify`, answers `401` with no audit row when that fails, and otherwise builds a per-request `McpServer` whose twelve tools close over the grant. One wrapper around every tool checks the role cell, runs the handler, and writes exactly one audit row (`ok`, `denied` or `error`) with the grant id and the ticket the call was about. Worker and tester grants are bound to one ticket and may omit `ticket_id`; naming another ticket is a scope denial. Tool list, role matrix and argument tables are in `docs/MCP.md`, generated from the same table the server enforces (`npm run docs:mcp`); a test fails when the file drifts.
 
+## Prompts
+
+1. `startRun(db, repo, {ticketId, template, cli, model, effort, worktree?, base?})` loads `<repo>/.kanban95/templates/<template>.md`. A placeholder outside `VARS` throws here, naming it.
+2. `buildContext` reads the ticket, the brain (FTS5 `OR` of the ticket's title and body words, top 5, 4000-char budget), the failure notes of the last cycle, the retry count, the role's tool list from the MCP table, and for a tester `git diff --no-color --no-ext-diff <base>...HEAD` in the worktree.
+3. The template is filled in a single pass and the result inserted into `runs.prompt_rendered`. Same ticket and same database give byte-identical output: every query has a total order and nothing reads the clock.
+
+The template is read from disk on every render, so operator edits apply without a restart. Template-to-role and template-to-phase mapping is the `TEMPLATES` table in `templates.ts`; agent-facing behaviour is in `docs/AGENTS.md`.
+
 ## Repo map
 
 ```
 package.json      npm workspace root: build / test / dev scripts
-daemon/           src/{server,api,db,grants,mcp,mcp-doc}.ts, migrations/*.sql, test/, tsconfig.json; compiled to dist/ (gitignored)
+daemon/           src/{server,api,db,grants,mcp,mcp-doc,templates,context}.ts, migrations/*.sql, test/, tsconfig.json; compiled to dist/ (gitignored)
 ui/               index.html, app.js, app.css, vendor/98.css + fonts
+templates/        default prompt templates (brainstorm, plan, execute, test, housekeeping), copied into each repo once
 shell/            Cargo.toml, build.rs, tauri.conf.json, src/main.rs, icons/icon.ico
-docs/             this file, DATA.md (schema), SECURITY.md (grants, audit, network), MCP.md (generated tool reference), handoffs/ (ephemeral) and handoffs/log/ (phase log)
-<repo>/.kanban95/ board.db (gitignored), .gitignore; created by the daemon on first start
+docs/             this file, DATA.md (schema), AGENTS.md (what agents receive and how they behave), SECURITY.md (grants, audit, network), MCP.md (generated tool reference), handoffs/ (ephemeral) and handoffs/log/ (phase log)
+<repo>/.kanban95/ board.db (gitignored), .gitignore, templates/*.md (committed, operator-editable); created by the daemon on first start
 ```

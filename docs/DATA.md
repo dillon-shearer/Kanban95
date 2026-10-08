@@ -51,7 +51,7 @@ The REST API presents the two flags as `flags: { needs_human, blocked_on_deps }`
 | body | TEXT | |
 | created_at | TEXT | |
 
-How the kinds are written over MCP: `add_note` takes `plan` `decision` `failure` `summary`; `ask_operator` writes `question` and sets `needs_human`; the operator's answer (phase 5) is `answer`; `report_test` writes `summary` on pass and `failure` on fail, body `PASS|FAIL: <summary>` followed by one `- ` line per evidence item; `report_cleanup` writes `summary` with one `- <action> \`<path>\`: <reason>` line per item. `role` is always the grant's role.
+How the kinds are written over MCP: `add_note` takes `plan` `decision` `failure` `summary`; `ask_operator` writes `question` and sets `needs_human`; the operator's answer (phase 5) is `answer`; `report_test` writes `summary` on pass and `failure` on fail, body `PASS|FAIL: <summary>` followed by one `- ` line per evidence item; `report_cleanup` writes `summary` with one `- <action> \`<path>\`: <reason>` line per item. `role` is always the grant's role. Prompts include only `failure` notes created at or after the `started_at` of the ticket's latest `execute` run (`context.failureNotes`), so each retry sees the failures of the attempt before it and nothing older.
 
 ### brain, brain_fts
 `brain(id, title, body, tags, ticket_id nullable FK set-null, created_at)`. `brain_add` over MCP sets `ticket_id` to the grant's ticket (null for a planner). `brain_fts` is an FTS5 external-content index over `title, body, tags` kept in sync by triggers `brain_ai`, `brain_au`, `brain_ad`. Query it with `brain_fts MATCH ? ORDER BY rank` and join `brain` on `rowid = id`.
@@ -63,7 +63,7 @@ How the kinds are written over MCP: `add_note` takes `plan` `decision` `failure`
 | ticket_id | INTEGER FK | cascade delete |
 | phase | TEXT | `plan` `execute` `test` |
 | cli, model, effort | TEXT | what was actually launched; effort is one of the four values |
-| prompt_rendered | TEXT | the exact prompt injected, for the context viewer |
+| prompt_rendered | TEXT | the exact prompt injected, written by `context.startRun` before the CLI is spawned; for the context viewer |
 | started_at, ended_at | TEXT | `ended_at` null while running |
 | outcome | TEXT | null while running; values are set by the lifecycle (phase 5) |
 

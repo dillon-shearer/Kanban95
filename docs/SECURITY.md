@@ -45,6 +45,16 @@ Every REST mutation and every MCP tool call writes one `audit` row: grant id (nu
 - Brain search quotes every term before handing it to FTS5, so query syntax cannot be injected.
 - Static file serving refuses any path that resolves outside `ui/` and any extension not in the MIME allowlist.
 
+## Prompts
+
+`daemon/src/templates.ts`, `daemon/src/context.ts`; what agents receive is listed in `docs/AGENTS.md`.
+
+- An agent is pushed only its ticket, criteria, up to 5 brain rows (4000 characters at most), the failure notes of the attempt being retried, the retry count, the diff (test only) and its tool list. No transcript, no other ticket, no environment, no file contents.
+- A template may only name the seven known variables. Anything else (for example `{{transcript}}`) is refused when the template is loaded, before any context is built or any run row is written.
+- Values are substituted in one pass, so text an agent wrote into the brain or a note (including `{{...}}`) is inserted literally and cannot pull in another variable.
+- The template name is checked against a fixed set before any path is built, so it cannot read a file outside `.kanban95/templates/`.
+- Brain text and notes are agent-written and end up in later prompts. Treat them as untrusted input to the next agent, the same as any file in the repo.
+
 ## Threats this does not address yet
 
 - A hostile process on the same machine with the same user can read `board.db` and the agent's MCP config. Same-user isolation is out of scope; the worktree is the blast radius for agent actions, not for local malware.

@@ -7,6 +7,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import { handleApi } from './api.js';
 import { openDb } from './db.js';
 import { handleMcp } from './mcp.js';
+import { initTemplates } from './templates.js';
 
 export const UI_DIR = resolve(import.meta.dirname, '../../ui');
 const LOOPBACK = '127.0.0.1';
@@ -82,7 +83,9 @@ async function handle(db: DatabaseSync, self: string, req: IncomingMessage, res:
 
 export function start(config: Config = {}): Promise<{ port: number; db: DatabaseSync; close: () => Promise<void> }> {
   const { host, port } = validateConfig(config);
-  const db = openDb(config.repo ?? process.cwd());
+  const repo = config.repo ?? process.cwd();
+  const db = openDb(repo);
+  initTemplates(repo);
   let self = '';
   const server = createServer((req, res) => {
     handle(db, self, req, res).catch(() => send(res, 500, 'internal error'));
