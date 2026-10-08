@@ -70,8 +70,10 @@ Every `/api/*` request needs the `k95` cookie holding the shell secret, or gets 
 | method | path | notes |
 |---|---|---|
 | GET, POST | `/api/tickets` | list / create. Body fields: `title` (required), `body`, `criteria`, `status`, `cli`, `model`, `effort`, `retry`, `needs_human`, `blocked_on_deps`, `depends_on: number[]` |
-| GET, PATCH, DELETE | `/api/tickets/:id` | same fields on PATCH; `null` clears `cli`/`model`/`effort` |
+| GET, PATCH, DELETE | `/api/tickets/:id` | same fields on PATCH; `null` clears `cli`/`model`/`effort`; DELETE also removes `.kanban95/attachments/<id>/` |
 | GET | `/api/tickets/:id/notes` `/runs` `/audit` | rows for that ticket, oldest first |
+| GET, POST | `/api/tickets/:id/attachments` | list `[{name, path, size}]` (`path` absolute) / upload: the raw file bytes as the body, its name in `?name=`. The name is cleaned to a safe basename (anything outside letters, digits and ` ._()+-` becomes `_`); one with `/`, `\` or `..` is refused `400`, a body over 10 MB `413`. A clash is stored as `<stem>-1<ext>`, never overwritten. `201` with the stored entry |
+| GET, DELETE | `/api/tickets/:id/attachments/:name` | serve / remove one. PNG, JPEG, GIF, WebP and BMP are served inline with their image type; anything else as an `application/octet-stream` download, so an uploaded page never runs on the board's origin |
 | GET | `/api/brain?q=&limit=` | FTS5 ranked search, limit at most 100; no `q` lists newest |
 | GET | `/api/grants` | all grants, never the hash |
 | DELETE | `/api/grants/:id` | revoke and kill the session's pty; 404 if not live |
@@ -111,7 +113,7 @@ ui/               index.html, app.js (data layer and windows), wm.js (window man
 templates/        default prompt templates (brainstorm, plan, execute, test, housekeeping), copied into each repo once
 shell/            Cargo.toml, build.rs, tauri.conf.json, tauri.bundle.json (installer overlay), stage.mjs (stages the installed daemon), src/main.rs, icons/icon.ico
 docs/             this file, LIFECYCLE.md (state machine, merge queue, janitor), CLIS.md (how each CLI is launched), DATA.md (schema), AGENTS.md (what agents receive and how they behave), SECURITY.md (grants, audit, network), MCP.md (generated tool reference), handoffs/ (ephemeral) and handoffs/log/ (phase log)
-<repo>/.kanban95/ board.db (gitignored), .gitignore, sessions/ (gitignored), templates/*.md (committed, operator-editable); created by the daemon on first start. config.json (optional, committed)
+<repo>/.kanban95/ board.db (gitignored), .gitignore, sessions/ (gitignored), attachments/ (gitignored), templates/*.md (committed, operator-editable); created by the daemon on first start. config.json (optional, committed)
 ~/.kanban95/      models.json (model catalog, read at each launch), settings.json (CLI paths, sounds, voice), models/ (the downloaded speech model); written only from Settings or the download dialog
 ```
 

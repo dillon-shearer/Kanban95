@@ -8,7 +8,7 @@ Each session starts from one rendered template. The board pushes only this; ever
 
 | variable | contents |
 |---|---|
-| `{{ticket}}` | `#<id> <title>`, a blank line, the body |
+| `{{ticket}}` | `#<id> <title>`, a blank line, the body; when the ticket has attachments, a blank line and `Attachments (open with your file reader):` with one `- <absolute path>` line each |
 | `{{criteria}}` | the acceptance criteria as written on the ticket |
 | `{{brain}}` | up to 5 brain rows matching any word (3+ letters) of the ticket's title and body, best first, as `- [#id] title: body`; capped at 4000 characters, a cut is marked `[brain truncated; search for more with brain_search]` |
 | `{{notes}}` | `failure` notes written since the latest execute run of this ticket started, i.e. what went wrong in the attempt being retried. Earlier cycles are left out |

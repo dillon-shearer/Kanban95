@@ -1,7 +1,9 @@
 // UI-facing REST under /api. Operator-only (no grant); every mutation writes an audit row.
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync, rmSync } from 'node:fs';
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import { extname, join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
+import { attachmentDir, attachments, MAX_ATTACHMENT, safeName, saveAttachment } from './attachments.js';
 import { isConstraintError } from './db.js';
 import { ticketDiff } from './git.js';
 import { audit, revoke } from './grants.js';
@@ -12,8 +14,8 @@ import { trustStatus, untrustClaude } from './trust.js';
 import { download, status as voiceStatus } from './voice.js';
 
 type Json = Record<string, unknown>;
-type Reply = { status: number; body?: unknown };
-type Ctx = { board: Board; db: DatabaseSync; params: string[]; body: Json; url: URL };
+type Reply = { status: number; body?: unknown; headers?: Record<string, string> };
+type Ctx = { board: Board; db: DatabaseSync; params: string[]; body: Json; url: URL; req: IncomingMessage };
 
 class HttpError extends Error {
   constructor(public status: number, message: string) {
@@ -105,6 +107,9 @@ function ftsQuery(q: string): string {
   return q.split(/\s+/).filter(Boolean).map((t) => `"${t.replaceAll('"', '""')}"`).join(' ');
 }
 
+const UPLOAD = /^\/api\/tickets\/(\d+)\/attachments$/;
+const ATTACHMENT = /^\/api\/tickets\/(\d+)\/attachments\/([^/]+)$/;
+
 const routes: [method: string, path: RegExp, mutation: string | null, handler: (c: Ctx) => Reply | Promise<Reply>][] = [
   ['GET', /^\/api\/tickets$/, null, ({ db }) => ({
     status: 200,
@@ -133,7 +138,7 @@ const routes: [method: string, path: RegExp, mutation: string | null, handler: (
     });
     return { status: 200, body: readTicket(db, id) };
   }],
-  ['DELETE', /^\/api\/tickets\/(\d+)$/, 'tickets.delete', ({ db, params }) => {
+  ['DELETE', /^\/api\/tickets\/(\d+)$/, 'tickets.delete', ({ board, db, params }) => {
     const id = Number(params[0]);
     // Its agents stop with it. The outcome makes their exit expected, so it flags nothing on a ticket that is gone.
     for (const s of sessionsOf(id)) {
@@ -143,11 +148,41 @@ const routes: [method: string, path: RegExp, mutation: string | null, handler: (
     }
     const r = db.prepare('DELETE FROM tickets WHERE id = ?').run(id);
     if (r.changes === 0) throw new HttpError(404, 'no such ticket');
+    rmSync(attachmentDir(board.repo, id), { recursive: true, force: true });
     return { status: 204 };
   }],
   ['GET', /^\/api\/tickets\/(\d+)\/(notes|runs|audit)$/, null, ({ db, params }) => {
     readTicket(db, Number(params[0]));
     return { status: 200, body: db.prepare(`SELECT * FROM ${params[1]} WHERE ticket_id = ? ORDER BY id`).all(Number(params[0])) };
+  }],
+  // Attachments. The upload is the file's raw bytes with its name in `?name=`; the audit row names the file as stored.
+  ['GET', UPLOAD, null, ({ board, params }) => {
+    readTicket(board.db, Number(params[0]));
+    return { status: 200, body: attachments(board.repo, Number(params[0])) };
+  }],
+  ['POST', UPLOAD, 'attachments.add', async ({ board, params, body, req }) => {
+    const id = Number(params[0]);
+    const data = await readRaw(req, MAX_ATTACHMENT, `an attachment may be at most ${MAX_ATTACHMENT >> 20} MB`);
+    readTicket(board.db, id);
+    const name = typeof body.name === 'string' ? safeName(body.name) : null;
+    if (!name) throw new HttpError(400, 'name must be a file name, without a path separator or ..');
+    body.name = saveAttachment(board.repo, id, name, data);
+    return { status: 201, body: attachments(board.repo, id).find((a) => a.name === body.name) };
+  }],
+  ['GET', ATTACHMENT, null, ({ board, params }) => {
+    const { name, file } = attachmentFile(board, params);
+    const type = IMAGE[extname(name).toLowerCase()];
+    // Only images render; anything else downloads, so an uploaded page or script never runs on the board's origin.
+    return { status: 200, body: readFileSync(file), headers: {
+      'Content-Type': type ?? 'application/octet-stream',
+      'Content-Disposition': `${type ? 'inline' : 'attachment'}; filename*=UTF-8''${encodeURIComponent(name)}`,
+    } };
+  }],
+  ['DELETE', ATTACHMENT, 'attachments.remove', ({ board, params, body }) => {
+    const { name, file } = attachmentFile(board, params);
+    rmSync(file);
+    body.name = name;
+    return { status: 204 };
   }],
   ['GET', /^\/api\/brain$/, null, ({ db, url }) => {
     const q = url.searchParams.get('q') ?? '';
@@ -238,6 +273,23 @@ const routes: [method: string, path: RegExp, mutation: string | null, handler: (
   }],
 ];
 
+const IMAGE: Record<string, string> = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp', '.bmp': 'image/bmp' };
+
+function attachmentFile(board: Board, params: string[]): { name: string; file: string } {
+  readTicket(board.db, Number(params[0]));
+  let name: string;
+  try {
+    name = decodeURIComponent(params[1]);
+  } catch {
+    throw new HttpError(400, 'bad attachment name');
+  }
+  const safe = safeName(name);
+  if (!safe) throw new HttpError(400, 'name must be a file name, without a path separator or ..');
+  const file = join(attachmentDir(board.repo, Number(params[0])), name);
+  if (safe !== name || !existsSync(file)) throw new HttpError(404, 'no such attachment'); // a name we would never store
+  return { name, file };
+}
+
 function sessionView(s: Session) {
   return { id: s.key, ticket_id: s.ticketId, run_id: s.runId, grant_id: s.grantId, role: s.role, phase: s.phase, model: s.model };
 }
@@ -247,18 +299,24 @@ function configName(s: string): ConfigName {
   return s as ConfigName;
 }
 
-async function readJson(req: IncomingMessage): Promise<Json> {
+/** The whole body. One over `max` bytes is still read to the end (so the client gets the 413, not a reset), then refused. */
+async function readRaw(req: IncomingMessage, max: number, tooLarge: string): Promise<Buffer> {
   const chunks: Buffer[] = [];
   let size = 0;
   for await (const c of req) {
     size += (c as Buffer).length;
-    if (size > 1 << 20) throw new HttpError(413, 'body too large');
-    chunks.push(c as Buffer);
+    if (size <= max) chunks.push(c as Buffer);
   }
-  if (size === 0) return {};
+  if (size > max) throw new HttpError(413, tooLarge);
+  return Buffer.concat(chunks);
+}
+
+async function readJson(req: IncomingMessage): Promise<Json> {
+  const raw = await readRaw(req, 1 << 20, 'body too large');
+  if (raw.length === 0) return {};
   let parsed: unknown;
   try {
-    parsed = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+    parsed = JSON.parse(raw.toString('utf8'));
   } catch {
     throw new HttpError(400, 'body is not JSON');
   }
@@ -269,6 +327,10 @@ async function readJson(req: IncomingMessage): Promise<Json> {
 function reply(res: ServerResponse, r: Reply) {
   if (r.body === undefined) {
     res.writeHead(r.status).end();
+    return;
+  }
+  if (Buffer.isBuffer(r.body)) {
+    res.writeHead(r.status, { ...r.headers, 'Content-Length': r.body.length }).end(r.body);
     return;
   }
   const text = JSON.stringify(r.body);
@@ -291,8 +353,8 @@ export async function handleApi(board: Board, req: IncomingMessage, res: ServerR
   let body: Json = {};
   let out: Reply;
   try {
-    body = await readJson(req);
-    out = await handler({ board, db, params, body, url });
+    body = path === UPLOAD && req.method === 'POST' ? { name: url.searchParams.get('name') } : await readJson(req);
+    out = await handler({ board, db, params, body, url, req });
   } catch (e) {
     const status = e instanceof HttpError ? e.status : e instanceof Refused ? 409 : isConstraintError(e) || e instanceof BadConfig ? 400 : 500;
     if (mutation) {

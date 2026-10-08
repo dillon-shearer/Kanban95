@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -24,6 +24,16 @@ describe('openDb', () => {
     const ignore = readFileSync(join(repo, '.kanban95', '.gitignore'), 'utf8');
     expect(ignore).toMatch(/^board\.db$/m);
     expect(ignore).toMatch(/^sessions\/$/m);
+    expect(ignore).toMatch(/^attachments\/$/m);
+  });
+
+  it('adds attachments/ to the inner .gitignore of a board made before attachments, once', () => {
+    const repo = tmp();
+    mkdirSync(join(repo, '.kanban95'));
+    writeFileSync(join(repo, '.kanban95', '.gitignore'), 'board.db\nboard.db-*\nsessions/\n');
+    openDb(repo).close();
+    openDb(repo).close();
+    expect(readFileSync(join(repo, '.kanban95', '.gitignore'), 'utf8').match(/^attachments\/$/gm)).toHaveLength(1);
   });
 
   it('applies nothing on a second start', () => {

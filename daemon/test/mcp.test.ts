@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -125,6 +125,14 @@ describe('ticket scope', () => {
     expect((await call(tester3, 'get_ticket', { ticket_id: 2 })).denied).toBe(true);
     expect((await call(tester3, 'list_tickets')).json.map((t: { id: number }) => t.id)).toEqual([3]);
     expect((await call(planner, 'list_tickets')).json.length).toBe(4);
+  });
+
+  it('get_ticket lists the absolute paths of the ticket attachments', async () => {
+    expect((await call(worker3, 'get_ticket')).json.attachments).toEqual([]);
+    const dir = join(repo, '.kanban95', 'attachments', '3');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'shot.png'), 'x');
+    expect((await call(worker3, 'get_ticket')).json.attachments).toEqual([join(dir, 'shot.png')]);
   });
 
   it('a worker may update body and criteria of its ticket but not title or dependencies', async () => {

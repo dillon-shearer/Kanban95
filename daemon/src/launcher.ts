@@ -115,7 +115,7 @@ export function launch(d: Daemon, o: { ticketId: number; template: Exclude<Templ
 
 /** A planner session in the repo root with the brainstorm brief. No ticket, so no worktree and no run row. */
 export function launchBrainstorm(d: Daemon, o: RunSettings): Session {
-  const prompt = render(d.repo, 'brainstorm', buildContext(d.db, null, 'planner'));
+  const prompt = render(d.repo, 'brainstorm', buildContext(d.db, d.repo, null, 'planner'));
   return spawnSession(d, o, { runId: null, ticketId: null, role: 'planner', phase: 'brainstorm', cwd: d.repo, prompt });
 }
 

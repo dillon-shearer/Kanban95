@@ -5,6 +5,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import * as z from 'zod';
 import { brainSearch, readTicket, setDeps, transaction } from './api.js';
+import { attachments } from './attachments.js';
 import { audit, verify, type Grant, type Role } from './grants.js';
 import { apply, changed, Refused, type Board } from './lifecycle.js';
 import { EFFORT } from './settings.js';
@@ -173,7 +174,8 @@ export const TOOLS: Record<string, Tool<z.ZodRawShape>> = {
 
   get_ticket: tool({
     description:
-      'Read one ticket in full: title, body, acceptance criteria, status, flags, dependencies, model settings, and every note on it in order. ' +
+      'Read one ticket in full: title, body, acceptance criteria, status, flags, dependencies, model settings, the absolute paths of files the operator ' +
+      'attached (screenshots and the like: open them with your file reader), and every note on it in order. ' +
       'A worker may also read the tickets its own ticket depends on, to see what they delivered.',
     access: { planner: 'yes', worker: 'own + its deps', tester: 'own' },
     input: { ticket_id: ticketId },
@@ -185,7 +187,7 @@ export const TOOLS: Record<string, Tool<z.ZodRawShape>> = {
       if (!visible) throw new Deny(`this grant is scoped to ticket ${grant.ticket_id}${grant.role === 'worker' ? ' and its dependencies' : ''}`);
       const ticket = readTicket(c.db, id);
       const notes = c.db.prepare('SELECT id, role, kind, body, created_at FROM notes WHERE ticket_id = ? ORDER BY id').all(id);
-      return { ...ticket, notes };
+      return { ...ticket, attachments: attachments(c.board.repo, id).map((f) => f.path), notes };
     },
   }),
 
