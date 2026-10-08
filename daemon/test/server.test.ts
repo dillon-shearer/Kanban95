@@ -36,7 +36,9 @@ describe('daemon process', () => {
     expect(port).toBeGreaterThan(0);
 
     const res = await fetch(`http://127.0.0.1:${port}/health`);
-    expect(res.headers.get('content-security-policy')).toBe("default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data:");
+    expect(res.headers.get('content-security-policy')).toBe(
+      `default-src 'self' http://127.0.0.1:${port} ws://127.0.0.1:${port}; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; frame-ancestors 'none'`,
+    );
     expect(await res.json()).toEqual({ ok: true });
     // The secret came in through the environment: /api takes it, and refuses a request without it.
     expect((await fetch(`http://127.0.0.1:${port}/api/tickets`, { headers: { cookie: `k95=${secret}` } })).status).toBe(200);

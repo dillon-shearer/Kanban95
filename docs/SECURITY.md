@@ -26,8 +26,9 @@ Every REST mutation and every MCP tool call writes one `audit` row: grant id (nu
 
 - The daemon binds `127.0.0.1` on a kernel-chosen port. `validateConfig` throws on any other host; there is no flag to widen it.
 - Every request must carry `Host: 127.0.0.1:<port>`; a request with an `Origin` header must carry `Origin: http://127.0.0.1:<port>`. Anything else is `403` before routing. This blocks DNS-rebinding and cross-site requests from other pages running on the machine, including other localhost apps. The shell's webview is loaded from that exact origin, so it always passes.
-- Responses carry `Content-Security-Policy: default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data:` and `X-Content-Type-Options: nosniff`. Scripts only from the daemon (no inline, no `blob:`, no eval; `'wasm-unsafe-eval'` permits compiling the speech model's WebAssembly and nothing else); `connect-src` falls back to `'self'`, so the UI cannot reach another host even by mistake. Inline styles are allowed for xterm.js's theme `<style>`; a style cannot run code.
+- Responses carry `Content-Security-Policy: default-src 'self' http://127.0.0.1:<port> ws://127.0.0.1:<port>; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; frame-ancestors 'none'` and `X-Content-Type-Options: nosniff`. Scripts only from the daemon (no inline, no `blob:`, no eval; `'wasm-unsafe-eval'` permits compiling the speech model's WebAssembly and nothing else); `connect-src` and `frame-src` fall back to the daemon's own origin (HTTP and websocket), so the UI cannot reach or frame another host even by mistake. Inline styles are allowed for xterm.js's theme `<style>`; a style cannot run code. `frame-ancestors 'none'` stops another local page from framing the board: a frame's GET carries no `Origin`, so the origin check alone would let it through.
 - REST (`/api/*`) and the `/events` and `/pty/<key>` websockets need the shell secret (below). MCP (`/mcp`) requires a bearer grant: see MCP. Static UI files and `/health` are open: they are public code and say nothing about the board.
+- Request bodies over 1 MiB are refused.
 
 ### Shell secret
 
@@ -40,7 +41,15 @@ Without it any local process (a script in another terminal, an agent in a worktr
 - **A secret dies with its daemon.** The next start mints a new one, so a cookie or value from an earlier run gets `401` (tested). The session cookie is overwritten by the next start's swap.
 - **Never written down**: not on a command line, not in a log line (the daemon prints only its port; the shell forwards daemon stdout), not in an audit row (audit summarises request bodies, never headers; tested).
 - **Ceiling.** A process running as the same Windows user can still read the daemon's environment block or the WebView2 profile's cookie store with debugger-level access. The secret stops scripts and agents that can only open a socket; it is not a boundary against same-user code that reads other processes' memory. Running agents as another account is the upgrade path.
-- Request bodies over 1 MiB are refused.
+
+## Webview
+
+The shell (`shell/src/main.rs`) opens one window on the daemon's origin and locks it there.
+
+- **No Tauri command is reachable.** The UI never calls Tauri, so the shell has no `capabilities/` dir and grants nothing; to Tauri the window is a remote URL, and a remote URL may only call what a capability lists for it. `cargo test` in `shell/` builds the real window on the mock runtime and checks that core commands (`app`, `window`, `webview`, `event`, `path`) and an unknown one are each refused with Tauri's ACL error. Adding a capability that grants the daemon origin anything fails it.
+- **No navigation off the origin.** Any top-level navigation whose origin is not `http://127.0.0.1:<port>` is cancelled (`on_navigation`), including another port on loopback. `window.open` is refused (wry denies new windows when the app sets no handler). Frames are held to the origin by the CSP.
+- **Microphone only.** The shell answers WebView2's permission requests itself: microphone allowed, every other kind (camera, location, notifications, clipboard read, …) denied, so nothing prompts. Navigation is pinned to the daemon's origin, so the allowed request can only come from it; answering in code also means no prompt when the random port gives a new origin each start.
+- Checked in the real shell (WebView2 154, a fresh profile, remote debugging): `__TAURI_INTERNALS__.invoke('plugin:app|version')` and friends rejected with "not allowed"; `getUserMedia({audio})` granted with no prompt; `{video}` `NotAllowedError`; geolocation denied; `window.open('https://example.com/')` returned `null`; `location.href = 'https://example.com/'`, `http://127.0.0.1:1/` and a DevTools `Page.navigate` all left the page on the daemon origin.
 
 ## MCP
 
@@ -111,6 +120,6 @@ The mic button's speech model is the only thing the board ever downloads, and th
 - No MCP tool touches the filesystem yet (`report_cleanup` records paths, it does not delete them).
 - Permissions are off inside the worker and tester CLIs. Such an agent can read and write anything the operator's user can, including its own session dir; the worktree bounds where it is told to work, not what it can reach. Only the planner is confined (no file writes).
 - If the daemon itself dies, its ptys die with it; their session dirs (which hold a bearer for Claude Code) and grants stay until the next daemon start, when the janitor removes and revokes them. Grants still expire on their TTL (24 h) if the daemon never starts again.
-- The webview asks for microphone permission per origin, and the daemon's origin changes with its random port, so the operator may be asked once per start. Answering that request in the shell (WebView2 `PermissionRequested`, microphone only, own origin only) is left for the shell hardening phase.
+- Each start's microphone grant is saved in the WebView2 profile under that start's origin (WebView2's default), so old `127.0.0.1:<port>` entries pile up there. Harmless, since no other page can load in the window.
 - An answer the operator types is written into the agent's terminal as keystrokes. It is the operator's own input to their own agent; the board only flattens it to one line.
 - A tool call whose arguments fail schema validation is answered by the MCP SDK before the tool wrapper runs, so it leaves no audit row. Only calls that reach a tool are audited.

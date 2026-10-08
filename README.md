@@ -23,6 +23,7 @@ By hand (Node 24 must be the `node` on PATH, because the shell starts the daemon
 npm install
 npm run build     # compiles daemon/ to daemon/dist
 npm test          # daemon and UI tests (builds first; the UI tests drive headless Edge or Chrome, or KANBAN95_BROWSER, and download the 80 MB speech model once into daemon/test/.cache/)
+npm run test:shell # the Tauri shell's tests (cargo test: no Tauri command reachable from the webview)
 npm run docs:mcp  # regenerate docs/MCP.md from the MCP tool table (a test fails if it drifts)
 npm run dev       # builds, then cargo-runs the Tauri shell, which spawns the daemon and opens the window on the cwd
 npm run dev -- C:\path\to\project   # the same, on another repo

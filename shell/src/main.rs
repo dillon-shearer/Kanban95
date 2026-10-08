@@ -4,7 +4,8 @@
 use std::io::{BufRead, BufReader};
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
-use tauri::{Manager, RunEvent, WebviewUrl, WebviewWindowBuilder};
+use tauri::webview::{PermissionKind, PermissionResponse};
+use tauri::{Manager, RunEvent, Runtime, Url, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 
 struct Daemon(Mutex<Child>);
 
@@ -50,6 +51,25 @@ fn spawn_daemon(secret: &str) -> (Child, u16) {
     (child, port)
 }
 
+/// The board's only window, locked to the daemon's origin. It holds no Tauri capability (there is no `capabilities/`
+/// dir), so every IPC command is refused for it: the UI talks to the daemon over HTTP and never calls Tauri.
+fn window<R: Runtime, M: Manager<R>>(app: &M, url: Url) -> tauri::Result<WebviewWindow<R>> {
+    let own = url.origin();
+    WebviewWindowBuilder::new(app, "main", WebviewUrl::External(url))
+        .title("Kanban95")
+        .inner_size(1280.0, 720.0)
+        // Any top-level navigation off the daemon's origin is cancelled. New windows are already refused by wry
+        // when no handler is set, and the CSP keeps frames and fetches on the origin.
+        .on_navigation(move |to| to.origin() == own)
+        // Navigation is pinned to the daemon's origin, so every request here comes from it. Answering in code
+        // means no prompt, though the random port gives a new origin each start. Everything but the mic is denied.
+        .on_permission_request(|_, kind| match kind {
+            PermissionKind::Microphone => PermissionResponse::Allow,
+            _ => PermissionResponse::Deny,
+        })
+        .build()
+}
+
 fn main() {
     let secret = mint_secret();
     let (child, port) = spawn_daemon(&secret);
@@ -59,10 +79,7 @@ fn main() {
     tauri::Builder::default()
         .manage(Daemon(Mutex::new(child)))
         .setup(move |app| {
-            WebviewWindowBuilder::new(app, "main", WebviewUrl::External(url))
-                .title("Kanban95")
-                .inner_size(1280.0, 720.0)
-                .build()?;
+            window(app, url)?;
             Ok(())
         })
         .build(tauri::generate_context!())
@@ -75,4 +92,41 @@ fn main() {
                 }
             }
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use tauri::test::{get_ipc_response, mock_builder, INVOKE_KEY};
+    use tauri::webview::InvokeRequest;
+
+    /// The UI calls no Tauri command, so none may answer it: core plugin commands and unknown names alike.
+    #[test]
+    fn webview_cannot_call_any_tauri_command() {
+        let app = mock_builder().build(tauri::generate_context!()).unwrap();
+        let origin: tauri::Url = "http://127.0.0.1:41234/".parse().unwrap();
+        let w = super::window(&app, origin.clone()).unwrap();
+        for cmd in [
+            "plugin:app|version",
+            "plugin:window|close",
+            "plugin:webview|create_webview_window",
+            "plugin:event|emit",
+            "plugin:path|resolve_directory",
+            "spawn_daemon",
+        ] {
+            let err = get_ipc_response(
+                &w,
+                InvokeRequest {
+                    cmd: cmd.into(),
+                    callback: tauri::ipc::CallbackFn(0),
+                    error: tauri::ipc::CallbackFn(1),
+                    url: origin.clone(),
+                    body: Default::default(),
+                    headers: Default::default(),
+                    invoke_key: INVOKE_KEY.into(),
+                },
+            )
+            .expect_err(cmd);
+            assert!(err.to_string().contains("not allowed"), "{cmd}: {err}");
+        }
+    }
 }

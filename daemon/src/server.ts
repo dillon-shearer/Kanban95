@@ -18,7 +18,9 @@ import { voiceFile } from './voice.js';
 
 export const UI_DIR = resolve(import.meta.dirname, '../../ui');
 const LOOPBACK = '127.0.0.1';
-export const CSP = "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data:";
+/** `self` is `127.0.0.1:<port>`. frame-ancestors stops another local page from framing the board (its GET carries no Origin). */
+export const csp = (self: string) =>
+  `default-src 'self' http://${self} ws://${self}; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; frame-ancestors 'none'`;
 
 const MIME: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -74,7 +76,7 @@ async function handle(board: Board, self: string, secret: string, req: IncomingM
   // Tauri only injects its configured CSP into pages it serves itself.
   // 'wasm-unsafe-eval' lets the local speech model's WebAssembly compile (no JS eval). Inline styles are for xterm.js, which
   // writes its theme into a <style> element; inline scripts stay blocked.
-  res.setHeader('Content-Security-Policy', CSP);
+  res.setHeader('Content-Security-Policy', csp(self));
   res.setHeader('X-Content-Type-Options', 'nosniff');
   if (!sameOrigin(req, self)) return send(res, 403, 'forbidden origin');
 
