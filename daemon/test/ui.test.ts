@@ -169,6 +169,24 @@ describe('ui', { timeout: 60_000 }, () => {
     expect(git('show', 'HEAD:answer.txt')).toBe('Navy blue');
   });
 
+  it('pins a compact tray right after Start on one taskbar row', async () => {
+    await page.goto(base);
+    await until(() => page.evaluate(`!!document.querySelector('#clock').textContent`), 'the clock');
+    const m = await page.evaluate<Record<string, number>>(`(() => {
+      const r = (s) => document.querySelector(s).getBoundingClientRect(), bar = document.getElementById('taskbar');
+      const start = r('#start'), tray = r('#tray'), tasks = r('#tasks');
+      return { gap: tray.left - start.right, trayH: tray.height, startH: start.height,
+        trayW: tray.width, tasksAfter: tasks.left - tray.right, overflow: bar.scrollWidth - bar.clientWidth,
+        font: parseFloat(getComputedStyle(document.getElementById('agents')).fontSize) };
+    })()`);
+    expect(m.gap).toBeLessThanOrEqual(4);
+    expect(m.tasksAfter).toBeGreaterThanOrEqual(0);
+    expect(m.trayH).toBeLessThanOrEqual(m.startH);
+    expect(m.trayW).toBeLessThan(300); // 98.css's .status-bar-field flex-grow stretched it across the bar
+    expect(m.font).toBe(11);
+    expect(m.overflow).toBe(0);
+  });
+
   it('keeps window positions across a reload', async () => {
     await page.goto(base);
     await until(() => page.evaluate(`!!document.querySelector('[data-win="board"]')`), 'the board');
