@@ -1,6 +1,6 @@
 # Kanban95 — agent conventions
 
-Read `PLAN.md` first. It is the spec. Then read every file in `docs/handoffs/log/` to learn what previous phases built and where they deviated.
+Read `README.md` and `docs/ARCHITECTURE.md` first, including its Working on the board section, then the living doc for each part you touch. Search the board's brain (`brain_search`) for gotchas.
 
 ## Principles, in priority order
 1. Security and the operator's keys/data above every feature. The board never holds provider API keys. Never read a `.env` implicitly. Never log a token in the clear.
@@ -18,14 +18,13 @@ Read `PLAN.md` first. It is the spec. Then read every file in `docs/handoffs/log
 
 ## Document lifecycle
 - Living (keep current, never delete): `README.md`, `docs/ARCHITECTURE.md`, `SECURITY.md`, `DATA.md`, `MCP.md`, `CLIS.md`, `LIFECYCLE.md`, `AGENTS.md`, `OPERATOR.md`, `LEARNING.md`.
-- Ephemeral (delete when superseded): everything in `docs/handoffs/` except `log/`, `PLAN.md`, any proposal or plan.
-- A handoff file is deleted in the same commit that adds its log entry. `PLAN.md` is retired in phase 8.
+- Ephemeral (delete when superseded): any plan, proposal or handoff. Move what is still true into a living doc first.
 
 ## Stack
 Node 24+, TypeScript, vitest. `node:sqlite`. Vanilla UI + 98.css + xterm.js. Tauri 2 shell with the daemon as sidecar. Windows is the primary platform.
 
 ## Layout
-`daemon/` `ui/` `shell/` `templates/` `skills/` `docs/`. See `PLAN.md` → Repo layout.
+`daemon/` `ui/` `shell/` `templates/` `skills/` `docs/`. See `docs/ARCHITECTURE.md` → Repo map.
 
 ## Working rules
 - Verify CLI flags against the installed tool (`claude --help`, `codex --help`) before writing an argv builder. Do not guess flags.
@@ -35,4 +34,4 @@ Node 24+, TypeScript, vitest. `node:sqlite`. Vanilla UI + 98.css + xterm.js. Tau
 - Commits, by hand or by the board, are authored as the operator (their `git config user.name`/`user.email`), with no `Co-Authored-By` or other trailer. Subject: a plain imperative sentence saying what changed, no ticket or phase ids. Body only when the why is not obvious from the subject.
 - Never leave uncommitted changes in the main checkout while the board runs; the merge queue merges there. Work in a worktree.
 - Mark deliberate shortcuts with a `// ponytail:` comment naming the ceiling and the upgrade path.
-- When a phase is done, write `docs/handoffs/log/<NN>-<name>.md`: what was built, what deviated from the handoff and why, gotchas for the next phase, how to run and test it. Then delete the handoff file you executed.
+- Record a gotcha a future ticket would trip on with `brain_add`; when it is about working on the code, also add it to `docs/ARCHITECTURE.md` → Working on the board.

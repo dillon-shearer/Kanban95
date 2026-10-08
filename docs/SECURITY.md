@@ -90,7 +90,7 @@ An agent the operator starts with a typed mission, for board work outside the ti
 
 In `~/.kanban95/` (or `$KANBAN95_HOME` when set; the board writes operator config nowhere else), only on an explicit operator action: `models.json`, `settings.json` and `preferences.md` when **Save** is pressed in Settings (the whole file is checked against its schema first and written through a temp file; a bad value is refused with the field named and the file is not touched), and `models/` when the speech model download is OK'd (see Voice model). No secrets go in `models.json` or `settings.json`; there is no field for one. `preferences.md` is free text copied into every prompt, so the operator is told not to put one there (`docs/DATA.md`).
 
-In an agent CLI's config, one file, only for Claude Code launches: `~/.claude.json` (or `$CLAUDE_CONFIG_DIR/.claude.json`), key `projects["<repo root>"].hasTrustDialogAccepted = true`, so Claude Code does not stop at its workspace-trust prompt in the board's worktrees (operator decision, `PLAN.md` → Agents). `daemon/src/trust.ts`:
+In an agent CLI's config, one file, only for Claude Code launches: `~/.claude.json` (or `$CLAUDE_CONFIG_DIR/.claude.json`), key `projects["<repo root>"].hasTrustDialogAccepted = true`, so Claude Code does not stop at its workspace-trust prompt in the board's worktrees (operator decision, 2026-10-07). `daemon/src/trust.ts`:
 
 - written only when neither the repo root nor an ancestor is already trusted; one entry per repo, never per worktree (`docs/CLIS.md` → First-run prompts);
 - merged: every other key in the file is preserved; the first write copies the original to `~/.claude.json.kanban95.bak` (same mode); the new content is written to an owner-only (0600) temp file and renamed over the original;
@@ -168,5 +168,6 @@ Ceiling and upgrade path: run worker and tester CLIs as a separate low-privilege
 - No MCP tool touches the filesystem yet (`report_cleanup` records paths, it does not delete them).
 - If the daemon itself dies, its ptys die with it; their session dirs (which hold a bearer for Claude Code) and grants stay until the next daemon start, when the janitor removes and revokes them. Grants still expire on their TTL (24 h) if the daemon never starts again.
 - Each start's microphone grant is saved in the WebView2 profile under that start's origin (WebView2's default), so old `127.0.0.1:<port>` entries pile up there. Harmless, since no other page can load in the window.
+- `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=<n>` opens the board's webview to DevTools, release builds included. Only a process that can set the shell's environment can do it, which is the same-user ceiling above, not a new hole.
 - An answer the operator types is written into the agent's terminal as keystrokes. It is the operator's own input to their own agent; the board only flattens it to one line.
 - A tool call whose arguments fail schema validation is answered by the MCP SDK before the tool wrapper runs, so it leaves no audit row. Only calls that reach a tool are audited.
