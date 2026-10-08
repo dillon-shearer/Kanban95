@@ -585,10 +585,12 @@ function openTerminal(s, auto = false) {
     w.title(`${title} (ended)`);
     w.el.classList.add('ended');
     if (!auto || s.run_id === null) return;
-    // The run's outcome is written as its terminal closes; its output stays in Ticket → Runs.
+    // The run's outcome is written as its terminal closes; its output stays in Ticket → Runs. Every outcome the board itself
+    // ends a run with closes it: after conflict and restart a new run is already open, and a stale "ended" window in front of
+    // it reads as a stuck ticket.
     setTimeout(async () => {
       const run = (await api('GET', `/tickets/${s.ticket_id}/runs`).catch(() => [])).find((r) => r.id === s.run_id);
-      if (['submit', 'pass', 'fail'].includes(run?.outcome)) setTimeout(w.close, 1500);
+      if (['submit', 'pass', 'fail', 'conflict', 'restart'].includes(run?.outcome)) setTimeout(w.close, 1500);
     }, 500);
   };
   term.onData((d) => send({ data: d }));
