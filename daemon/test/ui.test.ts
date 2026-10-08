@@ -57,10 +57,11 @@ const ticket = (title: string, cols: Record<string, unknown> = {}) => {
 const statusOf = (id: number) => (db.prepare('SELECT status FROM tickets WHERE id = ?').get(id) as { status: string }).status;
 const column = (id: number) => page.evaluate<string | null>(`document.querySelector('.card[data-id="${id}"]')?.closest('[data-status]')?.dataset.status ?? null`);
 const statusBar = () => page.evaluate<string>(`document.querySelector('.k95-board .status-bar-field').textContent`);
-const click = async (selector: string) => {
+/** A real click; `modifiers` is CDP's bit field (2 Ctrl, 8 Shift). */
+const click = async (selector: string, modifiers = 0) => {
   const { x, y } = await page.center(selector);
-  await page.send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', buttons: 1, clickCount: 1 });
-  await page.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', buttons: 0, clickCount: 1 });
+  await page.send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, modifiers, button: 'left', buttons: 1, clickCount: 1 });
+  await page.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, modifiers, button: 'left', buttons: 0, clickCount: 1 });
 };
 
 beforeAll(async () => {
@@ -127,6 +128,53 @@ describe('ui', { timeout: 60_000 }, () => {
       await until(() => page.evaluate<boolean>(`document.querySelector('.card[data-id="${ids[0]}"]').textContent.includes('Renamed')`), 'the redraw');
       expect(await page.evaluate<number>(`document.querySelector('[data-status="backlog"] .cards').scrollTop`)).toBe(top);
       expect(await page.evaluate<string>(`document.activeElement.dataset.id`)).toBe(String(last));
+    } finally {
+      for (const id of ids) db.prepare("UPDATE tickets SET status = 'done', merged_at = 'x' WHERE id = ?").run(id);
+    }
+  });
+
+  it('selects cards with Ctrl, Shift and Ctrl+A, and sets effort on the whole selection, naming a refusal', async () => {
+    const ids = ['One', 'Two', 'Three'].map((title) => ticket(title));
+    const [a, b, c] = ids;
+    const chosen = () => page.evaluate<number[]>(`[...document.querySelectorAll('.card.selected')].map((el) => Number(el.dataset.id))`);
+    const effort = (id: number) => (db.prepare('SELECT effort FROM tickets WHERE id = ?').get(id) as { effort: string | null }).effort;
+    try {
+      await page.goto(base);
+      await until(() => column(c), 'the cards');
+      await click(`.card[data-id="${a}"]`);
+      await click(`.card[data-id="${c}"]`, 2);
+      expect(await chosen()).toEqual([a, c]);
+      await click(`.card[data-id="${c}"]`, 2);
+      expect(await chosen()).toEqual([a]);
+      await click(`.card[data-id="${a}"]`);
+      await click(`.card[data-id="${c}"]`, 8);
+      expect(await chosen()).toEqual([a, b, c]);
+
+      await page.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65, modifiers: 2 });
+      expect((await chosen()).length).toBe(await page.evaluate<number>(`document.querySelectorAll('.card').length`));
+      await click(`[data-status="backlog"] .cards`);
+      expect(await chosen()).toEqual([]);
+
+      await click(`.card[data-id="${a}"]`);
+      await click(`.card[data-id="${b}"]`, 2);
+      await click(`.card[data-id="${c}"]`, 2);
+      // The daemon refuses #c once; the others still change and the status bar names it.
+      await page.evaluate(`(() => { const f = window.fetch; window.fetch = (u, o) => {
+        if (!(u.endsWith('/tickets/${c}') && o?.method === 'PATCH')) return f(u, o);
+        window.fetch = f;
+        return Promise.resolve(new Response(JSON.stringify({ error: 'nope' }), { status: 409 }));
+      }; })()`);
+      const high = async () => {
+        await page.evaluate(`document.querySelector('.card[data-id="${b}"]').dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 50, clientY: 50 }))`);
+        await page.evaluate(`[...document.querySelectorAll('.k95-menu li')].find((li) => li.firstChild?.textContent === 'Effort').querySelector('li:nth-child(4)').click()`);
+      };
+      await high();
+      await until(async () => (await statusBar()).startsWith('Effort'), 'the outcome');
+      expect(await statusBar()).toBe(`Effort set to high on 2 tickets. #${c} refused: nope`);
+      expect(ids.map(effort)).toEqual(['high', 'high', null]);
+      await high();
+      await until(async () => (await statusBar()) === 'Effort set to high on 3 tickets.', 'the second outcome');
+      expect(ids.map(effort)).toEqual(['high', 'high', 'high']);
     } finally {
       for (const id of ids) db.prepare("UPDATE tickets SET status = 'done', merged_at = 'x' WHERE id = ?").run(id);
     }

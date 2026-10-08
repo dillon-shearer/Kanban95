@@ -18,7 +18,7 @@ Living document. How a person drives Kanban95, from an idea to merged work. Upda
 
 ### 2. Launch all
 
-**Launch all** (or Ctrl+L) starts every Backlog ticket whose dependencies have merged; the rest wait with a yellow "waits on #n" badge and start by themselves when their dependency lands. To start one ticket, select it and press **Launch**.
+**Launch all** (or Ctrl+L) starts every Backlog ticket whose dependencies have merged; the rest wait with a yellow "waits on #n" badge and start by themselves when their dependency lands. To start some tickets, select them and press **Launch**.
 
 ![The board](img/board.png)
 
@@ -65,6 +65,8 @@ Windows can be dragged by the title bar, resized from the corner, minimized to t
 
 ## Cards
 
+Click a card to select it, Ctrl+click to add or remove one, Shift+click to select the run of cards in the same column from the last one you clicked, Ctrl+A to select every card; click empty column space to clear the selection. Right-click a selected card and its menu acts on the whole selection: one confirmation for Reset to Backlog or Delete naming the count, Launch starts only the Backlog cards and says how many it skipped, Open opens at most 8 Ticket windows, and the status bar reports the outcome once ("Effort set to high on 4 tickets."), naming any ticket the daemon refused while the rest go ahead.
+
 Right-click a card for its menu: Open, Launch, Resume (a red running card whose agent is gone), **Model**, **Effort** and **CLI** (set or clear this ticket's override without opening it), Retry merge (after you fixed a conflict or cleaned the main checkout), Reset to Backlog (also on a card waiting on a dependency: it cancels the wait, so it will not launch by itself), Delete.
 
 ![Card menu](img/card-menu.png)
@@ -82,6 +84,7 @@ Any other drop snaps back, and the status bar names where that card may go.
 |---|---|
 | Esc | closes the focused window (or an open menu) |
 | Ctrl+L | Launch all |
+| Ctrl+A | select every card (on the Board, outside a text field) |
 | Ctrl+N | New brainstorm |
 
 Inside a terminal every key goes to the agent instead: Esc interrupts Claude Code, Ctrl+L clears its screen.

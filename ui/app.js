@@ -43,6 +43,7 @@ async function refreshTicket(id) {
   } catch (e) {
     if (e.status !== 404) throw e;
     tickets.delete(id); // deleted: it leaves the board, and its windows close (its agents were stopped by the delete)
+    selection.delete(id);
     close(`ticket-${id}`);
     for (const [wid, ticket] of terms) if (ticket === id) close(wid);
   }
@@ -72,7 +73,25 @@ function listen() {
 
 // ---- board ----
 
-let selected = null;
+// The Board's selection. Every card action takes the selected tickets, so a new bulk action is one more menu item.
+const selection = new Set();
+let anchor = null; // the last clicked card, where a Shift+click range starts
+const picked = () => [...selection].map((id) => tickets.get(id)).filter(Boolean);
+
+function pick(t, e) {
+  if (e.shiftKey && tickets.get(anchor)?.status === t.status) {
+    const ids = [...tickets.values()].filter((x) => x.status === t.status).map((x) => x.id); // the column, in board order
+    const [a, b] = [ids.indexOf(anchor), ids.indexOf(t.id)].sort((x, y) => x - y);
+    selection.clear();
+    for (const id of ids.slice(a, b + 1)) selection.add(id);
+  } else {
+    if (!e.ctrlKey) selection.clear();
+    if (e.ctrlKey && selection.has(t.id)) selection.delete(t.id);
+    else selection.add(t.id);
+    anchor = t.id;
+  }
+  drawBoard();
+}
 let say = (msg) => console.log(msg); // the Board's status bar while it is open
 
 const defaults = (t) => models?.[t.cli ?? models.cli]?.execute ?? {};
@@ -82,10 +101,14 @@ const live = (ticketId) => sessions.filter((s) => s.ticket_id === ticketId);
 function card(t) {
   const d = defaults(t);
   const el = h('div', {
-    class: `card${t.id === selected ? ' selected' : ''}${t.flags.needs_human ? ' alert' : ''}`, 'data-id': t.id, tabindex: 0,
-    onclick: () => { selected = t.id; drawBoard(); },
+    class: `card${selection.has(t.id) ? ' selected' : ''}${t.flags.needs_human ? ' alert' : ''}`, 'data-id': t.id, tabindex: 0,
+    onclick: (e) => pick(t, e),
     ondblclick: () => openTicket(t.id),
-    oncontextmenu: (e) => { e.preventDefault(); cardMenu(t, e.clientX, e.clientY); },
+    oncontextmenu: (e) => {
+      e.preventDefault();
+      if (!selection.has(t.id)) pick(t, {});
+      cardMenu(picked(), e.clientX, e.clientY);
+    },
   },
   h('div', { class: 'card-title' }, h('b', {}, `#${t.id}`), ' ', t.title),
   h('div', { class: 'badges' },
@@ -138,18 +161,38 @@ async function drop(t, to) {
   if (!allowed.includes(to)) {
     return say(`#${t.id} cannot be dragged from ${LABEL[t.status]} to ${LABEL[to]}. Allowed: ${allowed.map((s) => LABEL[s]).join(', ')}.`);
   }
-  if (to === 'backlog') return reset(t);
+  if (to === 'backlog') return reset([t]);
   await act(() => api('PATCH', `/tickets/${t.id}`, { status: to }), `#${t.id} moved to ${LABEL[to]} by hand; no agent was started.`);
 }
 
 /** Back to Backlog, flags and retries cleared. A running agent is stopped after the move, so its exit flags nothing. */
-async function reset(t) {
-  const running = live(t.id);
-  if (running.length && (await dialog('Reset ticket', `#${t.id} has a running agent. Stop it and move the ticket to Backlog?`, ['Reset', 'Cancel'])) !== 'Reset') return;
-  await act(async () => {
+async function reset(ts) {
+  const running = ts.filter((t) => live(t.id).length);
+  const ask = ts.length > 1
+    ? `Reset ${count(ts)} to Backlog?${running.length ? ` ${count(running)} with a running agent will be stopped.` : ''}`
+    : running.length && `#${ts[0].id} has a running agent. Stop it and move the ticket to Backlog?`;
+  if (ask && (await dialog('Reset to Backlog', ask, ['Reset', 'Cancel'])) !== 'Reset') return;
+  await each(ts, async (t) => {
+    const stop = live(t.id);
     await api('PATCH', `/tickets/${t.id}`, { status: 'backlog', needs_human: false, blocked_on_deps: false, retry: 0 });
-    for (const s of running) await api('DELETE', `/grants/${s.grant_id}`).catch(() => {});
-  }, `#${t.id} reset to Backlog.`);
+    for (const s of stop) await api('DELETE', `/grants/${s.grant_id}`).catch(() => {});
+  }, (n) => `${n} reset to Backlog.`);
+}
+
+const count = (ts) => (ts.length === 1 ? `#${ts[0].id}` : `${ts.length} tickets`);
+/** Runs fn on each ticket in turn; one that refuses is named and the rest still go. Says the outcome once. */
+async function each(ts, fn, ok) {
+  const done = [];
+  const refused = [];
+  for (const t of ts) {
+    try {
+      await fn(t);
+      done.push(t);
+    } catch (e) {
+      refused.push(`#${t.id} refused: ${e.message}`);
+    }
+  }
+  say([done.length && ok(count(done)), ...refused].filter(Boolean).join(' '));
 }
 
 async function act(fn, ok) {
@@ -167,22 +210,25 @@ async function flagReason(id) {
   return `#${id} needs you: ${n ? n.body.replace(/\s+/g, ' ') : 'open the ticket for details'}`;
 }
 // A launch can be refused at once (no models, dirty base); the refusal then wins over "launched".
-async function sayLaunched(ids) {
+async function sayLaunched(ids, more = []) {
   for (const id of ids) await refreshTicket(id);
   const flagged = ids.find((id) => tickets.get(id)?.flags.needs_human);
-  if (flagged != null) return say(await flagReason(flagged));
-  say(ids.length ? `Launched ${ids.map((id) => `#${id}`).join(', ')}.` : 'Nothing in Backlog.');
+  const head = flagged != null ? await flagReason(flagged) : ids.length ? `Launched ${ids.map((id) => `#${id}`).join(', ')}.` : more.length ? '' : 'Nothing in Backlog.';
+  say([head, ...more].filter(Boolean).join(' '));
 }
-const launch = (id) => act(async () => {
-  await api('POST', `/tickets/${id}/launch`);
-  await sayLaunched([id]);
-});
-// A running ticket whose agent is gone: the agent for its phase starts again in the same worktree.
+// A running ticket whose agent is gone: the agent for its phase starts again in the same worktree (Launch does the same).
 const resumable = (t) => (t.status === 'in_progress' || t.status === 'testing') && t.flags.needs_human && !live(t.id).length;
-const resume = (id) => act(async () => {
-  await api('POST', `/tickets/${id}/resume`);
-  await sayLaunched([id]);
-});
+const launchable = (t) => t.status === 'backlog' || resumable(t);
+/** Launches (or resumes) each ticket that can start; the rest are skipped and counted, and a refusal is named. */
+async function launch(ts, verb = 'launch') {
+  const go = ts.filter(verb === 'launch' ? launchable : resumable);
+  if (!go.length) return say(verb === 'launch' ? 'Select a Backlog ticket first.' : 'Nothing to resume.');
+  const ok = [];
+  const more = [];
+  for (const t of go) await api('POST', `/tickets/${t.id}/${verb}`).then(() => ok.push(t.id), (e) => more.push(`#${t.id} refused: ${e.message}`));
+  if (go.length < ts.length) more.push(`Skipped ${ts.length - go.length} ${verb === 'launch' ? 'not in Backlog' : 'with nothing to resume'}.`);
+  await act(() => sayLaunched(ok, more));
+}
 const launchAll = () => act(async () => sayLaunched((await api('POST', '/tickets/launch-all')).map((t) => t.id)));
 const newBrainstorm = () => act(async () => openTerminal(await api('POST', '/brainstorm')), 'Brainstorm started.');
 const housekeeping = () => act(async () => {
@@ -190,39 +236,50 @@ const housekeeping = () => act(async () => {
   say(`Housekeeping ticket #${t.id} created and launched.`);
 });
 
-function cardMenu(t, x, y) {
-  const set = (body) => act(() => api('PATCH', `/tickets/${t.id}`, body));
-  const cli = t.cli ?? models?.cli;
-  const known = [...new Set(PHASES.map((p) => models?.[cli]?.[p]?.model).filter(Boolean))];
+/** The card menu for the selected tickets, one or many. A ✓ marks a value every one of them has. */
+function cardMenu(ts, x, y) {
+  const same = (k) => (new Set(ts.map((t) => t[k] ?? null)).size === 1 ? ts[0][k] ?? null : undefined);
+  const tick = (k, v) => (same(k) === v ? ' ✓' : '');
+  const set = (k, v) => each(ts, (t) => api('PATCH', `/tickets/${t.id}`, { [k]: v }),
+    (n) => `${k === 'cli' ? 'CLI' : k[0].toUpperCase() + k.slice(1)} set to ${v ?? 'the default'} on ${n}.`);
+  const clis = new Set(ts.map((t) => t.cli ?? models?.cli));
+  const known = [...new Set([...clis].flatMap((c) => PHASES.map((p) => models?.[c]?.[p]?.model)).filter(Boolean))];
+  const resettable = ts.filter((t) => t.status !== 'backlog' || t.flags.blocked_on_deps);
+  const unmerged = ts.filter((t) => t.status === 'done' && !t.merged_at);
   menu(x, y, [
-    { label: 'Open', run: () => openTicket(t.id) },
-    { label: 'Launch', disabled: t.status !== 'backlog' && !resumable(t), run: () => launch(t.id) },
-    { label: 'Resume', disabled: !resumable(t), run: () => resume(t.id) },
+    { label: 'Open', run: () => {
+      ts.slice(0, 8).forEach((t) => openTicket(t.id));
+      if (ts.length > 8) say(`Opened 8 of ${ts.length} tickets; at most 8 open at once.`);
+    } },
+    { label: 'Launch', disabled: !ts.some(launchable), run: () => launch(ts) },
+    { label: 'Resume', disabled: !ts.some(resumable), run: () => launch(ts, 'resume') },
     '-',
     { label: 'Model', items: [
-      { label: `Phase default${t.model ? '' : ' ✓'}`, run: () => set({ model: null }) },
-      ...known.map((m) => ({ label: `${m}${t.model === m ? ' ✓' : ''}`, run: () => set({ model: m }) })),
+      { label: `Phase default${tick('model', null)}`, run: () => set('model', null) },
+      ...known.map((m) => ({ label: `${m}${tick('model', m)}`, run: () => set('model', m) })),
       { label: 'Other…', run: async () => {
-        const input = h('input', { type: 'text', 'data-mic': 'off', value: t.model ?? '', size: 32 });
-        if ((await dialog(`Model for #${t.id}`, h('div', { class: 'field-row-stacked' }, h('label', {}, 'Model id'), input), ['OK', 'Cancel'])) === 'OK') {
-          set({ model: input.value.trim() || null });
+        const input = h('input', { type: 'text', 'data-mic': 'off', value: same('model') ?? '', size: 32 });
+        if ((await dialog(`Model for ${count(ts)}`, h('div', { class: 'field-row-stacked' }, h('label', {}, 'Model id'), input), ['OK', 'Cancel'])) === 'OK') {
+          set('model', input.value.trim() || null);
         }
       } },
     ] },
     { label: 'Effort', items: [
-      { label: `Phase default${t.effort ? '' : ' ✓'}`, run: () => set({ effort: null }) },
-      ...EFFORTS.map((e) => ({ label: `${e}${t.effort === e ? ' ✓' : ''}`, run: () => set({ effort: e }) })),
+      { label: `Phase default${tick('effort', null)}`, run: () => set('effort', null) },
+      ...EFFORTS.map((e) => ({ label: `${e}${tick('effort', e)}`, run: () => set('effort', e) })),
     ] },
     { label: 'CLI', items: [
-      { label: `Default${t.cli ? '' : ' ✓'}`, run: () => set({ cli: null }) },
-      ...CLIS.map((c) => ({ label: `${c}${t.cli === c ? ' ✓' : ''}`, run: () => set({ cli: c }) })),
+      { label: `Default${tick('cli', null)}`, run: () => set('cli', null) },
+      ...CLIS.map((c) => ({ label: `${c}${tick('cli', c)}`, run: () => set('cli', c) })),
     ] },
     '-',
-    { label: 'Retry merge', disabled: !(t.status === 'done' && !t.merged_at), run: () => act(() => api('POST', `/tickets/${t.id}/merge`), `Merge of #${t.id} queued.`) },
-    { label: 'Reset to Backlog', disabled: t.status === 'backlog' && !t.flags.blocked_on_deps, run: () => reset(t) },
+    { label: 'Retry merge', disabled: !unmerged.length, run: () => each(unmerged, (t) => api('POST', `/tickets/${t.id}/merge`), (n) => `Merge of ${n} queued.`) },
+    { label: 'Reset to Backlog', disabled: !resettable.length, run: () => reset(resettable) },
     { label: 'Delete', run: async () => {
-      if ((await dialog('Delete ticket', `Delete #${t.id} ${t.title}? Its notes and runs go with it.`, ['Delete', 'Cancel'])) === 'Delete') {
-        act(() => api('DELETE', `/tickets/${t.id}`), `#${t.id} deleted.`);
+      const ask = ts.length === 1 ? `Delete #${ts[0].id} ${ts[0].title}? Its notes and runs go with it.`
+        : `Delete ${count(ts)} (${ts.map((t) => `#${t.id}`).join(', ')})? Their notes and runs go with them.`;
+      if ((await dialog(ts.length === 1 ? 'Delete ticket' : 'Delete tickets', ask, ['Delete', 'Cancel'])) === 'Delete') {
+        each(ts, (t) => api('DELETE', `/tickets/${t.id}`), (n) => `${n} deleted.`);
       }
     } },
   ]);
@@ -233,11 +290,13 @@ function openBoard() {
   if (w.body.firstChild) return;
   const status = h('p', { class: 'status-bar-field', role: 'status' }, 'Ready');
   const count = h('p', { class: 'status-bar-field k95-count' });
-  const cols = h('div', { class: 'k95-columns' });
+  const cols = h('div', { class: 'k95-columns', onclick: (e) => { // a click on empty column space clears the selection
+    if (!e.target.closest('.card')) selection.clear(), drawBoard();
+  } });
   w.body.classList.add('k95-board');
   w.body.append(
     h('div', { class: 'k95-toolbar' },
-      h('button', { onclick: () => (selected ? launch(selected) : say('Select a Backlog ticket first.')) }, 'Launch'),
+      h('button', { onclick: () => launch(picked()) }, 'Launch'),
       h('button', { onclick: launchAll, title: 'Ctrl+L' }, 'Launch all'),
       h('button', { onclick: newBrainstorm, title: 'Ctrl+N' }, 'New brainstorm'),
       h('button', { onclick: () => openTicket(null) }, 'New ticket'),
@@ -410,7 +469,7 @@ function ticketForm(w, t) {
     h('div', { class: 'field-row-stacked' }, h('label', {}, 'Acceptance criteria, one per line'), criteria),
     h('div', { class: 'field-row-stacked' }, h('label', {}, 'Depends on'), deps),
     h('div', { class: 'field-row' }, h('button', { onclick: save }, t ? 'Save' : 'Create'),
-      t && h('button', { disabled: t.status !== 'backlog', onclick: () => launch(t.id) }, 'Launch')));
+      t && h('button', { disabled: t.status !== 'backlog', onclick: () => launch([t]) }, 'Launch')));
 }
 
 // ---- terminals ----
@@ -507,8 +566,8 @@ function openInbox() {
           h('div', { class: 'field-row' },
             h('button', { onclick: () => openTicket(q.ticket_id) }, 'Open ticket'),
             q.status === 'done' && !q.merged_at && h('button', { onclick: () => act(() => api('POST', `/tickets/${q.ticket_id}/merge`), `Merge of #${q.ticket_id} queued.`) }, 'Retry merge'),
-            (q.status === 'in_progress' || q.status === 'testing') && h('button', { onclick: () => resume(q.ticket_id) }, 'Resume'),
-            q.status !== 'done' && t && h('button', { onclick: () => reset(t) }, 'Reset to Backlog')));
+            (q.status === 'in_progress' || q.status === 'testing') && t && h('button', { onclick: () => launch([t], 'resume') }, 'Resume'),
+            q.status !== 'done' && t && h('button', { onclick: () => reset([t]) }, 'Reset to Backlog')));
       }
       const answer = h('textarea', { rows: 3, placeholder: 'Your answer' });
       return h('fieldset', { class: 'k95-question', 'data-ticket': q.ticket_id }, legend,
@@ -651,7 +710,8 @@ function taskbar() {
 
 const clock = () => { document.getElementById('clock').textContent = new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }); };
 
-// Esc closes the focused window, Ctrl+L launches all, Ctrl+N starts a brainstorm. Inside a terminal every key goes to the
+// Esc closes the focused window, Ctrl+L launches all, Ctrl+A selects every card on a focused Board, Ctrl+N starts a
+// brainstorm. Inside a terminal every key goes to the
 // agent instead (Esc interrupts Claude Code, Ctrl+L clears the screen).
 addEventListener('keydown', (e) => {
   if (document.querySelector('dialog[open]') || e.target.closest?.('.xterm')) return;
@@ -664,6 +724,10 @@ addEventListener('keydown', (e) => {
   } else if (plainCtrl && e.key.toLowerCase() === 'l') {
     e.preventDefault();
     launchAll();
+  } else if (plainCtrl && e.key.toLowerCase() === 'a' && focused()?.el.dataset.win === 'board' && !e.target.closest?.('input, textarea, select, [contenteditable]')) {
+    e.preventDefault();
+    for (const id of tickets.keys()) selection.add(id);
+    drawBoard();
   } else if (plainCtrl && e.key.toLowerCase() === 'n') {
     e.preventDefault();
     newBrainstorm();
