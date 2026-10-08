@@ -10,7 +10,7 @@ import { handleApi } from './api.js';
 import { openDb } from './db.js';
 import { sweep, SWEEP_MS } from './janitor.js';
 import { killAll, launch, sessions } from './launcher.js';
-import { events, recover, type Board } from './lifecycle.js';
+import { events, recover, tick, type Board } from './lifecycle.js';
 import { handleMcp } from './mcp.js';
 import { idle } from './merge.js';
 import { initTemplates } from './templates.js';
@@ -198,6 +198,7 @@ export function start(config: Config = {}): Promise<{
       // Janitor and recovery on start, the janitor again once a day (docs/LIFECYCLE.md).
       sweep(board);
       recover(board);
+      tick(board); // the runner picks up where it was
       const daily = setInterval(() => sweep(board), SWEEP_MS).unref();
       ok({
         port: addr.port,

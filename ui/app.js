@@ -30,6 +30,7 @@ const MOVES = { backlog: ['in_progress'], in_progress: ['backlog'], testing: ['b
 const tickets = new Map();
 let sessions = [];
 let inbox = [];
+let runner = { on: false, running: [], left: 0, backlog: 0 }; // GET /api/runner: the Run button and its status-bar line
 let models = null; // ~/.kanban95/models.json as written, for the cards' default model and effort
 let settings = { paths: {}, sounds: true, voice: { backend: 'local', mode: 'push' } };
 const views = new Map(); // open window id → redraw(ticketId | null)
@@ -48,7 +49,7 @@ async function refreshTicket(id) {
   }
 }
 async function refreshShared() {
-  [sessions, inbox] = await Promise.all([api('GET', '/sessions'), api('GET', '/inbox')]);
+  [sessions, inbox, runner] = await Promise.all([api('GET', '/sessions'), api('GET', '/inbox'), api('GET', '/runner')]);
   openNewTerminals();
   taskbar();
 }
@@ -183,6 +184,14 @@ const resume = (id) => act(async () => {
   await api('POST', `/tickets/${id}/resume`);
   await sayLaunched([id]);
 });
+const toggleRunner = () => act(async () => {
+  runner = await api('PUT', '/runner', { on: !runner.on });
+  drawBoard();
+});
+/** While on: what it waits on and what is left. Off by itself: why. Off by Stop: nothing. */
+const runnerLine = (r) => r.on
+  ? `Running: ${r.running.map((id) => `#${id}`).join(', ') || 'nothing yet'} (${r.left} of ${r.backlog} candidates left)`
+  : r.why ? `Runner stopped: ${r.why}` : '';
 // Replaces a running ticket's agent, live or hung, with a fresh one in the same phase and worktree (docs/LIFECYCLE.md).
 const restartable = (t) => t?.status === 'in_progress' || t?.status === 'testing';
 async function restart(id) {
@@ -193,7 +202,6 @@ async function restart(id) {
     await sayLaunched([id]);
   });
 }
-const launchAll = () => act(async () => sayLaunched((await api('POST', '/tickets/launch-all')).map((t) => t.id)));
 const newBrainstorm = () => act(async () => openTerminal(await api('POST', '/brainstorm')), 'Brainstorm started.');
 /** An operator terminal: an agent with the operator's reach on the board, given the mission typed here. The daemon refuses an empty one. */
 async function newOperator() {
@@ -251,17 +259,19 @@ function openBoard() {
   if (w.body.firstChild) return;
   const status = h('p', { class: 'status-bar-field', role: 'status' }, 'Ready');
   const count = h('p', { class: 'status-bar-field k95-count' });
+  const run = h('button', { onclick: toggleRunner, title: 'Ctrl+L' });
+  const runField = h('p', { class: 'status-bar-field k95-runner' });
   const cols = h('div', { class: 'k95-columns' });
   w.body.classList.add('k95-board');
   w.body.append(
     h('div', { class: 'k95-toolbar' },
       h('button', { onclick: () => (selected ? launch(selected) : say('Select a Backlog ticket first.')) }, 'Launch'),
-      h('button', { onclick: launchAll, title: 'Ctrl+L' }, 'Launch all'),
+      run,
       h('button', { onclick: newBrainstorm, title: 'Ctrl+N' }, 'New brainstorm'),
       h('button', { onclick: () => openTicket(null) }, 'New ticket'),
       h('button', { onclick: housekeeping }, 'Housekeeping')),
     cols,
-    h('div', { class: 'status-bar' }, status, count));
+    h('div', { class: 'status-bar' }, status, runField, count));
   say = (msg) => { status.textContent = msg; status.title = msg; };
   views.set('board', () => {
     const all = [...tickets.values()];
@@ -276,6 +286,9 @@ function openBoard() {
     for (const c of cols.querySelectorAll('.col')) c.querySelector('.cards').scrollTop = scroll[c.dataset.status] ?? 0;
     if (focus) cols.querySelector(`.col[data-status="${focus[0]}"] .card[data-id="${focus[1]}"]`)?.focus();
     count.textContent = `${all.length} tickets · ${sessions.length} agents`;
+    run.textContent = runner.on ? 'Stop' : 'Run';
+    runField.textContent = runField.title = runnerLine(runner);
+    runField.hidden = !runField.textContent;
   });
   drawBoard();
 }
@@ -703,7 +716,7 @@ const START = [
   { label: 'New ticket', run: () => openTicket(null) },
   { label: 'New brainstorm', run: newBrainstorm },
   { label: 'New operator terminal', run: newOperator },
-  { label: 'Launch all', run: launchAll },
+  { get label() { return runner.on ? 'Stop' : 'Run'; }, run: toggleRunner },
   { label: 'Housekeeping', run: housekeeping },
 ];
 
@@ -727,7 +740,7 @@ function taskbar() {
 
 const clock = () => { document.getElementById('clock').textContent = new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }); };
 
-// Esc closes the focused window, Ctrl+L launches all, Ctrl+N starts a brainstorm, Ctrl+Shift+N an operator terminal, Ctrl+R restarts the focused ticket's agent. Inside a terminal every key goes to the
+// Esc closes the focused window, Ctrl+L turns the runner on or off, Ctrl+N starts a brainstorm, Ctrl+Shift+N an operator terminal, Ctrl+R restarts the focused ticket's agent. Inside a terminal every key goes to the
 // agent instead (Esc interrupts Claude Code, Ctrl+L clears the screen).
 addEventListener('keydown', (e) => {
   if (document.querySelector('dialog[open]') || e.target.closest?.('.xterm')) return;
@@ -739,7 +752,7 @@ addEventListener('keydown', (e) => {
     if (w) close(w.el.dataset.win);
   } else if (plainCtrl && e.key.toLowerCase() === 'l') {
     e.preventDefault();
-    launchAll();
+    toggleRunner();
   } else if (plainCtrl && e.key.toLowerCase() === 'n') {
     e.preventDefault();
     newBrainstorm();

@@ -285,6 +285,9 @@ describe('ui', { timeout: 60_000 }, () => {
     const waiting = ticket('Not started');
     db.prepare("INSERT INTO notes (ticket_id, role, kind, body) VALUES (?, 'worker', 'failure', 'agent exited without reporting')").run(id);
     try {
+      // The id may be the one the previous test deleted, whose killed agents can still be closing under load.
+      const sessions = async () => (await (await fetch(`${base}api/sessions`, { headers: { cookie: `k95=${srv.secret}` } })).json()) as { ticket_id: number }[];
+      await until(async () => !(await sessions()).some((s) => s.ticket_id === id), 'the deleted ticket\'s agents to exit');
       await page.goto(base);
       await until(() => column(id), 'the card');
       await until(() => column(waiting), 'the backlog card');
@@ -340,6 +343,34 @@ describe('ui', { timeout: 60_000 }, () => {
     } finally {
       db.prepare("UPDATE tickets SET status = 'done', merged_at = 'x' WHERE id = ?").run(id);
     }
+  });
+
+  it('Run and Ctrl+L toggle the runner; the button and its status line redraw from /events; it says when it stopped itself', async () => {
+    db.prepare("UPDATE tickets SET status = 'done', merged_at = coalesce(merged_at, 'x'), needs_human = 0").run(); // earlier tests' leftovers
+    const id = ticket('Run me');
+    const button = `[...document.querySelectorAll('.k95-toolbar button')].find((b) => b.title === 'Ctrl+L')`;
+    const label = () => page.evaluate<string>(`${button}.textContent`);
+    const line = () => page.evaluate<string>(`document.querySelector('.k95-runner').textContent`);
+    await page.goto(base);
+    await until(() => column(id), 'the card');
+    await page.evaluate('window.__noReload = true');
+    expect(await label()).toBe('Run');
+
+    await page.evaluate(`${button}.click()`);
+    await until(async () => (await line()) === `Running: #${id} (0 of 0 candidates left)`, 'the running line');
+    expect(await label()).toBe('Stop');
+    // Stopped from outside the page: only /events can tell it.
+    await fetch(`${base}api/runner`, { method: 'PUT', headers: { 'content-type': 'application/json', cookie: `k95=${srv.secret}` }, body: '{"on":false}' });
+    await until(async () => (await label()) === 'Run', 'the button back to Run');
+    expect(await line()).toBe('');
+
+    await fetch(`${base}api/tickets/${id}`, { method: 'PATCH', headers: { 'content-type': 'application/json', cookie: `k95=${srv.secret}` }, body: '{"status":"backlog"}' }); // stops its agent
+    db.prepare("UPDATE tickets SET status = 'done', merged_at = 'x' WHERE id = ?").run(id);
+    await page.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'l', code: 'KeyL', modifiers: 2, windowsVirtualKeyCode: 76 });
+    await page.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'l', code: 'KeyL', modifiers: 2, windowsVirtualKeyCode: 76 });
+    await until(async () => (await line()) === 'Runner stopped: nothing left to launch', 'the stopped line');
+    expect(await label()).toBe('Run');
+    expect(await page.evaluate('window.__noReload')).toBe(true);
   });
 
   it('pins a compact tray right after Start on one taskbar row', async () => {
