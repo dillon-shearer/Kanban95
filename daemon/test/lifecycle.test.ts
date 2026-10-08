@@ -194,10 +194,8 @@ const until = async (f: () => unknown, what: string, ms = 30_000) => {
   }
 };
 // Every backlog ticket at once, in one request (so none can finish before the last starts): the runner with room for all.
-const launchTogether = (n: number) => {
-  writeFileSync(join(repo, '.kanban95', 'config.json'), JSON.stringify({ runner_concurrency: n }));
-  return fetch(`http://127.0.0.1:${srv.port}/api/runner`, { method: 'PUT', headers: { 'content-type': 'application/json', cookie: `k95=${srv.secret}` }, body: '{"on":true}' });
-};
+const launchTogether = (n: number) =>
+  fetch(`http://127.0.0.1:${srv.port}/api/runner`, { method: 'PUT', headers: { 'content-type': 'application/json', cookie: `k95=${srv.secret}` }, body: JSON.stringify({ on: true, concurrency: n }) });
 const mergeInProgress = (dir: string) => {
   try {
     execFileSync('git', ['rev-parse', '-q', '--verify', 'MERGE_HEAD'], { cwd: dir, stdio: 'ignore' });
