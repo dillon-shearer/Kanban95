@@ -92,7 +92,7 @@ Every `/api/*` request needs the `k95` cookie holding the shell secret, or gets 
 | POST | `/api/operator` | `{ mission }` (non-empty): starts an operator terminal (operator grant, repo root, the mission in its brief); returns it in the `/api/sessions` shape |
 | GET, PUT | `/api/config/models` `/api/config/settings` | `~/.kanban95/models.json` / `settings.json`: GET returns `{path, value}` as written (`null` when absent), PUT checks the whole file against its schema (`400` naming the field) and writes it |
 | GET, PUT | `/api/notepad` | `<repo>/.kanban95/notepad.md` as plain text: `{value}`, `''` when absent; PUT refuses a non-string with `400` and more than 256 KB with `413`. Not audited |
-| GET, PUT | `/api/runner` | the Run toggle: `{on, why?, running, left, backlog}`; PUT takes `{"on": boolean}`, audited `runner.set` (`docs/LIFECYCLE.md` → The runner) |
+| GET, PUT | `/api/runner` | the Run toggle: `{on, why?, concurrency, running, left, backlog, waits: [{id, on}]}`; PUT takes `{"on"?: boolean, "concurrency"?: 1-10}`, either or both, audited `runner.set` (`docs/LIFECYCLE.md` → The runner) |
 | GET, PUT | `/api/config/preferences` | `~/.kanban95/preferences.md` as plain text: `{path, value}`, `value` is `''` when absent; PUT refuses a non-string or more than 16 KB with `400` |
 | GET | `/api/models` | `{claude: string[], codex: string[]}`: the model names each installed CLI knows (Codex's `~/.codex/models_cache.json`, Claude's `--help` and executable), for the Settings → Models dropdowns |
 | GET, DELETE | `/api/trust` | Claude Code's trust entry for this repo root: status, or clear it (`docs/CLIS.md` → First-run prompts) |
@@ -108,7 +108,7 @@ Errors are `{ "error": "..." }`: 400 for bad input, a constraint violation or a 
 ## Prompts
 
 1. `startRun(db, repo, {ticketId, template, cli, model, effort, worktree?, base?})` loads `<repo>/.kanban95/templates/<template>.md`. A placeholder outside `VARS` throws here, naming it.
-2. `buildContext` reads the ticket, the brain (FTS5 `OR` of the ticket's title and body words, top 8, bodies for the top 2 and an index line for the rest, 2500-char budget cut between rows), the failure notes of the last cycle, the retry count, the base branch, the operator's `preferences.md`, the absolute paths of the ticket's attachments (appended to `{{ticket}}`), the role's tool list from the MCP table, and for a tester `git diff --no-color --no-ext-diff <base>...HEAD` in the worktree.
+2. `buildContext` reads the ticket, the brain (FTS5 `OR` of the ticket's title and body words, top 8, bodies for the top 2 and an index line for the rest, 2500-char budget cut between rows), the failure notes of the last cycle, the retry count, the base branch, the operator's `preferences.md`, the absolute paths of the ticket's attachments (appended to `{{ticket}}`), the role's tool list from the MCP table, and for a tester `git diff --stat` of the change plus its code diff without markdown, `docs/` and lockfiles, capped at 32 000 characters (`docs/AGENTS.md` → `{{diff}}`).
 3. The template is filled in a single pass and the result inserted into `runs.prompt_rendered`. Same ticket and same database give byte-identical output: every query has a total order and nothing reads the clock.
 
 The template is read from disk on every render, so operator edits apply without a restart. Template-to-role and template-to-phase mapping is the `TEMPLATES` table in `templates.ts`; agent-facing behaviour is in `docs/AGENTS.md`.
@@ -135,7 +135,7 @@ docs/             this file, LEARNING.md (guided tour for newcomers), OPERATOR.m
 1. `createWorktree` → `.worktrees/t-<id>` on `ticket/<id>` from the repo's current branch, reused if it exists; refused if the base branch has uncommitted tracked changes.
 2. `startRun` renders the template and inserts the `runs` row (a bad template stops here, nothing is minted).
 3. `mint` a grant with the template's role (`TEMPLATES[template].role`).
-4. Session dir `.kanban95/sessions/<run-id>/`, owner-only, with `prompt.md` and (Claude Code) `mcp.json`.
+4. Session dir `.kanban95/sessions/<run-id>/`, owner-only, with `prompt.md` and (Claude Code) `mcp.json`, plus `settings.json` for a Claude worker or tester (`docs/CLIS.md`).
 5. `buildArgv` with the role (flags and reach per role in `docs/CLIS.md`); for Claude Code, `preTrustClaude` makes sure the repo root is trusted; then `spawnPty` with `cwd` = worktree and the env allowlist.
 6. The session is kept in `sessions` (by run id) until its pty exits. On exit, for any reason: `runs.ended_at` and `runs.scrollback` are written, the grant is revoked, the session dir is removed, the lifecycle's exit hook runs (`runs.outcome`, and the `exit` event if the agent never reported), `session.done` resolves.
 
@@ -159,7 +159,7 @@ Any failure after the run row is written revokes the grant and removes the sessi
 
 - `icons/`: the desktop icons, self-drawn 32x32 SVGs served from the daemon's origin (`img-src 'self'`). The wallpaper is CSS gradients in `app.css`, no image.
 - `wm.js`: the window manager. Windows are 98.css `.window`s positioned on `#desktop`, dragged by the title bar (pointer events), resized by CSS (`resize: both`), minimized to a taskbar button, maximized to fill `#desktop` (the `max` class overrides the inline geometry, which stays as the restore geometry; drag and resize are off), clamped so a title bar is always reachable. Taskbar buttons shrink to 60px; past that `#tasks` scrolls (arrow buttons at its ends and the mouse wheel), and focusing a window scrolls its button into view. Windows opened with `persist` (Board, Brain, Inbox, Settings) keep position, size and maximized state in `localStorage`. Also modal dialogs (`<dialog>`) and pop-up menus.
-- `app.js`: the data layer and every window. It loads tickets, sessions, the Inbox and both settings files once, then listens on `/events`: a `{ticket}` frame refetches that ticket, then the live sessions and the Inbox, and asks each open window to redraw; each window decides whether the event concerns it (a ticket window only for its own ticket; form tabs never, so typing is not lost). A new session opens its terminal window automatically, behind the focused window; a terminal whose run ended with a reported outcome (`submit`, `pass`, `fail`) closes itself after a moment, one that was revoked or died stays open, marked ended.
+- `app.js`: the data layer and every window. It loads tickets, sessions, the Inbox and both settings files once, then listens on `/events`: a `{ticket}` frame refetches that ticket, then the live sessions and the Inbox, and asks each open window to redraw; each window decides whether the event concerns it (a ticket window only for its own ticket; form tabs never, so typing is not lost). A new session opens its terminal window automatically, behind the focused window; a terminal whose run the board ended (`submit`, `pass`, `fail`, or `conflict` and `restart`, which start a new run of the same ticket) closes itself after a moment; one the agent exited on its own, or that was revoked or died, stays open, marked ended. Add any new lifecycle event that runs `end_session` to that list in `openTerminal`, or its stale window will sit in front of the new run and the ticket will look stuck.
 - Board drag uses pointer events, not HTML5 drag and drop. Only operator moves are accepted (Backlog → In Progress; anything → Backlog, which also clears flags and retries and stops a live agent); an illegal drop snaps back and the status bar names the allowed columns.
 - `voice.js`: the mic button and `transcribe(blob)` (see Voice).
 
@@ -196,7 +196,6 @@ Gotchas collected while the board was built. Each one cost a phase some time.
 **Templates**
 - Operator edits to `<repo>/.kanban95/templates/` survive restarts, and a changed default in `templates/` only reaches repos that lack the file.
 - Running the daemon on this repo creates `./.kanban95/templates/` (untracked, not ignored: in a target repo they are meant to be committed).
-- The test diff is injected whole (`// ponytail:` in `context.ts`).
 
 **Windows**
 - node-pty prints `Error: AttachConsole failed` to stderr on `kill()`. It is harmless (the process is gone). `useConptyDll: true` silences it at about 3 s per spawn, so it is off. A one-off node script using node-pty does not exit by itself after the pty ends: call `process.exit`.

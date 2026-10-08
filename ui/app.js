@@ -30,7 +30,7 @@ const MOVES = { backlog: ['in_progress'], in_progress: ['backlog'], testing: ['b
 const tickets = new Map();
 let sessions = [];
 let inbox = [];
-let runner = { on: false, running: [], left: 0, backlog: 0 }; // GET /api/runner: the Run button and its status-bar line
+let runner = { on: false, concurrency: 3, running: [], left: 0, backlog: 0, waits: [] }; // GET /api/runner: the Run button and its status-bar line
 let models = null; // ~/.kanban95/models.json as written, for the cards' default model and effort
 let settings = { paths: {}, sounds: true, voice: { backend: 'local', mode: 'push' } };
 const views = new Map(); // open window id → redraw(ticketId | null)
@@ -239,9 +239,9 @@ const toggleRunner = () => act(async () => {
   runner = await api('PUT', '/runner', { on: !runner.on });
   drawBoard();
 });
-/** While on: what it waits on and what is left. Off by itself: why. Off by Stop: nothing. */
+/** While on: what it waits on against the limit, what is left, and who waits on shared files. Off by itself: why. Off by Stop: nothing. */
 const runnerLine = (r) => r.on
-  ? `Running: ${r.running.map((id) => `#${id}`).join(', ') || 'nothing yet'} (${r.left} of ${r.backlog} candidates left)`
+  ? `Running: ${r.running.map((id) => `#${id}`).join(', ') || 'nothing yet'} (${r.running.length} of ${r.concurrency}; ${r.left} of ${r.backlog} candidates left)${r.waits.map((w) => `; #${w.id} waits: shares files with #${w.on}`).join('')}`
   : r.why ? `Runner stopped: ${r.why}` : '';
 // Replaces a running ticket's agent, live or hung, with a fresh one in the same phase and worktree (docs/LIFECYCLE.md).
 const restartable = (t) => t?.status === 'in_progress' || t?.status === 'testing';
@@ -585,10 +585,12 @@ function openTerminal(s, auto = false) {
     w.title(`${title} (ended)`);
     w.el.classList.add('ended');
     if (!auto || s.run_id === null) return;
-    // The run's outcome is written as its terminal closes; its output stays in Ticket → Runs.
+    // The run's outcome is written as its terminal closes; its output stays in Ticket → Runs. Every outcome the board itself
+    // ends a run with closes it: after conflict and restart a new run is already open, and a stale "ended" window in front of
+    // it reads as a stuck ticket.
     setTimeout(async () => {
       const run = (await api('GET', `/tickets/${s.ticket_id}/runs`).catch(() => [])).find((r) => r.id === s.run_id);
-      if (['submit', 'pass', 'fail'].includes(run?.outcome)) setTimeout(w.close, 1500);
+      if (['submit', 'pass', 'fail', 'conflict', 'restart'].includes(run?.outcome)) setTimeout(w.close, 1500);
     }, 500);
   };
   term.onData((d) => send({ data: d }));
@@ -767,8 +769,16 @@ function openSettings() {
           h('p', {}, 'Local: transcription runs inside this window. Audio is never sent anywhere.')),
         h('fieldset', {}, h('legend', {}, 'Mic button'), mode('push', 'Push to talk (hold the button)'), mode('toggle', 'Toggle (click to start, click to stop)')));
     } else if (tab === 'General') {
+      const at = h('input', { type: 'number', id: 'concurrency', min: 1, max: 10, step: 1, value: runner.concurrency });
+      const saveRunner = () => act(async () => {
+        runner = await api('PUT', '/runner', { concurrency: Number(at.value) });
+        drawBoard();
+      }, 'Saved.');
       p.replaceChildren(h('div', { class: 'field-row' }, h('input', { type: 'checkbox', id: 'sounds', checked: settings.sounds,
-        onchange: (e) => act(() => saveSettings({ sounds: e.target.checked }), 'Saved.') }), h('label', { for: 'sounds' }, 'Sounds: ding when a ticket merges, chord when the board needs you')));
+        onchange: (e) => act(() => saveSettings({ sounds: e.target.checked }), 'Saved.') }), h('label', { for: 'sounds' }, 'Sounds: ding when a ticket merges, chord when the board needs you')),
+        h('fieldset', {}, h('legend', {}, 'Runner'),
+          h('div', { class: 'field-row' }, h('label', { for: 'concurrency' }, 'Tickets running at once'), at),
+          h('button', { onclick: saveRunner }, 'Save')));
     }
   });
   w.body.append(...tb.el);
