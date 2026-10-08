@@ -296,8 +296,10 @@ function openTicket(id) {
     w.title(`Ticket #${id} — ${t.title}`);
     if (tab === 'Ticket') {
       // The form is built when the tab is shown, so an event never overwrites what the operator is typing.
-      if (first) p.replaceChildren(ticketForm(w, t));
+      if (first) p.replaceChildren(ticketForm(w, t), h('fieldset', { class: 'k95-attachments' }));
       else p.querySelector('.k95-facts')?.replaceWith(facts(t));
+      const list = await attachmentList(id);
+      p.querySelector('.k95-attachments')?.replaceWith(list);
     } else if (tab === 'Notes') {
       const notes = await api('GET', `/tickets/${id}/notes`);
       keepScroll(p, () => p.replaceChildren(notes.length ? h('ol', { class: 'k95-notes' }, notes.map((n) => h('li', { class: `note ${n.kind}` },
@@ -327,6 +329,43 @@ function openTicket(id) {
   });
   w.body.append(...tb.el);
   views.set(wid, (tid) => tid === id && tb.redraw());
+  w.el.addEventListener('dragover', (e) => e.dataTransfer.types.includes('Files') && e.preventDefault());
+  w.el.addEventListener('drop', (e) => {
+    if (!e.dataTransfer.files.length) return;
+    e.preventDefault();
+    attach(id, [...e.dataTransfer.files]);
+  });
+}
+
+const IMAGE = /\.(png|jpe?g|gif|webp|bmp)$/i; // the types the daemon serves inline
+const attachmentUrl = (id, name) => `/api/tickets/${id}/attachments/${encodeURIComponent(name)}`;
+
+/** Uploads to ticket `id`, one file at a time; the daemon's change event redraws the list. */
+async function attach(id, files) {
+  for (const f of files) {
+    const r = await fetch(`/api/tickets/${id}/attachments?name=${encodeURIComponent(f.name)}`, { method: 'POST', body: f });
+    if (!r.ok) return dialog('Not attached', `${f.name}: ${(await r.json()).error}`);
+    say(`#${id}: attached ${(await r.json()).name}.`);
+  }
+}
+
+/** The Ticket tab's attachments: a thumbnail for each image, Open and Remove. */
+async function attachmentList(id) {
+  const files = await api('GET', `/tickets/${id}/attachments`);
+  return h('fieldset', { class: 'k95-attachments' }, h('legend', {}, 'Attachments'),
+    files.length ? files.map((f) => {
+      const url = attachmentUrl(id, f.name);
+      const img = IMAGE.test(f.name);
+      return h('div', { class: 'k95-attachment' }, img && h('img', { src: url, alt: '' }), h('span', {}, f.name),
+        // An image opens in a board window; anything else downloads (the board's window can never navigate away).
+        img ? h('a', { href: '#', onclick: (e) => { e.preventDefault(); openImage(id, f.name); } }, 'Open') : h('a', { href: url, download: f.name }, 'Open'),
+        h('button', { onclick: () => act(() => api('DELETE', `/tickets/${id}/attachments/${encodeURIComponent(f.name)}`), `#${id}: removed ${f.name}.`) }, 'Remove'));
+    }) : h('p', {}, 'Paste a screenshot (Ctrl+V) or drop a file on this window to attach it.'));
+}
+
+function openImage(id, name) {
+  const w = open(`attachment-${id}-${name}`, { title: name, w: 640, h: 480 });
+  if (!w.body.firstChild) w.body.append(h('img', { src: attachmentUrl(id, name), alt: name, class: 'k95-image' }));
 }
 
 function facts(t) {
@@ -598,6 +637,14 @@ addEventListener('keydown', (e) => {
     e.preventDefault();
     newBrainstorm();
   }
+});
+
+// Ctrl+V with a file on the clipboard (a screenshot) attaches it to the focused Ticket window, unless a text field has focus.
+addEventListener('paste', (e) => {
+  const id = /^ticket-(\d+)$/.exec(focused()?.el.dataset.win)?.[1];
+  if (!id || !e.clipboardData.files.length || e.target.closest?.('input, textarea, [contenteditable]')) return;
+  e.preventDefault();
+  attach(Number(id), [...e.clipboardData.files]);
 });
 
 async function boot() {

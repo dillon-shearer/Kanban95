@@ -88,7 +88,7 @@ Attach a note to a ticket. Kinds: plan (how you intend to do the work, post it b
 
 ### get_ticket
 
-Read one ticket in full: title, body, acceptance criteria, status, flags, dependencies, model settings, and every note on it in order. A worker may also read the tickets its own ticket depends on, to see what they delivered.
+Read one ticket in full: title, body, acceptance criteria, status, flags, dependencies, model settings, the absolute paths of files the operator attached (screenshots and the like: open them with your file reader), and every note on it in order. A worker may also read the tickets its own ticket depends on, to see what they delivered.
 
 | argument | type | required | description |
 |---|---|---|---|

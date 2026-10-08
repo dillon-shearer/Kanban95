@@ -2,6 +2,7 @@
 import { execFileSync } from 'node:child_process';
 import type { DatabaseSync } from 'node:sqlite';
 import { readTicket } from './api.js';
+import { attachments } from './attachments.js';
 import type { Role } from './grants.js';
 import { TOOLS } from './mcp.js';
 import { fill, loadTemplate, TEMPLATES, type Ctx, type TemplateName } from './templates.js';
@@ -42,13 +43,19 @@ export function failureNotes(db: DatabaseSync, ticketId: number): string {
   return rows.map((r) => bullet(`[${r.role}] `, r.body)).join('\n');
 }
 
+/** The files the operator attached, by absolute path, for the agent to open with its own file reader. Empty when none. */
+function attachmentList(repo: string, ticketId: number): string {
+  const files = attachments(repo, ticketId);
+  return files.length ? `Attachments (open with your file reader):\n${files.map((f) => `- ${f.path}`).join('\n')}` : '';
+}
+
 function gitDiff(worktree: string, base: string): string {
   // ponytail: the whole diff is injected; truncate with a marker if prompts outgrow the CLIs' input limits.
   return execFileSync('git', ['diff', '--no-color', '--no-ext-diff', `${base}...HEAD`], { cwd: worktree, encoding: 'utf8', maxBuffer: 16 << 20 });
 }
 
 /** A null ticket is a brainstorm session: tools only, nothing pushed. */
-export function buildContext(db: DatabaseSync, ticketId: number | null, role: Role, opts: ContextOpts = {}): Ctx {
+export function buildContext(db: DatabaseSync, repo: string, ticketId: number | null, role: Role, opts: ContextOpts = {}): Ctx {
   const tools = Object.entries(TOOLS)
     .filter(([, t]) => role in t.access)
     .map(([name, t]) => `- ${name} (${t.access[role]})`)
@@ -62,7 +69,7 @@ export function buildContext(db: DatabaseSync, ticketId: number | null, role: Ro
     diff = orNone(gitDiff(opts.worktree, opts.base));
   }
   return {
-    ticket: `#${t.id} ${t.title}\n\n${t.body}`.trimEnd(),
+    ticket: [`#${t.id} ${t.title}\n\n${t.body}`.trimEnd(), attachmentList(repo, t.id)].filter(Boolean).join('\n\n'),
     criteria: orNone(t.criteria),
     brain: orNone(brainFor(db, `${t.title} ${t.body}`, opts.brainLimit, opts.brainChars)),
     notes: orNone(failureNotes(db, t.id)),
@@ -80,7 +87,7 @@ export function startRun(
 ): { id: number; prompt: string } {
   const { role, phase } = TEMPLATES[r.template];
   const text = loadTemplate(repo, r.template); // a bad template fails here, before git runs or a row is written
-  const prompt = fill(text, buildContext(db, r.ticketId, role, r));
+  const prompt = fill(text, buildContext(db, repo, r.ticketId, role, r));
   const { lastInsertRowid } = db
     .prepare('INSERT INTO runs (ticket_id, phase, cli, model, effort, prompt_rendered) VALUES (?, ?, ?, ?, ?, ?)')
     .run(r.ticketId, phase, r.cli, r.model, r.effort, prompt);

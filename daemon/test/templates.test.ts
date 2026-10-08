@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
@@ -90,7 +90,7 @@ describe('context', () => {
     run(t, 'execute', '2026-01-01T00:02:00.000Z');
     note(t, 'failure', 'current failure\nline two', '2026-01-01T00:03:00.000Z');
     note(t, 'decision', 'not a failure', '2026-01-01T00:03:00.000Z');
-    const { notes } = buildContext(db, t, 'worker');
+    const { notes } = buildContext(db, repo, t, 'worker');
     expect(notes).toBe('- [tester] current failure\n  line two');
   });
 
@@ -98,8 +98,8 @@ describe('context', () => {
     const t = ticket('Add retry backoff', 'Backoff for the retry loop.', '- waits double each time');
     brain('retry backoff', 'use jitter');
     brain('retry backoff', 'use jitter');
-    const a = render(repo, 'execute', buildContext(db, t, 'worker'));
-    const b = render(repo, 'execute', buildContext(db, t, 'worker'));
+    const a = render(repo, 'execute', buildContext(db, repo, t, 'worker'));
+    const b = render(repo, 'execute', buildContext(db, repo, t, 'worker'));
     expect(a).toBe(b);
     expect(a).toContain(`#${t} Add retry backoff\n\nBackoff for the retry loop.`);
     expect(a).toContain('- waits double each time');
@@ -116,9 +116,26 @@ describe('context', () => {
     git('add', 'a.txt');
     git('-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '-m', 'add a');
     const t = ticket('diffed');
-    expect(buildContext(db, t, 'worker').diff).toBe('');
-    expect(buildContext(db, t, 'tester', { worktree: repo, base: 'main' }).diff).toMatch(/^diff --git a\/a\.txt[\s\S]*\+hello/);
-    expect(() => buildContext(db, t, 'tester')).toThrow('worktree and base');
+    expect(buildContext(db, repo, t, 'worker').diff).toBe('');
+    expect(buildContext(db, repo, t, 'tester', { worktree: repo, base: 'main' }).diff).toMatch(/^diff --git a\/a\.txt[\s\S]*\+hello/);
+    expect(() => buildContext(db, repo, t, 'tester')).toThrow('worktree and base');
+  });
+
+  it('ticket lists each attachment by absolute path, and nothing when there are none', () => {
+    const t = ticket('with a screenshot', 'See the picture.');
+    expect(buildContext(db, repo, t, 'worker').ticket).toBe(`#${t} with a screenshot
+
+See the picture.`);
+    const dir = join(repo, '.kanban95', 'attachments', String(t));
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'b.png'), 'x');
+    writeFileSync(join(dir, 'a.log'), 'x');
+    const { prompt } = startRun(db, repo, { ticketId: t, template: 'execute', cli: 'claude', model: 'm', effort: 'low' });
+    expect(prompt).toContain(`See the picture.
+
+Attachments (open with your file reader):
+- ${join(dir, 'a.log')}
+- ${join(dir, 'b.png')}`);
   });
 
   it('startRun stores the rendered prompt on a runs row before anything spawns; a bad template writes no row', () => {

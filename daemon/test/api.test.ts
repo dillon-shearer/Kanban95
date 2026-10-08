@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { request } from 'node:http';
@@ -112,6 +112,64 @@ describe('tickets', () => {
     expect(await (await call('GET', `/api/tickets/${t.id}/runs`)).json()).toMatchObject([{ phase: 'execute', outcome: null }]);
     expect(await (await call('GET', `/api/tickets/${t.id}/audit`)).json()).toMatchObject([{ tool: 'tickets.create', outcome: 'ok' }]);
     expect((await call('GET', `/api/tickets/9999/notes`)).status).toBe(404);
+  });
+});
+
+describe('attachments', () => {
+  const upload = (id: number, name: string, data: Buffer | string) =>
+    fetch(`${base}/api/tickets/${id}/attachments?name=${encodeURIComponent(name)}`, { method: 'POST', body: data, headers: { cookie: `k95=${srv.secret}` } });
+  const dir = (id: number) => join(repo, '.kanban95', 'attachments', String(id));
+
+  it('stores, lists, serves and removes a file; a clash gets a new name, never an overwrite', async () => {
+    const t = await (await call('POST', '/api/tickets', { title: 'shot' })).json();
+    const r = await upload(t.id, 'screen shot.png', 'png-bytes');
+    expect(r.status).toBe(201);
+    expect(await r.json()).toEqual({ name: 'screen shot.png', path: join(dir(t.id), 'screen shot.png'), size: 9 });
+    expect((await (await upload(t.id, 'screen shot.png', 'other')).json()).name).toBe('screen shot-1.png');
+    expect(readFileSync(join(dir(t.id), 'screen shot.png'), 'utf8')).toBe('png-bytes');
+
+    const got = await call('GET', `/api/tickets/${t.id}/attachments/screen%20shot.png`);
+    expect(got.headers.get('content-type')).toBe('image/png');
+    expect(await got.text()).toBe('png-bytes');
+    // Anything but an image downloads instead of rendering on the board's origin.
+    await upload(t.id, 'page.html', '<script>alert(1)</script>');
+    const html = await call('GET', `/api/tickets/${t.id}/attachments/page.html`);
+    expect(html.headers.get('content-type')).toBe('application/octet-stream');
+    expect(html.headers.get('content-disposition')).toMatch(/^attachment;/);
+
+    expect((await call('DELETE', `/api/tickets/${t.id}/attachments/screen%20shot.png`)).status).toBe(204);
+    expect(existsSync(join(dir(t.id), 'screen shot.png'))).toBe(false);
+    expect((await (await call('GET', `/api/tickets/${t.id}/attachments`)).json()).map((a: { name: string }) => a.name)).toEqual(['page.html', 'screen shot-1.png']);
+    expect((await call('GET', `/api/tickets/${t.id}/attachments/screen%20shot.png`)).status).toBe(404);
+    expect(auditRows().filter((a) => a.tool.startsWith('attachments.')).map((a) => [a.tool, a.outcome, a.args_summary])).toEqual([
+      ['attachments.add', 'ok', `{"id":${t.id},"name":"screen shot.png"}`],
+      ['attachments.add', 'ok', `{"id":${t.id},"name":"screen shot-1.png"}`],
+      ['attachments.add', 'ok', `{"id":${t.id},"name":"page.html"}`],
+      ['attachments.remove', 'ok', `{"id":${t.id},"name":"screen shot.png"}`],
+    ]);
+  });
+
+  it('refuses a path separator or .. with 400 and over 10 MB with 413, writing nothing', async () => {
+    const t = await (await call('POST', '/api/tickets', { title: 'refusals' })).json();
+    for (const name of ['../board.db', '..\\board.db', 'a/b.png', 'a\\b.png', '..', '', 'x..png']) {
+      expect((await upload(t.id, name, 'x')).status, name).toBe(400);
+    }
+    expect((await upload(t.id, 'big.png', Buffer.alloc((10 << 20) + 1))).status).toBe(413);
+    expect((await upload(t.id, 'max.png', Buffer.alloc(10 << 20))).status).toBe(201);
+    expect((await upload(9999, 'a.png', 'x')).status).toBe(404);
+    // Serving and removing refuse an encoded traversal the same way.
+    expect((await call('GET', `/api/tickets/${t.id}/attachments/..%5Cboard.db`)).status).toBe(400);
+    expect((await call('DELETE', `/api/tickets/${t.id}/attachments/..%2F..%2Fboard.db`)).status).toBe(400);
+    expect(readdirSync(dir(t.id))).toEqual(['max.png']);
+    expect(existsSync(join(repo, '.kanban95', 'board.db'))).toBe(true);
+  });
+
+  it('deleting the ticket removes its attachments directory', async () => {
+    const t = await (await call('POST', '/api/tickets', { title: 'gone' })).json();
+    await upload(t.id, 'a.png', 'x');
+    expect(existsSync(dir(t.id))).toBe(true);
+    expect((await call('DELETE', `/api/tickets/${t.id}`)).status).toBe(204);
+    expect(existsSync(dir(t.id))).toBe(false);
   });
 });
 

@@ -49,7 +49,7 @@ A merged ticket's worktree and branch are removed by the board. Every ten merged
 | Window | Open from | What it is for |
 |---|---|---|
 | Board | Start → Board | the four columns, the toolbar, the status bar |
-| Ticket | double-click a card, **New ticket** | fields, notes timeline, runs and prompts, diff, live grants (Revoke), audit trail |
+| Ticket | double-click a card, **New ticket** | fields and attachments, notes timeline, runs and prompts, diff, live grants (Revoke), audit trail. Ctrl+V a screenshot (outside a text field) or drop a file on the window to attach it; the agents get its path |
 | Terminal | opens by itself; Ticket → Runs → Terminal | one agent session, keyboard and mic |
 | Inbox | taskbar "Inbox n", Start → Inbox | open questions from agents |
 | Brain | Start → Brain | search what agents learned, add a note yourself |

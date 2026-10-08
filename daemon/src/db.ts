@@ -1,16 +1,18 @@
 // Per-repo SQLite board: <repo>/.kanban95/board.db, migrated from daemon/migrations/*.sql.
 import { DatabaseSync } from 'node:sqlite';
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 
 export const MIGRATIONS_DIR = resolve(import.meta.dirname, '../migrations');
-const INNER_GITIGNORE = 'board.db\nboard.db-*\nsessions/\n';
+const INNER_GITIGNORE = 'board.db\nboard.db-*\nsessions/\nattachments/\n';
 
 export function openDb(repo: string, opts: { migrationsDir?: string } = {}): DatabaseSync {
   const dir = join(repo, '.kanban95');
   mkdirSync(dir, { recursive: true });
   const ignore = join(dir, '.gitignore');
   if (!existsSync(ignore)) writeFileSync(ignore, INNER_GITIGNORE);
+  // A board made before attachments existed gets the line too: operator screenshots must never be committed.
+  else if (!readFileSync(ignore, 'utf8').split(/\r?\n/).includes('attachments/')) appendFileSync(ignore, '\nattachments/\n');
 
   const db = new DatabaseSync(join(dir, 'board.db'));
   db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;');
