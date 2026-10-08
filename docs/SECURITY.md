@@ -114,11 +114,46 @@ The mic button's speech model is the only thing the board ever downloads, and th
 - The template name is checked against a fixed set before any path is built, so it cannot read a file outside `.kanban95/templates/`.
 - Brain text and notes are agent-written and end up in later prompts. Treat them as untrusted input to the next agent, the same as any file in the repo.
 
+## A malicious agent in a worktree
+
+The threat model as of the end of the hardening phase. The attacker is a worker or tester whose CLI follows hostile instructions (planted in a repo file, a brain note, a dependency's README). It runs in `<repo>/.worktrees/t-<n>/` as the operator's Windows user, with permissions off (Agent sessions → Reach by role), holding one live grant for its own ticket and knowing the daemon's port (it is in its MCP config).
+
+### What it cannot reach
+
+| It cannot | Because | Enforced by | Tested by |
+|---|---|---|---|
+| Call the board's REST or open the `/events` or `/pty` websockets | It has no shell secret: the daemon drops `KANBAN95_SECRET` from its own environment before anything runs, and the pty gets an env allowlist | `daemon/src/server.ts` (`import.meta.main` block, `start`), `daemon/src/pty.ts` `ENV_ALLOW` | `server.test.ts` "refuses /api and /events without the secret, and a stale secret after a restart"; `launcher.test.ts` "passes only the env allowlist" (canary absent), "refuses a missing or foreign origin, an unknown run and a wrong secret" |
+| Read, note, move or edit another ticket over MCP | The ticket id comes from the grant, not the request | `daemon/src/mcp.ts` | `mcp.test.ts` → ticket scope ("a worker on ticket 3 cannot read, move, or note ticket 4 …", "reads its own ticket and its dependencies, nothing else") |
+| Use a tool its role lacks, edit title or dependencies, or move its ticket anywhere but where the state machine allows (a worker cannot pass itself; a tester cannot pass without `report_test(passed: true)`) | Role matrix and lifecycle table checked per call, refusals audited as `denied` | `daemon/src/mcp.ts`, `daemon/src/lifecycle.ts` | `mcp.test.ts` → role matrix, move_ticket; `lifecycle.test.ts` → transition table |
+| Keep using its grant after its session | Revoked on the accepted move, on every pty exit, and by the janitor at start | `daemon/src/launcher.ts`, `daemon/src/janitor.ts` | `launcher.test.ts` "revoking the grant over REST kills the pty …", "an agent that dies on its own (exit 3) still revokes the grant …"; `lifecycle.test.ts` → janitor on daemon start; `grants.test.ts` "rejects a revoked token" |
+| Recover any grant's token from the database | Only SHA-256 digests are stored | `daemon/src/grants.ts` | `grants.test.ts` "stores only a hash" |
+| Smuggle another variable, ticket or file into the next agent's prompt through text it writes (brain, notes) | One-pass substitution, fixed variable set, fixed template names | `daemon/src/templates.ts` | `templates.test.ts` "inserts values literally …", "refuses an unknown variable …", "refuses a template name outside the set" |
+| Run script in the operator's UI through text it writes (titles, bodies, notes, brain) | The UI never parses data as HTML: every element is built by `h()`, which appends strings as text nodes (`ui/` has no `innerHTML`); the CSP forbids inline script, so even injected markup could not run | `ui/wm.js` `h`, `CSP` in `daemon/src/server.ts` | `server.test.ts` "prints the port handshake …" (asserts the exact CSP) |
+| Call a Tauri command, navigate the board window off the daemon's origin, open a new window, or use a device other than the microphone, even with script in the page | No capability is granted; navigation is pinned to the live port; permission requests are answered in code | `shell/src/main.rs` `window`, `on_daemon` | `cargo test` in `shell/`: `webview_cannot_call_any_tauri_command`, `the_navigation_lock_follows_a_restarted_daemon_to_its_new_port`; live checks under Webview above |
+| Get a web page (one it serves, or one it opens in the operator's browser) to drive the board | `127.0.0.1` only; `Host`/`Origin` must be the daemon's own; `frame-ancestors 'none'`; the cookie is `SameSite=Strict` | `daemon/src/server.ts` | `server.test.ts` → bind address, shell secret; `api.test.ts` "refuses a foreign Origin and a foreign Host" |
+| Read files outside `ui/` or the voice manifest through the daemon | Static serving and `/voice-model/` answer only allowlisted paths | `daemon/src/server.ts`, `daemon/src/voice.ts` | `server.test.ts` "serves the UI but nothing above it"; `voice.test.ts` "serves only paths the manifest lists" |
+| Leave a daemon or webview behind it can attach to after the board closes | The shell's kill-on-close job takes the whole tree down on every exit path; the daemon exits on stdin EOF | `shell/src/main.rs` `kill_children_with_us`, `daemon/src/server.ts` | `server.test.ts` "… exits when stdin closes"; job object checked live (`docs/ARCHITECTURE.md` → Daemon lifetime) |
+
+One guard here is against accidents, not attacks: `KANBAN95_AGENT=1` in every agent's environment (`daemon/src/launcher.ts`) makes `npm run dev` and `Kanban95.cmd` refuse to start, and `daemon/test/cdp.ts` refuses a headed browser, so a well-meaning agent does not open windows on the operator's desktop (`launcher.test.ts` asserts the variable). A hostile agent can unset it.
+
+### What it can reach
+
+Permissions are off and the agent is the operator's user, so the worktree is where it is told to work, not a sandbox. Only the planner is confined (no file writes). A hostile worker or tester can:
+
+- **Read and write any file the operator's user can**: other worktrees, the main checkout, `~/.kanban95/`, `~/.claude.json`, SSH keys, git credentials, the provider CLIs' own logins.
+- **Open `<repo>/.kanban95/board.db` directly** and read every ticket, note and brain row, or write rows, bypassing MCP scope, the lifecycle and the audit log. It cannot recover tokens from it (hashes only).
+- **Read another live Claude Code session's `sessions/<key>/mcp.json`** (owner-only means owner = this same user) and act as that ticket's agent over MCP until that session ends. A Codex agent's token is in its pty's environment, readable by the same user.
+- **Get the shell secret** with debugger-level same-user access: from the shell's memory or the WebView2 profile's cookie store (DPAPI, which the same user can decrypt). See Shell secret → Ceiling.
+- **Use the network** with no egress filter: exfiltrate what it reads, push with the operator's git credentials.
+- **Change git directly**: commit to the base branch in the main checkout or rewrite other branches; the merge queue only orders the board's own merges.
+- **As a tester, pass bad work**: the board trusts the tester's verdict.
+
+Ceiling and upgrade path: run worker and tester CLIs as a separate low-privilege Windows account (or an AppContainer) with only its worktree ACL'd to it, and an egress allowlist for the provider's API. Then owner-only session dirs, `board.db` and the WebView2 profile become real boundaries and the rows above are the whole reach.
+
 ## Threats this does not address yet
 
-- A hostile process on the same machine with the same user can read `board.db` and a live agent's MCP config. Same-user isolation is out of scope; the worktree is the blast radius for agent actions, not for local malware.
+- Same-user isolation: see A malicious agent in a worktree → What it can reach. The worktree is the blast radius for what an agent is asked to do, not for what a hostile agent or local malware can do.
 - No MCP tool touches the filesystem yet (`report_cleanup` records paths, it does not delete them).
-- Permissions are off inside the worker and tester CLIs. Such an agent can read and write anything the operator's user can, including its own session dir; the worktree bounds where it is told to work, not what it can reach. Only the planner is confined (no file writes).
 - If the daemon itself dies, its ptys die with it; their session dirs (which hold a bearer for Claude Code) and grants stay until the next daemon start, when the janitor removes and revokes them. Grants still expire on their TTL (24 h) if the daemon never starts again.
 - Each start's microphone grant is saved in the WebView2 profile under that start's origin (WebView2's default), so old `127.0.0.1:<port>` entries pile up there. Harmless, since no other page can load in the window.
 - An answer the operator types is written into the agent's terminal as keystrokes. It is the operator's own input to their own agent; the board only flattens it to one line.
