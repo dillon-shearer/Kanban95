@@ -1,7 +1,7 @@
 // UI-facing REST under /api. Operator-only (no grant); every mutation writes an audit row.
-import { existsSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { extname, join } from 'node:path';
+import { dirname, extname, join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { attachmentDir, attachments, MAX_ATTACHMENT, safeName, saveAttachment } from './attachments.js';
 import { isConstraintError } from './db.js';
@@ -106,6 +106,9 @@ function ftsQuery(q: string): string {
   // Each whitespace-separated term becomes a quoted phrase, so user input cannot break FTS5 syntax.
   return q.split(/\s+/).filter(Boolean).map((t) => `"${t.replaceAll('"', '""')}"`).join(' ');
 }
+
+const NOTEPAD_MAX = 256 * 1024;
+const notepadPath = (board: Board) => join(board.repo, '.kanban95', 'notepad.md');
 
 const UPLOAD = /^\/api\/tickets\/(\d+)\/attachments$/;
 const ATTACHMENT = /^\/api\/tickets\/(\d+)\/attachments\/([^/]+)$/;
@@ -237,6 +240,25 @@ const routes: [method: string, path: RegExp, mutation: string | null, handler: (
   // Live agent terminals, for the UI's terminal windows and the taskbar count. `id` is the /pty/<id> key.
   ['GET', /^\/api\/sessions$/, null, () => ({ status: 200, body: [...sessions.values()].map(sessionView) })],
   ['POST', /^\/api\/brainstorm$/, 'brainstorm.launch', ({ board }) => ({ status: 201, body: sessionView(brainstorm(board)) })],
+  // <repo>/.kanban95/notepad.md, the operator's scratch notes, whole file in `value` both ways ('' when absent).
+  // Not audited: it autosaves every pause in typing and is nothing an agent reads.
+  ['GET', /^\/api\/notepad$/, null, ({ board }) => {
+    try {
+      return { status: 200, body: { value: readFileSync(notepadPath(board), 'utf8') } };
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code === 'ENOENT') return { status: 200, body: { value: '' } };
+      throw e;
+    }
+  }],
+  ['PUT', /^\/api\/notepad$/, null, ({ board, body }) => {
+    if (typeof body.value !== 'string') throw new HttpError(400, 'value must be a string');
+    if (Buffer.byteLength(body.value) > NOTEPAD_MAX) throw new HttpError(413, `notepad over ${NOTEPAD_MAX / 1024} KB`);
+    const file = notepadPath(board);
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(`${file}.tmp`, body.value);
+    renameSync(`${file}.tmp`, file);
+    return { status: 200, body: { value: body.value } };
+  }],
   // ~/.kanban95/preferences.md, plain text in `value` both ways ('' when absent). Matched before the JSON config routes.
   ['GET', /^\/api\/config\/preferences$/, null, () => ({ status: 200, body: { path: preferencesPath(), value: readPreferences() } })],
   ['PUT', /^\/api\/config\/preferences$/, 'config.write', ({ body }) => ({ status: 200, body: { path: preferencesPath(), value: writePreferences(body.value) } })],

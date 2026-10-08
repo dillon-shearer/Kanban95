@@ -58,10 +58,15 @@ A merged ticket's worktree and branch are removed by the board. Every ten merged
 | Inbox | taskbar "Inbox n", Start → Inbox | every ticket that needs you: questions to answer, and failures with what resolves them |
 | Brain | Start → Brain | search what agents learned, add a note yourself |
 | Settings | Start → Settings | Models, CLI paths and trusted folders, Prompts (preferences), Grants, Voice, sounds |
+| Notepad | Start → Notepad | your own scratch notes for this repo, saved as you type |
 
-The desktop has an icon for Board, Inbox, Brain, Settings, New ticket and New brainstorm down its left edge: click selects, double-click or Enter does what the Start menu entry does. Icons sit under every window.
+The desktop has an icon for Board, Inbox, Brain, Settings, Notepad, New ticket and New brainstorm down its left edge: click selects, double-click or Enter does what the Start menu entry does. Icons sit under every window.
 
-Windows can be dragged by the title bar, resized from the corner, minimized to the taskbar and maximized to fill the desktop (Maximize button or double-click the title bar; Restore puts it back). Board, Brain, Inbox and Settings remember where you left them, maximized or not.
+Windows can be dragged by the title bar, resized from the corner, minimized to the taskbar and maximized to fill the desktop (Maximize button or double-click the title bar; Restore puts it back). Board, Brain, Inbox, Settings and Notepad remember where you left them, maximized or not.
+
+## Notepad
+
+A place to draft before you hand words to an agent or a ticket. One plain text area, with the mic beside it. It saves half a second after you stop typing and again when you close the window, to `.kanban95/notepad.md` in the repo (git-ignored; each repo has its own). **New ticket from selection** opens the New ticket form with the selected text in Body, or all of it when nothing is selected; **Copy** puts the same text on the clipboard. Up to 256 KB; past that the status line says it was not saved and the file keeps the last text that fit. Agents never read it.
 
 ## Cards
 
