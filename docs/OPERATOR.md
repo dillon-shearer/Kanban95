@@ -61,7 +61,7 @@ Windows can be dragged by the title bar, resized from the corner and minimized t
 
 ## Cards
 
-Right-click a card for its menu: Open, Launch, **Model**, **Effort** and **CLI** (set or clear this ticket's override without opening it), Retry merge (after a conflict you fixed), Reset to Backlog, Delete.
+Right-click a card for its menu: Open, Launch, **Model**, **Effort** and **CLI** (set or clear this ticket's override without opening it), Retry merge (after a conflict you fixed), Reset to Backlog (also on a card waiting on a dependency: it cancels the wait, so it will not launch by itself), Delete.
 
 ![Card menu](img/card-menu.png)
 

@@ -210,7 +210,7 @@ function cardMenu(t, x, y) {
     ] },
     '-',
     { label: 'Retry merge', disabled: !(t.status === 'done' && !t.merged_at), run: () => act(() => api('POST', `/tickets/${t.id}/merge`), `Merge of #${t.id} queued.`) },
-    { label: 'Reset to Backlog', disabled: t.status === 'backlog', run: () => reset(t) },
+    { label: 'Reset to Backlog', disabled: t.status === 'backlog' && !t.flags.blocked_on_deps, run: () => reset(t) },
     { label: 'Delete', run: async () => {
       if ((await dialog('Delete ticket', `Delete #${t.id} ${t.title}? Its notes and runs go with it.`, ['Delete', 'Cancel'])) === 'Delete') {
         act(() => api('DELETE', `/tickets/${t.id}`), `#${t.id} deleted.`);
