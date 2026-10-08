@@ -25,15 +25,18 @@ describe('openDb', () => {
     expect(ignore).toMatch(/^board\.db$/m);
     expect(ignore).toMatch(/^sessions\/$/m);
     expect(ignore).toMatch(/^attachments\/$/m);
+    expect(ignore).toMatch(/^notepad\.md$/m);
+    expect(ignore).toMatch(/^runner\.json$/m);
   });
 
-  it('adds attachments/ to the inner .gitignore of a board made before attachments, once', () => {
+  it('adds attachments/ and notepad.md to the inner .gitignore of an older board, once', () => {
     const repo = tmp();
     mkdirSync(join(repo, '.kanban95'));
     writeFileSync(join(repo, '.kanban95', '.gitignore'), 'board.db\nboard.db-*\nsessions/\n');
     openDb(repo).close();
     openDb(repo).close();
     expect(readFileSync(join(repo, '.kanban95', '.gitignore'), 'utf8').match(/^attachments\/$/gm)).toHaveLength(1);
+    expect(readFileSync(join(repo, '.kanban95', '.gitignore'), 'utf8').match(/^notepad\.md$/gm)).toHaveLength(1);
   });
 
   it('applies nothing on a second start', () => {

@@ -1,3 +1,4 @@
+import './home.ts'; // also here, not only in vitest.config.ts: a run from the repo root skips that config and wrote the real home
 import { execFileSync, spawn } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -8,8 +9,8 @@ import WebSocket from 'ws';
 import { readTicket } from '../src/api.ts';
 import { createWorktree } from '../src/git.ts';
 import { mint } from '../src/grants.ts';
-import { sessionsOf } from '../src/launcher.ts';
-import { DIRTY_WAIT, events, MAX_RETRY, Refused, RESTARTED, TABLE, TO_RESOLVE, transition, type Event, type Facts, type Status } from '../src/lifecycle.ts';
+import { sessions, sessionsOf } from '../src/launcher.ts';
+import { DIRTY_WAIT, events, MAX_RETRY, Refused, RESTART_NOTE, RESTARTED, TABLE, TO_RESOLVE, transition, type Event, type Facts, type Status } from '../src/lifecycle.ts';
 import { start } from '../src/server.ts';
 
 describe('transition table', () => {
@@ -22,6 +23,8 @@ describe('transition table', () => {
     ['launch on a testing ticket whose agent is gone', { status: 'testing', live: false }, 'launch', { to: 'testing', set: { needs_human: 0 }, effects: ['spawn_test'] }],
     ['resume a flagged ticket in progress', { status: 'in_progress', live: false, needs_human: true, retry: 2 }, 'resume', { to: 'in_progress', set: { needs_human: 0 }, effects: ['spawn_execute'] }],
     ['resume a flagged ticket in testing', { status: 'testing', live: false, needs_human: true }, 'resume', { to: 'testing', set: { needs_human: 0 }, effects: ['spawn_test'] }],
+    ['restart a live ticket in progress', { status: 'in_progress', retry: 2 }, 'restart', { to: 'in_progress', set: { needs_human: 0 }, effects: ['end_session', 'note', 'spawn_execute'] }],
+    ['restart a flagged ticket in testing with no agent', { status: 'testing', live: false, needs_human: true }, 'restart', { to: 'testing', set: { needs_human: 0 }, effects: ['end_session', 'note', 'spawn_test'] }],
     ['worker submits', { status: 'in_progress' }, 'submit', { to: 'testing', set: {}, effects: ['end_session', 'spawn_test'] }],
     ['tester passes after report_test(pass)', { status: 'testing', passReported: true }, 'pass', { to: 'done', set: {}, effects: ['end_session', 'enqueue_merge'] }],
     ['first failure', { status: 'testing', retry: 0 }, 'fail', { to: 'in_progress', set: { retry: '+1' }, effects: ['end_session', 'spawn_execute'] }],
@@ -44,11 +47,11 @@ describe('transition table', () => {
 
   const allowed: Record<Status, Event[]> = {
     backlog: ['launch'],
-    in_progress: ['launch', 'resume', 'submit', 'ask', 'answer', 'exit'],
-    testing: ['launch', 'resume', 'pass', 'fail', 'ask', 'answer', 'exit'],
+    in_progress: ['launch', 'resume', 'restart', 'submit', 'ask', 'answer', 'exit'],
+    testing: ['launch', 'resume', 'restart', 'pass', 'fail', 'ask', 'answer', 'exit'],
     done: ['merged', 'conflict', 'merge', 'dirty'],
   };
-  const EVENTS: Event[] = ['launch', 'submit', 'pass', 'fail', 'ask', 'answer', 'exit', 'merged', 'conflict', 'merge', 'dirty', 'resume'];
+  const EVENTS: Event[] = ['launch', 'submit', 'pass', 'fail', 'ask', 'answer', 'exit', 'merged', 'conflict', 'merge', 'dirty', 'resume', 'restart'];
   it('refuses every other event in every status', () => {
     let n = 0;
     for (const status of Object.keys(allowed) as Status[]) {
@@ -57,7 +60,7 @@ describe('transition table', () => {
         n++;
       }
     }
-    expect(n).toBe(4 * EVENTS.length - 18);
+    expect(n).toBe(4 * EVENTS.length - 20);
   });
 
   it('refuses a guarded row whose guard fails, saying why', () => {
@@ -175,6 +178,11 @@ const until = async (f: () => unknown, what: string, ms = 30_000) => {
     await new Promise((r) => setTimeout(r, 25));
   }
 };
+// Every backlog ticket at once, in one request (so none can finish before the last starts): the runner with room for all.
+const launchTogether = (n: number) => {
+  writeFileSync(join(repo, '.kanban95', 'config.json'), JSON.stringify({ runner_concurrency: n }));
+  return fetch(`http://127.0.0.1:${srv.port}/api/runner`, { method: 'PUT', headers: { 'content-type': 'application/json', cookie: `k95=${srv.secret}` }, body: '{"on":true}' });
+};
 const landed = (id: number) => until(() => t(id).merged_at && !existsSync(join(repo, '.worktrees', `t-${id}`)), `ticket ${id} merged and cleaned`);
 
 beforeEach(async () => {
@@ -235,15 +243,12 @@ describe('lifecycle', { timeout: 60_000 }, () => {
     ws.close();
   });
 
-  it('holds a dependent and launches it the moment its last dependency is merged; Launch all goes in dependency order', async () => {
+  it('holds a dependent and launches it the moment its last dependency is merged', async () => {
     const b = ticket('Second step');
     const a = ticket('First step');
     db.prepare('INSERT INTO ticket_deps VALUES (?, ?)').run(b, a);
-    const r = await post('/api/tickets/launch-all');
-    expect((await r.json()).map((x: { id: number; status: string; flags: object }) => [x.id, x.status, x.flags])).toEqual([
-      [a, 'in_progress', { needs_human: false, blocked_on_deps: false }],
-      [b, 'backlog', { needs_human: false, blocked_on_deps: true }],
-    ]);
+    expect(await (await post(`/api/tickets/${b}/launch`)).json()).toMatchObject({ status: 'backlog', flags: { needs_human: false, blocked_on_deps: true } });
+    await post(`/api/tickets/${a}/launch`);
     await landed(a);
     await landed(b);
     expect(runs(b)[0].started_at >= t(a).merged_at!).toBe(true);
@@ -263,15 +268,15 @@ describe('lifecycle', { timeout: 60_000 }, () => {
     expect(runs(id)[2].prompt_rendered).toContain('FAIL: criterion 1 fails'); // the retry sees what failed
   });
 
-  it("escalation: the tester's set_model is what the retry runs with", async () => {
+  it("a tester cannot escalate: its set_model is refused and the retry runs with the ticket's own model", async () => {
     models({ test: 'escalate' });
     const id = ticket('Hard one');
     await post(`/api/tickets/${id}/launch`);
     await until(() => runs(id).filter((x) => x.phase === 'execute').length === 2, 'the retry');
     models({ test: 'pass' });
     await landed(id);
-    expect(runs(id).filter((x) => x.phase === 'execute').map((x) => x.model)).toEqual(['work', 'work-big']);
-    expect(t(id)).toMatchObject({ model: 'work-big', effort: 'high', retry: 1 });
+    expect(runs(id).filter((x) => x.phase === 'execute').map((x) => x.model)).toEqual(['work', 'work']);
+    expect(t(id)).toMatchObject({ model: null, effort: null, retry: 1 });
   });
 
   it('ask_operator round trip: chord, the answer reaches the agent as one line and clears the flag', async () => {
@@ -281,6 +286,8 @@ describe('lifecycle', { timeout: 60_000 }, () => {
     expect(notes(id, 'question')).toEqual(['Which colour?']);
     expect(sounds).toEqual([{ sound: 'chord', ticket: id }]);
     expect(sessionsOf(id)).toHaveLength(1); // the pty stays alive
+    const pty = sessionsOf(id)[0].pty, writes: string[] = [], write = pty.write.bind(pty);
+    pty.write = (d: string) => { writes.push(d); write(d); };
 
     expect((await post(`/api/tickets/${id}/answer`, { answer: '  ' })).status).toBe(400);
     const r = await post(`/api/tickets/${id}/answer`, { answer: 'blue,\r\nand bold' });
@@ -288,6 +295,8 @@ describe('lifecycle', { timeout: 60_000 }, () => {
     expect((await r.json()).flags.needs_human).toBe(false);
     expect(notes(id, 'answer')).toEqual(['blue,\r\nand bold']);
     expect((await post(`/api/tickets/${id}/answer`, { answer: 'again' })).status).toBe(409); // nothing is asked now
+    await until(() => writes.length === 2, 'the Enter');
+    expect(writes).toEqual(['blue, and bold', '\r']); // Enter on its own, or Claude Code takes the burst as a paste
 
     await landed(id);
     expect(git('show', 'HEAD:answer.txt')).toBe('blue, and bold');
@@ -306,10 +315,34 @@ describe('lifecycle', { timeout: 60_000 }, () => {
     expect(notes(broken, 'failure')[0]).toMatch(/^launch failed: unknown cli nope/);
   });
 
+  it("the operator's X ends a session: a ticket's is flagged once with the operator note, a brainstorm's touches no ticket", async () => {
+    const del = (key: number) => fetch(`http://127.0.0.1:${srv.port}/api/sessions/${key}`, { method: 'DELETE', headers: { cookie: `k95=${srv.secret}` } });
+    expect((await del(9999)).status).toBe(404);
+    const id = ticket('Long one', { model: 'hang' });
+    await post(`/api/tickets/${id}/launch`);
+    await until(() => sessionsOf(id).length === 1, 'the agent');
+    expect((await del(sessionsOf(id)[0].key)).status).toBe(204);
+    await until(() => sessionsOf(id).length === 0 && runs(id)[0].outcome, 'the session gone');
+    expect(t(id)).toMatchObject({ status: 'in_progress', flags: { needs_human: true } });
+    expect(runs(id).map((x) => x.outcome)).toEqual(['closed']);
+    await new Promise((r) => setTimeout(r, 200)); // a late exit handler would have written its note by now
+    expect(notes(id, 'failure')).toEqual([`ended by the operator from the terminal window
+${TO_RESOLVE}`]);
+    expect((await post(`/api/tickets/${id}/resume`)).status).toBe(200);
+
+    writeFileSync(join(process.env.USERPROFILE!, '.kanban95', 'models.json'), JSON.stringify({ cli: 'claude', claude: { plan: { model: 'hang', effort: 'low' } } }));
+    const b = await (await post('/api/brainstorm')).json();
+    const before = db.prepare('SELECT count(*) n FROM notes').get();
+    expect((await del(b.id)).status).toBe(204);
+    await until(() => !sessions.has(b.id), 'the brainstorm gone');
+    expect(db.prepare('SELECT count(*) n FROM notes').get()).toEqual(before);
+    expect(db.prepare("SELECT tool, outcome FROM audit WHERE tool = 'sessions.end'").all()).toHaveLength(3);
+  });
+
   it('merge conflict: the worker merges the base in its kept worktree and both tickets land with no operator action', async () => {
     const one = ticket('Write shared one', { model: 'conflict' });
     const two = ticket('Write shared two', { model: 'conflict' });
-    await post('/api/tickets/launch-all');
+    await launchTogether(2);
     await until(() => [one, two].some((id) => t(id).retry === 1), 'the conflict sent back');
     const [won, lost] = t(one).retry === 1 ? [two, one] : [one, two];
     await landed(won);
@@ -325,7 +358,7 @@ describe('lifecycle', { timeout: 60_000 }, () => {
   it('merge conflict at the retry cap: flagged with the worktree kept, the base clean, the fix in the note and the Inbox; a retried merge lands it', async () => {
     const one = ticket('Write shared one', { model: 'conflict', retry: MAX_RETRY });
     const two = ticket('Write shared two', { model: 'conflict', retry: MAX_RETRY });
-    await post('/api/tickets/launch-all');
+    await launchTogether(2);
     await until(() => [one, two].every((id) => t(id).status === 'done') && [one, two].some((id) => t(id).flags.needs_human), 'both done, one flagged');
     const [won, lost] = t(one).merged_at ? [one, two] : [two, one];
     await landed(won);
@@ -394,7 +427,7 @@ describe('lifecycle', { timeout: 60_000 }, () => {
 
   it('five tickets at once: five ptys, one merge queue, every branch lands in a straight line of merges', async () => {
     const ids = [1, 2, 3, 4, 5].map((i) => ticket(`Add file ${i}`));
-    await post('/api/tickets/launch-all');
+    await launchTogether(5);
     expect(ids.map((id) => sessionsOf(id).length)).toEqual([1, 1, 1, 1, 1]);
     for (const id of ids) await landed(id);
     expect(ids.map((id) => t(id).flags.needs_human)).toEqual([false, false, false, false, false]);
@@ -403,13 +436,15 @@ describe('lifecycle', { timeout: 60_000 }, () => {
     expect(readdirSync(join(repo, '.worktrees'))).toEqual([]);
   });
 
-  it('the 10th merged ticket creates exactly one housekeeping ticket, launched like any other; the 11th does not', async () => {
+  it('the 10th merged ticket creates exactly one housekeeping ticket, left in Backlog for the runner; the 11th does not', async () => {
     for (let i = 0; i < 9; i++) ticket(`Old ${i}`, { status: 'done', merged_at: '2026-01-01T00:00:00.000Z' });
     const tenth = ticket('Tenth');
     await post(`/api/tickets/${tenth}/launch`);
     await landed(tenth);
     const hk = () => db.prepare("SELECT id FROM tickets WHERE template = 'housekeeping'").all() as { id: number }[];
     expect(hk()).toHaveLength(1);
+    expect(t(hk()[0].id).status).toBe('backlog');
+    await post(`/api/tickets/${hk()[0].id}/launch`);
     await landed(hk()[0].id);
     expect(runs(hk()[0].id)[0].prompt_rendered).toMatch(/^# Housekeeping/);
     const eleventh = ticket('Eleventh');
@@ -537,5 +572,38 @@ describe('resume', { timeout: 60_000 }, () => {
     expect(notes(id, 'failure')).toEqual([RESTARTED, `agent exited without reporting\n${TO_RESOLVE}`]);
     expect(runs(id)).toHaveLength(1); // not resumed again
     expect(t(id).retry).toBe(1);
+  });
+});
+
+describe('restart', { timeout: 60_000 }, () => {
+  it('replaces a live agent in the same phase and worktree: old run ends as restart, no flag, status and retry kept, note in the prompt', async () => {
+    models({ execute: 'hang', test: 'hang' });
+    for (const [status, phase] of [['in_progress', 'execute'], ['testing', 'test']] as const) {
+      const id = ticket(`Stuck ${status}`, { status, retry: 1 });
+      const wt = createWorktree(repo, id);
+      expect((await post(`/api/tickets/${id}/resume`)).status).toBe(409); // not flagged, so only launch starts it
+      expect((await post(`/api/tickets/${id}/launch`)).status).toBe(200);
+      const [old] = sessionsOf(id);
+      expect((await post(`/api/tickets/${id}/restart`)).status).toBe(200);
+      await old.done;
+      await until(() => runs(id)[0].outcome, 'the old run outcome');
+      expect(runs(id).map((r) => [r.phase, r.outcome])).toEqual([[phase, 'restart'], [phase, null]]);
+      expect(runs(id)[1].prompt_rendered).toContain(RESTART_NOTE);
+      expect(sessionsOf(id)).toHaveLength(1);
+      expect(sessionsOf(id)[0]).not.toBe(old);
+      expect(existsSync(wt.path)).toBe(true);
+      expect(t(id)).toMatchObject({ status, retry: 1, flags: { needs_human: false } });
+      expect(notes(id, 'failure')).toEqual([RESTART_NOTE]); // the kill wrote no "exited without reporting"
+      const audit = db.prepare("SELECT 1 FROM audit WHERE tool = 'tickets.restart'").get();
+      expect(audit).toBeDefined();
+    }
+  });
+
+  it('is refused in backlog', async () => {
+    const id = ticket('Not started');
+    const r = await post(`/api/tickets/${id}/restart`);
+    expect(r.status).toBe(409);
+    expect((await r.json()).error).toContain('cannot restart a ticket in backlog');
+    expect(runs(id)).toEqual([]);
   });
 });

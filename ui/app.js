@@ -30,6 +30,7 @@ const MOVES = { backlog: ['in_progress'], in_progress: ['backlog'], testing: ['b
 const tickets = new Map();
 let sessions = [];
 let inbox = [];
+let runner = { on: false, running: [], left: 0, backlog: 0 }; // GET /api/runner: the Run button and its status-bar line
 let models = null; // ~/.kanban95/models.json as written, for the cards' default model and effort
 let settings = { paths: {}, sounds: true, voice: { backend: 'local', mode: 'push' } };
 const views = new Map(); // open window id → redraw(ticketId | null)
@@ -49,7 +50,7 @@ async function refreshTicket(id) {
   }
 }
 async function refreshShared() {
-  [sessions, inbox] = await Promise.all([api('GET', '/sessions'), api('GET', '/inbox')]);
+  [sessions, inbox, runner] = await Promise.all([api('GET', '/sessions'), api('GET', '/inbox'), api('GET', '/runner')]);
   openNewTerminals();
   taskbar();
 }
@@ -229,8 +230,32 @@ async function launch(ts, verb = 'launch') {
   if (go.length < ts.length) more.push(`Skipped ${ts.length - go.length} ${verb === 'launch' ? 'not in Backlog' : 'with nothing to resume'}.`);
   await act(() => sayLaunched(ok, more));
 }
-const launchAll = () => act(async () => sayLaunched((await api('POST', '/tickets/launch-all')).map((t) => t.id)));
+const toggleRunner = () => act(async () => {
+  runner = await api('PUT', '/runner', { on: !runner.on });
+  drawBoard();
+});
+/** While on: what it waits on and what is left. Off by itself: why. Off by Stop: nothing. */
+const runnerLine = (r) => r.on
+  ? `Running: ${r.running.map((id) => `#${id}`).join(', ') || 'nothing yet'} (${r.left} of ${r.backlog} candidates left)`
+  : r.why ? `Runner stopped: ${r.why}` : '';
+// Replaces a running ticket's agent, live or hung, with a fresh one in the same phase and worktree (docs/LIFECYCLE.md).
+const restartable = (t) => t?.status === 'in_progress' || t?.status === 'testing';
+async function restart(id) {
+  if (!restartable(tickets.get(id))) return say(`#${id} is not In progress or Testing; nothing to restart.`);
+  if ((await dialog('Restart ticket', `End the running agent for #${id} and start a new one in the same phase?`, ['Restart', 'Cancel'])) !== 'Restart') return;
+  await act(async () => {
+    await api('POST', `/tickets/${id}/restart`);
+    await sayLaunched([id]);
+  });
+}
 const newBrainstorm = () => act(async () => openTerminal(await api('POST', '/brainstorm')), 'Brainstorm started.');
+/** An operator terminal: an agent with the operator's reach on the board, given the mission typed here. The daemon refuses an empty one. */
+async function newOperator() {
+  const mission = h('textarea', { rows: 8, cols: 60, placeholder: 'What should the agent do?' });
+  const body = h('div', { class: 'field-row-stacked' }, h('label', {}, 'Mission'), mission);
+  if ((await dialog('New operator terminal', body, ['Start', 'Cancel'])) !== 'Start') return;
+  await act(async () => openTerminal(await api('POST', '/operator', { mission: mission.value })), 'Operator terminal started.');
+}
 const housekeeping = () => act(async () => {
   const t = await api('POST', '/tickets/housekeeping');
   say(`Housekeeping ticket #${t.id} created and launched.`);
@@ -253,6 +278,7 @@ function cardMenu(ts, x, y) {
     } },
     { label: 'Launch', disabled: !ts.some(launchable), run: () => launch(ts) },
     { label: 'Resume', disabled: !ts.some(resumable), run: () => launch(ts, 'resume') },
+    ...(ts.length === 1 && restartable(ts[0]) ? [{ label: 'Restart', run: () => restart(ts[0].id) }] : []),
     '-',
     { label: 'Model', items: [
       { label: `Phase default${tick('model', null)}`, run: () => set('model', null) },
@@ -290,6 +316,8 @@ function openBoard() {
   if (w.body.firstChild) return;
   const status = h('p', { class: 'status-bar-field', role: 'status' }, 'Ready');
   const count = h('p', { class: 'status-bar-field k95-count' });
+  const run = h('button', { onclick: toggleRunner, title: 'Ctrl+L' });
+  const runField = h('p', { class: 'status-bar-field k95-runner' });
   const cols = h('div', { class: 'k95-columns', onclick: (e) => { // a click on empty column space clears the selection
     if (!e.target.closest('.card')) selection.clear(), drawBoard();
   } });
@@ -297,12 +325,12 @@ function openBoard() {
   w.body.append(
     h('div', { class: 'k95-toolbar' },
       h('button', { onclick: () => launch(picked()) }, 'Launch'),
-      h('button', { onclick: launchAll, title: 'Ctrl+L' }, 'Launch all'),
+      run,
       h('button', { onclick: newBrainstorm, title: 'Ctrl+N' }, 'New brainstorm'),
       h('button', { onclick: () => openTicket(null) }, 'New ticket'),
       h('button', { onclick: housekeeping }, 'Housekeeping')),
     cols,
-    h('div', { class: 'status-bar' }, status, count));
+    h('div', { class: 'status-bar' }, status, runField, count));
   say = (msg) => { status.textContent = msg; status.title = msg; };
   views.set('board', () => {
     const all = [...tickets.values()];
@@ -317,6 +345,9 @@ function openBoard() {
     for (const c of cols.querySelectorAll('.col')) c.querySelector('.cards').scrollTop = scroll[c.dataset.status] ?? 0;
     if (focus) cols.querySelector(`.col[data-status="${focus[0]}"] .card[data-id="${focus[1]}"]`)?.focus();
     count.textContent = `${all.length} tickets · ${sessions.length} agents`;
+    run.textContent = runner.on ? 'Stop' : 'Run';
+    runField.textContent = runField.title = runnerLine(runner);
+    runField.hidden = !runField.textContent;
   });
   drawBoard();
 }
@@ -353,11 +384,16 @@ function keepScroll(p, rebuild) {
   if (sp) sp.scrollTop = inner;
 }
 
-function openTicket(id) {
+/** `draft`: for a new ticket, text for its Body (replaces what the form holds). */
+function openTicket(id, draft) {
   const wid = `ticket-${id ?? 'new'}`;
   const w = open(wid, { title: id ? `Ticket #${id}` : 'New ticket', w: 680, h: 480, onClose: () => views.delete(wid) });
+  if (id === null) {
+    if (!w.body.firstChild) w.body.append(ticketForm(w, null));
+    if (draft != null) w.body.querySelector('[data-field="body"]').value = draft;
+    return;
+  }
   if (w.body.firstChild) return;
-  if (id === null) return w.body.append(ticketForm(w, null));
   const tb = tabs(['Ticket', 'Notes', 'Runs', 'Diff', 'Grants', 'Audit'], async (tab, p, first) => {
     const t = tickets.get(id);
     if (!t) return p.replaceChildren(h('p', {}, 'This ticket was deleted.'));
@@ -444,7 +480,7 @@ function facts(t) {
 /** The ticket's own fields: edits an existing ticket, or creates one (`t` null) and swaps the window for the new ticket's. */
 function ticketForm(w, t) {
   const title = h('input', { type: 'text', value: t?.title ?? '' });
-  const body = h('textarea', { rows: 6 }, t?.body ?? '');
+  const body = h('textarea', { rows: 6, 'data-field': 'body' }, t?.body ?? '');
   const criteria = h('textarea', { rows: 5 }, t?.criteria ?? '');
   const deps = h('input', { type: 'text', 'data-mic': 'off', value: t?.depends_on.join(', ') ?? '', placeholder: 'e.g. 3, 4' });
   const save = async () => {
@@ -469,7 +505,8 @@ function ticketForm(w, t) {
     h('div', { class: 'field-row-stacked' }, h('label', {}, 'Acceptance criteria, one per line'), criteria),
     h('div', { class: 'field-row-stacked' }, h('label', {}, 'Depends on'), deps),
     h('div', { class: 'field-row' }, h('button', { onclick: save }, t ? 'Save' : 'Create'),
-      t && h('button', { disabled: t.status !== 'backlog', onclick: () => launch([t]) }, 'Launch')));
+      t && h('button', { disabled: t.status !== 'backlog', onclick: () => launch([t]) }, 'Launch'),
+      t && h('button', { onclick: () => restart(t.id) }, 'Restart')));
 }
 
 // ---- terminals ----
@@ -488,14 +525,26 @@ function openTerminal(s, auto = false) {
   seen.add(s.id);
   const wid = `term-${s.id}`;
   if (isOpen(wid)) return focus(wid);
-  const title = s.ticket_id === null ? `Brainstorm — ${s.model}` : `#${s.ticket_id} — ${s.phase} — ${s.model}`;
+  const title = s.ticket_id === null ? `${s.role === 'operator' ? 'Operator' : 'Brainstorm'} — ${s.model}` : `#${s.ticket_id} — ${s.phase} — ${s.model}`;
   const ws = new WebSocket(`ws://${location.host}/pty/${s.id}`);
   const send = (msg) => ws.readyState === WebSocket.OPEN && ws.send(JSON.stringify(msg));
   const term = new Terminal({ fontFamily: 'Consolas, "Courier New", monospace', fontSize: 13, scrollback: 5000 });
   const fit = new FitAddon();
   const ro = new ResizeObserver(() => fit.fit());
   // Spoken words are typed into the agent's terminal without Enter; the operator presses it.
-  const w = open(wid, { title, w: 760, h: 440, background: auto, extra: [micButton((text) => send({ data: text }))], onClose: () => { terms.delete(wid); ro.disconnect(); ws.close(); term.dispose(); } });
+  // X ends the agent for good, after a confirm; the board's own closes (after a report, a deleted ticket) never do.
+  const onX = async () => {
+    if (w.el.classList.contains('ended')) return w.close();
+    const ask = s.ticket_id === null ? 'End this brainstorm?' : `End the agent for #${s.ticket_id}? The ticket is flagged so you can resume it.`;
+    if ((await dialog('End agent', `${ask} Minimize to keep it running.`, ['End', 'Cancel'])) !== 'End') return;
+    try {
+      await api('DELETE', `/sessions/${s.id}`);
+      w.close();
+    } catch (e) {
+      say(e.message);
+    }
+  };
+  const w = open(wid, { title, w: 760, h: 440, background: auto, onX, extra: [micButton((text) => send({ data: text }))], onClose: () => { terms.delete(wid); ro.disconnect(); ws.close(); term.dispose(); } });
   terms.set(wid, s.ticket_id);
   w.body.classList.add('k95-term');
   term.loadAddon(fit);
@@ -567,6 +616,7 @@ function openInbox() {
             h('button', { onclick: () => openTicket(q.ticket_id) }, 'Open ticket'),
             q.status === 'done' && !q.merged_at && h('button', { onclick: () => act(() => api('POST', `/tickets/${q.ticket_id}/merge`), `Merge of #${q.ticket_id} queued.`) }, 'Retry merge'),
             (q.status === 'in_progress' || q.status === 'testing') && t && h('button', { onclick: () => launch([t], 'resume') }, 'Resume'),
+            (q.status === 'in_progress' || q.status === 'testing') && h('button', { onclick: () => restart(q.ticket_id) }, 'Restart'),
             q.status !== 'done' && t && h('button', { onclick: () => reset([t]) }, 'Reset to Backlog')));
       }
       const answer = h('textarea', { rows: 3, placeholder: 'Your answer' });
@@ -590,7 +640,7 @@ async function saveSettings(patch) {
 function grantTable(grants) {
   return table(['Grant', 'Ticket', 'Role', 'Session', 'Expires', ''], grants.map((g) => {
     const s = sessions.find((x) => x.grant_id === g.id);
-    return h('tr', {}, h('td', {}, g.id), h('td', {}, g.ticket_id ? `#${g.ticket_id}` : 'brainstorm'), h('td', {}, g.role),
+    return h('tr', {}, h('td', {}, g.id), h('td', {}, g.ticket_id ? `#${g.ticket_id}` : g.role === 'operator' ? 'operator terminal' : 'brainstorm'), h('td', {}, g.role),
       h('td', {}, s ? `${s.phase} · ${s.model}` : 'none'), h('td', {}, fmt(g.expires_at)),
       h('td', {}, h('button', { 'data-grant': g.id, onclick: () => act(() => api('DELETE', `/grants/${g.id}`), `Grant ${g.id} revoked; its session was stopped.`) }, 'Revoke')));
   }));
@@ -676,6 +726,43 @@ function openSettings() {
   views.set('settings', () => tb.redraw());
 }
 
+// ---- notepad ----
+
+/** The operator's scratch text, <repo>/.kanban95/notepad.md. Saved 500 ms after the last keystroke and on close. */
+function openNotepad() {
+  let timer = null;
+  const text = h('textarea', { spellcheck: 'false', readonly: true });
+  const status = h('p', { class: 'status-bar-field' }, 'Loading…');
+  const save = async () => {
+    clearTimeout(timer);
+    timer = null;
+    try {
+      await api('PUT', '/notepad', { value: text.value });
+      status.textContent = 'Saved.';
+    } catch (e) {
+      status.textContent = `Not saved: ${e.message}`;
+    }
+  };
+  const w = open('notepad', { title: 'Notepad', w: 520, h: 380, persist: true, onClose: () => timer && save() });
+  if (w.body.firstChild) return;
+  text.addEventListener('input', () => {
+    clearTimeout(timer);
+    timer = setTimeout(save, 500);
+  });
+  // The selection, or everything when nothing is selected.
+  const picked = () => text.value.slice(text.selectionStart, text.selectionEnd) || text.value;
+  w.body.append(h('div', { class: 'k95-notepad' }, text),
+    h('div', { class: 'field-row' },
+      h('button', { onclick: () => openTicket(null, picked()) }, 'New ticket from selection'),
+      h('button', { onclick: () => navigator.clipboard.writeText(picked()).then(() => { status.textContent = 'Copied.'; }, (e) => { status.textContent = e.message; }) }, 'Copy')),
+    h('div', { class: 'status-bar' }, status));
+  api('GET', '/notepad').then(({ value }) => {
+    text.value = value;
+    text.readOnly = false;
+    status.textContent = '.kanban95/notepad.md';
+  }, (e) => { status.textContent = e.message; });
+}
+
 // ---- taskbar, keyboard, start ----
 
 const START = [
@@ -683,10 +770,12 @@ const START = [
   { label: 'Inbox', run: openInbox },
   { label: 'Brain', run: openBrain },
   { label: 'Settings', run: openSettings },
+  { label: 'Notepad', run: openNotepad },
   '-',
   { label: 'New ticket', run: () => openTicket(null) },
   { label: 'New brainstorm', run: newBrainstorm },
-  { label: 'Launch all', run: launchAll },
+  { label: 'New operator terminal', run: newOperator },
+  { get label() { return runner.on ? 'Stop' : 'Run'; }, run: toggleRunner },
   { label: 'Housekeeping', run: housekeeping },
 ];
 
@@ -698,7 +787,7 @@ function desktopIcons() {
   h('img', { src: `icons/${label.toLowerCase().replace(' ', '-')}.svg`, alt: '', width: 32, height: 32, draggable: 'false' }),
   h('span', {}, label));
   document.getElementById('desktop').prepend(h('nav', { id: 'icons' },
-    ['Board', 'Inbox', 'Brain', 'Settings', 'New ticket', 'New brainstorm'].map(icon)));
+    ['Board', 'Inbox', 'Brain', 'Settings', 'Notepad', 'New ticket', 'New brainstorm'].map(icon)));
 }
 
 function taskbar() {
@@ -710,8 +799,8 @@ function taskbar() {
 
 const clock = () => { document.getElementById('clock').textContent = new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }); };
 
-// Esc closes the focused window, Ctrl+L launches all, Ctrl+A selects every card on a focused Board, Ctrl+N starts a
-// brainstorm. Inside a terminal every key goes to the
+// Esc closes the focused window, Ctrl+L turns the runner on or off, Ctrl+A selects every card on a focused Board, Ctrl+N starts a
+// brainstorm, Ctrl+Shift+N an operator terminal, Ctrl+R restarts the focused ticket's agent. Inside a terminal every key goes to the
 // agent instead (Esc interrupts Claude Code, Ctrl+L clears the screen).
 addEventListener('keydown', (e) => {
   if (document.querySelector('dialog[open]') || e.target.closest?.('.xterm')) return;
@@ -723,7 +812,7 @@ addEventListener('keydown', (e) => {
     if (w) close(w.el.dataset.win);
   } else if (plainCtrl && e.key.toLowerCase() === 'l') {
     e.preventDefault();
-    launchAll();
+    toggleRunner();
   } else if (plainCtrl && e.key.toLowerCase() === 'a' && focused()?.el.dataset.win === 'board' && !e.target.closest?.('input, textarea, select, [contenteditable]')) {
     e.preventDefault();
     for (const id of tickets.keys()) selection.add(id);
@@ -731,6 +820,14 @@ addEventListener('keydown', (e) => {
   } else if (plainCtrl && e.key.toLowerCase() === 'n') {
     e.preventDefault();
     newBrainstorm();
+  } else if (plainCtrl && e.key.toLowerCase() === 'r') {
+    const id = /^ticket-(\d+)$/.exec(focused()?.el.dataset.win)?.[1];
+    if (!id) return;
+    e.preventDefault(); // not a page reload
+    restart(Number(id));
+  } else if (e.ctrlKey && e.shiftKey && !e.altKey && e.key.toLowerCase() === 'n') {
+    e.preventDefault();
+    newOperator();
   }
 });
 
