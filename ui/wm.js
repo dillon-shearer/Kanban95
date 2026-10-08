@@ -1,5 +1,6 @@
 // Window manager: Win95 MDI windows on #desktop, one taskbar button each, modal dialogs and pop-up menus.
-// A window opened with `persist` keeps its position and size in localStorage; the others cascade.
+// A window opened with `persist` keeps its position, size and maximized state in localStorage; the others cascade.
+// Maximized is the `max` class: CSS fills #desktop over the inline geometry, which stays as the restore geometry.
 const desktop = document.getElementById('desktop');
 const tasks = document.getElementById('tasks');
 const wins = new Map(); // id → { el, task, onClose }
@@ -56,17 +57,32 @@ export function open(id, { title, w = 480, h: height = 320, persist = false, bac
   const el = h('div', { class: 'window k95-win', 'data-win': id },
     h('div', { class: 'title-bar' }, text, h('div', { class: 'title-bar-controls' }, ...extra,
       h('button', { 'aria-label': 'Minimize', onclick: () => minimize(id) }),
+      h('button', { 'aria-label': saved?.max ? 'Restore' : 'Maximize', onclick: () => toggleMax() }),
       h('button', { 'aria-label': 'Close', onclick: () => close(id) }))),
     body);
+  el.classList.toggle('max', !!saved?.max);
   Object.assign(el.style, { left: `${r.x}px`, top: `${r.y}px`, width: `${r.w}px`, height: `${r.h}px` });
   const task = h('button', { class: 'task', onclick: () => (el.classList.contains('active') && !el.hidden ? minimize(id) : focus(id)) }, title);
   const api = { el, body, title: (t) => { text.textContent = t; task.textContent = t; }, close: () => close(id) };
   wins.set(id, { el, task, onClose, api });
   desktop.append(el);
   tasks.append(task);
-  clamp(el);
+  if (!saved?.max) clamp(el); // clamp reads the maximized box and would overwrite the restore geometry
 
-  const save = () => persist && geo.set(id, { x: el.offsetLeft, y: el.offsetTop, w: el.offsetWidth, h: el.offsetHeight });
+  const save = () => {
+    if (!persist) return;
+    const max = el.classList.contains('max');
+    const s = el.style;
+    geo.set(id, max
+      ? { x: parseFloat(s.left), y: parseFloat(s.top), w: parseFloat(s.width), h: parseFloat(s.height), max }
+      : { x: el.offsetLeft, y: el.offsetTop, w: el.offsetWidth, h: el.offsetHeight });
+  };
+  const maxBtn = el.querySelector('[aria-label="Maximize"], [aria-label="Restore"]');
+  function toggleMax() {
+    maxBtn.setAttribute('aria-label', el.classList.toggle('max') ? 'Restore' : 'Maximize');
+    save();
+  }
+  el.querySelector('.title-bar').addEventListener('dblclick', (e) => { if (!e.target.closest('button')) toggleMax(); });
   el.addEventListener('pointerdown', () => focus(id), true);
   // The window is CSS-resizable (resize: both); its size is saved when the operator lets go.
   el.addEventListener('pointerup', save);
@@ -91,7 +107,7 @@ function clamp(el) {
 
 function drag(el, bar, done) {
   bar.addEventListener('pointerdown', (e) => {
-    if (e.button !== 0 || e.target.closest('button')) return;
+    if (e.button !== 0 || e.target.closest('button') || el.classList.contains('max')) return;
     const dx = e.clientX - el.offsetLeft;
     const dy = e.clientY - el.offsetTop;
     bar.setPointerCapture(e.pointerId);

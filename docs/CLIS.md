@@ -73,6 +73,10 @@ codex --model <model> -c model_reasoning_effort=<effort> -c mcp_servers.kanban95
 
 Codex has no equivalent of `--strict-mcp-config`; MCP servers from the operator's own `~/.codex/config.toml` still load in agent sessions.
 
+## Resuming a killed session
+
+Both CLIs can continue an earlier conversation: Claude Code with `--resume <session-id>` (and `--session-id <uuid>` to choose the id at launch), Codex with `codex resume <SESSION_ID>` (or `--last`, the newest session in the working directory). The board does not use either yet: Resume and the restart recovery start a fresh session with the ticket's failure notes in the brief, in the same worktree, so committed and uncommitted work is kept but the conversation is not. The upgrade path: pass `--session-id` at launch and keep it on the `runs` row, then `--resume <id>` with a fresh `mcp.json` on Resume; for Codex, record the session id Codex prints and use `codex resume <id>`. Checked against `claude --help` and `codex resume --help` on 2026-10-08.
+
 ## Model lists
 
 The ▾ beside each model box in Settings → Models lists every model the installed CLI knows (`GET /api/models`, `knownModels` in `daemon/src/settings.ts`); the box still takes any id typed by hand. Nothing is listed from the board's own code:

@@ -16,6 +16,7 @@ Each session starts from one rendered template. The board pushes only this; ever
 | `{{diff}}` | test sessions only: `git diff <base>...HEAD` in the worktree. Empty in every other template |
 | `{{base}}` | the branch the ticket's worktree forked from and merges into (the main checkout's current branch); `(none)` for a brainstorm |
 | `{{tools}}` | the MCP tools this session's role may call, with the access cell from `docs/MCP.md` |
+| `{{preferences}}` | the operator's standing instructions, `~/.kanban95/preferences.md` as written (Settings → Prompts), under every template's "## Operator preferences" heading |
 
 Empty values render as `(none)`. Values are inserted literally: a brain note containing `{{ticket}}` stays that text.
 

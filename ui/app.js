@@ -42,7 +42,9 @@ async function refreshTicket(id) {
     if (t.flags.needs_human && !was) say(await flagReason(id));
   } catch (e) {
     if (e.status !== 404) throw e;
-    tickets.delete(id); // deleted: it leaves the board
+    tickets.delete(id); // deleted: it leaves the board, and its windows close (its agents were stopped by the delete)
+    close(`ticket-${id}`);
+    for (const [wid, ticket] of terms) if (ticket === id) close(wid);
   }
 }
 async function refreshShared() {
@@ -175,6 +177,12 @@ const launch = (id) => act(async () => {
   await api('POST', `/tickets/${id}/launch`);
   await sayLaunched([id]);
 });
+// A running ticket whose agent is gone: the agent for its phase starts again in the same worktree.
+const resumable = (t) => (t.status === 'in_progress' || t.status === 'testing') && t.flags.needs_human && !live(t.id).length;
+const resume = (id) => act(async () => {
+  await api('POST', `/tickets/${id}/resume`);
+  await sayLaunched([id]);
+});
 const launchAll = () => act(async () => sayLaunched((await api('POST', '/tickets/launch-all')).map((t) => t.id)));
 const newBrainstorm = () => act(async () => openTerminal(await api('POST', '/brainstorm')), 'Brainstorm started.');
 const housekeeping = () => act(async () => {
@@ -188,7 +196,8 @@ function cardMenu(t, x, y) {
   const known = [...new Set(PHASES.map((p) => models?.[cli]?.[p]?.model).filter(Boolean))];
   menu(x, y, [
     { label: 'Open', run: () => openTicket(t.id) },
-    { label: 'Launch', disabled: t.status !== 'backlog', run: () => launch(t.id) },
+    { label: 'Launch', disabled: t.status !== 'backlog' && !resumable(t), run: () => launch(t.id) },
+    { label: 'Resume', disabled: !resumable(t), run: () => resume(t.id) },
     '-',
     { label: 'Model', items: [
       { label: `Phase default${t.model ? '' : ' ✓'}`, run: () => set({ model: null }) },
@@ -368,6 +377,7 @@ function ticketForm(w, t) {
 // ---- terminals ----
 
 const seen = new Set();
+const terms = new Map(); // open terminal window id → its session's ticket id
 function openNewTerminals() {
   for (const s of sessions) if (!seen.has(s.id)) openTerminal(s, true);
 }
@@ -387,7 +397,8 @@ function openTerminal(s, auto = false) {
   const fit = new FitAddon();
   const ro = new ResizeObserver(() => fit.fit());
   // Spoken words are typed into the agent's terminal without Enter; the operator presses it.
-  const w = open(wid, { title, w: 760, h: 440, background: auto, extra: [micButton((text) => send({ data: text }))], onClose: () => { ro.disconnect(); ws.close(); term.dispose(); } });
+  const w = open(wid, { title, w: 760, h: 440, background: auto, extra: [micButton((text) => send({ data: text }))], onClose: () => { terms.delete(wid); ro.disconnect(); ws.close(); term.dispose(); } });
+  terms.set(wid, s.ticket_id);
   w.body.classList.add('k95-term');
   term.loadAddon(fit);
   term.open(w.body);
@@ -457,6 +468,7 @@ function openInbox() {
           h('div', { class: 'field-row' },
             h('button', { onclick: () => openTicket(q.ticket_id) }, 'Open ticket'),
             q.status === 'done' && !q.merged_at && h('button', { onclick: () => act(() => api('POST', `/tickets/${q.ticket_id}/merge`), `Merge of #${q.ticket_id} queued.`) }, 'Retry merge'),
+            (q.status === 'in_progress' || q.status === 'testing') && h('button', { onclick: () => resume(q.ticket_id) }, 'Resume'),
             q.status !== 'done' && t && h('button', { onclick: () => reset(t) }, 'Reset to Backlog')));
       }
       const answer = h('textarea', { rows: 3, placeholder: 'Your answer' });
@@ -489,7 +501,7 @@ function grantTable(grants) {
 function openSettings() {
   const w = open('settings', { title: 'Settings', w: 640, h: 440, persist: true, onClose: () => views.delete('settings') });
   if (w.body.firstChild) return;
-  const tb = tabs(['Models', 'CLIs', 'Grants', 'Voice', 'General'], async (tab, p, first) => {
+  const tb = tabs(['Models', 'CLIs', 'Prompts', 'Grants', 'Voice', 'General'], async (tab, p, first) => {
     if (tab === 'Grants') {
       const grants = (await api('GET', '/grants')).filter(liveGrant);
       return p.replaceChildren(h('p', {}, 'Every live agent grant. Revoke invalidates its token and stops its terminal.'), grants.length ? grantTable(grants) : h('p', {}, 'No live grants.'));
@@ -538,6 +550,14 @@ function openSettings() {
             : `Claude Code does not trust ${trust.key}; the board writes that entry before the next Claude launch.`),
           h('p', {}, 'Codex is told per launch that this repo is trusted; nothing is written to its config.'),
           h('button', { disabled: !trust.trusted, onclick: () => act(async () => { await api('DELETE', '/trust'); tb.show(); }, 'Claude trust entry cleared.') }, 'Clear Claude trust')));
+    } else if (tab === 'Prompts') {
+      const { path, value } = await api('GET', '/config/preferences');
+      const text = h('textarea', { id: 'preferences', rows: 10, placeholder: 'e.g. No em dashes or non-ASCII characters in output.' });
+      text.value = value;
+      p.replaceChildren(h('fieldset', {}, h('legend', {}, 'Preferences'),
+        h('p', {}, `Standing instructions every agent prompt gets under "Operator preferences". Up to 16 KB. ${path}`),
+        h('div', { class: 'field-row' }, text),
+        h('button', { onclick: () => act(() => api('PUT', '/config/preferences', { value: text.value }), `Saved ${path}.`) }, 'Save')));
     } else if (tab === 'Voice') {
       const s = await api('GET', '/voice');
       const mode = (v, label) => h('div', { class: 'field-row' }, h('input', { type: 'radio', id: `mode-${v}`, name: 'mode', checked: settings.voice.mode === v,

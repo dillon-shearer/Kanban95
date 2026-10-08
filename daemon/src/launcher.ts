@@ -14,7 +14,7 @@ import type { Cli, Effort } from './settings.js';
 import { preTrustClaude } from './trust.js';
 
 /** Codex reads the bearer token for the board's MCP server from this variable; it is set only in the CLI's own environment. */
-export const TOKEN_ENV = 'KANBAN95_TOKEN';
+const TOKEN_ENV = 'KANBAN95_TOKEN';
 // ponytail: a grant outlives its session by at most 24 h; in practice teardown revokes it when the pty exits.
 const GRANT_TTL_MS = 24 * 60 * 60 * 1000;
 /**
@@ -22,7 +22,7 @@ const GRANT_TTL_MS = 24 * 60 * 60 * 1000;
  * run anything; Read, Grep and Glob cover the reading. Bash and PowerShell go too, since either could write a file, and Agent,
  * since a subagent is a way around the list (the live check's agent named it).
  */
-export const PLANNER_DENY = ['Edit', 'Write', 'NotebookEdit', 'Bash', 'PowerShell', 'Agent'];
+const PLANNER_DENY = ['Edit', 'Write', 'NotebookEdit', 'Bash', 'PowerShell', 'Agent'];
 
 export interface ArgvIn {
   cli: Cli;
@@ -93,7 +93,7 @@ export interface Session {
 export const sessions = new Map<number, Session>();
 export const sessionsOf = (ticketId: number) => [...sessions.values()].filter((s) => s.ticketId === ticketId);
 
-export const sessionDir = (repo: string, key: number) => join(repo, '.kanban95', 'sessions', String(key));
+const sessionDir = (repo: string, key: number) => join(repo, '.kanban95', 'sessions', String(key));
 
 /** Owner-only: mode 0700 on POSIX; on Windows inheritance is cut and only the current user is granted access. */
 function privateDir(dir: string) {

@@ -5,9 +5,9 @@ import type { DatabaseSync } from 'node:sqlite';
 import { isConstraintError } from './db.js';
 import { ticketDiff } from './git.js';
 import { audit, revoke } from './grants.js';
-import { killGrantSession, sessions, type Session } from './launcher.js';
+import { killGrantSession, sessions, sessionsOf, type Session } from './launcher.js';
 import { apply, brainstorm, changed, housekeeping, launchAll, Refused, type Board } from './lifecycle.js';
-import { BadConfig, CONFIGS, configPath, knownModels, writeConfig, type ConfigName } from './settings.js';
+import { BadConfig, CONFIGS, configPath, knownModels, preferencesPath, readPreferences, writeConfig, writePreferences, type ConfigName } from './settings.js';
 import { trustStatus, untrustClaude } from './trust.js';
 import { download, status as voiceStatus } from './voice.js';
 
@@ -134,7 +134,14 @@ const routes: [method: string, path: RegExp, mutation: string | null, handler: (
     return { status: 200, body: readTicket(db, id) };
   }],
   ['DELETE', /^\/api\/tickets\/(\d+)$/, 'tickets.delete', ({ db, params }) => {
-    const r = db.prepare('DELETE FROM tickets WHERE id = ?').run(Number(params[0]));
+    const id = Number(params[0]);
+    // Its agents stop with it. The outcome makes their exit expected, so it flags nothing on a ticket that is gone.
+    for (const s of sessionsOf(id)) {
+      s.outcome = 'deleted';
+      revoke(db, s.grantId);
+      s.pty.kill();
+    }
+    const r = db.prepare('DELETE FROM tickets WHERE id = ?').run(id);
     if (r.changes === 0) throw new HttpError(404, 'no such ticket');
     return { status: 204 };
   }],
@@ -159,6 +166,7 @@ const routes: [method: string, path: RegExp, mutation: string | null, handler: (
   }],
   // Lifecycle (docs/LIFECYCLE.md). A transition the table does not have is 409.
   ['POST', /^\/api\/tickets\/(\d+)\/launch$/, 'tickets.launch', ({ board, params }) => ({ status: 200, body: apply(board, Number(params[0]), 'launch').ticket })],
+  ['POST', /^\/api\/tickets\/(\d+)\/resume$/, 'tickets.resume', ({ board, params }) => ({ status: 200, body: apply(board, Number(params[0]), 'resume').ticket })],
   ['POST', /^\/api\/tickets\/launch-all$/, 'tickets.launch_all', ({ board }) => ({ status: 200, body: launchAll(board) })],
   ['POST', /^\/api\/tickets\/(\d+)\/answer$/, 'tickets.answer', ({ board, params, body }) => {
     if (typeof body.answer !== 'string' || !body.answer.trim()) throw new HttpError(400, 'answer must be a non-empty string');
@@ -174,13 +182,16 @@ const routes: [method: string, path: RegExp, mutation: string | null, handler: (
     readTicket(board.db, Number(params[0]));
     return { status: 200, body: { diff: ticketDiff(board.repo, Number(params[0])) } };
   }],
-  // Every flagged ticket with the note that flagged it: its newest question or failure (the lifecycle writes one with each flag).
+  // What a flagged ticket waits on: questions an agent asked with ask_operator that have no answer yet, and, when no newer
+  // question is open, the failure that flagged it. `merged_at` tells the Inbox whether Retry merge applies.
   ['GET', /^\/api\/inbox$/, null, ({ db }) => ({
     status: 200,
     body: db.prepare(`
-      SELECT n.id, n.ticket_id, n.role, n.kind, n.body, n.created_at, t.title, t.status, t.merged_at FROM tickets t
-      JOIN notes n ON n.id = (SELECT max(id) FROM notes WHERE ticket_id = t.id AND kind IN ('question', 'failure'))
-      WHERE t.needs_human = 1 ORDER BY n.id`).all(),
+      SELECT n.id, n.ticket_id, n.role, n.kind, n.body, n.created_at, t.title, t.status, t.merged_at FROM notes n JOIN tickets t ON t.id = n.ticket_id
+      WHERE t.needs_human = 1 AND (
+        (n.kind = 'question' AND NOT EXISTS (SELECT 1 FROM notes a WHERE a.ticket_id = n.ticket_id AND a.kind = 'answer' AND a.id > n.id))
+        OR (n.kind = 'failure' AND n.id = (SELECT max(id) FROM notes m WHERE m.ticket_id = n.ticket_id AND m.kind IN ('failure', 'question'))))
+      ORDER BY n.id`).all(),
   })],
   ['POST', /^\/api\/brain$/, 'brain.add', ({ db, body }) => {
     const { title, body: text, tags = '' } = body;
@@ -191,6 +202,9 @@ const routes: [method: string, path: RegExp, mutation: string | null, handler: (
   // Live agent terminals, for the UI's terminal windows and the taskbar count. `id` is the /pty/<id> key.
   ['GET', /^\/api\/sessions$/, null, () => ({ status: 200, body: [...sessions.values()].map(sessionView) })],
   ['POST', /^\/api\/brainstorm$/, 'brainstorm.launch', ({ board }) => ({ status: 201, body: sessionView(brainstorm(board)) })],
+  // ~/.kanban95/preferences.md, plain text in `value` both ways ('' when absent). Matched before the JSON config routes.
+  ['GET', /^\/api\/config\/preferences$/, null, () => ({ status: 200, body: { path: preferencesPath(), value: readPreferences() } })],
+  ['PUT', /^\/api\/config\/preferences$/, 'config.write', ({ body }) => ({ status: 200, body: { path: preferencesPath(), value: writePreferences(body.value) } })],
   // ~/.kanban95/models.json and settings.json. GET shows the file as it is (null when absent); PUT checks it whole, then writes.
   ['GET', /^\/api\/config\/(\w+)$/, null, ({ params }) => {
     const name = configName(params[0]);

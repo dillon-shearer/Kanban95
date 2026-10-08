@@ -34,7 +34,9 @@ The ticket moves on its own: In Progress → Testing → Done. A failed test sen
 
 The board fixes what it can before it asks you. A merge that conflicts goes back to the worker: the ticket returns to In Progress (retry + 1) and the agent merges the base into its worktree, resolves the conflict, and goes through testing again. A merge refused only because the main checkout has uncommitted changes is not flagged: the board retries it every 30 seconds and it lands once you commit or stash. So never leave edits in the main checkout while the board runs; work in a worktree.
 
-You hear the **chord** and a card turns red when an agent asks a question, exits without reporting, hits the retry cap, its merge still conflicts at the retry cap, or the main checkout is still dirty after 10 minutes. Every one of these lands in the **Inbox** (the "Inbox n" button in the taskbar tray, just right of Start; n counts them all), and the ticket's facts line says "needs human (the Inbox says why)". A question has an answer box: type the answer and press **Answer**; it is typed into the agent's terminal and the card's badge clears. Anything else shows the note that flagged it: what happened, then a line starting **To resolve:** with your next step (it names the worktree, e.g. `.worktrees/t-12`, and the button). Its buttons are **Open ticket**, **Retry merge** (a done ticket that has not merged) and **Reset to Backlog** (otherwise). The Board's status bar also says why at the moment a card turns red (`#n needs you: …`). A launch the board refuses outright (no models saved, uncommitted changes on the base branch) starts no agent and opens no terminal, so that line is where its reason shows.
+You hear the **chord** and a card turns red when an agent asks a question, exits without reporting, hits the retry cap, its merge still conflicts at the retry cap, or the main checkout is still dirty after 10 minutes. Every one of these lands in the **Inbox** (the "Inbox n" button in the taskbar tray, just right of Start; n counts them all), and the ticket's facts line says "needs human (the Inbox says why)". A question has an answer box: type the answer and press **Answer**; it is typed into the agent's terminal and the card's badge clears. Anything else shows the note that flagged it: what happened, then a line starting **To resolve:** with your next step (it names the worktree, e.g. `.worktrees/t-12`, and the button). Its buttons are **Open ticket**, **Retry merge** (a done ticket that has not merged), **Resume** (a running ticket) and **Reset to Backlog** (otherwise). The Board's status bar also says why at the moment a card turns red (`#n needs you: …`). A launch the board refuses outright (no models saved, uncommitted changes on the base branch) starts no agent and opens no terminal, so that line is where its reason shows. For an agent that went away (it crashed, its launch failed, it exited without reporting), press **Resume**: the agent for the ticket's phase starts again in the same worktree, with the failure note in its brief and the retry count kept. Resume is also in the card menu, and **Launch** on such a card does the same. Launch on a card whose agent is still running is refused: open its terminal, or Reset to Backlog to stop it.
+
+When the board restarts, every agent it was running is killed. Tickets that were running and not flagged are resumed by themselves, once; you only hear the chord if a resumed agent then exits without reporting. A ticket that was already red before the restart stays red until you resume it.
 
 ![Inbox](img/inbox.png)
 
@@ -55,15 +57,15 @@ A merged ticket's worktree and branch are removed by the board. Every ten merged
 | Terminal | opens by itself; Ticket → Runs → Terminal | one agent session, keyboard and mic |
 | Inbox | taskbar "Inbox n", Start → Inbox | every ticket that needs you: questions to answer, and failures with what resolves them |
 | Brain | Start → Brain | search what agents learned, add a note yourself |
-| Settings | Start → Settings | Models, CLI paths and trusted folders, Grants, Voice, sounds |
+| Settings | Start → Settings | Models, CLI paths and trusted folders, Prompts (preferences), Grants, Voice, sounds |
 
 The desktop has an icon for Board, Inbox, Brain, Settings, New ticket and New brainstorm down its left edge: click selects, double-click or Enter does what the Start menu entry does. Icons sit under every window.
 
-Windows can be dragged by the title bar, resized from the corner and minimized to the taskbar. Board, Brain, Inbox and Settings remember where you left them.
+Windows can be dragged by the title bar, resized from the corner, minimized to the taskbar and maximized to fill the desktop (Maximize button or double-click the title bar; Restore puts it back). Board, Brain, Inbox and Settings remember where you left them, maximized or not.
 
 ## Cards
 
-Right-click a card for its menu: Open, Launch, **Model**, **Effort** and **CLI** (set or clear this ticket's override without opening it), Retry merge (after you fixed a conflict or cleaned the main checkout), Reset to Backlog (also on a card waiting on a dependency: it cancels the wait, so it will not launch by itself), Delete.
+Right-click a card for its menu: Open, Launch, Resume (a red running card whose agent is gone), **Model**, **Effort** and **CLI** (set or clear this ticket's override without opening it), Retry merge (after you fixed a conflict or cleaned the main checkout), Reset to Backlog (also on a card waiting on a dependency: it cancels the wait, so it will not launch by itself), Delete.
 
 ![Card menu](img/card-menu.png)
 
@@ -83,6 +85,10 @@ Any other drop snaps back, and the status bar names where that card may go.
 | Ctrl+N | New brainstorm |
 
 Inside a terminal every key goes to the agent instead: Esc interrupts Claude Code, Ctrl+L clears its screen.
+
+## Preferences
+
+Standing instructions for every agent, for example "No em dashes or non-ASCII characters in output" or "Keep responses brief". Write them in **Settings → Prompts → Preferences** and press **Save**; that writes `~/.kanban95/preferences.md` (the path is shown on the tab), up to 16 KB. Every prompt rendered after that (brainstorm, plan, execute, test, housekeeping) carries them under "Operator preferences"; sessions already running keep the prompt they started with. They are yours, not the repo's, so they apply to every project the board works on. Never put a key or token in them: they are copied into every session's prompt.
 
 ## Grants
 

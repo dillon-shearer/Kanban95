@@ -18,7 +18,7 @@ export function enqueue(job: () => Promise<void>): Promise<void> {
 export const idle = () => tail;
 
 /** `dirty`: refused before git merge ran; `reason` is then the `git status` lines. Otherwise `reason` is git's output. */
-export type MergeResult = { ok: true } | { ok: false; dirty: boolean; base: string; reason: string };
+type MergeResult = { ok: true } | { ok: false; dirty: boolean; base: string; reason: string };
 
 /**
  * `git merge --no-ff ticket/<id>` into whatever branch the main working tree has checked out, authored by the repo's own

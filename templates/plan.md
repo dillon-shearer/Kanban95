@@ -27,6 +27,10 @@ Retry count: {{retry}} (0 means first attempt).
 3. If a decision belongs to the operator, ask with `ask_operator` instead of guessing.
 4. If the criteria are vague or not measurable, sharpen them with `update_ticket` and say why in the plan.
 
+## Operator preferences
+
+{{preferences}}
+
 ## Finish
 
 Write the plan with `add_note` kind `plan`. Keep it short enough to read in a minute: steps, files, how each criterion is checked, open risks.

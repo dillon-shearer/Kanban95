@@ -41,7 +41,7 @@ function check<N extends ConfigName>(name: N, value: unknown, where: string): Co
 }
 
 /** models.json has no default (the operator picks the models); a missing settings.json is all defaults. */
-export function readConfig<N extends ConfigName>(name: N): Config<N> {
+function readConfig<N extends ConfigName>(name: N): Config<N> {
   const file = configPath(name);
   if (!existsSync(file)) {
     if (name === 'models') throw new BadConfig(`no model catalog at ${file}`);
@@ -137,4 +137,29 @@ export function runSettings(t: Ticket | null, phase: 'plan' | 'execute' | 'test'
   if (!model) throw new Error(`no ${phase} model for ${cli} in ${file}`);
   if (!EFFORT.includes(effort)) throw new Error(`bad effort ${effort} for ${cli} ${phase} in ${file}`);
   return { cli, model, effort, path: readConfig('settings').paths[cli as Cli] || undefined };
+}
+
+/** ~/.kanban95/preferences.md: the operator's standing instructions, injected into every prompt as {{preferences}}. */
+export const preferencesPath = () => join(homedir(), '.kanban95', 'preferences.md');
+export const PREFERENCES_MAX = 16 * 1024;
+
+/** A missing file is an empty string. */
+export function readPreferences(): string {
+  try {
+    return readFileSync(preferencesPath(), 'utf8');
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return '';
+    throw e;
+  }
+}
+
+/** Refused over 16 KB (UTF-8 bytes); written through a temp file like the config files. */
+export function writePreferences(value: unknown): string {
+  if (typeof value !== 'string') throw new BadConfig('preferences.md: value must be a string');
+  if (Buffer.byteLength(value) > PREFERENCES_MAX) throw new BadConfig(`preferences.md: over ${PREFERENCES_MAX / 1024} KB`);
+  const file = preferencesPath();
+  mkdirSync(dirname(file), { recursive: true });
+  writeFileSync(`${file}.tmp`, value);
+  renameSync(`${file}.tmp`, file);
+  return value;
 }

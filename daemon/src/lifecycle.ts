@@ -13,7 +13,7 @@ import { runSettings } from './settings.js';
 import { TEMPLATES } from './templates.js';
 
 export const MAX_RETRY = 3;
-export const HOUSEKEEPING_EVERY = 10;
+const HOUSEKEEPING_EVERY = 10;
 
 export type Status = 'backlog' | 'in_progress' | 'testing' | 'done';
 export type Event =
@@ -26,8 +26,9 @@ export type Event =
   | 'exit' // the agent's pty exited without a move_ticket, or its launch failed
   | 'merged' | 'conflict' // the merge queue's verdict
   | 'dirty' // the merge queue gave up waiting for the main checkout to be clean (DIRTY_WAIT)
-  | 'merge'; // the operator retries a merge that failed
-export type Effect =
+  | 'merge' // the operator retries a merge that failed
+  | 'resume'; // the operator restarts the agent of a flagged running ticket whose agent is gone
+type Effect =
   | 'spawn_execute' | 'spawn_test' | 'end_session' | 'enqueue_merge' | 'note' | 'answer_pty'
   | 'chord' | 'ding' | 'remove_worktree' | 'release_dependents' | 'housekeeping';
 
@@ -46,7 +47,7 @@ interface Row {
   event: Event;
   when?: (f: Facts) => boolean;
   /** Why a guarded row did not match, for the refusal. */
-  why?: string;
+  why?: string | ((f: Facts) => string);
   /** Omitted: the status does not change. */
   to?: Status;
   set?: { needs_human?: 0 | 1; blocked_on_deps?: 0 | 1; retry?: '+1'; merged?: true };
@@ -61,9 +62,20 @@ interface Row {
 }
 
 const RUNNING: Status[] = ['in_progress', 'testing'];
+/** What fixes an agent that went away. */
+const RESUME = 'Resume (card menu or Inbox) starts the agent again in the same worktree; Reset to Backlog starts over.';
+export const TO_RESOLVE = `To resolve: ${RESUME}`;
+const busy = (f: Facts) => f.live ? 'it already has a running agent; open its terminal, or Reset to Backlog to stop it' : '';
+const resumable = (f: Facts) => f.needs_human && !f.live;
+const notResumable = (f: Facts) => busy(f) || 'it is not flagged; nothing failed, so there is nothing to resume';
 export const TABLE: Row[] = [
   { from: ['backlog'], event: 'launch', when: (f) => f.depsMerged, to: 'in_progress', set: { blocked_on_deps: 0 }, effects: ['spawn_execute'] },
   { from: ['backlog'], event: 'launch', when: (f) => !f.depsMerged, set: { blocked_on_deps: 1 }, effects: [] },
+  // Launch on a running ticket whose agent is gone (a crash, a failed launch, a restart) starts the agent for its phase again.
+  { from: ['in_progress'], event: 'launch', when: (f) => !f.live, why: busy, set: { needs_human: 0 }, effects: ['spawn_execute'] },
+  { from: ['testing'], event: 'launch', when: (f) => !f.live, why: busy, set: { needs_human: 0 }, effects: ['spawn_test'] },
+  { from: ['in_progress'], event: 'resume', when: resumable, why: notResumable, set: { needs_human: 0 }, effects: ['spawn_execute'] },
+  { from: ['testing'], event: 'resume', when: resumable, why: notResumable, set: { needs_human: 0 }, effects: ['spawn_test'] },
   { from: ['in_progress'], event: 'submit', to: 'testing', effects: ['end_session', 'spawn_test'] },
   { from: ['testing'], event: 'pass', when: (f) => f.passReported, why: 'call report_test with passed: true first', to: 'done', effects: ['end_session', 'enqueue_merge'] },
   { from: ['testing'], event: 'fail', when: (f) => f.retry < MAX_RETRY, to: 'in_progress', set: { retry: '+1' }, effects: ['end_session', 'spawn_execute'] },
@@ -73,7 +85,7 @@ export const TABLE: Row[] = [
   { from: RUNNING, event: 'ask', set: { needs_human: 1 }, effects: ['note', 'chord'] },
   { from: RUNNING, event: 'answer', when: (f) => f.needs_human && f.live, why: 'no flagged question with a live agent session', set: { needs_human: 0 }, effects: ['note', 'answer_pty'] },
   { from: RUNNING, event: 'exit', set: { needs_human: 1 }, effects: ['note', 'chord'],
-    resolve: (id) => `open the ticket; its Runs tab shows where the agent stopped. Fix what it names (a launch failure says why), then Reset to Backlog and Launch; .worktrees/t-${id} is kept.` },
+    resolve: () => RESUME },
   { from: ['done'], event: 'merged', set: { merged: true, needs_human: 0 }, effects: ['ding', 'remove_worktree', 'release_dependents', 'housekeeping'] },
   { from: ['done'], event: 'conflict', when: (f) => f.retry < MAX_RETRY, to: 'in_progress', set: { retry: '+1' }, effects: ['note', 'spawn_execute'] },
   { from: ['done'], event: 'conflict', when: (f) => f.retry >= MAX_RETRY, set: { needs_human: 1 }, effects: ['note', 'chord'],
@@ -89,7 +101,10 @@ export class Refused extends Error {}
 function pick(f: Facts, event: Event): Row {
   const rows = TABLE.filter((r) => r.event === event && r.from.includes(f.status));
   const row = rows.find((r) => !r.when || r.when(f));
-  if (!row) throw new Refused(`cannot ${event} a ticket in ${f.status}${rows.find((r) => r.why) ? `: ${rows.find((r) => r.why)!.why}` : ''}`);
+  if (!row) {
+    const why = rows.find((r) => r.why)?.why;
+    throw new Refused(`cannot ${event} a ticket in ${f.status}${why ? `: ${typeof why === 'string' ? why : why(f)}` : ''}`);
+  }
   return row;
 }
 
@@ -183,7 +198,7 @@ export function apply(b: Board, id: number, event: Event, x: { note?: Note; answ
 }
 
 /** An answer is typed into a terminal: a newline would submit half of it, so it becomes one line. */
-export const oneLine = (s: string) => s.replace(/\s*[\r\n]+\s*/g, ' ').trim();
+const oneLine = (s: string) => s.replace(/\s*[\r\n]+\s*/g, ' ').trim();
 
 /** Launches the phase's agent. A launch that fails is an agent that exited without reporting: the ticket is flagged. */
 function spawn(b: Board, id: number, template: 'execute' | 'housekeeping' | 'test') {
@@ -286,16 +301,22 @@ export function launchAll(b: Board): Ticket[] {
   return order.map((id) => readTicket(b.db, id));
 }
 
+export const RESTARTED = 'agent exited without reporting (the daemon restarted)';
+
 /**
- * Daemon start: no agent survives a restart, so a running ticket without a session is an agent that exited without reporting.
- * A done ticket that never merged and is not flagged was cut off mid-queue: it is queued again.
+ * Daemon start: no agent survives a restart. The agent did nothing wrong, so a running, unflagged ticket is resumed once: the
+ * note goes into the new prompt and the agent for its phase starts again in the same worktree. If that agent then exits
+ * without reporting, the ordinary exit row flags it. A done ticket that never merged and is not flagged was cut off mid-queue:
+ * it is queued again.
  */
 export function recover(b: Board) {
   const running = b.db.prepare("SELECT id, status FROM tickets WHERE status IN ('in_progress', 'testing') AND needs_human = 0").all() as { id: number; status: string }[];
   for (const { id, status } of running) {
     if (sessionsOf(id).length > 0) continue;
     const role = status === 'testing' ? 'tester' : 'worker';
-    apply(b, id, 'exit', { note: { role, kind: 'failure', body: 'agent exited without reporting (the daemon restarted)' } });
+    // ponytail: no Pause yet; when it lands, a paused board flags here (apply 'exit' with RESTARTED) instead.
+    b.db.prepare("INSERT INTO notes (ticket_id, role, kind, body) VALUES (?, ?, 'failure', ?)").run(id, role, RESTARTED);
+    apply(b, id, 'launch');
   }
   for (const { id } of b.db.prepare("SELECT id FROM tickets WHERE status = 'done' AND merged_at IS NULL AND needs_human = 0").all() as { id: number }[]) {
     queueMerge(b, id);
