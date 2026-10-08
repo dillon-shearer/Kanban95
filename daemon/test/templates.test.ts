@@ -1,11 +1,12 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { BRAIN_TRUNCATED, brainFor, buildContext, startRun } from '../src/context.ts';
 import { openDb } from '../src/db.ts';
+import { preferencesPath } from '../src/settings.ts';
 import { DEFAULTS_DIR, initTemplates, render, TEMPLATES, VARS, type Ctx, type TemplateName } from '../src/templates.ts';
 
 let repo: string;
@@ -129,5 +130,25 @@ describe('context', () => {
     writeFileSync(tpl('test'), '{{transcript}}');
     expect(() => startRun(db, repo, { ticketId: t, template: 'test', cli: 'c', model: 'm', effort: 'low', worktree: repo, base: 'x' })).toThrow('transcript');
     expect((db.prepare('SELECT count(*) AS n FROM runs').get() as { n: number }).n).toBe(1);
+  });
+});
+
+describe('operator preferences', () => {
+  afterEach(() => rmSync(preferencesPath(), { force: true }));
+  const ticket = () => Number(db.prepare("INSERT INTO tickets (title) VALUES ('t')").run().lastInsertRowid);
+
+  it('every default template injects them under their own heading, ticket runs and brainstorms alike', () => {
+    mkdirSync(dirname(preferencesPath()), { recursive: true });
+    writeFileSync(preferencesPath(), 'no em dashes\n');
+    const t = ticket();
+    for (const name of Object.keys(TEMPLATES) as TemplateName[]) {
+      const out = render(repo, name, name === 'brainstorm' ? buildContext(db, null, 'planner') : buildContext(db, t, 'worker'));
+      expect(out, name).toContain('## Operator preferences\n\nno em dashes\n');
+    }
+  });
+
+  it('a missing file renders (none)', () => {
+    expect(render(repo, 'execute', buildContext(db, ticket(), 'worker'))).toContain('## Operator preferences\n\n(none)\n');
+    expect(render(repo, 'brainstorm', buildContext(db, null, 'planner'))).toContain('## Operator preferences\n\n(none)\n');
   });
 });

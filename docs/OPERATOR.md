@@ -53,7 +53,7 @@ A merged ticket's worktree and branch are removed by the board. Every ten merged
 | Terminal | opens by itself; Ticket → Runs → Terminal | one agent session, keyboard and mic |
 | Inbox | taskbar "Inbox n", Start → Inbox | open questions from agents |
 | Brain | Start → Brain | search what agents learned, add a note yourself |
-| Settings | Start → Settings | Models, CLI paths and trusted folders, Grants, Voice, sounds |
+| Settings | Start → Settings | Models, CLI paths and trusted folders, Prompts (preferences), Grants, Voice, sounds |
 
 The desktop has an icon for Board, Inbox, Brain, Settings, New ticket and New brainstorm down its left edge: click selects, double-click or Enter does what the Start menu entry does. Icons sit under every window.
 
@@ -81,6 +81,10 @@ Any other drop snaps back, and the status bar names where that card may go.
 | Ctrl+N | New brainstorm |
 
 Inside a terminal every key goes to the agent instead: Esc interrupts Claude Code, Ctrl+L clears its screen.
+
+## Preferences
+
+Standing instructions for every agent, for example "No em dashes or non-ASCII characters in output" or "Keep responses brief". Write them in **Settings → Prompts → Preferences** and press **Save**; that writes `~/.kanban95/preferences.md` (the path is shown on the tab), up to 16 KB. Every prompt rendered after that (brainstorm, plan, execute, test, housekeeping) carries them under "Operator preferences"; sessions already running keep the prompt they started with. They are yours, not the repo's, so they apply to every project the board works on. Never put a key or token in them: they are copied into every session's prompt.
 
 ## Grants
 

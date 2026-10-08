@@ -10,6 +10,7 @@ Living document. Update it in the same change that alters the schema.
 - `<repo>/.kanban95/config.json`: optional, committed, no secrets. Read by the lifecycle: `housekeeping_every` (default 10). The daemon never writes it.
 - `~/.kanban95/models.json`: the operator's model catalog, read at each launch (`docs/LIFECYCLE.md` → Run settings). Written by Settings → Models → Save after a schema check. No secrets.
 - `~/.kanban95/settings.json`: `paths` (`claude`, `codex`: an absolute path to the executable, empty for PATH), `sounds` (boolean, default true), `voice` (`backend`: `local`; `mode`: `push` or `toggle`). Absent means all defaults. Written by Settings after a schema check. No secrets.
+- `~/.kanban95/preferences.md`: the operator's standing instructions for every agent, free text, at most 16 KB. Injected into every prompt as `{{preferences}}` (`docs/AGENTS.md`). Absent means none. Written by Settings → Prompts → Save. Do not put secrets in it: it is copied into every session's prompt.md.
 - `~/.kanban95/models/whisper-base.en/`: the speech model, downloaded on the operator's OK and hash-checked (`docs/SECURITY.md` → Voice model). Not data; delete it to free 80 MB, the mic will offer the download again.
 - `localStorage` in the webview: window positions and sizes only.
 - Nothing in the database leaves the machine. There is no sync, no telemetry, no export yet (export is explicit when it arrives).

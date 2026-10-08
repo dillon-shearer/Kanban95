@@ -36,6 +36,10 @@ Retry count: {{retry}} (after 3 failed retries the ticket stops and goes to the 
 4. If the ticket changes the UI, screenshot the affected screens with a headless script built on `daemon/test/cdp.ts` (`Page.captureScreenshot`), and keep the screenshots you cite as evidence. Delete every other artefact you made (screenshots, temp dirs).
 5. If the work failed because the model or effort was too small for it, raise it with `set_model` before sending it back.
 
+## Operator preferences
+
+{{preferences}}
+
 ## Finish
 
 1. Call `report_test` with `passed`, a summary naming each criterion and its result, and the evidence (commands run, test output, screenshot paths).

@@ -104,6 +104,7 @@ menu[role=tablist] { flex: none; margin-bottom: -2px !important; }
 .k95-brain input[type=search] { flex: 1; }
 .k95-brain textarea { flex: 1; }
 .k95-question textarea { flex: 1; }
+#preferences { flex: 1; }
 fieldset { margin: 0; }
 
 /* Terminal */
