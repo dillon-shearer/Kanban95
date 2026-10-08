@@ -391,6 +391,45 @@ describe('ui', { timeout: 60_000 }, () => {
     expect(m.overflow).toBe(0);
   });
 
+  it('scrolls an overflowing taskbar with its arrows, the wheel and focus; buttons stay at least 60px', async () => {
+    await page.goto(base);
+    await until(() => page.evaluate(`!!document.querySelector('[data-win="board"]')`), 'the board');
+    const wm = (js: string) => page.evaluate(`import('/wm.js').then((wm) => { ${js} })`);
+    const arrowsShown = () => page.evaluate<boolean>(`!document.getElementById('tasks-right').hidden && !document.getElementById('tasks-left').hidden`);
+    const shown = (id: string) => page.evaluate<boolean>(`(() => {
+      const t = document.getElementById('tasks').getBoundingClientRect();
+      const b = [...document.querySelectorAll('#tasks .task')].find((e) => e.textContent === '${id}').getBoundingClientRect();
+      return b.left >= t.left - 0.5 && b.right <= t.right + 0.5;
+    })()`);
+    const ids = Array.from({ length: 20 }, (_, i) => `scroll-${i}`);
+    expect(await arrowsShown()).toBe(false);
+    await wm(`${JSON.stringify(ids)}.forEach((id) => wm.open(id, { title: id }));`);
+    try {
+      expect(await arrowsShown()).toBe(true);
+      expect(await page.evaluate<number>(`Math.min(...[...document.querySelectorAll('#tasks .task')].map((b) => b.getBoundingClientRect().width))`)).toBeGreaterThanOrEqual(60);
+      expect(await shown('scroll-19')).toBe(true); // the newest window is focused, so its button scrolled into view
+
+      await page.evaluate(`document.getElementById('tasks').scrollLeft = 0`);
+      expect(await shown('scroll-19')).toBe(false);
+      for (let i = 0; i < 30 && !(await shown('scroll-19')); i++) await click('#tasks-right');
+      expect(await shown('scroll-19')).toBe(true);
+      await click('#tasks-left');
+      expect(await shown('scroll-19')).toBe(false);
+
+      await page.evaluate(`document.getElementById('tasks').scrollLeft = 0`);
+      const { x, y } = await page.center('#tasks');
+      await page.send('Input.dispatchMouseEvent', { type: 'mouseWheel', x, y, deltaX: 0, deltaY: 100 });
+      await until(() => page.evaluate<boolean>(`document.getElementById('tasks').scrollLeft > 0`), 'the wheel to scroll the taskbar');
+
+      await page.evaluate(`document.getElementById('tasks').scrollLeft = 0`);
+      await wm(`wm.focus('scroll-19');`);
+      expect(await shown('scroll-19')).toBe(true);
+    } finally {
+      await wm(`${JSON.stringify(ids)}.forEach((id) => wm.close(id));`);
+    }
+    expect(await arrowsShown()).toBe(false);
+  });
+
   it('keeps window positions across a reload', async () => {
     await page.goto(base);
     await until(() => page.evaluate(`!!document.querySelector('[data-win="board"]')`), 'the board');
