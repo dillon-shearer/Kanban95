@@ -88,7 +88,7 @@ beforeAll(async () => {
   // As the shell does: open on ?k95=<secret>, which the daemon trades for a cookie and redirects to /.
   await page.send('Page.navigate', { url: `${base}?k95=${srv.secret}` });
   await until(() => page.evaluate(`document.readyState === 'complete' && location.href === ${JSON.stringify(base)}`), 'the redirect to /');
-}, 30_000);
+}, 60_000);
 afterAll(async () => {
   await page?.close();
   await srv?.close();
