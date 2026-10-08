@@ -22,7 +22,7 @@ afterAll(async () => {
 const call = (method: string, path: string, body?: unknown, headers: Record<string, string> = {}) =>
   fetch(base + path, {
     method,
-    headers: { 'content-type': 'application/json', ...headers },
+    headers: { 'content-type': 'application/json', cookie: `k95=${srv.secret}`, ...headers },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
 const auditRows = () => srv.db.prepare('SELECT tool, outcome, ticket_id, grant_id, args_summary FROM audit ORDER BY id').all();
@@ -79,7 +79,7 @@ describe('tickets', () => {
     expect((await call('POST', '/api/tickets', { title: 'x', bogus: 1 })).status).toBe(400);
     expect((await call('POST', '/api/tickets', { title: 42 })).status).toBe(400);
     expect((await call('POST', '/api/tickets', [1])).status).toBe(400);
-    expect((await fetch(base + '/api/tickets', { method: 'POST', body: '{nope' })).status).toBe(400);
+    expect((await fetch(base + '/api/tickets', { method: 'POST', body: '{nope', headers: { cookie: `k95=${srv.secret}` } })).status).toBe(400);
     expect((await call('PUT', '/api/tickets')).status).toBe(405);
     expect((await call('GET', '/api/nothing')).status).toBe(404);
     expect(auditRows().slice(before).every((r) => r.outcome === 'error')).toBe(true);

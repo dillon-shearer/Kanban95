@@ -140,7 +140,7 @@ const runs = (id: number) => db.prepare('SELECT phase, model, outcome, prompt_re
   { phase: string; model: string; outcome: string | null; prompt_rendered: string; started_at: string }[];
 const notes = (id: number, kind: string) => (db.prepare('SELECT body FROM notes WHERE ticket_id = ? AND kind = ? ORDER BY id').all(id, kind) as { body: string }[]).map((r) => r.body);
 const post = (path: string, body?: unknown) =>
-  fetch(`http://127.0.0.1:${srv.port}${path}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) });
+  fetch(`http://127.0.0.1:${srv.port}${path}`, { method: 'POST', headers: { 'content-type': 'application/json', cookie: `k95=${srv.secret}` }, body: body === undefined ? undefined : JSON.stringify(body) });
 const until = async (f: () => unknown, what: string, ms = 30_000) => {
   const end = Date.now() + ms;
   while (!f()) {
@@ -173,7 +173,7 @@ afterEach(async () => {
 
 describe('lifecycle', { timeout: 60_000 }, () => {
   it('launch → execute → test → merge: one plain merge commit by the operator, a ding, and nothing left behind', async () => {
-    const ws = new WebSocket(`ws://127.0.0.1:${srv.port}/events`, { origin: `http://127.0.0.1:${srv.port}` });
+    const ws = new WebSocket(`ws://127.0.0.1:${srv.port}/events`, { origin: `http://127.0.0.1:${srv.port}`, headers: { cookie: `k95=${srv.secret}` } });
     const frames: { sound?: string; ticket: number | null }[] = [];
     ws.on('message', (m) => frames.push(JSON.parse(String(m))));
     await new Promise((r) => ws.on('open', r));

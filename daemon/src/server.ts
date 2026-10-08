@@ -1,5 +1,6 @@
 // Kanban95 daemon: static UI, /health, /api (operator), /mcp (agents), /pty and /events websockets on 127.0.0.1:<random port>, backed by <repo>/.kanban95/board.db.
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import { extname, resolve, sep } from 'node:path';
@@ -38,6 +39,8 @@ export interface Config {
   port?: number;
   /** Repo whose .kanban95/board.db this daemon owns. */
   repo?: string;
+  /** Shell-to-daemon secret required on /api, /events and /pty (docs/SECURITY.md). Random when not given. */
+  secret?: string;
 }
 
 /** Rejects any bind address other than loopback. The daemon is never reachable off-host. */
@@ -59,7 +62,14 @@ function send(res: ServerResponse, status: number, body: string, type = 'text/pl
 const sameOrigin = (req: IncomingMessage, self: string) =>
   req.headers.host === self && (req.headers.origin === undefined || req.headers.origin === `http://${self}`);
 
-async function handle(board: Board, self: string, req: IncomingMessage, res: ServerResponse) {
+const COOKIE = 'k95';
+const digest = (s: string) => createHash('sha256').update(s).digest();
+/** Constant-time compare; hashing first evens out the lengths. */
+const matches = (given: string | null | undefined, secret: string) => given != null && timingSafeEqual(digest(given), digest(secret));
+const authed = (req: IncomingMessage, secret: string) =>
+  matches(/(?:^|;\s*)k95=([^;]*)/.exec(req.headers.cookie ?? '')?.[1], secret);
+
+async function handle(board: Board, self: string, secret: string, req: IncomingMessage, res: ServerResponse) {
   // The shell loads the UI from this origin, so the CSP must come from here:
   // Tauri only injects its configured CSP into pages it serves itself.
   // 'wasm-unsafe-eval' lets the local speech model's WebAssembly compile (no JS eval). Inline styles are for xterm.js, which
@@ -69,7 +79,16 @@ async function handle(board: Board, self: string, req: IncomingMessage, res: Ser
   if (!sameOrigin(req, self)) return send(res, 403, 'forbidden origin');
 
   const url = new URL(req.url ?? '/', `http://${self}`);
-  if (url.pathname.startsWith('/api/')) return handleApi(board, req, res, url);
+  // The shell opens the window on /?k95=<secret>; we trade it for an HttpOnly cookie and redirect to /, so it stays out
+  // of the page's history and page scripts never see it (docs/SECURITY.md).
+  if (url.searchParams.has(COOKIE)) {
+    if (!matches(url.searchParams.get(COOKIE), secret)) return send(res, 401, 'unauthorized');
+    res.writeHead(302, { 'Set-Cookie': `${COOKIE}=${secret}; HttpOnly; SameSite=Strict; Path=/`, Location: '/', 'Content-Length': 0 });
+    return res.end();
+  }
+  if (url.pathname.startsWith('/api/')) {
+    return authed(req, secret) ? handleApi(board, req, res, url) : send(res, 401, 'unauthorized');
+  }
   if (url.pathname === '/mcp') return handleMcp(board, req, res);
   if (req.method !== 'GET' && req.method !== 'HEAD') return send(res, 405, 'method not allowed');
   if (url.pathname === '/health') return send(res, 200, JSON.stringify({ ok: true }), 'application/json');
@@ -107,17 +126,19 @@ export function start(config: Config = {}): Promise<{
   port: number;
   db: DatabaseSync;
   board: Board;
+  secret: string;
   launch: (o: Launch) => ReturnType<typeof launch>;
   close: () => Promise<void>;
 }> {
   const { host, port } = validateConfig(config);
   const repo = config.repo ?? process.cwd();
+  const secret = config.secret ?? randomBytes(32).toString('hex');
   const db = openDb(repo);
   initTemplates(repo);
   let self = '';
   const board: Board = { db, repo, port: 0 };
   const server = createServer((req, res) => {
-    handle(board, self, req, res).catch(() => send(res, 500, 'internal error'));
+    handle(board, self, secret, req, res).catch(() => send(res, 500, 'internal error'));
   });
 
   // /pty/<key>: a session's terminal for xterm.js (key = run id, or minus the grant id for a brainstorm). Output goes out as text frames, starting with the scrollback so far.
@@ -130,6 +151,10 @@ export function start(config: Config = {}): Promise<{
     const s = sessions.get(Number(/^\/pty\/(-?\d+)$/.exec(req.url ?? '')?.[1]));
     if (!req.headers.origin || !sameOrigin(req, self) || !(s || req.url === '/events')) {
       socket.end('HTTP/1.1 403 Forbidden\r\n\r\n');
+      return;
+    }
+    if (!authed(req, secret)) {
+      socket.end('HTTP/1.1 401 Unauthorized\r\n\r\n');
       return;
     }
     if (!s) {
@@ -176,6 +201,7 @@ export function start(config: Config = {}): Promise<{
         port: addr.port,
         db,
         board,
+        secret,
         launch: (o) => launch(board, o),
         close: async () => {
           board.closing = true; // nothing new is spawned from here on
@@ -192,7 +218,16 @@ export function start(config: Config = {}): Promise<{
 }
 
 if (import.meta.main) {
+  // From the shell's environment, never argv (another process can read a command line). Dropped from ours at once so
+  // nothing we spawn (git, hooks, agent CLIs) inherits it.
+  const secret = process.env.KANBAN95_SECRET;
+  delete process.env.KANBAN95_SECRET;
+  if (!secret || secret.length < 32) {
+    console.error('KANBAN95_SECRET is missing or shorter than 32 characters: start the board through the shell (Kanban95.cmd)');
+    process.exit(1);
+  }
   const { port } = await start({
+    secret,
     port: process.env.KANBAN95_PORT ? Number(process.env.KANBAN95_PORT) : 0,
     repo: process.argv[2],
   });

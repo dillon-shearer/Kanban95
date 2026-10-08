@@ -189,7 +189,7 @@ describe('tools', () => {
     expect((await call(planner, 'update_ticket', { ticket_id: 1, depends_on: [3] })).json.depends_on).toEqual([3]);
     expect((await call(planner, 'update_ticket', { ticket_id: 2, depends_on: [1] })).text).toMatch(/dependency cycle/); // 2 → 1 → 3 → 2
     expect((await call(planner, 'get_ticket', { ticket_id: 2 })).json.depends_on).toEqual([]);
-    const rest = await fetch(`http://127.0.0.1:${srv.port}/api/tickets/2`, { method: 'PATCH', body: JSON.stringify({ depends_on: [1] }) });
+    const rest = await fetch(`http://127.0.0.1:${srv.port}/api/tickets/2`, { method: 'PATCH', body: JSON.stringify({ depends_on: [1] }), headers: { cookie: `k95=${srv.secret}` } });
     expect(rest.status).toBe(400);
     expect((await call(planner, 'update_ticket', { ticket_id: 1, depends_on: [] })).json.depends_on).toEqual([]);
   });
