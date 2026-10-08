@@ -169,6 +169,33 @@ describe('ui', { timeout: 60_000 }, () => {
     expect(git('show', 'HEAD:answer.txt')).toBe('Navy blue');
   });
 
+  it('offers Resume in the card menu and the Inbox for a flagged running ticket whose agent is gone; Resume starts it again', async () => {
+    const id = ticket('Died', { status: 'in_progress', needs_human: 1, retry: 2 });
+    db.prepare("INSERT INTO notes (ticket_id, role, kind, body) VALUES (?, 'worker', 'failure', 'agent exited without reporting')").run(id);
+    try {
+      await page.goto(base);
+      await until(() => column(id), 'the card');
+      const item = (label: string) => `[...document.querySelectorAll('.k95-menu li')].find((li) => li.firstChild.textContent === '${label}')`;
+      await page.evaluate(`document.querySelector('.card[data-id="${id}"]').dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 50, clientY: 50 }))`);
+      expect(await page.evaluate(`${item('Resume')}?.getAttribute('aria-disabled') ?? 'enabled'`)).toBe('enabled');
+      expect(await page.evaluate(`${item('Launch')}?.getAttribute('aria-disabled') ?? 'enabled'`)).toBe('enabled');
+      await page.evaluate(`document.querySelector('.k95-menu').remove()`);
+
+      await click('#inbox-count');
+      const box = `.k95-question[data-ticket="${id}"]`;
+      await until(() => page.evaluate(`!!document.querySelector('${box} button')`), 'the failure in the Inbox');
+      expect(await page.evaluate(`document.querySelector('${box} pre').textContent`)).toBe('agent exited without reporting');
+      expect(await page.evaluate(`document.querySelector('${box} button').textContent`)).toBe('Resume');
+      await click(`${box} button`);
+      await until(() => !(db.prepare('SELECT needs_human FROM tickets WHERE id = ?').get(id) as { needs_human: number }).needs_human, 'the flag to clear', 5000);
+      expect(db.prepare('SELECT status, retry FROM tickets WHERE id = ?').get(id)).toEqual({ status: 'in_progress', retry: 2 });
+      expect((db.prepare("SELECT prompt_rendered FROM runs WHERE ticket_id = ? AND phase = 'execute'").get(id) as { prompt_rendered: string }).prompt_rendered)
+        .toContain('agent exited without reporting');
+    } finally {
+      db.prepare("UPDATE tickets SET status = 'done', merged_at = 'x', needs_human = 0 WHERE id = ?").run(id);
+    }
+  });
+
   it('pins a compact tray right after Start on one taskbar row', async () => {
     await page.goto(base);
     await until(() => page.evaluate(`!!document.querySelector('#clock').textContent`), 'the clock');

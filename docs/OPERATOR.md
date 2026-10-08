@@ -32,7 +32,9 @@ The ticket moves on its own: In Progress → Testing → Done. A failed test sen
 
 ### 4. When the board needs you
 
-You hear the **chord** and a card turns red when an agent asks a question, exits without reporting, hits the retry cap, or its merge conflicts. The Board's status bar says why at that moment (`#n needs you: …`, the card's newest failure note or question; hover it for the whole text). A launch the board refuses outright (no models saved, uncommitted changes on the base branch) starts no agent and opens no terminal, so that line is where its reason shows. Questions land in the **Inbox** (the "Inbox n" button in the taskbar tray, just right of Start). Type the answer and press **Answer**; it is typed into the agent's terminal and the card's badge clears.
+You hear the **chord** and a card turns red when an agent asks a question, exits without reporting, hits the retry cap, or its merge conflicts. The Board's status bar says why at that moment (`#n needs you: …`, the card's newest failure note or question; hover it for the whole text). A launch the board refuses outright (no models saved, uncommitted changes on the base branch) starts no agent and opens no terminal, so that line is where its reason shows. Questions and failures land in the **Inbox** (the "Inbox n" button in the taskbar tray, just right of Start). For a question, type the answer and press **Answer**; it is typed into the agent's terminal and the card's badge clears. For an agent that went away (it crashed, its launch failed, it exited without reporting), press **Resume**: the agent for the ticket's phase starts again in the same worktree, with the failure note in its brief and the retry count kept. Resume is also in the card menu, and **Launch** on such a card does the same. Launch on a card whose agent is still running is refused: open its terminal, or Reset to Backlog to stop it.
+
+When the board restarts, every agent it was running is killed. Tickets that were running and not flagged are resumed by themselves, once; you only hear the chord if a resumed agent then exits without reporting. A ticket that was already red before the restart stays red until you resume it.
 
 ![Inbox](img/inbox.png)
 
@@ -61,7 +63,7 @@ Windows can be dragged by the title bar, resized from the corner and minimized t
 
 ## Cards
 
-Right-click a card for its menu: Open, Launch, **Model**, **Effort** and **CLI** (set or clear this ticket's override without opening it), Retry merge (after a conflict you fixed), Reset to Backlog (also on a card waiting on a dependency: it cancels the wait, so it will not launch by itself), Delete.
+Right-click a card for its menu: Open, Launch, Resume (a red running card whose agent is gone), **Model**, **Effort** and **CLI** (set or clear this ticket's override without opening it), Retry merge (after a conflict you fixed), Reset to Backlog (also on a card waiting on a dependency: it cancels the wait, so it will not launch by itself), Delete.
 
 ![Card menu](img/card-menu.png)
 

@@ -159,6 +159,7 @@ const routes: [method: string, path: RegExp, mutation: string | null, handler: (
   }],
   // Lifecycle (docs/LIFECYCLE.md). A transition the table does not have is 409.
   ['POST', /^\/api\/tickets\/(\d+)\/launch$/, 'tickets.launch', ({ board, params }) => ({ status: 200, body: apply(board, Number(params[0]), 'launch').ticket })],
+  ['POST', /^\/api\/tickets\/(\d+)\/resume$/, 'tickets.resume', ({ board, params }) => ({ status: 200, body: apply(board, Number(params[0]), 'resume').ticket })],
   ['POST', /^\/api\/tickets\/launch-all$/, 'tickets.launch_all', ({ board }) => ({ status: 200, body: launchAll(board) })],
   ['POST', /^\/api\/tickets\/(\d+)\/answer$/, 'tickets.answer', ({ board, params, body }) => {
     if (typeof body.answer !== 'string' || !body.answer.trim()) throw new HttpError(400, 'answer must be a non-empty string');
@@ -174,13 +175,15 @@ const routes: [method: string, path: RegExp, mutation: string | null, handler: (
     readTicket(board.db, Number(params[0]));
     return { status: 200, body: { diff: ticketDiff(board.repo, Number(params[0])) } };
   }],
-  // Questions an agent asked with ask_operator that have no answer yet, on tickets still flagged.
+  // What a flagged ticket waits on: questions an agent asked with ask_operator that have no answer yet, and, when no newer
+  // question is open, the failure that flagged it.
   ['GET', /^\/api\/inbox$/, null, ({ db }) => ({
     status: 200,
     body: db.prepare(`
-      SELECT n.id, n.ticket_id, n.role, n.body, n.created_at, t.title FROM notes n JOIN tickets t ON t.id = n.ticket_id
-      WHERE n.kind = 'question' AND t.needs_human = 1
-        AND NOT EXISTS (SELECT 1 FROM notes a WHERE a.ticket_id = n.ticket_id AND a.kind = 'answer' AND a.id > n.id)
+      SELECT n.id, n.ticket_id, n.role, n.kind, n.body, n.created_at, t.title, t.status FROM notes n JOIN tickets t ON t.id = n.ticket_id
+      WHERE t.needs_human = 1 AND (
+        (n.kind = 'question' AND NOT EXISTS (SELECT 1 FROM notes a WHERE a.ticket_id = n.ticket_id AND a.kind = 'answer' AND a.id > n.id))
+        OR (n.kind = 'failure' AND n.id = (SELECT max(id) FROM notes m WHERE m.ticket_id = n.ticket_id AND m.kind IN ('failure', 'question'))))
       ORDER BY n.id`).all(),
   })],
   ['POST', /^\/api\/brain$/, 'brain.add', ({ db, body }) => {
