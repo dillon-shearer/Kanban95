@@ -24,9 +24,13 @@ The agent has your reach on the board and nothing beyond the repo and the board:
 
 It runs with the plan phase's model and effort, unless `.kanban95/config.json` has `"operator": { "model": "...", "effort": "..." }` (either or both). It shows in the agent count and the taskbar like a brainstorm. Closing its window does not stop it; **Revoke** its grant in Settings → Grants, or close the board, does.
 
-### 2. Launch all
+### 2. Run
 
-**Launch all** (or Ctrl+L) starts every Backlog ticket whose dependencies have merged; the rest wait with a yellow "waits on #n" badge and start by themselves when their dependency lands. To start one ticket, select it and press **Launch**.
+**Run** (or Ctrl+L, or Start → Run) works the backlog for you, one ticket at a time, smallest first: it launches a ticket, waits for it to execute, pass its test and merge, then launches the next, until nothing launchable is left. The button then reads **Stop**, and the status bar shows `Running: #id (n of m candidates left)`: the ticket it is on, how many backlog tickets it can launch now, out of everything in Backlog. Smallest means lowest effort first (low, medium, high, max; no effort counts as medium), then fewest acceptance-criteria lines, then lowest id.
+
+It skips what needs you: a red (needs human) ticket waits in the Inbox, and so does anything depending on it, while the runner moves on. When nothing is running and nothing is left it turns itself off with a ding and the status bar says "Runner stopped: nothing left to launch". **Stop** (or Ctrl+L again) starts nothing new; agents already running finish their step and merge. It stays on across a restart. To run two at once, put `{ "runner_concurrency": 2 }` in `.kanban95/config.json`.
+
+To start one ticket yourself, select it and press **Launch**, runner on or off. A ticket whose dependencies have not merged waits with a yellow "waits on #n" badge and starts by itself when they land.
 
 ![The board](img/board.png)
 
@@ -94,7 +98,7 @@ Any other drop snaps back, and the status bar names where that card may go.
 | Key | Does |
 |---|---|
 | Esc | closes the focused window (or an open menu) |
-| Ctrl+L | Launch all |
+| Ctrl+L | Run / Stop the runner |
 | Ctrl+R | Restart the agent of the focused ticket window (after a confirm) |
 | Ctrl+N | New brainstorm |
 | Ctrl+Shift+N | New operator terminal |
