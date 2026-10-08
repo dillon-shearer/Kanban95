@@ -88,7 +88,7 @@ Both CLIs ask whether to trust a folder the first time they open it, and a new w
 - **Claude Code**: "Quick safety check: Is this a project you created or one you trust?" in each new worktree.
 - **Codex**: "Do you trust the contents of this directory?" likewise.
 
-Until the lifecycle (phase 5) handles this, the operator answers it in the agent's terminal window. Claude Code's one-time `--dangerously-skip-permissions` warning appears too if it was never accepted on this machine.
+Until phase 5 lands, the operator answers it in the agent's terminal window. The operator has decided the board will pre-trust its worktrees on first run (`PLAN.md` → Agents); phase 5 implements it and documents the exact keys here. Claude Code's one-time `--dangerously-skip-permissions` warning appears too if it was never accepted on this machine.
 
 Claude Code also applies the operator's user-level settings (`~/.claude/settings.json` hooks, user `CLAUDE.md`) inside agent sessions; `--strict-mcp-config` only covers MCP servers.
 

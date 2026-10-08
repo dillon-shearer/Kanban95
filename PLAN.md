@@ -32,7 +32,8 @@ Fire and forget. Planning closed 2026-10-07. This file is the spec; it is a livi
 ### Agents
 - Harnesses: **Claude Code CLI**, **OpenAI Codex CLI**. Providers: Anthropic, OpenAI.
 - Agnostic means the board only chooses CLI + flags. The board makes no LLM calls.
-- Permissions off inside worktrees (`--dangerously-skip-permissions` / Codex `--dangerously-bypass-approvals-and-sandbox`, see `docs/CLIS.md`). The worktree is the blast radius.
+- Permissions off inside worktrees (`--dangerously-skip-permissions` / Codex `--dangerously-bypass-approvals-and-sandbox`, see `docs/CLIS.md`). Approved by the operator: the board trusts agent actions, and limits their reach per role with each CLI's own scoping (sandbox mode, tool deny lists) rather than approvals.
+- **First-run prompts are answered by the board.** Each CLI's workspace-trust prompt (and Claude Code's one-time bypass warning) is pre-accepted for the board's worktrees, minimally, audited, visible and removable in Settings.
 - **Git worktree per ticket** at `.worktrees/t-<id>`, branch `ticket/<id>`.
 - Concurrency unlimited. **Merges are serialized** through one queue regardless.
 - **Commits carry the operator's identity.** Agent commits in a worktree and the merge commit are authored with the operator's git `user.name`/`user.email`, never a bot and never a `Co-Authored-By` trailer. Subject is a plain imperative sentence saying what changed, no ticket or phase ids (those live in the board); body only when the why is not obvious.

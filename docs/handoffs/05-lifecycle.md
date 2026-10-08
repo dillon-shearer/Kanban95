@@ -19,6 +19,26 @@ Tickets move themselves. The operator clicks Launch or Launch all. The board run
 | done | merge ok | done | ding; remove worktree; release dependents |
 | done | merge conflict | done + `needs_human` | chord; worktree kept |
 
+## Agent trust and reach (operator decision, 2026-10-07)
+
+Phase 4 left two things open (see `log/04-launcher.md` and `docs/CLIS.md`). The operator decided:
+
+1. **Approve the permission bypass.** Keep `--dangerously-skip-permissions` (Claude Code) and `--dangerously-bypass-approvals-and-sandbox` (Codex) as the default. The board trusts what agents do; it does not stall on approvals.
+2. **Pre-trust on first run.** The board answers each CLI's one-time prompts itself so a launch is unattended:
+   - Workspace trust for every new worktree. Claude Code keeps it per project in `~/.claude.json` (`projects["<path>"].hasTrustDialogAccepted`); Codex in `~/.codex/config.toml` (`[projects."<path>"] trust_level = "trusted"`), or per process with `-c` if a quote-free form works through `cmd.exe`. Check first whether trusting the repo root once already covers `.worktrees/t-*` (it would be one write instead of one per ticket).
+   - Claude Code's one-time bypass-permissions warning, if it has not been accepted on this machine.
+   - Verify every key against the installed CLI (`--help`, a real launch) before writing it. Do not guess.
+   - Write the minimum, merge into the existing file without disturbing anything else in it, back the file up before the first write, and audit each write (who, which file, which key). Remove the per-worktree entries when the janitor removes the worktree. Show "Trusted folders" in Settings (phase 6) so the operator can see and clear them. Document all of it in `docs/CLIS.md` and `docs/SECURITY.md`.
+3. **Limit reach by role, not by approvals.** With approvals off, scope what each role can touch using each CLI's own mechanisms, applied by `buildArgv` per role (role becomes an input to `buildArgv` and a column of its table test):
+
+   | role | needs | Claude Code (verify) | Codex (verify) |
+   |---|---|---|---|
+   | planner (brainstorm) | read the repo, write tickets over MCP | `--disallowedTools` for Edit/Write/NotebookEdit; Bash stays for reading | `-s read-only` |
+   | worker (plan, execute, housekeeping) | write and commit in its worktree, run builds | bypass, `cwd` = worktree | try `-s workspace-write -a never --add-dir <repo>/.git` so commits work; if commits or builds still fail, fall back to the bypass and record why |
+   | tester | run the suite, write tests, screenshots | as worker | as worker |
+
+   Candidates found in `claude --help` but not adopted yet: `--restricted` confines file tools to the working dirs but refuses bypass mode and removes Bash, so it does not fit a worker; `--settings <json>` can carry per-session permission deny rules without touching the operator's settings. Any reach a role loses must be justified by what the role's template asks it to do. Test it: the argv table per role, and one live check per CLI that a planner cannot write a file.
+
 ## Deliverables
 - `daemon/src/lifecycle.ts`: the table above as data plus one `transition(ticket, event)` function. No transitions outside the table.
 - `daemon/src/merge.ts`: one serialized queue. `git merge --no-ff ticket/<id>` into the base branch in the main working tree; aborts cleanly on conflict. Merge commit message is the ticket title as a plain sentence (no ticket or phase ids), authored by the operator's git identity, no trailers (see `CLAUDE.md` → commits). The `execute.md` template tells the agent the same format for its own commits.
