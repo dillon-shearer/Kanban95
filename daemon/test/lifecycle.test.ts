@@ -10,7 +10,7 @@ import { readTicket } from '../src/api.ts';
 import { createWorktree } from '../src/git.ts';
 import { mint } from '../src/grants.ts';
 import { sessions, sessionsOf } from '../src/launcher.ts';
-import { DIRTY_WAIT, events, MAX_RETRY, Refused, RESTARTED, TABLE, TO_RESOLVE, transition, type Event, type Facts, type Status } from '../src/lifecycle.ts';
+import { DIRTY_WAIT, events, MAX_RETRY, Refused, RESTART_NOTE, RESTARTED, TABLE, TO_RESOLVE, transition, type Event, type Facts, type Status } from '../src/lifecycle.ts';
 import { start } from '../src/server.ts';
 
 describe('transition table', () => {
@@ -23,6 +23,8 @@ describe('transition table', () => {
     ['launch on a testing ticket whose agent is gone', { status: 'testing', live: false }, 'launch', { to: 'testing', set: { needs_human: 0 }, effects: ['spawn_test'] }],
     ['resume a flagged ticket in progress', { status: 'in_progress', live: false, needs_human: true, retry: 2 }, 'resume', { to: 'in_progress', set: { needs_human: 0 }, effects: ['spawn_execute'] }],
     ['resume a flagged ticket in testing', { status: 'testing', live: false, needs_human: true }, 'resume', { to: 'testing', set: { needs_human: 0 }, effects: ['spawn_test'] }],
+    ['restart a live ticket in progress', { status: 'in_progress', retry: 2 }, 'restart', { to: 'in_progress', set: { needs_human: 0 }, effects: ['end_session', 'note', 'spawn_execute'] }],
+    ['restart a flagged ticket in testing with no agent', { status: 'testing', live: false, needs_human: true }, 'restart', { to: 'testing', set: { needs_human: 0 }, effects: ['end_session', 'note', 'spawn_test'] }],
     ['worker submits', { status: 'in_progress' }, 'submit', { to: 'testing', set: {}, effects: ['end_session', 'spawn_test'] }],
     ['tester passes after report_test(pass)', { status: 'testing', passReported: true }, 'pass', { to: 'done', set: {}, effects: ['end_session', 'enqueue_merge'] }],
     ['first failure', { status: 'testing', retry: 0 }, 'fail', { to: 'in_progress', set: { retry: '+1' }, effects: ['end_session', 'spawn_execute'] }],
@@ -45,11 +47,11 @@ describe('transition table', () => {
 
   const allowed: Record<Status, Event[]> = {
     backlog: ['launch'],
-    in_progress: ['launch', 'resume', 'submit', 'ask', 'answer', 'exit'],
-    testing: ['launch', 'resume', 'pass', 'fail', 'ask', 'answer', 'exit'],
+    in_progress: ['launch', 'resume', 'restart', 'submit', 'ask', 'answer', 'exit'],
+    testing: ['launch', 'resume', 'restart', 'pass', 'fail', 'ask', 'answer', 'exit'],
     done: ['merged', 'conflict', 'merge', 'dirty'],
   };
-  const EVENTS: Event[] = ['launch', 'submit', 'pass', 'fail', 'ask', 'answer', 'exit', 'merged', 'conflict', 'merge', 'dirty', 'resume'];
+  const EVENTS: Event[] = ['launch', 'submit', 'pass', 'fail', 'ask', 'answer', 'exit', 'merged', 'conflict', 'merge', 'dirty', 'resume', 'restart'];
   it('refuses every other event in every status', () => {
     let n = 0;
     for (const status of Object.keys(allowed) as Status[]) {
@@ -58,7 +60,7 @@ describe('transition table', () => {
         n++;
       }
     }
-    expect(n).toBe(4 * EVENTS.length - 18);
+    expect(n).toBe(4 * EVENTS.length - 20);
   });
 
   it('refuses a guarded row whose guard fails, saying why', () => {
@@ -562,5 +564,38 @@ describe('resume', { timeout: 60_000 }, () => {
     expect(notes(id, 'failure')).toEqual([RESTARTED, `agent exited without reporting\n${TO_RESOLVE}`]);
     expect(runs(id)).toHaveLength(1); // not resumed again
     expect(t(id).retry).toBe(1);
+  });
+});
+
+describe('restart', { timeout: 60_000 }, () => {
+  it('replaces a live agent in the same phase and worktree: old run ends as restart, no flag, status and retry kept, note in the prompt', async () => {
+    models({ execute: 'hang', test: 'hang' });
+    for (const [status, phase] of [['in_progress', 'execute'], ['testing', 'test']] as const) {
+      const id = ticket(`Stuck ${status}`, { status, retry: 1 });
+      const wt = createWorktree(repo, id);
+      expect((await post(`/api/tickets/${id}/resume`)).status).toBe(409); // not flagged, so only launch starts it
+      expect((await post(`/api/tickets/${id}/launch`)).status).toBe(200);
+      const [old] = sessionsOf(id);
+      expect((await post(`/api/tickets/${id}/restart`)).status).toBe(200);
+      await old.done;
+      await until(() => runs(id)[0].outcome, 'the old run outcome');
+      expect(runs(id).map((r) => [r.phase, r.outcome])).toEqual([[phase, 'restart'], [phase, null]]);
+      expect(runs(id)[1].prompt_rendered).toContain(RESTART_NOTE);
+      expect(sessionsOf(id)).toHaveLength(1);
+      expect(sessionsOf(id)[0]).not.toBe(old);
+      expect(existsSync(wt.path)).toBe(true);
+      expect(t(id)).toMatchObject({ status, retry: 1, flags: { needs_human: false } });
+      expect(notes(id, 'failure')).toEqual([RESTART_NOTE]); // the kill wrote no "exited without reporting"
+      const audit = db.prepare("SELECT 1 FROM audit WHERE tool = 'tickets.restart'").get();
+      expect(audit).toBeDefined();
+    }
+  });
+
+  it('is refused in backlog', async () => {
+    const id = ticket('Not started');
+    const r = await post(`/api/tickets/${id}/restart`);
+    expect(r.status).toBe(409);
+    expect((await r.json()).error).toContain('cannot restart a ticket in backlog');
+    expect(runs(id)).toEqual([]);
   });
 });

@@ -27,7 +27,8 @@ export type Event =
   | 'merged' | 'conflict' // the merge queue's verdict
   | 'dirty' // the merge queue gave up waiting for the main checkout to be clean (DIRTY_WAIT)
   | 'merge' // the operator retries a merge that failed
-  | 'resume'; // the operator restarts the agent of a flagged running ticket whose agent is gone
+  | 'resume' // the operator restarts the agent of a flagged running ticket whose agent is gone
+  | 'restart'; // the operator replaces a running ticket's agent, live or not, with a fresh one in the same phase
 type Effect =
   | 'spawn_execute' | 'spawn_test' | 'end_session' | 'enqueue_merge' | 'note' | 'answer_pty'
   | 'chord' | 'ding' | 'remove_worktree' | 'release_dependents' | 'housekeeping';
@@ -76,6 +77,9 @@ export const TABLE: Row[] = [
   { from: ['testing'], event: 'launch', when: (f) => !f.live, why: busy, set: { needs_human: 0 }, effects: ['spawn_test'] },
   { from: ['in_progress'], event: 'resume', when: resumable, why: notResumable, set: { needs_human: 0 }, effects: ['spawn_execute'] },
   { from: ['testing'], event: 'resume', when: resumable, why: notResumable, set: { needs_human: 0 }, effects: ['spawn_test'] },
+  // end_session sets the outcome before the kill, so exited() does not flag the killed session.
+  { from: ['in_progress'], event: 'restart', set: { needs_human: 0 }, effects: ['end_session', 'note', 'spawn_execute'] },
+  { from: ['testing'], event: 'restart', set: { needs_human: 0 }, effects: ['end_session', 'note', 'spawn_test'] },
   { from: ['in_progress'], event: 'submit', to: 'testing', effects: ['end_session', 'spawn_test'] },
   { from: ['testing'], event: 'pass', when: (f) => f.passReported, why: 'call report_test with passed: true first', to: 'done', effects: ['end_session', 'enqueue_merge'] },
   { from: ['testing'], event: 'fail', when: (f) => f.retry < MAX_RETRY, to: 'in_progress', set: { retry: '+1' }, effects: ['end_session', 'spawn_execute'] },
@@ -157,6 +161,7 @@ export function apply(b: Board, id: number, event: Event, x: { note?: Note; answ
   const row = pick(facts(b, t), event);
   const { to = t.status as Status, set = {}, effects } = row;
   let note = x.note ?? (row.says ? ({ role: 'tester', kind: 'failure', body: row.says } as Note) : undefined);
+  if (event === 'restart') note = { role: 'operator', kind: 'failure', body: RESTART_NOTE };
   if (note && row.resolve) note = { ...note, body: `${note.body}\nTo resolve: ${row.resolve(id, b.repo)}` };
   if (effects.includes('note') !== (note !== undefined)) throw new Error(`${event} ${note ? 'takes no' : 'needs a'} note`);
   const noteId = transaction(b.db, () => {
@@ -318,6 +323,8 @@ export function launchAll(b: Board): Ticket[] {
   }
   return order.map((id) => readTicket(b.db, id));
 }
+
+export const RESTART_NOTE = 'restarted by the operator; the previous session was ended without reporting. Continue from the state of this worktree: read `git status` and `git log` first';
 
 export const RESTARTED = 'agent exited without reporting (the daemon restarted)';
 

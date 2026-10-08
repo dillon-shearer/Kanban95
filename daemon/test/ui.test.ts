@@ -282,28 +282,63 @@ describe('ui', { timeout: 60_000 }, () => {
 
   it('offers Resume in the card menu and the Inbox for a flagged running ticket whose agent is gone; Resume starts it again', async () => {
     const id = ticket('Died', { status: 'in_progress', needs_human: 1, retry: 2 });
+    const waiting = ticket('Not started');
     db.prepare("INSERT INTO notes (ticket_id, role, kind, body) VALUES (?, 'worker', 'failure', 'agent exited without reporting')").run(id);
     try {
       await page.goto(base);
       await until(() => column(id), 'the card');
-      const item = (label: string) => `[...document.querySelectorAll('.k95-menu li')].find((li) => li.firstChild.textContent === '${label}')`;
+      await until(() => column(waiting), 'the backlog card');
+      const item = (label: string) => `[...document.querySelectorAll('.k95-menu li')].find((li) => li.firstChild?.textContent === '${label}')`;
       await page.evaluate(`document.querySelector('.card[data-id="${id}"]').dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 50, clientY: 50 }))`);
       expect(await page.evaluate(`${item('Resume')}?.getAttribute('aria-disabled') ?? 'enabled'`)).toBe('enabled');
       expect(await page.evaluate(`${item('Launch')}?.getAttribute('aria-disabled') ?? 'enabled'`)).toBe('enabled');
+      expect(await page.evaluate(`${item('Restart')}?.getAttribute('aria-disabled') ?? 'enabled'`)).toBe('enabled');
+      await page.evaluate(`document.querySelector('.k95-menu').remove()`);
+      await page.evaluate(`document.querySelector('.card[data-id="${waiting}"]').dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 50, clientY: 50 }))`);
+      expect(await page.evaluate(`!!${item('Restart')}`)).toBe(false); // not on a Backlog card
       await page.evaluate(`document.querySelector('.k95-menu').remove()`);
 
       await click('#inbox-count');
       const box = `.k95-flag[data-ticket="${id}"]`;
       await until(() => page.evaluate(`!!document.querySelector('${box} button')`), 'the failure in the Inbox');
       expect(await page.evaluate(`document.querySelector('${box} pre').textContent`)).toBe('agent exited without reporting');
-      expect(await page.evaluate(`[...document.querySelectorAll('${box} button')].map((b) => b.textContent)`)).toEqual(['Open ticket', 'Resume', 'Reset to Backlog']);
+      expect(await page.evaluate(`[...document.querySelectorAll('${box} button')].map((b) => b.textContent)`)).toEqual(['Open ticket', 'Resume', 'Restart', 'Reset to Backlog']);
+      await click(`${box} button:nth-child(3)`);
+      await until(() => page.evaluate(`!!document.querySelector('dialog[open]')`), 'the Restart confirm');
+      expect(await page.evaluate(`document.querySelector('dialog[open]').textContent`)).toContain(`End the running agent for #${id} and start a new one in the same phase?`);
+      await page.evaluate(`[...document.querySelectorAll('dialog[open] button')].find((b) => b.textContent === 'Cancel').click()`);
       await click(`${box} button:nth-child(2)`);
       await until(() => !(db.prepare('SELECT needs_human FROM tickets WHERE id = ?').get(id) as { needs_human: number }).needs_human, 'the flag to clear', 5000);
       expect(db.prepare('SELECT status, retry FROM tickets WHERE id = ?').get(id)).toEqual({ status: 'in_progress', retry: 2 });
       expect((db.prepare("SELECT prompt_rendered FROM runs WHERE ticket_id = ? AND phase = 'execute'").get(id) as { prompt_rendered: string }).prompt_rendered)
         .toContain('agent exited without reporting');
     } finally {
-      db.prepare("UPDATE tickets SET status = 'done', merged_at = 'x', needs_human = 0 WHERE id = ?").run(id);
+      db.prepare("UPDATE tickets SET status = 'done', merged_at = 'x', needs_human = 0 WHERE id IN (?, ?)").run(id, waiting);
+    }
+  });
+
+  it('Ctrl+R in a focused Ticket window asks to restart a running ticket; the window button too; Cancel starts nothing', async () => {
+    const id = ticket('Stuck', { status: 'in_progress' });
+    try {
+      await page.goto(base);
+      await until(() => column(id), 'the card');
+      await page.evaluate(`document.querySelector('.card[data-id="${id}"]').dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))`);
+      const win = `[data-win="ticket-${id}"]`;
+      await until(() => page.evaluate(`!!document.querySelector('${win}')`), 'the Ticket window');
+      const confirm = `End the running agent for #${id} and start a new one in the same phase?`;
+      const cancel = async () => {
+        await until(() => page.evaluate(`!!document.querySelector('dialog[open]')`), 'the Restart confirm');
+        expect(await page.evaluate(`document.querySelector('dialog[open]').textContent`)).toContain(confirm);
+        await page.evaluate(`[...document.querySelectorAll('dialog[open] button')].find((b) => b.textContent === 'Cancel').click()`);
+        await until(() => page.evaluate(`!document.querySelector('dialog[open]')`), 'the confirm to close');
+      };
+      await page.evaluate(`dispatchEvent(new KeyboardEvent('keydown', { key: 'r', ctrlKey: true, bubbles: true }))`);
+      await cancel();
+      await page.evaluate(`[...document.querySelectorAll('${win} button')].find((b) => b.textContent === 'Restart').click()`);
+      await cancel();
+      expect(db.prepare('SELECT COUNT(*) AS n FROM runs WHERE ticket_id = ?').get(id)).toEqual({ n: 0 });
+    } finally {
+      db.prepare("UPDATE tickets SET status = 'done', merged_at = 'x' WHERE id = ?").run(id);
     }
   });
 

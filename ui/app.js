@@ -183,6 +183,16 @@ const resume = (id) => act(async () => {
   await api('POST', `/tickets/${id}/resume`);
   await sayLaunched([id]);
 });
+// Replaces a running ticket's agent, live or hung, with a fresh one in the same phase and worktree (docs/LIFECYCLE.md).
+const restartable = (t) => t?.status === 'in_progress' || t?.status === 'testing';
+async function restart(id) {
+  if (!restartable(tickets.get(id))) return say(`#${id} is not In progress or Testing; nothing to restart.`);
+  if ((await dialog('Restart ticket', `End the running agent for #${id} and start a new one in the same phase?`, ['Restart', 'Cancel'])) !== 'Restart') return;
+  await act(async () => {
+    await api('POST', `/tickets/${id}/restart`);
+    await sayLaunched([id]);
+  });
+}
 const launchAll = () => act(async () => sayLaunched((await api('POST', '/tickets/launch-all')).map((t) => t.id)));
 const newBrainstorm = () => act(async () => openTerminal(await api('POST', '/brainstorm')), 'Brainstorm started.');
 /** An operator terminal: an agent with the operator's reach on the board, given the mission typed here. The daemon refuses an empty one. */
@@ -205,6 +215,7 @@ function cardMenu(t, x, y) {
     { label: 'Open', run: () => openTicket(t.id) },
     { label: 'Launch', disabled: t.status !== 'backlog' && !resumable(t), run: () => launch(t.id) },
     { label: 'Resume', disabled: !resumable(t), run: () => resume(t.id) },
+    ...(restartable(t) ? [{ label: 'Restart', run: () => restart(t.id) }] : []),
     '-',
     { label: 'Model', items: [
       { label: `Phase default${t.model ? '' : ' ✓'}`, run: () => set({ model: null }) },
@@ -422,7 +433,8 @@ function ticketForm(w, t) {
     h('div', { class: 'field-row-stacked' }, h('label', {}, 'Acceptance criteria, one per line'), criteria),
     h('div', { class: 'field-row-stacked' }, h('label', {}, 'Depends on'), deps),
     h('div', { class: 'field-row' }, h('button', { onclick: save }, t ? 'Save' : 'Create'),
-      t && h('button', { disabled: t.status !== 'backlog', onclick: () => launch(t.id) }, 'Launch')));
+      t && h('button', { disabled: t.status !== 'backlog', onclick: () => launch(t.id) }, 'Launch'),
+      t && h('button', { onclick: () => restart(t.id) }, 'Restart')));
 }
 
 // ---- terminals ----
@@ -532,6 +544,7 @@ function openInbox() {
             h('button', { onclick: () => openTicket(q.ticket_id) }, 'Open ticket'),
             q.status === 'done' && !q.merged_at && h('button', { onclick: () => act(() => api('POST', `/tickets/${q.ticket_id}/merge`), `Merge of #${q.ticket_id} queued.`) }, 'Retry merge'),
             (q.status === 'in_progress' || q.status === 'testing') && h('button', { onclick: () => resume(q.ticket_id) }, 'Resume'),
+            (q.status === 'in_progress' || q.status === 'testing') && h('button', { onclick: () => restart(q.ticket_id) }, 'Restart'),
             q.status !== 'done' && t && h('button', { onclick: () => reset(t) }, 'Reset to Backlog')));
       }
       const answer = h('textarea', { rows: 3, placeholder: 'Your answer' });
@@ -714,7 +727,7 @@ function taskbar() {
 
 const clock = () => { document.getElementById('clock').textContent = new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }); };
 
-// Esc closes the focused window, Ctrl+L launches all, Ctrl+N starts a brainstorm, Ctrl+Shift+N an operator terminal. Inside a terminal every key goes to the
+// Esc closes the focused window, Ctrl+L launches all, Ctrl+N starts a brainstorm, Ctrl+Shift+N an operator terminal, Ctrl+R restarts the focused ticket's agent. Inside a terminal every key goes to the
 // agent instead (Esc interrupts Claude Code, Ctrl+L clears the screen).
 addEventListener('keydown', (e) => {
   if (document.querySelector('dialog[open]') || e.target.closest?.('.xterm')) return;
@@ -730,6 +743,11 @@ addEventListener('keydown', (e) => {
   } else if (plainCtrl && e.key.toLowerCase() === 'n') {
     e.preventDefault();
     newBrainstorm();
+  } else if (plainCtrl && e.key.toLowerCase() === 'r') {
+    const id = /^ticket-(\d+)$/.exec(focused()?.el.dataset.win)?.[1];
+    if (!id) return;
+    e.preventDefault(); // not a page reload
+    restart(Number(id));
   } else if (e.ctrlKey && e.shiftKey && !e.altKey && e.key.toLowerCase() === 'n') {
     e.preventDefault();
     newOperator();
