@@ -441,7 +441,19 @@ function openTerminal(s, auto = false) {
   const fit = new FitAddon();
   const ro = new ResizeObserver(() => fit.fit());
   // Spoken words are typed into the agent's terminal without Enter; the operator presses it.
-  const w = open(wid, { title, w: 760, h: 440, background: auto, extra: [micButton((text) => send({ data: text }))], onClose: () => { terms.delete(wid); ro.disconnect(); ws.close(); term.dispose(); } });
+  // X ends the agent for good, after a confirm; the board's own closes (after a report, a deleted ticket) never do.
+  const onX = async () => {
+    if (w.el.classList.contains('ended')) return w.close();
+    const ask = s.ticket_id === null ? 'End this brainstorm?' : `End the agent for #${s.ticket_id}? The ticket is flagged so you can resume it.`;
+    if ((await dialog('End agent', `${ask} Minimize to keep it running.`, ['End', 'Cancel'])) !== 'End') return;
+    try {
+      await api('DELETE', `/sessions/${s.id}`);
+      w.close();
+    } catch (e) {
+      say(e.message);
+    }
+  };
+  const w = open(wid, { title, w: 760, h: 440, background: auto, onX, extra: [micButton((text) => send({ data: text }))], onClose: () => { terms.delete(wid); ro.disconnect(); ws.close(); term.dispose(); } });
   terms.set(wid, s.ticket_id);
   w.body.classList.add('k95-term');
   term.loadAddon(fit);

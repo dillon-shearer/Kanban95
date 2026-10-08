@@ -83,6 +83,7 @@ Every `/api/*` request needs the `k95` cookie holding the shell secret, or gets 
 | GET | `/api/inbox` | what flagged tickets wait on: unanswered `question` notes, and the newest `failure` note when no newer question is open (`kind`, `body`, `role`, `created_at`, and the ticket's `title`, `status`, `merged_at`) |
 | POST | `/api/brain` | add a note: `title`, `body`, optional `tags` |
 | GET | `/api/sessions` | live agent sessions: `id` (the `/pty/<id>` key), `ticket_id`, `run_id`, `grant_id`, `role`, `phase`, `model` |
+| DELETE | `/api/sessions/:id` | the operator's X on a terminal: ends the session (`runs.outcome` = `closed`, grant revoked, pty killed); a ticket session also flags its ticket (`exit` with an operator note). 404 when not live. Audited as `sessions.end` |
 | POST | `/api/brainstorm` | starts a brainstorm session (planner, repo root); returns it in the `/api/sessions` shape |
 | GET, PUT | `/api/config/models` `/api/config/settings` | `~/.kanban95/models.json` / `settings.json`: GET returns `{path, value}` as written (`null` when absent), PUT checks the whole file against its schema (`400` naming the field) and writes it |
 | GET, PUT | `/api/notepad` | `<repo>/.kanban95/notepad.md` as plain text: `{value}`, `''` when absent; PUT refuses a non-string with `400` and more than 256 KB with `413`. Not audited |

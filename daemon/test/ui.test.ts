@@ -246,6 +246,34 @@ describe('ui', { timeout: 60_000 }, () => {
     expect(await tasks()).toBe(0);
   });
 
+  it("X on a running terminal asks first: Cancel keeps the agent, End stops it and flags the ticket", async () => {
+    const id = ticket('Stop me');
+    await page.goto(base);
+    await until(() => column(id), 'the card');
+    expect((await fetch(`${base}api/tickets/${id}/launch`, { method: 'POST', headers: { cookie: `k95=${srv.secret}` } })).status).toBe(200);
+    const wid = await until(() => page.evaluate<string | undefined>(`document.querySelector('[data-win^="term-"]:not(.ended) .xterm')?.closest('[data-win]').dataset.win`), 'the terminal');
+    const live = async () => (await (await fetch(`${base}api/sessions`, { headers: { cookie: `k95=${srv.secret}` } })).json()).some((x: { id: number }) => `term-${x.id}` === wid);
+    const press = (label: string) => page.evaluate(`[...document.querySelectorAll('dialog[open] button')].find((b) => b.textContent === '${label}').click()`);
+    const x = `[data-win="${wid}"] [aria-label="Close"]`;
+
+    await page.evaluate(`document.querySelector('${x}').click()`);
+    const text = await until(() => page.evaluate<string>(`document.querySelector('dialog[open]')?.textContent ?? ''`), 'the confirm');
+    expect(text).toContain(`End the agent for #${id}?`);
+    expect(text).toContain('Minimize to keep it running');
+    await press('Cancel');
+    await until(() => page.evaluate('!document.querySelector("dialog[open]")'), 'the dialog to close');
+    expect(await page.evaluate(`!!document.querySelector('[data-win="${wid}"]')`)).toBe(true);
+    expect(await live()).toBe(true);
+
+    await page.evaluate(`document.querySelector('${x}').click()`);
+    await until(() => page.evaluate('!!document.querySelector("dialog[open]")'), 'the confirm');
+    await press('End');
+    await until(() => page.evaluate(`!document.querySelector('[data-win="${wid}"]')`), 'the window to close');
+    await until(async () => !(await live()), 'the session to end');
+    expect(db.prepare('SELECT needs_human FROM tickets WHERE id = ?').get(id)).toEqual({ needs_human: 1 });
+    db.prepare("UPDATE tickets SET needs_human = 0, merged_at = 'x' WHERE id = ?").run(id);
+  });
+
   it('offers Resume in the card menu and the Inbox for a flagged running ticket whose agent is gone; Resume starts it again', async () => {
     const id = ticket('Died', { status: 'in_progress', needs_human: 1, retry: 2 });
     db.prepare("INSERT INTO notes (ticket_id, role, kind, body) VALUES (?, 'worker', 'failure', 'agent exited without reporting')").run(id);
