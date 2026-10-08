@@ -577,8 +577,28 @@ function openBrain() {
   const search = async () => {
     const rows = await api('GET', `/brain?q=${encodeURIComponent(q.value)}`);
     results.replaceChildren(...(rows.length ? rows.map((b) => h('li', { class: 'note' },
-      h('div', { class: 'note-head' }, `#${b.id} ${b.title}`, b.ticket_id && ` · ticket #${b.ticket_id}`, b.tags && ` · ${b.tags}`),
+      h('div', { class: 'note-head' }, `#${b.id} ${b.title}`, b.tags && ` · ${b.tags}`),
+      // Provenance: a row from a ticket that never landed may describe code that does not exist.
+      h('div', { class: 'note-meta' }, fmt(b.created_at), b.ticket_id && ` · ticket #${b.ticket_id} (${b.ticket_status ?? 'deleted'})`,
+        h('button', { onclick: () => edit(b) }, 'Edit'), h('button', { onclick: () => remove(b) }, 'Delete')),
       h('pre', {}, b.body))) : [h('li', {}, 'Nothing found.')]));
+  };
+  // Merge = edit the survivor, delete the rest.
+  const edit = async (b) => {
+    const f = { title: h('input', { type: 'text', value: b.title }), tags: h('input', { type: 'text', 'data-mic': 'off', value: b.tags }), body: h('textarea', { rows: 10 }, b.body) };
+    const form = h('div', { class: 'k95-brain-edit' }, ...Object.entries(f).map(([k, el]) => h('div', { class: 'field-row-stacked' }, h('label', {}, k), el)));
+    if ((await dialog(`Edit brain #${b.id}`, form, ['Save', 'Cancel'])) !== 'Save') return;
+    act(async () => {
+      await api('PATCH', `/brain/${b.id}`, { title: f.title.value, body: f.body.value, tags: f.tags.value });
+      await search();
+    }, `Brain #${b.id} saved.`);
+  };
+  const remove = async (b) => {
+    if ((await dialog('Delete brain note', `Delete #${b.id} "${b.title}"? No agent will see it again.`, ['Delete', 'Cancel'])) !== 'Delete') return;
+    act(async () => {
+      await api('DELETE', `/brain/${b.id}`);
+      await search();
+    }, `Brain #${b.id} deleted.`);
   };
   const title = h('input', { type: 'text', placeholder: 'Title' });
   const tags = h('input', { type: 'text', 'data-mic': 'off', placeholder: 'tags' });

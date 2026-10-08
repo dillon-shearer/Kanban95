@@ -4,7 +4,8 @@ import type { DatabaseSync } from 'node:sqlite';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import * as z from 'zod';
-import { brainSearch, readTicket, setDeps, transaction } from './api.js';
+import { brainDelete, brainSearch, brainUpdate, readTicket, setDeps, transaction } from './api.js';
+import { BRAIN_BODY_MAX } from './db.js';
 import { attachments } from './attachments.js';
 import { audit, verify, type Grant, type Role } from './grants.js';
 import { apply, changed, Refused, type Board } from './lifecycle.js';
@@ -23,7 +24,7 @@ const unbound = (r: Role) => r === 'planner' || r === 'operator';
 const an = (r: Role) => `${r === 'operator' ? 'an' : 'a'} ${r}`;
 /** The only ticket columns a worker may edit on its own ticket. */
 const WORKER_FIELDS = ['body', 'criteria'] as const;
-const BRAIN_SEARCH_MAX = 20;
+const BRAIN_SEARCH_MAX = 50;
 
 /** A refusal. Audited as `denied`; anything else thrown is `error`. */
 class Deny extends Error {}
@@ -223,12 +224,15 @@ export const TOOLS: Record<string, Tool<z.ZodRawShape>> = {
 
   brain_add: tool({
     description:
-      'Save a durable note to the project brain: a decision, a gotcha, a convention, or how a subsystem works. Future tickets that match its title, body or tags get it injected, ' +
-      'so write it for a reader with no context. Do not duplicate what the code or docs already say. Returns the brain row id.',
+      'Save one fact a future agent would trip on to the project brain: a gotcha, a non-obvious decision, or how an external tool behaves (with version and date). ' +
+      'brain_search the subject first; if a row already covers it, correct that row with brain_update instead of adding a near-duplicate. ' +
+      'Title: a sentence naming the trap ("X does Y; do Z"). Body: what happens, why, what to do instead, and the file or function, for a reader with no context. ' +
+      'Tags: words the title of a future ticket would contain. Never write ticket status or plans ("pending", "until #N merges"): they go stale; unbuilt work belongs in a ticket. ' +
+      'Skip what the code, docs or templates already say. Returns the brain row id.',
     access: { planner: 'yes', worker: 'yes', tester: 'yes', operator: 'yes' },
     input: {
       title: z.string().min(1),
-      body: z.string().min(1).describe('Markdown.'),
+      body: z.string().min(1).max(BRAIN_BODY_MAX).describe(`Markdown, at most ${BRAIN_BODY_MAX} characters.`),
       tags: z.string().default('').describe('Space-separated keywords used for matching.'),
     },
     run(c, a) {
@@ -237,16 +241,45 @@ export const TOOLS: Record<string, Tool<z.ZodRawShape>> = {
     },
   }),
 
+  brain_update: tool({
+    description:
+      'Correct a brain row in place: when your change made it false, when it duplicates what you were about to add, or to merge rows (edit the survivor; ask for the rest to be deleted in your summary). ' +
+      'Omitted fields are left unchanged. Returns the row.',
+    access: { planner: 'yes', worker: 'yes', tester: 'yes', operator: 'yes' },
+    input: {
+      id: z.number().int().positive(),
+      title: z.string().min(1).optional(),
+      body: z.string().min(1).max(BRAIN_BODY_MAX).optional().describe(`Markdown, at most ${BRAIN_BODY_MAX} characters.`),
+      tags: z.string().optional(),
+    },
+    run: (c, { id, ...fields }) => brainUpdate(c.db, id, fields),
+  }),
+
+  brain_delete: tool({
+    description: 'Delete a brain row that is stale or duplicates another row or the docs. Workers and testers update rows instead and name the ones to delete in their summary note. Returns the deleted id.',
+    access: { planner: 'yes', operator: 'yes' },
+    input: { id: z.number().int().positive() },
+    run(c, a) {
+      brainDelete(c.db, a.id);
+      return { id: a.id };
+    },
+  }),
+
   brain_search: tool({
     description:
-      'Full-text search the project brain, best match first. Search before making a decision another ticket may already have made, and when you meet an unfamiliar subsystem. ' +
+      'Full-text search the project brain, best match first (title and tags weigh more than the body). Search before making a decision another ticket may already have made, before brain_add, ' +
+      'and when you meet an unfamiliar subsystem. Give `id` instead to fetch one row, such as one your prompt listed by title only; give neither to list the newest rows. ' +
       `Returns up to limit rows (default 5, max ${BRAIN_SEARCH_MAX}) with title, body and tags.`,
     access: { planner: 'yes', worker: 'yes', tester: 'yes', operator: 'yes' },
     input: {
-      query: z.string().min(1).describe('Keywords; each word must match.'),
+      query: z.string().min(1).optional().describe('Keywords; each word must match.'),
+      id: z.number().int().positive().optional().describe('Fetch this one row instead of searching.'),
       limit: z.number().int().min(1).max(BRAIN_SEARCH_MAX).default(5),
     },
-    run: (c, a) => brainSearch(c.db, a.query, a.limit),
+    run(c, a) {
+      if (a.id !== undefined) return c.db.prepare('SELECT * FROM brain WHERE id = ?').all(a.id);
+      return brainSearch(c.db, a.query ?? '', a.limit);
+    },
   }),
 
   ask_operator: tool({

@@ -23,6 +23,8 @@ A refused call returns a tool error whose text says why and, for `move_ticket`, 
 | get_ticket | yes | own + its deps | own | yes |
 | list_tickets | yes | own + its deps | own | yes |
 | brain_add | yes | yes | yes | yes |
+| brain_update | yes | yes | yes | yes |
+| brain_delete | yes | no | no | yes |
 | brain_search | yes | yes | yes | yes |
 | ask_operator | yes | own | own | yes |
 | report_test | no | no | own | no |
@@ -105,21 +107,41 @@ List tickets with id, title, status, flags and dependencies, optionally filtered
 
 ### brain_add
 
-Save a durable note to the project brain: a decision, a gotcha, a convention, or how a subsystem works. Future tickets that match its title, body or tags get it injected, so write it for a reader with no context. Do not duplicate what the code or docs already say. Returns the brain row id.
+Save one fact a future agent would trip on to the project brain: a gotcha, a non-obvious decision, or how an external tool behaves (with version and date). brain_search the subject first; if a row already covers it, correct that row with brain_update instead of adding a near-duplicate. Title: a sentence naming the trap ("X does Y; do Z"). Body: what happens, why, what to do instead, and the file or function, for a reader with no context. Tags: words the title of a future ticket would contain. Never write ticket status or plans ("pending", "until #N merges"): they go stale; unbuilt work belongs in a ticket. Skip what the code, docs or templates already say. Returns the brain row id.
 
 | argument | type | required | description |
 |---|---|---|---|
 | title | string | yes |  |
-| body | string | yes | Markdown. |
+| body | string | yes | Markdown, at most 1500 characters. |
 | tags | string | default `""` | Space-separated keywords used for matching. |
 
-### brain_search
+### brain_update
 
-Full-text search the project brain, best match first. Search before making a decision another ticket may already have made, and when you meet an unfamiliar subsystem. Returns up to limit rows (default 5, max 20) with title, body and tags.
+Correct a brain row in place: when your change made it false, when it duplicates what you were about to add, or to merge rows (edit the survivor; ask for the rest to be deleted in your summary). Omitted fields are left unchanged. Returns the row.
 
 | argument | type | required | description |
 |---|---|---|---|
-| query | string | yes | Keywords; each word must match. |
+| id | integer | yes |  |
+| title | string | no |  |
+| body | string | no | Markdown, at most 1500 characters. |
+| tags | string | no |  |
+
+### brain_delete
+
+Delete a brain row that is stale or duplicates another row or the docs. Workers and testers update rows instead and name the ones to delete in their summary note. Returns the deleted id.
+
+| argument | type | required | description |
+|---|---|---|---|
+| id | integer | yes |  |
+
+### brain_search
+
+Full-text search the project brain, best match first (title and tags weigh more than the body). Search before making a decision another ticket may already have made, before brain_add, and when you meet an unfamiliar subsystem. Give `id` instead to fetch one row, such as one your prompt listed by title only; give neither to list the newest rows. Returns up to limit rows (default 5, max 50) with title, body and tags.
+
+| argument | type | required | description |
+|---|---|---|---|
+| query | string | no | Keywords; each word must match. |
+| id | integer | no | Fetch this one row instead of searching. |
 | limit | integer | default `5` |  |
 
 ### ask_operator

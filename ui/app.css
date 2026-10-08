@@ -95,6 +95,11 @@ menu[role=tablist] { flex: none; margin-bottom: -2px !important; }
 .note.answer { border-left-color: navy; }
 .note.summary { border-left-color: green; }
 .note-head { color: #444; margin-bottom: 2px; }
+.note-meta { color: #666; display: flex; gap: 4px; align-items: center; }
+.note-meta button { min-width: 0; padding: 0 6px; margin-left: auto; }
+.note-meta button + button { margin-left: 0; }
+.k95-brain-edit { width: 460px; max-width: 80vw; }
+.k95-brain-edit textarea { width: 100%; box-sizing: border-box; }
 .k95-facts { margin: 0; font-weight: bold; }
 .k95-form { display: flex; flex-direction: column; gap: 6px; }
 .k95-form textarea, .k95-form input[type=text] { width: 100%; box-sizing: border-box; }

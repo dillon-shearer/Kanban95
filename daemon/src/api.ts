@@ -4,7 +4,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { dirname, extname, join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { attachmentDir, attachments, MAX_ATTACHMENT, safeName, saveAttachment } from './attachments.js';
-import { isConstraintError } from './db.js';
+import { BRAIN_BODY_MAX, BRAIN_RANK, isConstraintError } from './db.js';
 import { ticketDiff } from './git.js';
 import { audit, revoke } from './grants.js';
 import { killGrantSession, sessions, sessionsOf, type Session } from './launcher.js';
@@ -98,8 +98,34 @@ export function transaction<T>(db: DatabaseSync, fn: () => T): T {
 /** Ranked FTS5 search over the brain; an empty query lists the newest rows. Shared by REST and MCP. */
 export function brainSearch(db: DatabaseSync, q: string, limit: number) {
   return q.trim()
-    ? db.prepare('SELECT b.* FROM brain_fts f JOIN brain b ON b.id = f.rowid WHERE brain_fts MATCH ? ORDER BY rank LIMIT ?').all(ftsQuery(q), limit)
+    ? db.prepare(`SELECT b.* FROM brain_fts f JOIN brain b ON b.id = f.rowid WHERE brain_fts MATCH ? ORDER BY ${BRAIN_RANK}, b.id LIMIT ?`).all(ftsQuery(q), limit)
     : db.prepare('SELECT * FROM brain ORDER BY id DESC LIMIT ?').all(limit);
+}
+
+type BrainFields = { title?: string; body?: string; tags?: string };
+/** Rows are edited in place, no history: the audit log says who changed what. Unknown id is 404. Shared by REST and MCP. */
+export function brainUpdate(db: DatabaseSync, id: number, fields: BrainFields) {
+  const set = Object.entries(fields).filter(([, v]) => v !== undefined);
+  if (set.length === 0) throw new HttpError(400, 'give title, body and/or tags');
+  const r = db.prepare(`UPDATE brain SET ${set.map(([k]) => `${k} = ?`).join(', ')} WHERE id = ?`).run(...set.map(([, v]) => v!), id);
+  if (r.changes === 0) throw new HttpError(404, 'no such brain row');
+  return db.prepare('SELECT * FROM brain WHERE id = ?').get(id);
+}
+
+export function brainDelete(db: DatabaseSync, id: number) {
+  if (db.prepare('DELETE FROM brain WHERE id = ?').run(id).changes === 0) throw new HttpError(404, 'no such brain row');
+}
+
+/** REST body check for POST (all of title and body) and PATCH (any subset). */
+function brainFields(body: Record<string, unknown>, partial: boolean): BrainFields {
+  const { title, body: text, tags } = body;
+  for (const [k, v] of Object.entries({ title, body: text, tags })) {
+    if (v === undefined ? !partial && k !== 'tags' : typeof v !== 'string' || (k !== 'tags' && !v.trim())) {
+      throw new HttpError(400, 'title and body must be non-empty strings, tags a string');
+    }
+  }
+  if (typeof text === 'string' && text.length > BRAIN_BODY_MAX) throw new HttpError(400, `body over ${BRAIN_BODY_MAX} characters: one fact per row`);
+  return { title, body: text, tags } as BrainFields;
 }
 
 function ftsQuery(q: string): string {
@@ -190,8 +216,16 @@ const routes: [method: string, path: RegExp, mutation: string | null, handler: (
   ['GET', /^\/api\/brain$/, null, ({ db, url }) => {
     const q = url.searchParams.get('q') ?? '';
     const limit = Math.min(Number(url.searchParams.get('limit') ?? 20) || 20, 100);
-    const rows = brainSearch(db, q, limit);
+    // The source ticket's status, so the Brain window shows rows written for work that never landed.
+    const status = db.prepare('SELECT status FROM tickets WHERE id = ?');
+    const rows = (brainSearch(db, q, limit) as { ticket_id: number | null }[])
+      .map((r) => ({ ...r, ticket_status: r.ticket_id === null ? null : (status.get(r.ticket_id) as { status: string } | undefined)?.status ?? null }));
     return { status: 200, body: rows };
+  }],
+  ['PATCH', /^\/api\/brain\/(\d+)$/, 'brain.update', ({ db, params, body }) => ({ status: 200, body: brainUpdate(db, Number(params[0]), brainFields(body, true)) })],
+  ['DELETE', /^\/api\/brain\/(\d+)$/, 'brain.delete', ({ db, params }) => {
+    brainDelete(db, Number(params[0]));
+    return { status: 204 };
   }],
   ['GET', /^\/api\/grants$/, null, ({ db }) => ({
     status: 200,
@@ -239,9 +273,8 @@ const routes: [method: string, path: RegExp, mutation: string | null, handler: (
       ORDER BY n.id`).all(),
   })],
   ['POST', /^\/api\/brain$/, 'brain.add', ({ db, body }) => {
-    const { title, body: text, tags = '' } = body;
-    if (typeof title !== 'string' || typeof text !== 'string' || typeof tags !== 'string') throw new HttpError(400, 'title, body and tags must be strings');
-    const r = db.prepare('INSERT INTO brain (title, body, tags) VALUES (?, ?, ?)').run(title, text, tags);
+    const { title, body: text, tags = '' } = brainFields(body, false);
+    const r = db.prepare('INSERT INTO brain (title, body, tags) VALUES (?, ?, ?)').run(title!, text!, tags);
     return { status: 201, body: db.prepare('SELECT * FROM brain WHERE id = ?').get(Number(r.lastInsertRowid)) };
   }],
   // Live agent terminals, for the UI's terminal windows and the taskbar count. `id` is the /pty/<id> key.

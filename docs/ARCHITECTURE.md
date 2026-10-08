@@ -74,14 +74,16 @@ Every `/api/*` request needs the `k95` cookie holding the shell secret, or gets 
 | GET | `/api/tickets/:id/notes` `/runs` `/audit` | rows for that ticket, oldest first |
 | GET, POST | `/api/tickets/:id/attachments` | list `[{name, path, size}]` (`path` absolute) / upload: the raw file bytes as the body, its name in `?name=`. The name is cleaned to a safe basename (anything outside letters, digits and ` ._()+-` becomes `_`); one with `/`, `\` or `..` is refused `400`, a body over 10 MB `413`. A clash is stored as `<stem>-1<ext>`, never overwritten. `201` with the stored entry |
 | GET, DELETE | `/api/tickets/:id/attachments/:name` | serve / remove one. PNG, JPEG, GIF, WebP and BMP are served inline with their image type; anything else as an `application/octet-stream` download, so an uploaded page never runs on the board's origin |
-| GET | `/api/brain?q=&limit=` | FTS5 ranked search, limit at most 100; no `q` lists newest |
+| GET | `/api/brain?q=&limit=` | FTS5 ranked search (title and tags weigh more than body), limit at most 100; no `q` lists newest. Each row carries `ticket_status`, its source ticket's status (null when none or deleted) |
 | GET | `/api/grants` | all grants, never the hash |
 | DELETE | `/api/grants/:id` | revoke and kill the session's pty; 404 if not live |
 | POST | `/api/tickets/:id/launch` `/api/tickets/:id/answer` `/api/tickets/:id/merge` `/api/tickets/:id/resume` | lifecycle events (`docs/LIFECYCLE.md`); `409` when the state machine has no such transition |
 | POST | `/api/tickets/housekeeping` | creates a housekeeping ticket and launches it (the Housekeeping button) |
 | GET | `/api/tickets/:id/diff` | `{diff}`: the worktree against its fork point, uncommitted tracked changes included; `null` without a worktree |
 | GET | `/api/inbox` | what flagged tickets wait on: unanswered `question` notes, and the newest `failure` note when no newer question is open (`kind`, `body`, `role`, `created_at`, and the ticket's `title`, `status`, `merged_at`) |
-| POST | `/api/brain` | add a note: `title`, `body`, optional `tags` |
+| POST | `/api/brain` | add a note: `title`, `body` (at most 1500 characters), optional `tags` |
+| PATCH | `/api/brain/<id>` | edit a note in place: any of `title`, `body`, `tags`; 404 for an unknown id |
+| DELETE | `/api/brain/<id>` | delete a note; 404 for an unknown id |
 | GET | `/api/sessions` | live agent sessions: `id` (the `/pty/<id>` key), `ticket_id`, `run_id`, `grant_id`, `role`, `phase`, `model` |
 | DELETE | `/api/sessions/:id` | the operator's X on a terminal: ends the session (`runs.outcome` = `closed`, grant revoked, pty killed); a ticket session also flags its ticket (`exit` with an operator note). 404 when not live. Audited as `sessions.end` |
 | POST | `/api/brainstorm` | starts a brainstorm session (planner, repo root); returns it in the `/api/sessions` shape |
@@ -104,7 +106,7 @@ Errors are `{ "error": "..." }`: 400 for bad input, a constraint violation or a 
 ## Prompts
 
 1. `startRun(db, repo, {ticketId, template, cli, model, effort, worktree?, base?})` loads `<repo>/.kanban95/templates/<template>.md`. A placeholder outside `VARS` throws here, naming it.
-2. `buildContext` reads the ticket, the brain (FTS5 `OR` of the ticket's title and body words, top 5, 4000-char budget), the failure notes of the last cycle, the retry count, the base branch, the operator's `preferences.md`, the absolute paths of the ticket's attachments (appended to `{{ticket}}`), the role's tool list from the MCP table, and for a tester `git diff --no-color --no-ext-diff <base>...HEAD` in the worktree.
+2. `buildContext` reads the ticket, the brain (FTS5 `OR` of the ticket's title and body words, top 8, bodies for the top 2 and an index line for the rest, 2500-char budget cut between rows), the failure notes of the last cycle, the retry count, the base branch, the operator's `preferences.md`, the absolute paths of the ticket's attachments (appended to `{{ticket}}`), the role's tool list from the MCP table, and for a tester `git diff --no-color --no-ext-diff <base>...HEAD` in the worktree.
 3. The template is filled in a single pass and the result inserted into `runs.prompt_rendered`. Same ticket and same database give byte-identical output: every query has a total order and nothing reads the clock.
 
 The template is read from disk on every render, so operator edits apply without a restart. Template-to-role and template-to-phase mapping is the `TEMPLATES` table in `templates.ts`; agent-facing behaviour is in `docs/AGENTS.md`.
@@ -211,6 +213,7 @@ Gotchas collected while the board was built. Each one cost a phase some time.
 - Headless Edge resizes its window to `--window-size` minus chrome; `cdp.ts` sets the viewport with `Emulation.setDeviceMetricsOverride` to get an exact size.
 - `/events` carries several frame shapes; anything listening must ignore frames it does not know.
 - The suite is load-sensitive (ptys, headless browsers, real git). Rerun a failing file alone before treating it as a regression.
+- `api.ts` and `mcp.ts` import each other. A value from `api.ts` read while `mcp.ts` loads (inside the `TOOLS` table, not inside a `run`) is in its temporal dead zone when the built daemon starts from `main.js`: `server.test.ts` times out with "Cannot access X before initialization" while the vitest files that import `api.ts` first pass. Put such constants in a leaf module (`db.ts` holds the brain ones).
 
 ## How the board was built
 
