@@ -294,11 +294,16 @@ function keepScroll(p, rebuild) {
   if (sp) sp.scrollTop = inner;
 }
 
-function openTicket(id) {
+/** `draft`: for a new ticket, text for its Body (replaces what the form holds). */
+function openTicket(id, draft) {
   const wid = `ticket-${id ?? 'new'}`;
   const w = open(wid, { title: id ? `Ticket #${id}` : 'New ticket', w: 680, h: 480, onClose: () => views.delete(wid) });
+  if (id === null) {
+    if (!w.body.firstChild) w.body.append(ticketForm(w, null));
+    if (draft != null) w.body.querySelector('[data-field="body"]').value = draft;
+    return;
+  }
   if (w.body.firstChild) return;
-  if (id === null) return w.body.append(ticketForm(w, null));
   const tb = tabs(['Ticket', 'Notes', 'Runs', 'Diff', 'Grants', 'Audit'], async (tab, p, first) => {
     const t = tickets.get(id);
     if (!t) return p.replaceChildren(h('p', {}, 'This ticket was deleted.'));
@@ -385,7 +390,7 @@ function facts(t) {
 /** The ticket's own fields: edits an existing ticket, or creates one (`t` null) and swaps the window for the new ticket's. */
 function ticketForm(w, t) {
   const title = h('input', { type: 'text', value: t?.title ?? '' });
-  const body = h('textarea', { rows: 6 }, t?.body ?? '');
+  const body = h('textarea', { rows: 6, 'data-field': 'body' }, t?.body ?? '');
   const criteria = h('textarea', { rows: 5 }, t?.criteria ?? '');
   const deps = h('input', { type: 'text', 'data-mic': 'off', value: t?.depends_on.join(', ') ?? '', placeholder: 'e.g. 3, 4' });
   const save = async () => {
@@ -617,6 +622,43 @@ function openSettings() {
   views.set('settings', () => tb.redraw());
 }
 
+// ---- notepad ----
+
+/** The operator's scratch text, <repo>/.kanban95/notepad.md. Saved 500 ms after the last keystroke and on close. */
+function openNotepad() {
+  let timer = null;
+  const text = h('textarea', { spellcheck: 'false', readonly: true });
+  const status = h('p', { class: 'status-bar-field' }, 'Loading…');
+  const save = async () => {
+    clearTimeout(timer);
+    timer = null;
+    try {
+      await api('PUT', '/notepad', { value: text.value });
+      status.textContent = 'Saved.';
+    } catch (e) {
+      status.textContent = `Not saved: ${e.message}`;
+    }
+  };
+  const w = open('notepad', { title: 'Notepad', w: 520, h: 380, persist: true, onClose: () => timer && save() });
+  if (w.body.firstChild) return;
+  text.addEventListener('input', () => {
+    clearTimeout(timer);
+    timer = setTimeout(save, 500);
+  });
+  // The selection, or everything when nothing is selected.
+  const picked = () => text.value.slice(text.selectionStart, text.selectionEnd) || text.value;
+  w.body.append(h('div', { class: 'k95-notepad' }, text),
+    h('div', { class: 'field-row' },
+      h('button', { onclick: () => openTicket(null, picked()) }, 'New ticket from selection'),
+      h('button', { onclick: () => navigator.clipboard.writeText(picked()).then(() => { status.textContent = 'Copied.'; }, (e) => { status.textContent = e.message; }) }, 'Copy')),
+    h('div', { class: 'status-bar' }, status));
+  api('GET', '/notepad').then(({ value }) => {
+    text.value = value;
+    text.readOnly = false;
+    status.textContent = '.kanban95/notepad.md';
+  }, (e) => { status.textContent = e.message; });
+}
+
 // ---- taskbar, keyboard, start ----
 
 const START = [
@@ -624,6 +666,7 @@ const START = [
   { label: 'Inbox', run: openInbox },
   { label: 'Brain', run: openBrain },
   { label: 'Settings', run: openSettings },
+  { label: 'Notepad', run: openNotepad },
   '-',
   { label: 'New ticket', run: () => openTicket(null) },
   { label: 'New brainstorm', run: newBrainstorm },
@@ -639,7 +682,7 @@ function desktopIcons() {
   h('img', { src: `icons/${label.toLowerCase().replace(' ', '-')}.svg`, alt: '', width: 32, height: 32, draggable: 'false' }),
   h('span', {}, label));
   document.getElementById('desktop').prepend(h('nav', { id: 'icons' },
-    ['Board', 'Inbox', 'Brain', 'Settings', 'New ticket', 'New brainstorm'].map(icon)));
+    ['Board', 'Inbox', 'Brain', 'Settings', 'Notepad', 'New ticket', 'New brainstorm'].map(icon)));
 }
 
 function taskbar() {

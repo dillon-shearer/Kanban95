@@ -4,10 +4,11 @@ Living document. Update it in the same change that alters the schema.
 
 ## Where
 
-- `<repo>/.kanban95/board.db`, one SQLite file per repo, WAL mode, foreign keys on. Created on first daemon start together with `.kanban95/.gitignore` (ignores `board.db`, `board.db-*`, `sessions/`, `attachments/`; an older board's `.gitignore` gets the `attachments/` line on the next start).
+- `<repo>/.kanban95/board.db`, one SQLite file per repo, WAL mode, foreign keys on. Created on first daemon start together with `.kanban95/.gitignore` (ignores `board.db`, `board.db-*`, `sessions/`, `attachments/`, `notepad.md`; an older board's `.gitignore` gets the missing lines on the next start).
 - `<repo>/.kanban95/sessions/<run-id>/`: per-run `prompt.md` and (Claude Code) `mcp.json`, owner-only, deleted when the run's pty exits. Not data to keep; the prompt is also in `runs.prompt_rendered`.
 - `<repo>/.kanban95/attachments/<ticket-id>/<filename>`: files the operator attached to a ticket (pasted screenshots, dropped files), written by `POST /api/tickets/:id/attachments` (`daemon/src/attachments.ts`). Plain files, no table: the directory listing is the list. The `{{ticket}}` prompt variable and MCP `get_ticket` name each by absolute path so an agent opens it with its own file reader. Removed with the ticket.
 - `<repo>/.worktrees/t-<id>/`: the ticket's git worktree on branch `ticket/<id>`, excluded through `.git/info/exclude`. Removed with the branch once the ticket merges (`docs/LIFECYCLE.md` → Janitor).
+- `<repo>/.kanban95/notepad.md`: the operator's Notepad window, free text, at most 256 KB, read and written whole by `GET`/`PUT /api/notepad`. Git-ignored (the inner `.gitignore` lists it) and never given to an agent. Absent means empty.
 - `<repo>/.kanban95/config.json`: optional, committed, no secrets. Read by the lifecycle: `housekeeping_every` (default 10). The daemon never writes it.
 - `~/.kanban95/models.json`: the operator's model catalog, read at each launch (`docs/LIFECYCLE.md` → Run settings). Written by Settings → Models → Save after a schema check. No secrets.
 - `~/.kanban95/settings.json`: `paths` (`claude`, `codex`: an absolute path to the executable, empty for PATH), `sounds` (boolean, default true), `voice` (`backend`: `local`; `mode`: `push` or `toggle`). Absent means all defaults. Written by Settings after a schema check. No secrets.
