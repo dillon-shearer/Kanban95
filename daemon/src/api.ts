@@ -3,6 +3,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { DatabaseSync } from 'node:sqlite';
 import { isConstraintError } from './db.js';
 import { audit, revoke } from './grants.js';
+import { killGrantSession } from './launcher.js';
 
 type Json = Record<string, unknown>;
 type Reply = { status: number; body?: unknown };
@@ -140,6 +141,7 @@ const routes: [method: string, path: RegExp, mutation: string | null, handler: (
   })],
   ['DELETE', /^\/api\/grants\/(\d+)$/, 'grants.revoke', ({ db, params }) => {
     if (!revoke(db, Number(params[0]))) throw new HttpError(404, 'no such live grant');
+    killGrantSession(Number(params[0]));
     return { status: 204 };
   }],
 ];

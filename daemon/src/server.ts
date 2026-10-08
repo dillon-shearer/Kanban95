@@ -4,8 +4,10 @@ import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import { extname, resolve, sep } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
+import { WebSocketServer } from 'ws';
 import { handleApi } from './api.js';
 import { openDb } from './db.js';
+import { killAll, launch, sessions } from './launcher.js';
 import { handleMcp } from './mcp.js';
 import { initTemplates } from './templates.js';
 
@@ -46,15 +48,16 @@ function send(res: ServerResponse, status: number, body: string, type = 'text/pl
   res.end(body);
 }
 
+/** Only our own origin may talk to us: blocks DNS rebinding and cross-site requests from other local pages. */
+const sameOrigin = (req: IncomingMessage, self: string) =>
+  req.headers.host === self && (req.headers.origin === undefined || req.headers.origin === `http://${self}`);
+
 async function handle(db: DatabaseSync, self: string, req: IncomingMessage, res: ServerResponse) {
   // The shell loads the UI from this origin, so the CSP must come from here:
   // Tauri only injects its configured CSP into pages it serves itself.
   res.setHeader('Content-Security-Policy', "default-src 'self'; img-src 'self' data:");
   res.setHeader('X-Content-Type-Options', 'nosniff');
-  // Only our own origin may talk to us: blocks DNS rebinding and cross-site requests from other local pages.
-  if (req.headers.host !== self || (req.headers.origin !== undefined && req.headers.origin !== `http://${self}`)) {
-    return send(res, 403, 'forbidden origin');
-  }
+  if (!sameOrigin(req, self)) return send(res, 403, 'forbidden origin');
 
   const url = new URL(req.url ?? '/', `http://${self}`);
   if (url.pathname.startsWith('/api/')) return handleApi(db, req, res, url);
@@ -81,7 +84,14 @@ async function handle(db: DatabaseSync, self: string, req: IncomingMessage, res:
   createReadStream(file).pipe(res);
 }
 
-export function start(config: Config = {}): Promise<{ port: number; db: DatabaseSync; close: () => Promise<void> }> {
+type Launch = Parameters<typeof launch>[1];
+
+export function start(config: Config = {}): Promise<{
+  port: number;
+  db: DatabaseSync;
+  launch: (o: Launch) => ReturnType<typeof launch>;
+  close: () => Promise<void>;
+}> {
   const { host, port } = validateConfig(config);
   const repo = config.repo ?? process.cwd();
   const db = openDb(repo);
@@ -89,6 +99,38 @@ export function start(config: Config = {}): Promise<{ port: number; db: Database
   let self = '';
   const server = createServer((req, res) => {
     handle(db, self, req, res).catch(() => send(res, 500, 'internal error'));
+  });
+
+  // /pty/<run-id>: the run's terminal for xterm.js. Output goes out as text frames, starting with the scrollback so far.
+  // In: JSON `{"data": "..."}` is typed into the pty, `{"resize": [cols, rows]}` resizes it. A browser always sends
+  // Origin on a websocket, so here it is required, not optional.
+  const wss = new WebSocketServer({ noServer: true, maxPayload: 1 << 16 });
+  server.on('upgrade', (req, socket, head) => {
+    const s = sessions.get(Number(/^\/pty\/(\d+)$/.exec(req.url ?? '')?.[1]));
+    if (!req.headers.origin || !sameOrigin(req, self) || !s) {
+      socket.end('HTTP/1.1 403 Forbidden\r\n\r\n');
+      return;
+    }
+    wss.handleUpgrade(req, socket, head, (ws) => {
+      ws.send(s.scrollback());
+      const out = s.pty.onData((d) => ws.send(d));
+      const exit = s.pty.onExit(() => ws.close());
+      ws.on('message', (m) => {
+        try {
+          const msg = JSON.parse(String(m));
+          if (typeof msg.data === 'string') s.pty.write(msg.data);
+          else if (Array.isArray(msg.resize) && msg.resize.every((n: unknown) => Number.isInteger(n) && (n as number) > 0 && (n as number) < 1000)) {
+            s.pty.resize(msg.resize[0], msg.resize[1]);
+          }
+        } catch {
+          // not JSON: ignored
+        }
+      });
+      ws.on('close', () => {
+        out.dispose();
+        exit.dispose();
+      });
+    });
   });
   return new Promise((ok, fail) => {
     server.once('error', fail);
@@ -99,7 +141,13 @@ export function start(config: Config = {}): Promise<{ port: number; db: Database
       ok({
         port: addr.port,
         db,
-        close: () => new Promise((r) => server.close(() => { db.close(); r(); })),
+        launch: (o) => launch({ db, repo, port: addr.port }, o),
+        close: async () => {
+          await killAll(); // run rows are written before the db closes
+          for (const c of wss.clients) c.terminate();
+          await new Promise<void>((r) => server.close(() => r()));
+          db.close();
+        },
       });
     });
   });

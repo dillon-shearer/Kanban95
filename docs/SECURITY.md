@@ -5,7 +5,7 @@ Living document. Update it in the same change that moves a boundary described he
 ## What the board holds, and does not
 
 - **No provider API keys.** Claude Code and Codex CLI authenticate themselves in their own config. The board never asks for, reads, or stores a provider key, and never reads a `.env`.
-- **Its own grant tokens, hashed.** The only secrets the board creates are per-session bearer tokens. The database stores a SHA-256 of each; the raw token exists in memory at mint time and in the CLI process it is handed to (phase 4), nowhere else. It must never appear in logs, audit rows, or REST responses.
+- **Its own grant tokens, hashed.** The only secrets the board creates are per-session bearer tokens. The database stores a SHA-256 of each; the raw token exists in memory at mint time and in the agent's session: Claude Code reads it from `sessions/<run-id>/mcp.json` (owner-only, deleted at teardown), Codex from `KANBAN95_TOKEN` in its own pty environment. It is never put on a command line and must never appear in logs, audit rows, or REST responses.
 - **Everything else is plain project data** (tickets, notes, brain, runs, audit) in `<repo>/.kanban95/board.db`, gitignored, never uploaded.
 
 ## Grants
@@ -14,7 +14,7 @@ Living document. Update it in the same change that moves a boundary described he
 
 - `mint({ ticket, role, ttlMs })` creates a row and returns `{ id, token }` once. `token` is 32 random bytes, base64url.
 - `verify(token)` hashes and looks up the row. Unknown, expired, or revoked all return `null`; the caller cannot tell which, and neither can a probing client.
-- `revoke(id)` stamps `revoked_at`. Every later `verify` fails. (Killing the agent's pty on revoke is wired in phase 4; today revoke only invalidates the token.)
+- `revoke(id)` stamps `revoked_at`. Every later `verify` fails. `DELETE /api/grants/:id` also kills the agent's pty, which tears its session down (see Agent sessions).
 - Roles: `planner` (no ticket), `worker` and `tester` (bound to one ticket). The database `CHECK` enforces the pairing. Role scopes per tool are enforced by the MCP layer (`daemon/src/mcp.ts`, matrix in `docs/MCP.md`).
 - Expiry is set at mint from a TTL. Grants also die with their ticket (`ON DELETE CASCADE`).
 
@@ -39,6 +39,17 @@ Every REST mutation and every MCP tool call writes one `audit` row: grant id (nu
 - The ticket id a worker or tester acts on comes from the grant, not from the request, so a compromised agent can at most damage its own ticket.
 - Arguments are the only thing summarised into `audit.args_summary`; the bearer never reaches a tool handler.
 
+## Agent sessions
+
+`daemon/src/launcher.ts`, `daemon/src/pty.ts`, flags in `docs/CLIS.md`.
+
+- **Environment allowlist.** The CLI's pty gets only `PATH`, `PATHEXT`, `SystemRoot`, `SystemDrive`, `windir`, `ComSpec`, `HOME`, `USERPROFILE`, `HOMEDRIVE`, `HOMEPATH`, `APPDATA`, `LOCALAPPDATA`, `USERNAME`, `TEMP`, `TMP`, `TMPDIR`, `LANG`, `CLAUDE_CONFIG_DIR`, `CODEX_HOME` from the daemon (when set), plus `TERM`, `NoDefaultCurrentDirectoryInExePath=1` and, for Codex, `KANBAN95_TOKEN`. A secret in the daemon's environment does not reach an agent (tested with a canary variable).
+- **Session dir** `<repo>/.kanban95/sessions/<run-id>/` holds `prompt.md` and Claude Code's `mcp.json` (the bearer header). It is created owner-only: on Windows inheritance is removed and only the current user is granted access; on POSIX mode 0700, files 0600. It is gitignored.
+- **Teardown** happens on every pty exit, whatever the cause (agent done, crash, kill, revoke, daemon shutdown): the scrollback is written to `runs`, the grant is revoked, the session dir is deleted. Revoke to dead agent process and gone session dir takes under a second (tested). The worktree is left for the operator or the lifecycle to decide.
+- **Command line.** On Windows the CLI is started through `cmd.exe /d /s /c`; any argument with `"`, `%`, a newline or a trailing backslash is refused instead of escaped. `NoDefaultCurrentDirectoryInExePath` stops `cmd.exe` from resolving `claude` or `codex` to a script in the worktree.
+- **Terminal websocket** `/pty/<run-id>` requires `Host` and `Origin` to be the daemon's own (`Origin` is mandatory here, unlike plain HTTP, because every browser sends it on a websocket). Frames are capped at 64 KiB. It carries keystrokes, so it is exactly as trusted as the operator UI.
+- **Worktrees** are only created from a base branch without uncommitted changes to tracked files; otherwise the launch is refused with the `git status` lines. `/.worktrees/` is added to the repo's `.git/info/exclude`, so an operator's `git add -A` cannot pick a worktree up as an embedded repo.
+
 ## Input
 
 - REST writes accept a whitelist of fields with type checks; values are then validated by the schema's `CHECK` and foreign-key constraints, so a bad status, effort, or dependency is refused by SQLite itself and surfaced as `400`.
@@ -57,6 +68,8 @@ Every REST mutation and every MCP tool call writes one `audit` row: grant id (nu
 
 ## Threats this does not address yet
 
-- A hostile process on the same machine with the same user can read `board.db` and the agent's MCP config. Same-user isolation is out of scope; the worktree is the blast radius for agent actions, not for local malware.
-- No MCP tool touches the filesystem yet (`report_cleanup` records paths, it does not delete them). Worktree scoping arrives with the launcher (phase 4).
+- A hostile process on the same machine with the same user can read `board.db` and a live agent's MCP config. Same-user isolation is out of scope; the worktree is the blast radius for agent actions, not for local malware.
+- No MCP tool touches the filesystem yet (`report_cleanup` records paths, it does not delete them).
+- Permissions are off inside the agent CLI. An agent can read anything the operator's user can, including its own session dir; the worktree bounds where it is told to work, not what it can reach.
+- If the daemon itself dies, its ptys die with it but their session dirs and grants are left until the janitor (phase 5) sweeps orphans. Grants still expire on their TTL (24 h today).
 - A tool call whose arguments fail schema validation is answered by the MCP SDK before the tool wrapper runs, so it leaves no audit row. Only calls that reach a tool are audited.

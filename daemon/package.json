@@ -9,11 +9,14 @@
   },
   "devDependencies": {
     "@types/node": "^26.6.4",
+    "@types/ws": "^8.18.2",
     "typescript": "^7.0.2",
     "vitest": "^5.0.3"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.1",
+    "node-pty": "^1.1.0",
+    "ws": "^8.22.0",
     "zod": "^4.6.5"
   }
 }

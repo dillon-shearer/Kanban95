@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -30,9 +30,12 @@ describe('openDb', () => {
     const repo = tmp();
     openDb(repo).close();
     const db = openDb(repo);
-    expect(migrate(db, MIGRATIONS_DIR)).toEqual([]);
-    expect(db.prepare('SELECT count(*) AS n FROM schema_migrations').get()).toEqual({ n: 1 });
-    db.close();
+    try {
+      expect(migrate(db, MIGRATIONS_DIR)).toEqual([]);
+      expect(db.prepare('SELECT count(*) AS n FROM schema_migrations').get()).toEqual({ n: readdirSync(MIGRATIONS_DIR).length });
+    } finally {
+      db.close();
+    }
   });
 
   it('rolls back a failing migration and keeps the previous version', () => {

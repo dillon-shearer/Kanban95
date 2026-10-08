@@ -5,6 +5,8 @@ Living document. Update it in the same change that alters the schema.
 ## Where
 
 - `<repo>/.kanban95/board.db`, one SQLite file per repo, WAL mode, foreign keys on. Created on first daemon start together with `.kanban95/.gitignore` (ignores `board.db`, `board.db-*`, `sessions/`).
+- `<repo>/.kanban95/sessions/<run-id>/`: per-run `prompt.md` and (Claude Code) `mcp.json`, owner-only, deleted when the run's pty exits. Not data to keep; the prompt is also in `runs.prompt_rendered`.
+- `<repo>/.worktrees/t-<id>/`: the ticket's git worktree on branch `ticket/<id>`, excluded through `.git/info/exclude`.
 - Nothing in the database leaves the machine. There is no sync, no telemetry, no export yet (export is explicit when it arrives).
 - The daemon is the only writer. The UI goes through REST, agents go through MCP (`docs/MCP.md`).
 
@@ -66,6 +68,7 @@ How the kinds are written over MCP: `add_note` takes `plan` `decision` `failure`
 | prompt_rendered | TEXT | the exact prompt injected, written by `context.startRun` before the CLI is spawned; for the context viewer |
 | started_at, ended_at | TEXT | `ended_at` null while running |
 | outcome | TEXT | null while running; values are set by the lifecycle (phase 5) |
+| scrollback | TEXT | last 2000 lines of the agent's raw terminal output (ANSI included), written by the launcher when the pty exits; null while running or if the launch failed before spawning. Added in `002-run-scrollback.sql` |
 
 ### grants
 | column | type | notes |
