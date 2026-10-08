@@ -141,7 +141,7 @@ export function runSettings(t: Ticket | null, phase: 'plan' | 'execute' | 'test'
 
 /** ~/.kanban95/preferences.md: the operator's standing instructions, injected into every prompt as {{preferences}}. */
 export const preferencesPath = () => join(homedir(), '.kanban95', 'preferences.md');
-export const PREFERENCES_MAX = 16 * 1024;
+const PREFERENCES_MAX = 16 * 1024;
 
 /** A missing file is an empty string. */
 export function readPreferences(): string {
