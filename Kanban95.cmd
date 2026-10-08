@@ -3,6 +3,10 @@ rem Kanban95 launcher. Double-click: the board opens on this repo. Drop a projec
 rem `Kanban95.cmd C:\path\to\project`): the board opens on that project. The project must be a git repository.
 rem Puts Node 24 first on PATH (found through fnm when the Node on PATH is older), builds, then starts the shell.
 setlocal
+if defined KANBAN95_AGENT (
+  echo Kanban95 is already running; verify with npm test, not by starting the app.
+  exit /b 1
+)
 cd /d "%~dp0"
 set "REPO=%~1"
 if "%REPO%"=="" set "REPO=%~dp0."

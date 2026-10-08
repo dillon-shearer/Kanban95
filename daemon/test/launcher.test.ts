@@ -161,6 +161,7 @@ describe('launch', () => {
     expect(keys).not.toContain('KANBAN95_CANARY');
     expect(keys).toContain('PATH');
     expect(env.KANBAN95_TOKEN).toMatch(/^[\w-]{43}$/); // codex reads its bearer token from here
+    expect(env.KANBAN95_AGENT).toBe('1'); // makes npm run dev and Kanban95.cmd refuse to start
     expect(existsSync(join(s.dir, 'mcp.json'))).toBe(false); // codex gets its MCP server through -c, not a file
   });
 
