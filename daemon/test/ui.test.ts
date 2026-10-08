@@ -115,6 +115,23 @@ describe('ui', { timeout: 60_000 }, () => {
     db.prepare("UPDATE tickets SET status = 'done', merged_at = 'x' WHERE id = ?").run(id); // out of the way of the next tests
   });
 
+  it('keeps column scroll and the focused card across an event redraw', async () => {
+    const ids = Array.from({ length: 30 }, (_, i) => ticket(`Long ${i}`));
+    const last = ids.at(-1)!;
+    try {
+      await page.goto(base);
+      await until(() => column(last), 'the cards');
+      const top = await page.evaluate<number>(`(() => { const c = document.querySelector('[data-status="backlog"] .cards'); c.scrollTop = c.scrollHeight; document.querySelector('.card[data-id="${last}"]').focus(); return c.scrollTop; })()`);
+      expect(top).toBeGreaterThan(0);
+      await page.evaluate(`fetch('/api/tickets/${ids[0]}', { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ title: 'Renamed' }) })`);
+      await until(() => page.evaluate<boolean>(`document.querySelector('.card[data-id="${ids[0]}"]').textContent.includes('Renamed')`), 'the redraw');
+      expect(await page.evaluate<number>(`document.querySelector('[data-status="backlog"] .cards').scrollTop`)).toBe(top);
+      expect(await page.evaluate<string>(`document.activeElement.dataset.id`)).toBe(String(last));
+    } finally {
+      for (const id of ids) db.prepare("UPDATE tickets SET status = 'done', merged_at = 'x' WHERE id = ?").run(id);
+    }
+  });
+
   it('names the reason in the status bar when a launch is refused, not "launched"', async () => {
     const id = ticket('Refused');
     await page.goto(base);

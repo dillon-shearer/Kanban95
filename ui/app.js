@@ -238,10 +238,16 @@ function openBoard() {
   say = (msg) => { status.textContent = msg; status.title = msg; };
   views.set('board', () => {
     const all = [...tickets.values()];
+    // A rebuild resets each column's scroll and drops focus; carry both across by status and card id.
+    const scroll = Object.fromEntries([...cols.querySelectorAll('.col')].map((c) => [c.dataset.status, c.querySelector('.cards').scrollTop]));
+    const focused = document.activeElement?.closest?.('.card');
+    const focus = focused && cols.contains(focused) ? [focused.closest('.col').dataset.status, focused.dataset.id] : null;
     cols.replaceChildren(...COLUMNS.map(([s, label]) => {
       const list = all.filter((t) => t.status === s);
       return h('fieldset', { class: 'col', 'data-status': s }, h('legend', {}, `${label} (${list.length})`), h('div', { class: 'cards' }, list.map(card)));
     }));
+    for (const c of cols.querySelectorAll('.col')) c.querySelector('.cards').scrollTop = scroll[c.dataset.status] ?? 0;
+    if (focus) cols.querySelector(`.col[data-status="${focus[0]}"] .card[data-id="${focus[1]}"]`)?.focus();
     count.textContent = `${all.length} tickets · ${sessions.length} agents`;
   });
   drawBoard();
@@ -270,6 +276,15 @@ function tabs(names, draw) {
   return { el: [bar, panel], show: () => show(current), redraw: () => draw(current, panel.firstChild, false) };
 }
 
+/** Run a rebuild of `p` without losing the scroll of `p` or the run table inside it. */
+function keepScroll(p, rebuild) {
+  const top = p.scrollTop, inner = p.querySelector('.sunken-panel')?.scrollTop ?? 0;
+  rebuild();
+  p.scrollTop = top;
+  const sp = p.querySelector('.sunken-panel');
+  if (sp) sp.scrollTop = inner;
+}
+
 function openTicket(id) {
   const wid = `ticket-${id ?? 'new'}`;
   const w = open(wid, { title: id ? `Ticket #${id}` : 'New ticket', w: 680, h: 480, onClose: () => views.delete(wid) });
@@ -285,19 +300,19 @@ function openTicket(id) {
       else p.querySelector('.k95-facts')?.replaceWith(facts(t));
     } else if (tab === 'Notes') {
       const notes = await api('GET', `/tickets/${id}/notes`);
-      p.replaceChildren(notes.length ? h('ol', { class: 'k95-notes' }, notes.map((n) => h('li', { class: `note ${n.kind}` },
-        h('div', { class: 'note-head' }, `${fmt(n.created_at)} · ${n.role} · ${n.kind}`), h('pre', {}, n.body)))) : h('p', {}, 'No notes yet.'));
+      keepScroll(p, () => p.replaceChildren(notes.length ? h('ol', { class: 'k95-notes' }, notes.map((n) => h('li', { class: `note ${n.kind}` },
+        h('div', { class: 'note-head' }, `${fmt(n.created_at)} · ${n.role} · ${n.kind}`), h('pre', {}, n.body)))) : h('p', {}, 'No notes yet.')));
     } else if (tab === 'Runs') {
       const runs = await api('GET', `/tickets/${id}/runs`);
       const view = h('pre', { class: 'k95-pre' }, 'Select a run to see the exact prompt it was given.');
-      p.replaceChildren(table(['Run', 'Phase', 'CLI', 'Model', 'Effort', 'Started', 'Ended', 'Outcome', ''], runs.map((r) => {
+      keepScroll(p, () => p.replaceChildren(table(['Run', 'Phase', 'CLI', 'Model', 'Effort', 'Started', 'Ended', 'Outcome', ''], runs.map((r) => {
         const s = sessions.find((x) => x.run_id === r.id);
         return h('tr', { onclick: () => { view.textContent = r.prompt_rendered; } },
           h('td', {}, r.id), h('td', {}, r.phase), h('td', {}, r.cli), h('td', {}, r.model), h('td', {}, r.effort),
           h('td', {}, fmt(r.started_at)), h('td', {}, fmt(r.ended_at)), h('td', {}, r.outcome ?? (s ? 'running' : '')),
           h('td', {}, s ? h('button', { onclick: () => openTerminal(s) }, 'Terminal')
             : r.scrollback ? h('button', { onclick: (e) => { e.stopPropagation(); view.textContent = r.scrollback; } }, 'Output') : ''));
-      })), view);
+      })), view));
     } else if (tab === 'Diff') {
       const { diff } = await api('GET', `/tickets/${id}/diff`);
       p.replaceChildren(h('pre', { class: 'k95-pre k95-diff' }, diff === null ? '(no worktree: not launched yet, or merged and cleaned up)' : diff || '(no changes yet)'));
