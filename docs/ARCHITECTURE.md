@@ -23,9 +23,9 @@ Living document. Update it in the same change that alters the shape described he
 
 ## Port handshake
 
-1. Shell spawns the daemon with `stdin` and `stdout` piped.
+1. Shell mints a random secret and spawns the daemon with it in `KANBAN95_SECRET` (environment, never argv) and `stdin` and `stdout` piped.
 2. Daemon binds `127.0.0.1:0` (kernel-assigned port), then prints exactly one line to stdout: `KANBAN95 port=<n>`.
-3. Shell reads that line, builds `http://127.0.0.1:<n>/` and creates the main webview window on it. Any other first line is a fatal handshake error; the shell kills the child and exits.
+3. Shell reads that line, builds `http://127.0.0.1:<n>/?k95=<secret>` and creates the main webview window on it; the daemon trades that for an HttpOnly cookie and redirects to `/`. Any other first line is a fatal handshake error; the shell kills the child and exits.
 4. Shell keeps draining daemon stdout to its own stderr prefixed `[daemon]` so the pipe can never fill and block the daemon.
 
 ## Daemon lifetime, two belts
@@ -41,6 +41,8 @@ Living document. Update it in the same change that alters the shape described he
 - The webview is an "external" URL to Tauri, so it has no IPC access and no capabilities. The UI talks to the daemon over plain HTTP, the `/events` websocket and a websocket per terminal. Tauri IPC is not used.
 
 ## REST (operator UI only, same-origin)
+
+Every `/api/*` request needs the `k95` cookie holding the shell secret, or gets `401`; so do the `/events` and `/pty` websockets (`docs/SECURITY.md` → Shell secret).
 
 | method | path | notes |
 |---|---|---|
