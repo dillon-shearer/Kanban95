@@ -124,3 +124,19 @@ If the microphone is blocked, the board says how to allow it: Windows Settings �
 ## Sounds
 
 `ding` when a ticket merges, `chord` when the board needs you. **Settings → General** turns them off.
+
+## Dogfood walkthrough
+
+The first full cycle on a throwaway repo, 2026-10-08, kept here as a worked example of what a run looks like and where the operator still had to step in.
+
+**Setup.** A fresh git repo, `tally`, holding only a README ("a tiny Node CLI that counts words in a text file") and a `package.json`. Models: plan `fable`/medium, execute `opus`, test `sonnet`/low, all Claude Code. The board ran headless: the daemon (`node daemon/dist/server.js <repo>` with `KANBAN95_SECRET` set) on its own random port, driven through `/api` and the `/pty/<key>` websocket (the cookie `k95=<secret>` and an `Origin: http://127.0.0.1:<port>` header are both required). It was a second instance beside the live board, so no window opened.
+
+**Brainstorm.** New brainstorm, then wait. The planner read its brief, surveyed the empty repo and brain, then created a "Confirm scope" ticket to hang a question on rather than asking in its terminal, and assumed defaults when that question was refused. One line typed into its terminal ("I'm here, defaults are fine, make 5 tickets with dependencies") got five tickets: `countWords` (#2), CLI entry (#3, after #2), stdin (#4, after #3), tests (#5, after #2-4) and README (#6, after #3-4), plus a brain note on the conventions. The leftover scoping ticket had to be deleted by hand.
+
+**Launch all.** One ticket started; the rest waited on their dependencies and started by themselves as each one merged. #2 and #3 went In Progress → Testing → Done → merged with no help, about 4 minutes each. #4's worker started with a model id that did not exist (`work`, read from `~/.kanban95/models.json` at that moment). Claude Code printed "There's an issue with the selected model" and sat at its prompt, so the ticket stayed In Progress for 15 minutes without being flagged. Reset to Backlog then Launch restarted it with the right model, and #4, #5 and #6 merged by themselves. Total: about 35 minutes, 5 of 5 merged, zero needs_human flags, and `npm test` in the sample passed 5 of 5.
+
+**Manual touches.** Each is filed as a ticket on this board. A worker grant cannot call `create_ticket`, so the operator filed them. The operator has agreed that agents may create and edit follow-up tickets, so a later change can let the worker file its own.
+
+1. #56: The planner asked through a throwaway ticket instead of its terminal. Its brief lists `ask_operator`, which only works on a ticket that has left Backlog. The operator had to type into the terminal to unblock it.
+2. #57: The planner cannot delete tickets, so its leftover ticket had to be deleted by the operator.
+3. #58: A worker launched with an unknown model sat idle and was never flagged. The operator had to notice the stall and Reset then Launch. The launch should check the model, or the board should flag an agent that sits idle at its prompt.
