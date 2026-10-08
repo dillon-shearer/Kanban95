@@ -7,9 +7,9 @@ import type { DatabaseSync } from 'node:sqlite';
 import { readTicket, transaction, type Ticket } from './api.js';
 import { revoke, type Role } from './grants.js';
 import { cleanTicket } from './janitor.js';
-import { launch, launchBrainstorm, sessionsOf, type Session } from './launcher.js';
+import { launch, launchRoot, sessionsOf, type Session } from './launcher.js';
 import { enqueue, merge } from './merge.js';
-import { runSettings } from './settings.js';
+import { BadConfig, EFFORT, runSettings, type Effort } from './settings.js';
 import { TEMPLATES } from './templates.js';
 
 export const MAX_RETRY = 3;
@@ -258,11 +258,15 @@ function releaseDependents(b: Board, id: number) {
   for (const r of rows) apply(b, r.id, 'launch'); // one still waiting on another dependency stays held
 }
 
+/** `<repo>/.kanban95/config.json`, the repo's own board settings (docs/DATA.md); `{}` when absent. */
+const repoConfigPath = (repo: string) => join(repo, '.kanban95', 'config.json');
+const repoConfig = (repo: string) => (existsSync(repoConfigPath(repo)) ? JSON.parse(readFileSync(repoConfigPath(repo), 'utf8')) : {});
+
 /** `.kanban95/config.json` → `housekeeping_every` (default 10). Merged execute tickets are counted; housekeeping ones are not. */
 function maybeHousekeeping(b: Board, t: Ticket) {
   if (t.template !== 'execute') return;
-  const file = join(b.repo, '.kanban95', 'config.json');
-  const every = Number((existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : {}).housekeeping_every ?? HOUSEKEEPING_EVERY);
+  const file = repoConfigPath(b.repo);
+  const every = Number(repoConfig(b.repo).housekeeping_every ?? HOUSEKEEPING_EVERY);
   if (!Number.isInteger(every) || every < 1) throw new Error(`housekeeping_every in ${file} must be a positive integer`);
   const { n } = b.db.prepare("SELECT count(*) AS n FROM tickets WHERE template = 'execute' AND merged_at IS NOT NULL").get() as { n: number };
   if (n % every !== 0) return;
@@ -279,12 +283,26 @@ export function housekeeping(b: Board, body: string): Ticket {
   return apply(b, Number(r.lastInsertRowid), 'launch').ticket;
 }
 
-/** A brainstorm session: a planner in the repo root, plan-phase settings. It touches no ticket, so the lifecycle has no row for it. */
-export function brainstorm(b: Board): Session {
+/** A session in the repo root without a ticket. It touches no ticket, so the lifecycle has no row for it. */
+function rootSession(b: Board, o: Parameters<typeof launchRoot>[1]): Session {
   if (b.closing) throw new Error('the daemon is shutting down');
-  const s = launchBrainstorm({ ...b, onExit: () => changed(null) }, runSettings(null, 'plan'));
+  const s = launchRoot({ ...b, onExit: () => changed(null) }, o);
   changed(null);
   return s;
+}
+
+/** A brainstorm session: a planner with plan-phase settings. */
+export const brainstorm = (b: Board) => rootSession(b, { ...runSettings(null, 'plan'), template: 'brainstorm' });
+
+/** An operator terminal: plan-phase settings unless `.kanban95/config.json` has `operator: { model, effort }` (either or both). */
+export function operator(b: Board, mission: string): Session {
+  const o = repoConfig(b.repo).operator ?? {};
+  const where = `${repoConfigPath(b.repo)} operator`;
+  if (typeof o !== 'object' || Array.isArray(o)) throw new BadConfig(`${where} must be an object`);
+  if (o.model !== undefined && (typeof o.model !== 'string' || !o.model)) throw new BadConfig(`${where}.model must be a non-empty string`);
+  if (o.effort !== undefined && !EFFORT.includes(o.effort)) throw new BadConfig(`${where}.effort must be one of ${EFFORT.join(', ')}`);
+  const plan = runSettings(null, 'plan');
+  return rootSession(b, { ...plan, model: o.model ?? plan.model, effort: (o.effort as Effort) ?? plan.effort, template: 'operator', mission });
 }
 
 /** Launch all: every backlog ticket, dependencies before dependents, ids ascending otherwise. Those waiting on a dependency are held. */

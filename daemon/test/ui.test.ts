@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { delimiter, join, resolve } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { sessions } from '../src/launcher.ts';
 import { start } from '../src/server.ts';
 import { MANIFEST, modelDir, status } from '../src/voice.ts';
 import { browser, until, type Page } from './cdp.ts';
@@ -244,6 +245,8 @@ describe('ui', { timeout: 60_000 }, () => {
     expect((await fetch(`${base}api/tickets/${id}`, { method: 'DELETE', headers: { cookie: `k95=${srv.secret}` } })).status).toBe(204);
     await until(async () => !(await win(`ticket-${id}`)) && !(await win(first)) && !(await win(second)), 'the windows to close', 5000);
     expect(await tasks()).toBe(0);
+    // The next test's ticket reuses this id; it must not see these agents still exiting as its own.
+    await until(() => sessions.size === 0, 'the agents to exit');
   });
 
   it("X on a running terminal asks first: Cancel keeps the agent, End stops it and flags the ticket", async () => {
@@ -412,6 +415,37 @@ describe('ui', { timeout: 60_000 }, () => {
     await until(() => page.evaluate(`document.querySelector('[data-win="notepad"] .status-bar-field').textContent.includes('256 KB')`), 'the refusal in the Notepad');
     expect(readFileSync(file, 'utf8')).toBe(TEXT);
     rmSync(file);
+  });
+
+  it('asks for a mission on Ctrl+Shift+N and Start → New operator terminal, refuses an empty one, and opens the Operator terminal', async () => {
+    const models = join(process.env.USERPROFILE!, '.kanban95', 'models.json');
+    const before = readFileSync(models, 'utf8');
+    writeFileSync(models, JSON.stringify({ ...JSON.parse(before), claude: { ...JSON.parse(before).claude, plan: { model: 'plan', effort: 'low' } } }));
+    await page.goto(base);
+    await until(() => page.evaluate(`!!document.querySelector('[data-win="board"]')`), 'the board');
+    const dialogOpen = () => page.evaluate<boolean>(`document.querySelector('dialog[open] .title-bar-text')?.textContent === 'New operator terminal'`);
+    const press = (button: string) => page.evaluate(`[...document.querySelectorAll('dialog[open] button')].find((b) => b.textContent === '${button}').click()`);
+
+    for (const type of ['keyDown', 'keyUp']) {
+      await page.send('Input.dispatchKeyEvent', { type, key: 'N', code: 'KeyN', windowsVirtualKeyCode: 78, modifiers: 2 | 8 });
+    }
+    await until(dialogOpen, 'the mission dialog');
+    await press('Start');
+    await until(async () => (await statusBar()) === 'mission must be a non-empty string', 'the refusal');
+    expect(db.prepare("SELECT count(*) AS n FROM grants WHERE role = 'operator'").get()).toEqual({ n: 0 });
+
+    await click('#start');
+    await page.evaluate(`[...document.querySelectorAll('.k95-menu li')].find((li) => li.textContent === 'New operator terminal').click()`);
+    await until(dialogOpen, 'the mission dialog from Start');
+    const mission = 'Rename the janitor log & keep {{tools}} literal.';
+    await page.evaluate(`document.querySelector('dialog[open] textarea').value = ${JSON.stringify(mission)}`);
+    await press('Start');
+    await until(() => page.evaluate(`[...document.querySelectorAll('[data-win^="term-"] .title-bar-text')].some((t) => t.textContent === 'Operator — plan')`), 'the Operator terminal');
+    const g = db.prepare("SELECT id FROM grants WHERE role = 'operator' AND revoked_at IS NULL").get() as { id: number };
+    expect(readFileSync(join(repo, '.kanban95', 'sessions', String(-g.id), 'prompt.md'), 'utf8')).toContain(`## Mission\n\n${mission}\n`);
+    await fetch(`${base}api/grants/${g.id}`, { method: 'DELETE', headers: { cookie: `k95=${srv.secret}` } });
+    await until(() => ![...sessions.values()].some((s) => s.role === 'operator'), 'the operator agent to exit');
+    writeFileSync(models, before);
   });
 
   it('keeps a window the same size while it is dragged', async () => {
