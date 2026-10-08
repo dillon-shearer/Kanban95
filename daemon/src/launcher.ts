@@ -9,7 +9,7 @@ import { buildContext, startRun } from './context.js';
 import { createWorktree } from './git.js';
 import { mint, revoke, type Role } from './grants.js';
 import { childEnv, spawnPty } from './pty.js';
-import { render, TEMPLATES, type TemplateName } from './templates.js';
+import { render, TEMPLATES, type TicketTemplate } from './templates.js';
 import type { Cli, Effort } from './settings.js';
 import { preTrustClaude } from './trust.js';
 
@@ -43,7 +43,7 @@ export interface ArgvIn {
  * The exact command line per CLI, flags verified against the installed `--help` (docs/CLIS.md).
  * The initial message points at prompt.md instead of carrying it: Windows caps a command line at 32 767 characters
  * (a test prompt holds the whole diff) and cmd.exe cannot pass a newline inside an argument.
- * Reach is limited by role, not by approvals: a planner cannot write files; workers and testers run with permissions off.
+ * Reach is limited by role, not by approvals: a planner cannot write files; workers, testers and the operator run with permissions off.
  */
 export function buildArgv(a: ArgvIn): string[] {
   const message = `Read ${relative(a.cwd, a.promptPath).replaceAll('\\', '/')} in full and follow it. It is your brief for this session.`;
@@ -71,13 +71,13 @@ export function buildArgv(a: ArgvIn): string[] {
 }
 
 export interface Session {
-  /** The key in `sessions` and in `/pty/<key>`: the run id, or minus the grant id for a brainstorm (it has no ticket, so no run). */
+  /** The key in `sessions` and in `/pty/<key>`: the run id, or minus the grant id for a brainstorm or operator terminal (no ticket, so no run). */
   key: number;
   runId: number | null;
   grantId: number;
   ticketId: number | null;
   role: Role;
-  /** For the terminal title: the run's phase (`brainstorm` for a brainstorm) and model. */
+  /** For the terminal title: the run's phase (`brainstorm` or `operator` for a session without a ticket) and model. */
   phase: string;
   model: string;
   /** Set by the lifecycle when it ends the session after the agent reported (a move_ticket); its exit is then expected. */
@@ -107,16 +107,22 @@ type Daemon = { db: DatabaseSync; repo: string; port: number; onExit?: (s: Sessi
 /** `path`: the operator's configured executable for the CLI (Settings); the bare name, resolved through PATH, when unset. */
 type RunSettings = { cli: Cli; model: string; effort: Effort; path?: string };
 
-export function launch(d: Daemon, o: { ticketId: number; template: Exclude<TemplateName, 'brainstorm'> } & RunSettings): Session {
+export function launch(d: Daemon, o: { ticketId: number; template: TicketTemplate } & RunSettings): Session {
   const wt = createWorktree(d.repo, o.ticketId);
   const run = startRun(d.db, d.repo, { ...o, worktree: wt.path, base: wt.base });
   return spawnSession(d, o, { runId: run.id, ticketId: o.ticketId, role: TEMPLATES[o.template].role, phase: TEMPLATES[o.template].phase, cwd: wt.path, prompt: run.prompt });
 }
 
-/** A planner session in the repo root with the brainstorm brief. No ticket, so no worktree and no run row. */
-export function launchBrainstorm(d: Daemon, o: RunSettings): Session {
-  const prompt = render(d.repo, 'brainstorm', buildContext(d.db, d.repo, null, 'planner'));
-  return spawnSession(d, o, { runId: null, ticketId: null, role: 'planner', phase: 'brainstorm', cwd: d.repo, prompt });
+/**
+ * A session in the repo root with no ticket, so no worktree and no run row: a brainstorm (planner) or an operator terminal
+ * (the operator's typed mission). Its grant has no ticket and is revoked when the pty exits.
+ */
+export function launchRoot(d: Daemon, o: RunSettings & { template: 'brainstorm' } | RunSettings & { template: 'operator'; mission: string }): Session {
+  const { role } = TEMPLATES[o.template];
+  const ctx = buildContext(d.db, d.repo, null, role);
+  if (o.template === 'operator') ctx.mission = o.mission;
+  const prompt = render(d.repo, o.template, ctx);
+  return spawnSession(d, o, { runId: null, ticketId: null, role, phase: o.template, cwd: d.repo, prompt });
 }
 
 function spawnSession(d: Daemon, o: RunSettings, r: { runId: number | null; ticketId: number | null; role: Role; phase: string; cwd: string; prompt: string }): Session {

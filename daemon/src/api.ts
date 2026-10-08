@@ -8,7 +8,7 @@ import { isConstraintError } from './db.js';
 import { ticketDiff } from './git.js';
 import { audit, revoke } from './grants.js';
 import { killGrantSession, sessions, sessionsOf, type Session } from './launcher.js';
-import { apply, brainstorm, changed, housekeeping, launchAll, Refused, type Board } from './lifecycle.js';
+import { apply, brainstorm, changed, housekeeping, launchAll, operator, Refused, type Board } from './lifecycle.js';
 import { BadConfig, CONFIGS, configPath, knownModels, preferencesPath, readPreferences, writeConfig, writePreferences, type ConfigName } from './settings.js';
 import { trustStatus, untrustClaude } from './trust.js';
 import { download, status as voiceStatus } from './voice.js';
@@ -240,6 +240,11 @@ const routes: [method: string, path: RegExp, mutation: string | null, handler: (
   // Live agent terminals, for the UI's terminal windows and the taskbar count. `id` is the /pty/<id> key.
   ['GET', /^\/api\/sessions$/, null, () => ({ status: 200, body: [...sessions.values()].map(sessionView) })],
   ['POST', /^\/api\/brainstorm$/, 'brainstorm.launch', ({ board }) => ({ status: 201, body: sessionView(brainstorm(board)) })],
+  // An operator terminal: the typed mission goes into its brief verbatim (docs/SECURITY.md → Operator terminal).
+  ['POST', /^\/api\/operator$/, 'operator.launch', ({ board, body }) => {
+    if (typeof body.mission !== 'string' || !body.mission.trim()) throw new HttpError(400, 'mission must be a non-empty string');
+    return { status: 201, body: sessionView(operator(board, body.mission)) };
+  }],
   // <repo>/.kanban95/notepad.md, the operator's scratch notes, whole file in `value` both ways ('' when absent).
   // Not audited: it autosaves every pause in typing and is nothing an agent reads.
   ['GET', /^\/api\/notepad$/, null, ({ board }) => {

@@ -185,6 +185,13 @@ const resume = (id) => act(async () => {
 });
 const launchAll = () => act(async () => sayLaunched((await api('POST', '/tickets/launch-all')).map((t) => t.id)));
 const newBrainstorm = () => act(async () => openTerminal(await api('POST', '/brainstorm')), 'Brainstorm started.');
+/** An operator terminal: an agent with the operator's reach on the board, given the mission typed here. The daemon refuses an empty one. */
+async function newOperator() {
+  const mission = h('textarea', { rows: 8, cols: 60, placeholder: 'What should the agent do?' });
+  const body = h('div', { class: 'field-row-stacked' }, h('label', {}, 'Mission'), mission);
+  if ((await dialog('New operator terminal', body, ['Start', 'Cancel'])) !== 'Start') return;
+  await act(async () => openTerminal(await api('POST', '/operator', { mission: mission.value })), 'Operator terminal started.');
+}
 const housekeeping = () => act(async () => {
   const t = await api('POST', '/tickets/housekeeping');
   say(`Housekeeping ticket #${t.id} created and launched.`);
@@ -434,7 +441,7 @@ function openTerminal(s, auto = false) {
   seen.add(s.id);
   const wid = `term-${s.id}`;
   if (isOpen(wid)) return focus(wid);
-  const title = s.ticket_id === null ? `Brainstorm — ${s.model}` : `#${s.ticket_id} — ${s.phase} — ${s.model}`;
+  const title = s.ticket_id === null ? `${s.role === 'operator' ? 'Operator' : 'Brainstorm'} — ${s.model}` : `#${s.ticket_id} — ${s.phase} — ${s.model}`;
   const ws = new WebSocket(`ws://${location.host}/pty/${s.id}`);
   const send = (msg) => ws.readyState === WebSocket.OPEN && ws.send(JSON.stringify(msg));
   const term = new Terminal({ fontFamily: 'Consolas, "Courier New", monospace', fontSize: 13, scrollback: 5000 });
@@ -536,7 +543,7 @@ async function saveSettings(patch) {
 function grantTable(grants) {
   return table(['Grant', 'Ticket', 'Role', 'Session', 'Expires', ''], grants.map((g) => {
     const s = sessions.find((x) => x.grant_id === g.id);
-    return h('tr', {}, h('td', {}, g.id), h('td', {}, g.ticket_id ? `#${g.ticket_id}` : 'brainstorm'), h('td', {}, g.role),
+    return h('tr', {}, h('td', {}, g.id), h('td', {}, g.ticket_id ? `#${g.ticket_id}` : g.role === 'operator' ? 'operator terminal' : 'brainstorm'), h('td', {}, g.role),
       h('td', {}, s ? `${s.phase} · ${s.model}` : 'none'), h('td', {}, fmt(g.expires_at)),
       h('td', {}, h('button', { 'data-grant': g.id, onclick: () => act(() => api('DELETE', `/grants/${g.id}`), `Grant ${g.id} revoked; its session was stopped.`) }, 'Revoke')));
   }));
@@ -670,6 +677,7 @@ const START = [
   '-',
   { label: 'New ticket', run: () => openTicket(null) },
   { label: 'New brainstorm', run: newBrainstorm },
+  { label: 'New operator terminal', run: newOperator },
   { label: 'Launch all', run: launchAll },
   { label: 'Housekeeping', run: housekeeping },
 ];
@@ -694,7 +702,7 @@ function taskbar() {
 
 const clock = () => { document.getElementById('clock').textContent = new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }); };
 
-// Esc closes the focused window, Ctrl+L launches all, Ctrl+N starts a brainstorm. Inside a terminal every key goes to the
+// Esc closes the focused window, Ctrl+L launches all, Ctrl+N starts a brainstorm, Ctrl+Shift+N an operator terminal. Inside a terminal every key goes to the
 // agent instead (Esc interrupts Claude Code, Ctrl+L clears the screen).
 addEventListener('keydown', (e) => {
   if (document.querySelector('dialog[open]') || e.target.closest?.('.xterm')) return;
@@ -710,6 +718,9 @@ addEventListener('keydown', (e) => {
   } else if (plainCtrl && e.key.toLowerCase() === 'n') {
     e.preventDefault();
     newBrainstorm();
+  } else if (e.ctrlKey && e.shiftKey && !e.altKey && e.key.toLowerCase() === 'n') {
+    e.preventDefault();
+    newOperator();
   }
 });
 

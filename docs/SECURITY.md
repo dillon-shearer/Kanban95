@@ -15,7 +15,7 @@ Living document. Update it in the same change that moves a boundary described he
 - `mint({ ticket, role, ttlMs })` creates a row and returns `{ id, token }` once. `token` is 32 random bytes, base64url.
 - `verify(token)` hashes and looks up the row. Unknown, expired, or revoked all return `null`; the caller cannot tell which, and neither can a probing client.
 - `revoke(id)` stamps `revoked_at`. Every later `verify` fails. `DELETE /api/grants/:id` also kills the agent's pty, which tears its session down (see Agent sessions).
-- Roles: `planner` (no ticket), `worker` and `tester` (bound to one ticket). The database `CHECK` enforces the pairing. Role scopes per tool are enforced by the MCP layer (`daemon/src/mcp.ts`, matrix in `docs/MCP.md`).
+- Roles: `planner` and `operator` (no ticket), `worker` and `tester` (bound to one ticket). The database `CHECK` enforces the pairing. Role scopes per tool are enforced by the MCP layer (`daemon/src/mcp.ts`, matrix in `docs/MCP.md`).
 - Expiry is set at mint from a TTL (24 h, a ceiling). In practice a grant lives exactly as long as its session: it is revoked the moment the agent's `move_ticket` is accepted (the board then ends the session), on every terminal exit, and by the janitor for any live grant without a live session on daemon start and once a day. Grants also die with their ticket (`ON DELETE CASCADE`).
 
 ## Audit
@@ -58,7 +58,7 @@ The shell (`shell/src/main.rs`) opens one window on the daemon's origin and lock
 
 - `POST /mcp` reads `Authorization: Bearer <token>` and resolves it with `verify`. Missing, malformed, unknown, expired or revoked all get `401` and the same body, before any MCP message is parsed. No audit row is written, there is no grant to attribute it to.
 - A live grant scopes every tool. A role not listed for a tool, a worker or tester naming a ticket other than its own, a worker editing a field other than body/criteria, or a move to a target the role may not use is refused as a tool error (`denied` in audit). The refusal text says why but never reveals whether the other ticket exists.
-- The ticket id a worker or tester acts on comes from the grant, not from the request, so a compromised agent can at most damage its own ticket.
+- The ticket id a worker or tester acts on comes from the grant, not from the request, so a compromised agent can at most damage its own ticket. A planner or operator grant has no ticket and must name one on every ticket tool.
 - Arguments are the only thing summarised into `audit.args_summary`; the bearer never reaches a tool handler.
 - `move_ticket` and `ask_operator` go through the lifecycle state machine (`docs/LIFECYCLE.md`). A move the table does not have (a worker submitting a ticket that is not in progress, a tester passing a ticket without `report_test(passed: true)` in this test run) is refused as `denied` and changes nothing.
 
@@ -73,7 +73,18 @@ The shell (`shell/src/main.rs`) opens one window on the daemon's origin and lock
 - **Terminal websocket** `/pty/<key>` requires `Host` and `Origin` to be the daemon's own (`Origin` is mandatory here, unlike plain HTTP, because every browser sends it on a websocket) and the shell secret cookie. Frames are capped at 64 KiB. It carries keystrokes, so it is exactly as trusted as the operator UI.
 - **Reach by role.** Approvals are off for every role (operator decision). A planner cannot write files: Claude Code runs it with `--disallowedTools Edit Write NotebookEdit Bash PowerShell Agent`, Codex with `-s read-only -a never` (the board's own MCP tools pre-approved for that server only). Workers and testers run with permissions off in their worktree. Details and what was checked live: `docs/CLIS.md` → Reach by role.
 - **Brainstorm** sessions run a planner grant with no ticket in the repo root. They have no `runs` row; the grant, session dir and teardown are the same as any other session, and the janitor treats them the same way.
+- **Operator terminals** run an `operator` grant the same way (see Operator terminal).
 - **Worktrees** are only created from a base branch without uncommitted changes to tracked files; otherwise the launch is refused with the `git status` lines. `/.worktrees/` is added to the repo's `.git/info/exclude`, so an operator's `git add -A` cannot pick a worktree up as an embedded repo.
+
+## Operator terminal
+
+An agent the operator starts with a typed mission, for board work outside the ticket flow (maintenance, a refactor steered live, fixing the board itself). `daemon/src/lifecycle.ts` `operator`, `daemon/src/launcher.ts` `launchRoot`.
+
+- **Started only by the operator.** The one way in is `POST /api/operator` with a non-empty `mission`, sent by the UI's **New operator terminal** dialog (Start menu or Ctrl+Shift+N). The route sits behind the shell cookie and the `Host`/`Origin` checks like every other, on a daemon bound to `127.0.0.1`, and is audited (`operator.launch`, the mission's first 200 characters in the summary). No MCP tool and no lifecycle row starts one, so an agent cannot spawn an operator.
+- **Reach: what the operator could do by hand on the board, nothing more.** The grant's role is `operator` with no ticket. Over MCP it may create tickets, edit any field of any ticket, change model and effort, add notes, read and list every ticket, use the brain, ask the operator, record a cleanup, and move any ticket through the lifecycle (`launch`, `submit`, `pass`, `fail` with the same guards as everyone else). It never gets `report_test`, and a move to `done` still needs a tester's `report_test(passed: true)` from the current test run, so an operator agent cannot pass a ticket itself. Matrix: `docs/MCP.md`.
+- **Files and commands.** It runs in the repo root with the worker's CLI flags (permissions off; no planner deny list), so it can do what a worker can (see A malicious agent in a worktree). Its brief tells it to change code only in a worktree under `.worktrees/op-<time>` and merge that itself when green, because the merge queue merges into the main checkout.
+- **Lifetime.** The grant is minted when the session starts and revoked on every pty exit: the operator's Revoke in Settings → Grants, the agent quitting, or the daemon shutting down. Closing its terminal window does not end it. The janitor revokes a leftover operator grant on the next start like any other.
+- **The mission** is operator text. It is inserted into the brief literally, in one pass, so a `{{...}}` inside it is not expanded.
 
 ## Operator files the board writes
 
@@ -110,7 +121,7 @@ The mic button's speech model is the only thing the board ever downloads, and th
 `daemon/src/templates.ts`, `daemon/src/context.ts`; what agents receive is listed in `docs/AGENTS.md`.
 
 - An agent is pushed only its ticket, criteria, up to 5 brain rows (4000 characters at most), the failure notes of the attempt being retried, the retry count, the diff (test only) and its tool list. No transcript, no other ticket, no environment, no file contents.
-- A template may only name the seven known variables. Anything else (for example `{{transcript}}`) is refused when the template is loaded, before any context is built or any run row is written.
+- A template may only name the known variables (`VARS` in `daemon/src/templates.ts`), and every one it names must have a value. Anything else (for example `{{transcript}}`) is refused when the template is loaded, before any context is built or any run row is written.
 - Values are substituted in one pass, so text an agent wrote into the brain or a note (including `{{...}}`) is inserted literally and cannot pull in another variable.
 - The template name is checked against a fixed set before any path is built, so it cannot read a file outside `.kanban95/templates/`.
 - Brain text and notes are agent-written and end up in later prompts. Treat them as untrusted input to the next agent, the same as any file in the repo.

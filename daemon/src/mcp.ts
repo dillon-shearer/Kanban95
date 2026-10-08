@@ -11,12 +11,16 @@ import { apply, changed, Refused, type Board } from './lifecycle.js';
 import { EFFORT } from './settings.js';
 
 const STATUS = ['backlog', 'in_progress', 'testing', 'done'] as const;
-/** Where each role may move its own ticket. The planner never moves anything. */
+/** Where each role may move a ticket: its own, or for the operator any. The planner never moves anything. */
 const MOVE_TARGETS: Record<Role, readonly (typeof STATUS)[number][]> = {
   planner: [],
   worker: ['testing'],
   tester: ['done', 'in_progress'],
+  operator: ['in_progress', 'testing', 'done'],
 };
+/** Grants without a ticket: they see the whole board and name the ticket on every ticket tool. */
+const unbound = (r: Role) => r === 'planner' || r === 'operator';
+const an = (r: Role) => `${r === 'operator' ? 'an' : 'a'} ${r}`;
 /** The only ticket columns a worker may edit on its own ticket. */
 const WORKER_FIELDS = ['body', 'criteria'] as const;
 const BRAIN_SEARCH_MAX = 20;
@@ -36,12 +40,12 @@ interface Tool<S extends z.ZodRawShape> {
 const tool = <S extends z.ZodRawShape>(t: Tool<S>) => t as unknown as Tool<z.ZodRawShape>;
 
 const ticketId = z.number().int().positive().optional()
-  .describe('Ticket id. Worker and tester grants are bound to one ticket and may omit it; a planner must give it.');
+  .describe('Ticket id. Worker and tester grants are bound to one ticket and may omit it; a planner or operator must give it.');
 
-/** Resolves the ticket a call is about. Worker/tester: their own, a foreign id is a scope denial. Planner: the explicit id. */
+/** Resolves the ticket a call is about. Worker/tester: their own, a foreign id is a scope denial. Planner/operator: the explicit id. */
 function own(c: Call, id: number | undefined): number {
-  if (c.grant.role === 'planner') {
-    if (id === undefined) throw new Error('ticket_id is required for a planner grant');
+  if (unbound(c.grant.role)) {
+    if (id === undefined) throw new Error(`ticket_id is required for ${an(c.grant.role)} grant`);
     return id;
   }
   if (id !== undefined && id !== c.grant.ticket_id) throw new Deny(`this grant is scoped to ticket ${c.grant.ticket_id}`);
@@ -64,7 +68,7 @@ export const TOOLS: Record<string, Tool<z.ZodRawShape>> = {
     description:
       'Create a ticket in the backlog. Give it a title, a body that says what to build and why, and acceptance criteria a tester can check one by one. ' +
       'List depends_on ids when this work must wait for other tickets. Set model and effort only when the work clearly warrants it: trivial work gets effort low, hard work gets high. Returns the ticket.',
-    access: { planner: 'yes' },
+    access: { planner: 'yes', operator: 'yes' },
     input: {
       title: z.string().min(1).describe('Short imperative title.'),
       body: z.string().default('').describe('What to build and why, markdown.'),
@@ -91,7 +95,7 @@ export const TOOLS: Record<string, Tool<z.ZodRawShape>> = {
     description:
       'Edit a ticket\'s title, body, criteria or dependencies. A worker may only refine the body and criteria of its own ticket, for example to record a clarified scope; ' +
       'use add_note for progress and decisions instead. Omitted fields are left unchanged. Returns the ticket.',
-    access: { planner: 'any ticket', worker: `own, ${WORKER_FIELDS.join('/')} only` },
+    access: { planner: 'any ticket', worker: `own, ${WORKER_FIELDS.join('/')} only`, operator: 'any ticket' },
     input: {
       ticket_id: ticketId,
       title: z.string().min(1).optional(),
@@ -122,7 +126,7 @@ export const TOOLS: Record<string, Tool<z.ZodRawShape>> = {
     description:
       'Change the model and/or effort a ticket runs with; give either or both. Lower effort for trivial work and raise it for hard work, do not only escalate. ' +
       'The ticket\x27s model and effort apply to its execute runs: a worker or tester changing them sets what the next execute attempt (the retry) runs with. Returns the ticket.',
-    access: { planner: 'any', worker: 'own', tester: 'own (for the retry)' },
+    access: { planner: 'any', worker: 'own', tester: 'own (for the retry)', operator: 'any' },
     input: {
       ticket_id: ticketId,
       model: z.string().min(1).optional().describe('Model id as listed in the board\'s model catalog.'),
@@ -144,14 +148,22 @@ export const TOOLS: Record<string, Tool<z.ZodRawShape>> = {
     description:
       'Move a ticket to another column. A worker moves its ticket to testing when the work is committed in the worktree and ready to be checked. ' +
       'A tester moves it to done after report_test with passed true (the board then merges the branch), or back to in_progress after report_test with the failure so the worker retries. ' +
-      'Once the move is accepted your session is over: the board ends it and starts the next agent. Returns the ticket.',
-    access: { worker: `own → ${MOVE_TARGETS.worker.join(' / ')}`, tester: `own → ${MOVE_TARGETS.tester.join(' / ')}` },
+      'Once the move is accepted your session is over: the board ends it and starts the next agent. ' +
+      'An operator grant may move any ticket the same ways, which ends that ticket\x27s agent, not its own session, and may launch a backlog ticket by moving it to in_progress; ' +
+      'it still cannot finish a ticket the tester has not passed. Returns the ticket.',
+    access: {
+      worker: `own → ${MOVE_TARGETS.worker.join(' / ')}`,
+      tester: `own → ${MOVE_TARGETS.tester.join(' / ')}`,
+      operator: `any → ${MOVE_TARGETS.operator.join(' / ')}`,
+    },
     input: { ticket_id: ticketId, status: z.enum(STATUS) },
     run(c, a) {
       const id = (c.ticket = own(c, a.ticket_id));
       const allowed = MOVE_TARGETS[c.grant.role];
-      if (!allowed.includes(a.status)) throw new Deny(`a ${c.grant.role} may only move its ticket to: ${allowed.join(', ')}`);
-      return apply(c.board, id, a.status === 'testing' ? 'submit' : a.status === 'done' ? 'pass' : 'fail').ticket;
+      if (!allowed.includes(a.status)) throw new Deny(`${an(c.grant.role)} may only move ${c.grant.role === 'operator' ? 'a' : 'its'} ticket to: ${allowed.join(', ')}`);
+      // Into in_progress: from backlog it is a launch (only an operator reaches a backlog ticket), from testing a failed test.
+      const from = readTicket(c.db, id).status;
+      return apply(c.board, id, a.status === 'testing' ? 'submit' : a.status === 'done' ? 'pass' : from === 'backlog' ? 'launch' : 'fail').ticket;
     },
   }),
 
@@ -159,7 +171,7 @@ export const TOOLS: Record<string, Tool<z.ZodRawShape>> = {
     description:
       'Attach a note to a ticket. Kinds: plan (how you intend to do the work, post it before starting), decision (a choice made and why), ' +
       'failure (what went wrong, for the next attempt), summary (what was done, post it when finished). Notes are shown to the operator and injected into later runs of this ticket. Returns the note id.',
-    access: { planner: 'any', worker: 'own', tester: 'own' },
+    access: { planner: 'any', worker: 'own', tester: 'own', operator: 'any' },
     input: {
       ticket_id: ticketId,
       kind: z.enum(['plan', 'decision', 'failure', 'summary']),
@@ -177,13 +189,13 @@ export const TOOLS: Record<string, Tool<z.ZodRawShape>> = {
       'Read one ticket in full: title, body, acceptance criteria, status, flags, dependencies, model settings, the absolute paths of files the operator ' +
       'attached (screenshots and the like: open them with your file reader), and every note on it in order. ' +
       'A worker may also read the tickets its own ticket depends on, to see what they delivered.',
-    access: { planner: 'yes', worker: 'own + its deps', tester: 'own' },
+    access: { planner: 'yes', worker: 'own + its deps', tester: 'own', operator: 'yes' },
     input: { ticket_id: ticketId },
     run(c, a) {
       const { grant } = c;
-      const id = grant.role === 'planner' ? own(c, a.ticket_id) : (a.ticket_id ?? grant.ticket_id!);
+      const id = unbound(grant.role) ? own(c, a.ticket_id) : (a.ticket_id ?? grant.ticket_id!);
       c.ticket = id;
-      const visible = grant.role === 'planner' || id === grant.ticket_id || (grant.role === 'worker' && depsOf(c.db, grant.ticket_id!).includes(id));
+      const visible = unbound(grant.role) || id === grant.ticket_id || (grant.role === 'worker' && depsOf(c.db, grant.ticket_id!).includes(id));
       if (!visible) throw new Deny(`this grant is scoped to ticket ${grant.ticket_id}${grant.role === 'worker' ? ' and its dependencies' : ''}`);
       const ticket = readTicket(c.db, id);
       const notes = c.db.prepare('SELECT id, role, kind, body, created_at FROM notes WHERE ticket_id = ? ORDER BY id').all(id);
@@ -193,14 +205,14 @@ export const TOOLS: Record<string, Tool<z.ZodRawShape>> = {
 
   list_tickets: tool({
     description:
-      'List tickets with id, title, status, flags and dependencies, optionally filtered by status. A planner sees the whole board; ' +
+      'List tickets with id, title, status, flags and dependencies, optionally filtered by status. A planner or operator sees the whole board; ' +
       'a worker sees its own ticket and the ones it depends on; a tester sees its own. Use get_ticket for the body and notes.',
-    access: { planner: 'yes', worker: 'own + its deps', tester: 'own' },
+    access: { planner: 'yes', worker: 'own + its deps', tester: 'own', operator: 'yes' },
     input: { status: z.enum(STATUS).optional() },
     run(c, a) {
       const { grant } = c;
       let ids: number[];
-      if (grant.role === 'planner') ids = (c.db.prepare('SELECT id FROM tickets ORDER BY id').all() as { id: number }[]).map((r) => r.id);
+      if (unbound(grant.role)) ids = (c.db.prepare('SELECT id FROM tickets ORDER BY id').all() as { id: number }[]).map((r) => r.id);
       else ids = [grant.ticket_id!, ...(grant.role === 'worker' ? depsOf(c.db, grant.ticket_id!) : [])];
       return ids
         .map((id) => readTicket(c.db, id))
@@ -213,7 +225,7 @@ export const TOOLS: Record<string, Tool<z.ZodRawShape>> = {
     description:
       'Save a durable note to the project brain: a decision, a gotcha, a convention, or how a subsystem works. Future tickets that match its title, body or tags get it injected, ' +
       'so write it for a reader with no context. Do not duplicate what the code or docs already say. Returns the brain row id.',
-    access: { planner: 'yes', worker: 'yes', tester: 'yes' },
+    access: { planner: 'yes', worker: 'yes', tester: 'yes', operator: 'yes' },
     input: {
       title: z.string().min(1),
       body: z.string().min(1).describe('Markdown.'),
@@ -229,7 +241,7 @@ export const TOOLS: Record<string, Tool<z.ZodRawShape>> = {
     description:
       'Full-text search the project brain, best match first. Search before making a decision another ticket may already have made, and when you meet an unfamiliar subsystem. ' +
       `Returns up to limit rows (default 5, max ${BRAIN_SEARCH_MAX}) with title, body and tags.`,
-    access: { planner: 'yes', worker: 'yes', tester: 'yes' },
+    access: { planner: 'yes', worker: 'yes', tester: 'yes', operator: 'yes' },
     input: {
       query: z.string().min(1).describe('Keywords; each word must match.'),
       limit: z.number().int().min(1).max(BRAIN_SEARCH_MAX).default(5),
@@ -241,7 +253,7 @@ export const TOOLS: Record<string, Tool<z.ZodRawShape>> = {
     description:
       'Ask the human operator a question you cannot resolve from the ticket, the brain or the code. The ticket is flagged needs_human and the operator is alerted; ' +
       'the answer is typed into your session as one line and kept as a note on the ticket. Ask once with full context and the options you see, rather than many small questions. Returns the question id.',
-    access: { planner: 'yes', worker: 'own', tester: 'own' },
+    access: { planner: 'yes', worker: 'own', tester: 'own', operator: 'yes' },
     input: { ticket_id: ticketId, question: z.string().min(1) },
     run(c, a) {
       const id = (c.ticket = own(c, a.ticket_id));
@@ -272,8 +284,8 @@ export const TOOLS: Record<string, Tool<z.ZodRawShape>> = {
   report_cleanup: tool({
     description:
       'Record what a housekeeping ticket removed or updated: one item per file or module with the action and the reason (superseded by X, no importers, references removed code). ' +
-      'Used by housekeeping tickets only; the list is shown to the operator and kept with the ticket. Returns the note id.',
-    access: { worker: 'own' },
+      'Used by housekeeping tickets, and by an operator grant on any ticket; the list is shown to the operator and kept with the ticket. Returns the note id.',
+    access: { worker: 'own', operator: 'any' },
     input: {
       ticket_id: ticketId,
       items: z.array(z.object({
@@ -299,7 +311,7 @@ function registerTools(server: McpServer, board: Board, grant: Grant) {
       let outcome: 'ok' | 'denied' | 'error' = 'ok';
       let text: string;
       try {
-        if (!(grant.role in t.access)) throw new Deny(`a ${grant.role} may not call ${name}`);
+        if (!(grant.role in t.access)) throw new Deny(`${an(grant.role)} may not call ${name}`);
         text = JSON.stringify(t.run(c, a), null, 2);
       } catch (e) {
         outcome = e instanceof Deny || e instanceof Refused ? 'denied' : 'error';

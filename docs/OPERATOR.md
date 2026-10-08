@@ -16,6 +16,14 @@ Living document. How a person drives Kanban95, from an idea to merged work. Upda
 
 **New brainstorm** (or Ctrl+N) opens a terminal with a planner agent in the repo root. Tell it what you want. It reads the code and the brain, proposes tickets, and writes them to the board with `create_ticket` once you agree. The planner cannot write files. Cards appear in Backlog as it creates them.
 
+### Operator terminal
+
+For board work that is not a ticket: maintenance on the repo, a refactor you want to steer live, a one-off investigation, fixing the board itself. **Start → New operator terminal** (or Ctrl+Shift+N) asks for a **Mission** (the mic works there too) and opens a terminal titled `Operator — <model>` in the repo root with an agent whose brief starts from your mission, word for word. An empty mission is refused.
+
+The agent has your reach on the board and nothing beyond the repo and the board: it can read and list every ticket, create and edit tickets, add notes, change a ticket's model, and move tickets through the usual steps (launch, submit, fail; it cannot pass a ticket, only a tester can). It has full tools in the repo, works in its own worktree under `.worktrees/op-<time>` when it changes code, merges that itself when the tests pass, and ends with a short summary in its terminal. It does not create tickets unless your mission asks it to.
+
+It runs with the plan phase's model and effort, unless `.kanban95/config.json` has `"operator": { "model": "...", "effort": "..." }` (either or both). It shows in the agent count and the taskbar like a brainstorm. Closing its window does not stop it; **Revoke** its grant in Settings → Grants, or close the board, does.
+
 ### 2. Launch all
 
 **Launch all** (or Ctrl+L) starts every Backlog ticket whose dependencies have merged; the rest wait with a yellow "waits on #n" badge and start by themselves when their dependency lands. To start one ticket, select it and press **Launch**.
@@ -88,12 +96,13 @@ Any other drop snaps back, and the status bar names where that card may go.
 | Esc | closes the focused window (or an open menu) |
 | Ctrl+L | Launch all |
 | Ctrl+N | New brainstorm |
+| Ctrl+Shift+N | New operator terminal |
 
 Inside a terminal every key goes to the agent instead: Esc interrupts Claude Code, Ctrl+L clears its screen.
 
 ## Preferences
 
-Standing instructions for every agent, for example "No em dashes or non-ASCII characters in output" or "Keep responses brief". Write them in **Settings → Prompts → Preferences** and press **Save**; that writes `~/.kanban95/preferences.md` (the path is shown on the tab), up to 16 KB. Every prompt rendered after that (brainstorm, plan, execute, test, housekeeping) carries them under "Operator preferences"; sessions already running keep the prompt they started with. They are yours, not the repo's, so they apply to every project the board works on. Never put a key or token in them: they are copied into every session's prompt.
+Standing instructions for every agent, for example "No em dashes or non-ASCII characters in output" or "Keep responses brief". Write them in **Settings → Prompts → Preferences** and press **Save**; that writes `~/.kanban95/preferences.md` (the path is shown on the tab), up to 16 KB. Every prompt rendered after that (brainstorm, operator, plan, execute, test, housekeeping) carries them under "Operator preferences"; sessions already running keep the prompt they started with. They are yours, not the repo's, so they apply to every project the board works on. Never put a key or token in them: they are copied into every session's prompt.
 
 ## Grants
 
