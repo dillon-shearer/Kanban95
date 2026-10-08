@@ -61,7 +61,7 @@ export const DIFF_CHARS = 32000;
 export function gitDiff(worktree: string, base: string, chars = DIFF_CHARS): string {
   const git = (...a: string[]) =>
     execFileSync('git', ['diff', '--no-color', '--no-ext-diff', ...a], { cwd: worktree, encoding: 'utf8', maxBuffer: 16 << 20 });
-  const stat = git('--stat=200', `${base}...HEAD`).trimEnd();
+  const stat = git('--stat=200', '--stat-graph-width=20', `${base}...HEAD`).trimEnd();
   if (!stat) return '';
   const marker = `\n[diff truncated: run git diff ${base}...HEAD -- <path>]`;
   let body = git(`${base}...HEAD`, '--', ...DIFF_SKIP);
