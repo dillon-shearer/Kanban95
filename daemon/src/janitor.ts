@@ -6,7 +6,7 @@ import { git, removeWorktree, worktreePath } from './git.js';
 import { audit, revoke } from './grants.js';
 import { sessions } from './launcher.js';
 
-export const SCROLLBACK_DAYS = 30;
+const SCROLLBACK_DAYS = 30;
 export const SWEEP_MS = 24 * 60 * 60 * 1000;
 
 type Board = { db: DatabaseSync; repo: string };

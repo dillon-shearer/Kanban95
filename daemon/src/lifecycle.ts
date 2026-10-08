@@ -13,7 +13,7 @@ import { runSettings } from './settings.js';
 import { TEMPLATES } from './templates.js';
 
 export const MAX_RETRY = 3;
-export const HOUSEKEEPING_EVERY = 10;
+const HOUSEKEEPING_EVERY = 10;
 
 export type Status = 'backlog' | 'in_progress' | 'testing' | 'done';
 export type Event =
@@ -27,7 +27,7 @@ export type Event =
   | 'merged' | 'conflict' // the merge queue's verdict
   | 'merge' // the operator retries a merge that failed
   | 'resume'; // the operator restarts the agent of a flagged running ticket whose agent is gone
-export type Effect =
+type Effect =
   | 'spawn_execute' | 'spawn_test' | 'end_session' | 'enqueue_merge' | 'note' | 'answer_pty'
   | 'chord' | 'ding' | 'remove_worktree' | 'release_dependents' | 'housekeeping';
 
@@ -172,7 +172,7 @@ export function apply(b: Board, id: number, event: Event, x: { note?: Note; answ
 }
 
 /** An answer is typed into a terminal: a newline would submit half of it, so it becomes one line. */
-export const oneLine = (s: string) => s.replace(/\s*[\r\n]+\s*/g, ' ').trim();
+const oneLine = (s: string) => s.replace(/\s*[\r\n]+\s*/g, ' ').trim();
 
 /** Every flag for an agent that went away says what the operator can do about it. */
 export const TO_RESOLVE = 'To resolve: Resume (card menu or Inbox) starts the agent again in the same worktree; Reset to Backlog starts over.';

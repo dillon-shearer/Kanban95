@@ -1,14 +1,14 @@
 // Agent terminals: a pseudo-terminal per run with a minimal environment and a capped scrollback.
 import { spawn, type IPty } from 'node-pty';
 
-export const SCROLLBACK_LINES = 2000;
+const SCROLLBACK_LINES = 2000;
 
 /**
  * The only daemon variables a CLI inherits: what Windows and a shell need to run, where the user's home and temp are
  * (Claude Code and Codex keep their own auth under the home dir), and the CLIs' own config-dir overrides.
  * Nothing else crosses, so a secret in the daemon's environment never reaches an agent.
  */
-export const ENV_ALLOW = [
+const ENV_ALLOW = [
   'PATH', 'PATHEXT', 'SystemRoot', 'SystemDrive', 'windir', 'ComSpec',
   'HOME', 'USERPROFILE', 'HOMEDRIVE', 'HOMEPATH', 'APPDATA', 'LOCALAPPDATA', 'USERNAME',
   'TEMP', 'TMP', 'TMPDIR', 'LANG',

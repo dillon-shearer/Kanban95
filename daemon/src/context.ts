@@ -6,11 +6,11 @@ import type { Role } from './grants.js';
 import { TOOLS } from './mcp.js';
 import { fill, loadTemplate, TEMPLATES, type Ctx, type TemplateName } from './templates.js';
 
-export const BRAIN_LIMIT = 5;
-export const BRAIN_CHARS = 4000;
+const BRAIN_LIMIT = 5;
+const BRAIN_CHARS = 4000;
 export const BRAIN_TRUNCATED = '\n[brain truncated; search for more with brain_search]';
 
-export interface ContextOpts {
+interface ContextOpts {
   /** Test phase only: the worktree and the branch the ticket forked from, for `git diff <base>...HEAD`. */
   worktree?: string;
   base?: string;
@@ -33,7 +33,7 @@ export function brainFor(db: DatabaseSync, text: string, limit = BRAIN_LIMIT, ch
 }
 
 /** Failure notes written since the latest execute run started: what went wrong in the attempt now being retried. Older cycles are left out. */
-export function failureNotes(db: DatabaseSync, ticketId: number): string {
+function failureNotes(db: DatabaseSync, ticketId: number): string {
   const rows = db.prepare(`
     SELECT role, body FROM notes
     WHERE ticket_id = ? AND kind = 'failure'
