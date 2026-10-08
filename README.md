@@ -29,7 +29,7 @@ npm run dev       # builds, then cargo-runs the Tauri shell, which spawns the da
 npm run dev -- C:\path\to\project   # the same, on another repo
 ```
 
-The daemon alone: `node daemon/dist/server.js [repo]` prints `KANBAN95 port=<n>`; the UI is at `http://127.0.0.1:<n>/`. It creates `<repo>/.kanban95/board.db` and `<repo>/.kanban95/templates/` (default repo: the cwd). It exits when its stdin closes, so run it from a parent that holds the pipe (the shell does).
+The daemon alone: set `KANBAN95_SECRET` to a random string of 32+ characters (it refuses to start without one), then `node daemon/dist/server.js [repo]` prints `KANBAN95 port=<n>`; open the UI at `http://127.0.0.1:<n>/?k95=<secret>` (`docs/SECURITY.md` → Shell secret). It creates `<repo>/.kanban95/board.db` and `<repo>/.kanban95/templates/` (default repo: the cwd). It exits when its stdin closes, so run it from a parent that holds the pipe (the shell does).
 
 ## Layout
 

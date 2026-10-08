@@ -83,6 +83,9 @@ beforeAll(async () => {
   db = srv.db;
   base = `http://127.0.0.1:${srv.port}/`;
   page = await browser();
+  // As the shell does: open on ?k95=<secret>, which the daemon trades for a cookie and redirects to /.
+  await page.send('Page.navigate', { url: `${base}?k95=${srv.secret}` });
+  await until(() => page.evaluate(`document.readyState === 'complete' && location.href === ${JSON.stringify(base)}`), 'the redirect to /');
 }, 30_000);
 afterAll(async () => {
   await page?.close();
@@ -133,7 +136,7 @@ describe('ui', { timeout: 60_000 }, () => {
     const id = ticket('Ask me', { model: 'ask' });
     await page.goto(base);
     await until(() => column(id), 'the card');
-    expect((await fetch(`${base}api/tickets/${id}/launch`, { method: 'POST' })).status).toBe(200);
+    expect((await fetch(`${base}api/tickets/${id}/launch`, { method: 'POST', headers: { cookie: `k95=${srv.secret}` } })).status).toBe(200);
     const flagged = `.card[data-id="${id}"] .badge.flag`;
     await until(() => page.evaluate(`!!document.querySelector('${flagged}')`), 'the needs human badge');
 
@@ -163,6 +166,16 @@ describe('ui', { timeout: 60_000 }, () => {
     expect(await pos()).toEqual(moved);
   });
 
+  it('keeps a window the same size while it is dragged', async () => {
+    await page.goto(base + '?resize');
+    await until(() => page.evaluate(`!!document.querySelector('[data-win="board"]')`), 'the board');
+    const size = () => page.evaluate<[number, number]>(`(() => { const e = document.querySelector('[data-win="board"]'); return [e.offsetWidth, e.offsetHeight]; })()`);
+    const before = await size();
+    const bar = await page.center('[data-win="board"] .title-bar-text');
+    await page.drag(bar, { x: bar.x + 200, y: bar.y });
+    expect(await size()).toEqual(before);
+  });
+
   it('shows the download dialog on the first mic press and fetches nothing until OK', async () => {
     rmSync(modelDir(MANIFEST), { recursive: true, force: true });
     await page.goto(base);
@@ -182,7 +195,7 @@ describe('ui', { timeout: 60_000 }, () => {
   it('transcribes the bundled WAV with the local model', { timeout: 600_000 }, async () => {
     if (existsSync(CACHE)) cpSync(CACHE, modelDir(MANIFEST), { recursive: true });
     // The daemon verifies every file's SHA-256, cached or not; a missing or tampered file is fetched again.
-    const r = await fetch(`${base}api/voice/download`, { method: 'POST' });
+    const r = await fetch(`${base}api/voice/download`, { method: 'POST', headers: { cookie: `k95=${srv.secret}` } });
     expect(r.status, await r.clone().text()).toBe(200);
     expect(status().downloaded).toBe(true);
     if (!existsSync(CACHE)) cpSync(modelDir(MANIFEST), CACHE, { recursive: true });

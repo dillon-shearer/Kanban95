@@ -10,7 +10,7 @@ The shell is a locked box around the daemon. Ship an installer that works on a m
 - Tauri capabilities: only the commands the UI actually calls. No `shell:open`, no fs scope, no http scope beyond the daemon origin.
 - CSP: `default-src 'self' http://127.0.0.1:<port> ws://127.0.0.1:<port>`; no inline script, move anything inline into files. The voice model is served from the daemon, so no model host appears in the CSP. The one-time model download is made by the daemon, not the webview.
 - Microphone: grant the webview microphone access through the Tauri capability, nothing else from the media set.
-- A shell-to-daemon secret passed via env at spawn (not argv, which other processes can read). The daemon's REST refuses requests without it. This closes the gap where any local process could drive the board through REST.
+- A shell-to-daemon secret passed via env at spawn (not argv, which other processes can read). The daemon's REST refuses requests without it. This closes the gap where any local process could drive the board through REST. **Done** (`docs/SECURITY.md` → Shell secret; tests in `daemon/test/server.test.ts`).
 - Windows installer via the Tauri bundler. First run detects missing Node 24 and shows a dialog with the download link instead of failing silently.
 - `docs/SECURITY.md` updated with the final threat model: what a malicious agent inside a worktree can and cannot reach.
 - Investigate and document (implement only if trivial) Node single-executable builds for shipping the daemon as a real sidecar binary.
