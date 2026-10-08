@@ -183,8 +183,25 @@ const resume = (id) => act(async () => {
   await api('POST', `/tickets/${id}/resume`);
   await sayLaunched([id]);
 });
+// Replaces a running ticket's agent, live or hung, with a fresh one in the same phase and worktree (docs/LIFECYCLE.md).
+const restartable = (t) => t?.status === 'in_progress' || t?.status === 'testing';
+async function restart(id) {
+  if (!restartable(tickets.get(id))) return say(`#${id} is not In progress or Testing; nothing to restart.`);
+  if ((await dialog('Restart ticket', `End the running agent for #${id} and start a new one in the same phase?`, ['Restart', 'Cancel'])) !== 'Restart') return;
+  await act(async () => {
+    await api('POST', `/tickets/${id}/restart`);
+    await sayLaunched([id]);
+  });
+}
 const launchAll = () => act(async () => sayLaunched((await api('POST', '/tickets/launch-all')).map((t) => t.id)));
 const newBrainstorm = () => act(async () => openTerminal(await api('POST', '/brainstorm')), 'Brainstorm started.');
+/** An operator terminal: an agent with the operator's reach on the board, given the mission typed here. The daemon refuses an empty one. */
+async function newOperator() {
+  const mission = h('textarea', { rows: 8, cols: 60, placeholder: 'What should the agent do?' });
+  const body = h('div', { class: 'field-row-stacked' }, h('label', {}, 'Mission'), mission);
+  if ((await dialog('New operator terminal', body, ['Start', 'Cancel'])) !== 'Start') return;
+  await act(async () => openTerminal(await api('POST', '/operator', { mission: mission.value })), 'Operator terminal started.');
+}
 const housekeeping = () => act(async () => {
   const t = await api('POST', '/tickets/housekeeping');
   say(`Housekeeping ticket #${t.id} created and launched.`);
@@ -198,6 +215,7 @@ function cardMenu(t, x, y) {
     { label: 'Open', run: () => openTicket(t.id) },
     { label: 'Launch', disabled: t.status !== 'backlog' && !resumable(t), run: () => launch(t.id) },
     { label: 'Resume', disabled: !resumable(t), run: () => resume(t.id) },
+    ...(restartable(t) ? [{ label: 'Restart', run: () => restart(t.id) }] : []),
     '-',
     { label: 'Model', items: [
       { label: `Phase default${t.model ? '' : ' ✓'}`, run: () => set({ model: null }) },
@@ -415,7 +433,8 @@ function ticketForm(w, t) {
     h('div', { class: 'field-row-stacked' }, h('label', {}, 'Acceptance criteria, one per line'), criteria),
     h('div', { class: 'field-row-stacked' }, h('label', {}, 'Depends on'), deps),
     h('div', { class: 'field-row' }, h('button', { onclick: save }, t ? 'Save' : 'Create'),
-      t && h('button', { disabled: t.status !== 'backlog', onclick: () => launch(t.id) }, 'Launch')));
+      t && h('button', { disabled: t.status !== 'backlog', onclick: () => launch(t.id) }, 'Launch'),
+      t && h('button', { onclick: () => restart(t.id) }, 'Restart')));
 }
 
 // ---- terminals ----
@@ -434,14 +453,26 @@ function openTerminal(s, auto = false) {
   seen.add(s.id);
   const wid = `term-${s.id}`;
   if (isOpen(wid)) return focus(wid);
-  const title = s.ticket_id === null ? `Brainstorm — ${s.model}` : `#${s.ticket_id} — ${s.phase} — ${s.model}`;
+  const title = s.ticket_id === null ? `${s.role === 'operator' ? 'Operator' : 'Brainstorm'} — ${s.model}` : `#${s.ticket_id} — ${s.phase} — ${s.model}`;
   const ws = new WebSocket(`ws://${location.host}/pty/${s.id}`);
   const send = (msg) => ws.readyState === WebSocket.OPEN && ws.send(JSON.stringify(msg));
   const term = new Terminal({ fontFamily: 'Consolas, "Courier New", monospace', fontSize: 13, scrollback: 5000 });
   const fit = new FitAddon();
   const ro = new ResizeObserver(() => fit.fit());
   // Spoken words are typed into the agent's terminal without Enter; the operator presses it.
-  const w = open(wid, { title, w: 760, h: 440, background: auto, extra: [micButton((text) => send({ data: text }))], onClose: () => { terms.delete(wid); ro.disconnect(); ws.close(); term.dispose(); } });
+  // X ends the agent for good, after a confirm; the board's own closes (after a report, a deleted ticket) never do.
+  const onX = async () => {
+    if (w.el.classList.contains('ended')) return w.close();
+    const ask = s.ticket_id === null ? 'End this brainstorm?' : `End the agent for #${s.ticket_id}? The ticket is flagged so you can resume it.`;
+    if ((await dialog('End agent', `${ask} Minimize to keep it running.`, ['End', 'Cancel'])) !== 'End') return;
+    try {
+      await api('DELETE', `/sessions/${s.id}`);
+      w.close();
+    } catch (e) {
+      say(e.message);
+    }
+  };
+  const w = open(wid, { title, w: 760, h: 440, background: auto, onX, extra: [micButton((text) => send({ data: text }))], onClose: () => { terms.delete(wid); ro.disconnect(); ws.close(); term.dispose(); } });
   terms.set(wid, s.ticket_id);
   w.body.classList.add('k95-term');
   term.loadAddon(fit);
@@ -513,6 +544,7 @@ function openInbox() {
             h('button', { onclick: () => openTicket(q.ticket_id) }, 'Open ticket'),
             q.status === 'done' && !q.merged_at && h('button', { onclick: () => act(() => api('POST', `/tickets/${q.ticket_id}/merge`), `Merge of #${q.ticket_id} queued.`) }, 'Retry merge'),
             (q.status === 'in_progress' || q.status === 'testing') && h('button', { onclick: () => resume(q.ticket_id) }, 'Resume'),
+            (q.status === 'in_progress' || q.status === 'testing') && h('button', { onclick: () => restart(q.ticket_id) }, 'Restart'),
             q.status !== 'done' && t && h('button', { onclick: () => reset(t) }, 'Reset to Backlog')));
       }
       const answer = h('textarea', { rows: 3, placeholder: 'Your answer' });
@@ -536,7 +568,7 @@ async function saveSettings(patch) {
 function grantTable(grants) {
   return table(['Grant', 'Ticket', 'Role', 'Session', 'Expires', ''], grants.map((g) => {
     const s = sessions.find((x) => x.grant_id === g.id);
-    return h('tr', {}, h('td', {}, g.id), h('td', {}, g.ticket_id ? `#${g.ticket_id}` : 'brainstorm'), h('td', {}, g.role),
+    return h('tr', {}, h('td', {}, g.id), h('td', {}, g.ticket_id ? `#${g.ticket_id}` : g.role === 'operator' ? 'operator terminal' : 'brainstorm'), h('td', {}, g.role),
       h('td', {}, s ? `${s.phase} · ${s.model}` : 'none'), h('td', {}, fmt(g.expires_at)),
       h('td', {}, h('button', { 'data-grant': g.id, onclick: () => act(() => api('DELETE', `/grants/${g.id}`), `Grant ${g.id} revoked; its session was stopped.`) }, 'Revoke')));
   }));
@@ -670,6 +702,7 @@ const START = [
   '-',
   { label: 'New ticket', run: () => openTicket(null) },
   { label: 'New brainstorm', run: newBrainstorm },
+  { label: 'New operator terminal', run: newOperator },
   { label: 'Launch all', run: launchAll },
   { label: 'Housekeeping', run: housekeeping },
 ];
@@ -694,7 +727,7 @@ function taskbar() {
 
 const clock = () => { document.getElementById('clock').textContent = new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }); };
 
-// Esc closes the focused window, Ctrl+L launches all, Ctrl+N starts a brainstorm. Inside a terminal every key goes to the
+// Esc closes the focused window, Ctrl+L launches all, Ctrl+N starts a brainstorm, Ctrl+Shift+N an operator terminal, Ctrl+R restarts the focused ticket's agent. Inside a terminal every key goes to the
 // agent instead (Esc interrupts Claude Code, Ctrl+L clears the screen).
 addEventListener('keydown', (e) => {
   if (document.querySelector('dialog[open]') || e.target.closest?.('.xterm')) return;
@@ -710,6 +743,14 @@ addEventListener('keydown', (e) => {
   } else if (plainCtrl && e.key.toLowerCase() === 'n') {
     e.preventDefault();
     newBrainstorm();
+  } else if (plainCtrl && e.key.toLowerCase() === 'r') {
+    const id = /^ticket-(\d+)$/.exec(focused()?.el.dataset.win)?.[1];
+    if (!id) return;
+    e.preventDefault(); // not a page reload
+    restart(Number(id));
+  } else if (e.ctrlKey && e.shiftKey && !e.altKey && e.key.toLowerCase() === 'n') {
+    e.preventDefault();
+    newOperator();
   }
 });
 

@@ -6,7 +6,7 @@ import { attachments } from './attachments.js';
 import type { Role } from './grants.js';
 import { TOOLS } from './mcp.js';
 import { readPreferences } from './settings.js';
-import { fill, loadTemplate, TEMPLATES, type Ctx, type TemplateName } from './templates.js';
+import { fill, loadTemplate, TEMPLATES, type Ctx, type TicketTemplate } from './templates.js';
 
 const BRAIN_LIMIT = 5;
 const BRAIN_CHARS = 4000;
@@ -55,14 +55,14 @@ function gitDiff(worktree: string, base: string): string {
   return execFileSync('git', ['diff', '--no-color', '--no-ext-diff', `${base}...HEAD`], { cwd: worktree, encoding: 'utf8', maxBuffer: 16 << 20 });
 }
 
-/** A null ticket is a brainstorm session: tools only, nothing pushed. */
+/** A null ticket is a brainstorm or operator session: tools only, nothing pushed. `mission` is the operator terminal's, set by its launcher. */
 export function buildContext(db: DatabaseSync, repo: string, ticketId: number | null, role: Role, opts: ContextOpts = {}): Ctx {
   const tools = Object.entries(TOOLS)
     .filter(([, t]) => role in t.access)
     .map(([name, t]) => `- ${name} (${t.access[role]})`)
     .join('\n');
   const preferences = orNone(readPreferences());
-  if (ticketId === null) return { ticket: '(none)', criteria: '(none)', brain: '(none)', notes: '(none)', retry: '0', diff: '', tools, base: '(none)', preferences };
+  if (ticketId === null) return { ticket: '(none)', criteria: '(none)', brain: '(none)', notes: '(none)', retry: '0', diff: '', tools, base: '(none)', preferences, mission: '(none)' };
 
   const t = readTicket(db, ticketId);
   let diff = '';
@@ -80,6 +80,7 @@ export function buildContext(db: DatabaseSync, repo: string, ticketId: number | 
     base: opts.base ?? '(none)',
     tools,
     preferences,
+    mission: '(none)',
   };
 }
 
@@ -87,7 +88,7 @@ export function buildContext(db: DatabaseSync, repo: string, ticketId: number | 
 export function startRun(
   db: DatabaseSync,
   repo: string,
-  r: { ticketId: number; template: Exclude<TemplateName, 'brainstorm'>; cli: string; model: string; effort: string } & ContextOpts,
+  r: { ticketId: number; template: TicketTemplate; cli: string; model: string; effort: string } & ContextOpts,
 ): { id: number; prompt: string } {
   const { role, phase } = TEMPLATES[r.template];
   const text = loadTemplate(repo, r.template); // a bad template fails here, before git runs or a row is written

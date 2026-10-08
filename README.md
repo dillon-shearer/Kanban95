@@ -38,7 +38,7 @@ The project must be a git repository. `Kanban95.cmd` finds Node 24 (through fnm 
 | doc | what it covers |
 |---|---|
 | [docs/LEARNING.md](docs/LEARNING.md) | a guided tour for newcomers: worktrees, MCP tools, grants, and why the board uses them |
-| [docs/OPERATOR.md](docs/OPERATOR.md) | driving the board: brainstorm, launch, the Inbox, settings, voice input |
+| [docs/OPERATOR.md](docs/OPERATOR.md) | driving the board: brainstorm, operator terminals, launch, the Inbox, settings, voice input |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | shell, daemon and UI; REST, events, launch, packaging, repo map |
 | [docs/LIFECYCLE.md](docs/LIFECYCLE.md) | the ticket state machine, retries, the merge queue, the janitor |
 | [docs/AGENTS.md](docs/AGENTS.md) | what an agent receives, how each role is expected to behave, the skills plugin |

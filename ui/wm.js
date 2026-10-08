@@ -43,8 +43,9 @@ export function focus(id) {
 /**
  * Opens window `id`, or focuses it when it is already open. Returns { el, body, title(text), close }.
  * `background`: opens behind the focused window without taking focus (terminals the board opens on its own).
+ * `onX`: runs instead of closing when the operator clicks X; `close` and `api.close` still close at once.
  */
-export function open(id, { title, w = 480, h: height = 320, persist = false, background = false, onClose, extra = [] }) {
+export function open(id, { title, w = 480, h: height = 320, persist = false, background = false, onClose, onX, extra = [] }) {
   if (wins.has(id)) {
     focus(id);
     return wins.get(id).api;
@@ -58,7 +59,7 @@ export function open(id, { title, w = 480, h: height = 320, persist = false, bac
     h('div', { class: 'title-bar' }, text, h('div', { class: 'title-bar-controls' }, ...extra,
       h('button', { 'aria-label': 'Minimize', onclick: () => minimize(id) }),
       h('button', { 'aria-label': saved?.max ? 'Restore' : 'Maximize', onclick: () => toggleMax() }),
-      h('button', { 'aria-label': 'Close', onclick: () => close(id) }))),
+      h('button', { 'aria-label': 'Close', onclick: () => (onX ? onX() : close(id)) }))),
     body);
   el.classList.toggle('max', !!saved?.max);
   Object.assign(el.style, { left: `${r.x}px`, top: `${r.y}px`, width: `${r.w}px`, height: `${r.h}px` });
