@@ -242,3 +242,22 @@ describe('model lists for the Settings dropdowns', () => {
     expect(await (await call('GET', '/api/models')).json()).toEqual({ claude: [], codex: [] });
   });
 });
+
+describe('operator preferences', () => {
+  const file = () => join(process.env.USERPROFILE!, '.kanban95', 'preferences.md');
+  afterAll(() => rmSync(file(), { force: true }));
+
+  it('reads empty when absent, saves the text, refuses over 16 KB without touching the file', async () => {
+    rmSync(file(), { force: true });
+    expect(await (await call('GET', '/api/config/preferences')).json()).toEqual({ path: file(), value: '' });
+    expect((await call('PUT', '/api/config/preferences', { value: 'no em dashes' })).status).toBe(200);
+    expect(readFileSync(file(), 'utf8')).toBe('no em dashes');
+    expect((await call('PUT', '/api/config/preferences', { value: 'x'.repeat(16 * 1024) })).status).toBe(200);
+    const big = await call('PUT', '/api/config/preferences', { value: 'é'.repeat(8 * 1024 + 1) }); // 16 KB + 2 bytes in UTF-8
+    expect(big.status).toBe(400);
+    expect((await big.json()).error).toMatch(/16 KB/);
+    expect(readFileSync(file(), 'utf8')).toBe('x'.repeat(16 * 1024));
+    expect((await call('PUT', '/api/config/preferences', { value: 3 })).status).toBe(400);
+    expect(existsSync(`${file()}.tmp`)).toBe(false);
+  });
+});

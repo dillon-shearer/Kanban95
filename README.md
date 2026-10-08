@@ -13,6 +13,12 @@ Spec: `PLAN.md`. Design: `docs/ARCHITECTURE.md`, schema `docs/DATA.md`, security
 - WebView2 runtime (ships with Windows 11).
 - To launch agents: Claude Code and/or Codex CLI, logged in with their own commands; a model per CLI and phase, saved in Settings → Models (`~/.kanban95/models.json`, `docs/LIFECYCLE.md` → Run settings); for Claude Code, its one-time `--dangerously-skip-permissions` warning accepted once by hand (`docs/CLIS.md`).
 
+## Install or run from source
+
+**Use the installer** to use Kanban95 on a machine: it needs only Node 24+ on PATH and the WebView2 runtime, no Rust, no clone. Build it with `npm run installer` (from a source checkout, Rust required) → `shell/target/release/bundle/nsis/Kanban95_<version>_x64-setup.exe`. It installs for the current user, no admin prompt, with a Start menu entry. The installed `Kanban95.exe` opens the board on the folder passed as its argument (a git repository; drop the project folder on it or put the path in a shortcut's target), else on its working directory. Without Node 24 the first run shows a dialog with the download link. How it is packaged: `docs/ARCHITECTURE.md` → Packaging.
+
+**Use `Kanban95.cmd`** when developing Kanban95 itself: it builds the checkout you are editing and shows the daemon's log.
+
 ## Run
 
 **One click: `Kanban95.cmd`.** Double-click it to open the board on this repo, or drop a project folder (a git repository) onto it to open the board on that project; `Kanban95.cmd C:\path\to\project` does the same from a terminal, and a desktop shortcut to it works too. It finds Node 24 even when an older Node is first on PATH (through fnm), runs `npm install` the first time, builds and starts the window. Its console window shows the daemon's log; closing the board window ends both.

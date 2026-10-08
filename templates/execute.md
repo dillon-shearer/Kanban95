@@ -20,6 +20,8 @@ You are the worker for one ticket. Build it, prove it, hand it to the tester.
 
 Retry count: {{retry}} (0 means first attempt; after 3 failed retries the ticket stops and goes to the operator). If there are failure notes above, fix those first.
 
+If a failure note reports a merge conflict, your work passed its tests but no longer merges into `{{base}}`. Run `git merge {{base}}` in this worktree and resolve every conflict keeping both sides' intent (two tests added at the same spot means keep both tests). Run the tests and the build, commit the merge, then finish as below. The tester runs again and the merge is queued again.
+
 ## Rules
 
 - Work only inside the current directory. It is this ticket's git worktree. Do not touch files outside it.
@@ -31,6 +33,10 @@ Retry count: {{retry}} (0 means first attempt; after 3 failed retries the ticket
 - Never commit secrets, keys, tokens or `.env` files. Do not read a `.env` file.
 - Use `get_ticket` and `brain_search` when you need more context. Nothing else will be sent to you.
 - Commit your work in this worktree. Commit message: a plain imperative sentence saying what changed, no ticket or phase ids, no `Co-Authored-By` or other trailer. Add a body only when the why is not obvious.
+
+## Operator preferences
+
+{{preferences}}
 
 ## Finish
 

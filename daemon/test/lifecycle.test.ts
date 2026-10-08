@@ -9,7 +9,7 @@ import { readTicket } from '../src/api.ts';
 import { createWorktree } from '../src/git.ts';
 import { mint } from '../src/grants.ts';
 import { sessionsOf } from '../src/launcher.ts';
-import { events, MAX_RETRY, Refused, transition, type Event, type Facts, type Status } from '../src/lifecycle.ts';
+import { DIRTY_WAIT, events, MAX_RETRY, Refused, RESTARTED, TABLE, TO_RESOLVE, transition, type Event, type Facts, type Status } from '../src/lifecycle.ts';
 import { start } from '../src/server.ts';
 
 describe('transition table', () => {
@@ -18,18 +18,24 @@ describe('transition table', () => {
   const rows: [string, Partial<Facts>, Event, ReturnType<typeof transition>][] = [
     ['launch, deps merged', { status: 'backlog' }, 'launch', { to: 'in_progress', set: { blocked_on_deps: 0 }, effects: ['spawn_execute'] }],
     ['launch, deps not merged', { status: 'backlog', depsMerged: false }, 'launch', { to: 'backlog', set: { blocked_on_deps: 1 }, effects: [] }],
+    ['launch on a running ticket whose agent is gone', { status: 'in_progress', live: false, needs_human: true }, 'launch', { to: 'in_progress', set: { needs_human: 0 }, effects: ['spawn_execute'] }],
+    ['launch on a testing ticket whose agent is gone', { status: 'testing', live: false }, 'launch', { to: 'testing', set: { needs_human: 0 }, effects: ['spawn_test'] }],
+    ['resume a flagged ticket in progress', { status: 'in_progress', live: false, needs_human: true, retry: 2 }, 'resume', { to: 'in_progress', set: { needs_human: 0 }, effects: ['spawn_execute'] }],
+    ['resume a flagged ticket in testing', { status: 'testing', live: false, needs_human: true }, 'resume', { to: 'testing', set: { needs_human: 0 }, effects: ['spawn_test'] }],
     ['worker submits', { status: 'in_progress' }, 'submit', { to: 'testing', set: {}, effects: ['end_session', 'spawn_test'] }],
     ['tester passes after report_test(pass)', { status: 'testing', passReported: true }, 'pass', { to: 'done', set: {}, effects: ['end_session', 'enqueue_merge'] }],
     ['first failure', { status: 'testing', retry: 0 }, 'fail', { to: 'in_progress', set: { retry: '+1' }, effects: ['end_session', 'spawn_execute'] }],
     ['third failure is the last retry', { status: 'testing', retry: MAX_RETRY - 1 }, 'fail', { to: 'in_progress', set: { retry: '+1' }, effects: ['end_session', 'spawn_execute'] }],
-    ['fourth failure stops', { status: 'testing', retry: MAX_RETRY }, 'fail', { to: 'in_progress', set: { retry: '+1', needs_human: 1 }, effects: ['end_session', 'chord'] }],
+    ['fourth failure stops', { status: 'testing', retry: MAX_RETRY }, 'fail', { to: 'in_progress', set: { retry: '+1', needs_human: 1 }, effects: ['end_session', 'note', 'chord'] }],
     ['worker asks', { status: 'in_progress' }, 'ask', { to: 'in_progress', set: { needs_human: 1 }, effects: ['note', 'chord'] }],
     ['tester asks', { status: 'testing' }, 'ask', { to: 'testing', set: { needs_human: 1 }, effects: ['note', 'chord'] }],
     ['operator answers', { status: 'in_progress', needs_human: true }, 'answer', { to: 'in_progress', set: { needs_human: 0 }, effects: ['note', 'answer_pty'] }],
     ['worker exits silently', { status: 'in_progress' }, 'exit', { to: 'in_progress', set: { needs_human: 1 }, effects: ['note', 'chord'] }],
     ['tester exits silently', { status: 'testing', live: false }, 'exit', { to: 'testing', set: { needs_human: 1 }, effects: ['note', 'chord'] }],
     ['merge ok', { status: 'done' }, 'merged', { to: 'done', set: { merged: true, needs_human: 0 }, effects: ['ding', 'remove_worktree', 'release_dependents', 'housekeeping'] }],
-    ['merge conflict', { status: 'done' }, 'conflict', { to: 'done', set: { needs_human: 1 }, effects: ['note', 'chord'] }],
+    ['merge conflict goes back to the worker', { status: 'done', retry: MAX_RETRY - 1 }, 'conflict', { to: 'in_progress', set: { retry: '+1' }, effects: ['note', 'spawn_execute'] }],
+    ['merge conflict at the retry cap stops', { status: 'done', retry: MAX_RETRY }, 'conflict', { to: 'done', set: { needs_human: 1 }, effects: ['note', 'chord'] }],
+    ['base still dirty after the wait', { status: 'done' }, 'dirty', { to: 'done', set: { needs_human: 1 }, effects: ['note', 'chord'] }],
     ['operator retries a failed merge', { status: 'done', needs_human: true }, 'merge', { to: 'done', set: {}, effects: ['enqueue_merge'] }],
   ];
   it.each(rows)('%s', (_, facts, event, want) => {
@@ -38,11 +44,11 @@ describe('transition table', () => {
 
   const allowed: Record<Status, Event[]> = {
     backlog: ['launch'],
-    in_progress: ['submit', 'ask', 'answer', 'exit'],
-    testing: ['pass', 'fail', 'ask', 'answer', 'exit'],
-    done: ['merged', 'conflict', 'merge'],
+    in_progress: ['launch', 'resume', 'submit', 'ask', 'answer', 'exit'],
+    testing: ['launch', 'resume', 'pass', 'fail', 'ask', 'answer', 'exit'],
+    done: ['merged', 'conflict', 'merge', 'dirty'],
   };
-  const EVENTS: Event[] = ['launch', 'submit', 'pass', 'fail', 'ask', 'answer', 'exit', 'merged', 'conflict', 'merge'];
+  const EVENTS: Event[] = ['launch', 'submit', 'pass', 'fail', 'ask', 'answer', 'exit', 'merged', 'conflict', 'merge', 'dirty', 'resume'];
   it('refuses every other event in every status', () => {
     let n = 0;
     for (const status of Object.keys(allowed) as Status[]) {
@@ -51,7 +57,7 @@ describe('transition table', () => {
         n++;
       }
     }
-    expect(n).toBe(4 * EVENTS.length - 13);
+    expect(n).toBe(4 * EVENTS.length - 18);
   });
 
   it('refuses a guarded row whose guard fails, saying why', () => {
@@ -59,6 +65,25 @@ describe('transition table', () => {
     expect(() => transition(f({ status: 'testing', needs_human: false }), 'answer')).toThrow(/no flagged question/);
     expect(() => transition(f({ status: 'testing', needs_human: true, live: false }), 'answer')).toThrow(/no flagged question/);
     expect(() => transition(f({ status: 'done', merged: true }), 'merge')).toThrow('cannot merge a ticket in done: already merged');
+    const busy = 'it already has a running agent; open its terminal, or Reset to Backlog to stop it';
+    expect(() => transition(f({ status: 'in_progress', needs_human: true }), 'launch')).toThrow(`cannot launch a ticket in in_progress: ${busy}`);
+    expect(() => transition(f({ status: 'testing', needs_human: true }), 'resume')).toThrow(`cannot resume a ticket in testing: ${busy}`);
+    expect(() => transition(f({ status: 'in_progress', live: false }), 'resume')).toThrow('cannot resume a ticket in in_progress: it is not flagged');
+    expect(() => transition(f({ status: 'backlog', needs_human: true, live: false }), 'resume')).toThrow('cannot resume a ticket in backlog');
+    expect(() => transition(f({ status: 'done', needs_human: true, live: false }), 'resume')).toThrow('cannot resume a ticket in done');
+  });
+
+  it('every row that raises needs_human writes one note, and all but a question end it with what resolves it', () => {
+    const flagged = TABLE.filter((r) => r.set?.needs_human === 1);
+    expect(flagged.map((r) => r.event)).toEqual(['fail', 'ask', 'exit', 'conflict', 'dirty']);
+    for (const r of flagged) {
+      expect(r.effects.filter((e) => e === 'note'), r.event).toHaveLength(1);
+      expect(r.resolve === undefined, r.event).toBe(r.event === 'ask');
+    }
+    const fix = (e: Event) => flagged.find((r) => r.event === e)!.resolve!(7, 'C:/repo');
+    expect(fix('conflict')).toMatch(/\.worktrees\/t-7 .*Retry merge/);
+    expect(fix('dirty')).toMatch(/main checkout \(C:\/repo\).*Retry merge/);
+    expect(`To resolve: ${fix('exit')}`).toBe(TO_RESOLVE);
   });
 });
 
@@ -91,7 +116,7 @@ const commit = (file, text) => {
 };
 const line = () => new Promise((ok) => process.stdin.setEncoding('utf8').once('data', (d) => ok(d.replace(/[\\r\\n]+$/, ''))));
 console.log('FAKE ' + model);
-if (brief.startsWith('# Test')) {
+if (brief.startsWith('# Test') && model !== 'hang') {
   if (model === 'escalate') await call('set_model', { model: 'work-big', effort: 'high' });
   const passed = model === 'pass';
   await call('report_test', { passed, summary: passed ? 'every criterion passes' : 'criterion 1 fails' });
@@ -102,6 +127,8 @@ if (brief.startsWith('# Test')) {
   if (model === 'ask') {
     await call('ask_operator', { question: 'Which colour?' });
     commit('answer.txt', await line());
+  } else if (model === 'conflict' && brief.includes('merge conflict with main')) {
+    try { execFileSync('git', ['merge', '-q', 'main'], { stdio: 'ignore' }); } catch { commit('shared.txt', 'both\\n'); }
   } else if (model === 'conflict') commit('shared.txt', name + '\\n');
   else commit(name + '.txt', 'done\\n');
   await call('move_ticket', { status: 'testing' });
@@ -232,6 +259,7 @@ describe('lifecycle', { timeout: 60_000 }, () => {
     expect(runs(id).map((x) => x.phase)).toEqual(['execute', 'test', 'execute', 'test', 'execute', 'test', 'execute', 'test']);
     expect(t(id)).toMatchObject({ status: 'in_progress', retry: MAX_RETRY + 1, flags: { needs_human: true } });
     expect(sounds).toEqual([{ sound: 'chord', ticket: id }]);
+    expect(notes(id, 'failure').at(-1)).toMatch(/^stopped after 4 failed tests\nTo resolve: .*Reset to Backlog and Launch/);
     expect(runs(id)[2].prompt_rendered).toContain('FAIL: criterion 1 fails'); // the retry sees what failed
   });
 
@@ -272,21 +300,39 @@ describe('lifecycle', { timeout: 60_000 }, () => {
     await post(`/api/tickets/${broken}/launch`);
     await until(() => t(silent).flags.needs_human, 'the silent exit');
     expect(t(silent).status).toBe('in_progress');
-    expect(notes(silent, 'failure')).toEqual(['agent exited without reporting']);
+    expect(notes(silent, 'failure')).toEqual([`agent exited without reporting\n${TO_RESOLVE}`]);
     expect(runs(silent).map((x) => x.outcome)).toEqual(['exit']);
     expect(t(broken)).toMatchObject({ status: 'in_progress', flags: { needs_human: true } });
     expect(notes(broken, 'failure')[0]).toMatch(/^launch failed: unknown cli nope/);
   });
 
-  it('merge conflict: the second ticket is flagged with its worktree kept and the base clean; a retried merge lands it', async () => {
+  it('merge conflict: the worker merges the base in its kept worktree and both tickets land with no operator action', async () => {
     const one = ticket('Write shared one', { model: 'conflict' });
     const two = ticket('Write shared two', { model: 'conflict' });
+    await post('/api/tickets/launch-all');
+    await until(() => [one, two].some((id) => t(id).retry === 1), 'the conflict sent back');
+    const [won, lost] = t(one).retry === 1 ? [two, one] : [one, two];
+    await landed(won);
+    await landed(lost);
+    expect(notes(lost, 'failure')).toEqual([expect.stringMatching(/^merge conflict with main: [^]*CONFLICT[^]*shared\.txt/)]);
+    expect(runs(lost).map((x) => x.phase)).toEqual(['execute', 'test', 'execute', 'test']);
+    expect(runs(lost)[2].prompt_rendered).toMatch(/merge conflict with main: [^]*git merge main/); // the note, and the brief's base
+    expect([one, two].map((id) => t(id).flags.needs_human)).toEqual([false, false]);
+    expect(git('show', 'HEAD:shared.txt')).toBe('both');
+    expect(sounds.filter((s) => s.sound === 'chord')).toEqual([]);
+  });
+
+  it('merge conflict at the retry cap: flagged with the worktree kept, the base clean, the fix in the note and the Inbox; a retried merge lands it', async () => {
+    const one = ticket('Write shared one', { model: 'conflict', retry: MAX_RETRY });
+    const two = ticket('Write shared two', { model: 'conflict', retry: MAX_RETRY });
     await post('/api/tickets/launch-all');
     await until(() => [one, two].every((id) => t(id).status === 'done') && [one, two].some((id) => t(id).flags.needs_human), 'both done, one flagged');
     const [won, lost] = t(one).merged_at ? [one, two] : [two, one];
     await landed(won);
-    expect(t(lost)).toMatchObject({ status: 'done', merged_at: null, flags: { needs_human: true } });
-    expect(notes(lost, 'failure')[0]).toMatch(/^merge failed; the worktree is kept\.\n/);
+    expect(t(lost)).toMatchObject({ status: 'done', merged_at: null, retry: MAX_RETRY, flags: { needs_human: true } });
+    expect(notes(lost, 'failure')).toEqual([expect.stringMatching(new RegExp(`^merge conflict with main: [^]*\\nTo resolve: in \\.worktrees/t-${lost} .*Retry merge\\.$`))]);
+    const inbox = await (await fetch(`http://127.0.0.1:${srv.port}/api/inbox`, { headers: { cookie: `k95=${srv.secret}` } })).json();
+    expect(inbox).toEqual([expect.objectContaining({ ticket_id: lost, kind: 'failure', status: 'done', merged_at: null, body: notes(lost, 'failure')[0] })]);
     expect(existsSync(join(repo, '.worktrees', `t-${lost}`))).toBe(true);
     expect(git('status', '--porcelain', '--untracked-files=no')).toBe('');
     expect(existsSync(join(repo, '.git', 'MERGE_HEAD'))).toBe(false);
@@ -306,6 +352,44 @@ describe('lifecycle', { timeout: 60_000 }, () => {
     expect(t(lost).flags.needs_human).toBe(false);
     expect(git('show', 'HEAD:shared.txt')).toBe('both');
     expect((await post(`/api/tickets/${lost}/merge`)).status).toBe(409); // already merged
+  });
+
+  describe('a dirty main checkout', () => {
+    const wait0 = { ...DIRTY_WAIT };
+    afterEach(() => Object.assign(DIRTY_WAIT, wait0));
+    // Dirtied once the worktree exists (a dirty base refuses the launch itself) and long before the tester passes.
+    const launchThenDirty = async (id: number) => {
+      expect((await post(`/api/tickets/${id}/launch`)).status).toBe(200);
+      writeFileSync(join(repo, 'a.txt'), 'the operator is editing\n');
+    };
+
+    it('flags nothing and retries by itself; the merge lands once the base is clean, with the edits untouched until then', async () => {
+      Object.assign(DIRTY_WAIT, { every: 50, max: 60_000 });
+      const id = ticket('Add while dirty');
+      await launchThenDirty(id);
+      await until(() => t(id).status === 'done', 'done');
+      await new Promise((r) => setTimeout(r, 500)); // several refused tries
+      expect(t(id)).toMatchObject({ merged_at: null, flags: { needs_human: false } });
+      expect(notes(id, 'failure')).toEqual([]);
+      expect(readFileSync(join(repo, 'a.txt'), 'utf8')).toBe('the operator is editing\n'); // no merge --abort over it
+      git('checkout', 'a.txt');
+      await landed(id);
+      expect(t(id).flags.needs_human).toBe(false);
+      expect(sounds).toEqual([{ sound: 'ding', ticket: id }]);
+    });
+
+    it('still dirty after the wait: flagged with the changed files and the fix; Retry merge lands it once clean', async () => {
+      Object.assign(DIRTY_WAIT, { every: 50, max: 300 });
+      const id = ticket('Add while dirty for long');
+      await launchThenDirty(id);
+      await until(() => t(id).flags.needs_human, 'the flag');
+      expect(t(id)).toMatchObject({ status: 'done', merged_at: null });
+      expect(notes(id, 'failure')).toEqual([expect.stringMatching(/^merge did not run: the main checkout \(main\) still has uncommitted changes after the wait:\n M a\.txt\nTo resolve: commit or stash those changes in the main checkout .*Retry merge/)]);
+      expect(readFileSync(join(repo, 'a.txt'), 'utf8')).toBe('the operator is editing\n');
+      git('checkout', 'a.txt');
+      expect((await post(`/api/tickets/${id}/merge`)).status).toBe(200);
+      await landed(id);
+    });
   });
 
   it('five tickets at once: five ptys, one merge queue, every branch lands in a straight line of merges', async () => {
@@ -354,23 +438,86 @@ describe('janitor on daemon start', () => {
     const openRun = Number(ins.run(kept, null, null, null).lastInsertRowid);
     await srv.close();
 
+    models({ execute: 'hang' });
     srv = await start({ repo });
     db = srv.db;
     expect(readdirSync(join(repo, '.worktrees'))).toEqual([`t-${kept}`]);
     expect(readFileSync(join(keptWt, 'wip.txt'), 'utf8')).toBe('uncommitted work');
     expect(git('branch', '--list', 'ticket/99', `ticket/${merged}`)).toBe('');
-    expect(readdirSync(join(repo, '.kanban95', 'sessions'))).toEqual([]);
+    expect(readdirSync(join(repo, '.kanban95', 'sessions'))).not.toContain('4242'); // the resumed run has its own
     expect((db.prepare('SELECT revoked_at FROM grants WHERE id = ?').get(grant.id) as { revoked_at: string | null }).revoked_at).not.toBeNull();
     const run = (id: number) => db.prepare('SELECT scrollback, outcome, ended_at FROM runs WHERE id = ?').get(id) as Record<string, unknown>;
     expect(run(oldRun)).toMatchObject({ scrollback: null, outcome: 'submit' });
     expect(run(newRun)).toMatchObject({ scrollback: 'new screen' });
     expect(run(openRun)).toMatchObject({ outcome: 'lost', ended_at: expect.any(String) });
-    expect(t(kept).flags.needs_human).toBe(true);
-    expect(notes(kept, 'failure')).toEqual(['agent exited without reporting (the daemon restarted)']);
+    expect(t(kept).flags.needs_human).toBe(false); // resumed, see 'resume' below
+    expect(notes(kept, 'failure')).toEqual([RESTARTED]);
     const tools = (db.prepare("SELECT tool, count(*) AS n FROM audit WHERE tool LIKE 'janitor.%' GROUP BY tool ORDER BY tool").all() as { tool: string; n: number }[]);
     expect(tools).toEqual([
       { tool: 'janitor.grant', n: 1 }, { tool: 'janitor.run', n: 1 }, { tool: 'janitor.scrollback', n: 1 },
       { tool: 'janitor.session', n: 1 }, { tool: 'janitor.worktree', n: 3 },
     ]);
+  });
+});
+
+describe('resume', { timeout: 60_000 }, () => {
+  const flagged = (title: string, status: Status, retry = 1) => {
+    const id = ticket(title, { status, needs_human: 1, retry });
+    createWorktree(repo, id);
+    db.prepare("INSERT INTO notes (ticket_id, role, kind, body) VALUES (?, 'worker', 'failure', 'agent exited without reporting')").run(id);
+    return id;
+  };
+
+  it('starts the phase agent again in the same worktree with the failure note; retry kept, flag cleared; refused while it runs', async () => {
+    models({ execute: 'hang', test: 'hang' });
+    const work = flagged('Was working', 'in_progress');
+    const test = flagged('Was testing', 'testing');
+    for (const [id, phase] of [[work, 'execute'], [test, 'test']] as const) {
+      expect((await post(`/api/tickets/${id}/resume`)).status).toBe(200);
+      expect(t(id)).toMatchObject({ status: phase === 'test' ? 'testing' : 'in_progress', retry: 1, flags: { needs_human: false } });
+      expect(runs(id).map((r) => r.phase)).toEqual([phase]);
+      expect(runs(id)[0].prompt_rendered).toContain('agent exited without reporting');
+      expect(sessionsOf(id)).toHaveLength(1);
+    }
+    for (const verb of ['resume', 'launch']) {
+      const r = await post(`/api/tickets/${work}/${verb}`);
+      expect(r.status).toBe(409);
+      expect((await r.json()).error).toMatch(/already has a running agent; open its terminal, or Reset to Backlog to stop it/);
+    }
+  });
+
+  it('Launch on a flagged running ticket with no agent resumes it', async () => {
+    models({ execute: 'hang' });
+    const id = flagged('Launch me again', 'in_progress', 2);
+    expect((await post(`/api/tickets/${id}/launch`)).status).toBe(200);
+    expect(t(id)).toMatchObject({ status: 'in_progress', retry: 2, flags: { needs_human: false } });
+    expect(sessionsOf(id)).toHaveLength(1);
+  });
+
+  it('is refused for an unflagged running ticket, and in backlog and done', async () => {
+    const unflagged = ticket('Fine', { status: 'in_progress' });
+    const backlog = ticket('Waiting');
+    const done = ticket('Shipped', { status: 'done', needs_human: 1 });
+    for (const [id, why] of [[unflagged, 'it is not flagged'], [backlog, 'in backlog'], [done, 'in done']] as const) {
+      const r = await post(`/api/tickets/${id}/resume`);
+      expect(r.status).toBe(409);
+      expect((await r.json()).error).toContain(why);
+    }
+    expect(runs(unflagged)).toEqual([]);
+  });
+
+  it('restart resumes a running ticket once by itself; an agent that then exits silently flags it with what to do', async () => {
+    const id = ticket('Cut off', { status: 'in_progress', retry: 1 });
+    createWorktree(repo, id);
+    await srv.close();
+    models({ execute: 'silent' });
+    srv = await start({ repo });
+    db = srv.db;
+    expect(runs(id)).toHaveLength(1);
+    expect(runs(id)[0].prompt_rendered).toContain(RESTARTED);
+    await until(() => t(id).flags.needs_human, 'the flag after the silent exit');
+    expect(notes(id, 'failure')).toEqual([RESTARTED, `agent exited without reporting\n${TO_RESOLVE}`]);
+    expect(runs(id)).toHaveLength(1); // not resumed again
+    expect(t(id).retry).toBe(1);
   });
 });

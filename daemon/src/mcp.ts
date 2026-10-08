@@ -10,16 +10,16 @@ import { audit, verify, type Grant, type Role } from './grants.js';
 import { apply, changed, Refused, type Board } from './lifecycle.js';
 import { EFFORT } from './settings.js';
 
-export const STATUS = ['backlog', 'in_progress', 'testing', 'done'] as const;
+const STATUS = ['backlog', 'in_progress', 'testing', 'done'] as const;
 /** Where each role may move its own ticket. The planner never moves anything. */
-export const MOVE_TARGETS: Record<Role, readonly (typeof STATUS)[number][]> = {
+const MOVE_TARGETS: Record<Role, readonly (typeof STATUS)[number][]> = {
   planner: [],
   worker: ['testing'],
   tester: ['done', 'in_progress'],
 };
 /** The only ticket columns a worker may edit on its own ticket. */
-export const WORKER_FIELDS = ['body', 'criteria'] as const;
-export const BRAIN_SEARCH_MAX = 20;
+const WORKER_FIELDS = ['body', 'criteria'] as const;
+const BRAIN_SEARCH_MAX = 20;
 
 /** A refusal. Audited as `denied`; anything else thrown is `error`. */
 class Deny extends Error {}

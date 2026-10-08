@@ -5,14 +5,15 @@ import { readTicket } from './api.js';
 import { attachments } from './attachments.js';
 import type { Role } from './grants.js';
 import { TOOLS } from './mcp.js';
+import { readPreferences } from './settings.js';
 import { fill, loadTemplate, TEMPLATES, type Ctx, type TemplateName } from './templates.js';
 
-export const BRAIN_LIMIT = 5;
-export const BRAIN_CHARS = 4000;
+const BRAIN_LIMIT = 5;
+const BRAIN_CHARS = 4000;
 export const BRAIN_TRUNCATED = '\n[brain truncated; search for more with brain_search]';
 
-export interface ContextOpts {
-  /** Test phase only: the worktree and the branch the ticket forked from, for `git diff <base>...HEAD`. */
+interface ContextOpts {
+  /** The worktree and the branch the ticket forked from: `{{base}}` in every ticket prompt, and `git diff <base>...HEAD` for the test phase. */
   worktree?: string;
   base?: string;
   brainLimit?: number;
@@ -34,7 +35,7 @@ export function brainFor(db: DatabaseSync, text: string, limit = BRAIN_LIMIT, ch
 }
 
 /** Failure notes written since the latest execute run started: what went wrong in the attempt now being retried. Older cycles are left out. */
-export function failureNotes(db: DatabaseSync, ticketId: number): string {
+function failureNotes(db: DatabaseSync, ticketId: number): string {
   const rows = db.prepare(`
     SELECT role, body FROM notes
     WHERE ticket_id = ? AND kind = 'failure'
@@ -60,7 +61,8 @@ export function buildContext(db: DatabaseSync, repo: string, ticketId: number | 
     .filter(([, t]) => role in t.access)
     .map(([name, t]) => `- ${name} (${t.access[role]})`)
     .join('\n');
-  if (ticketId === null) return { ticket: '(none)', criteria: '(none)', brain: '(none)', notes: '(none)', retry: '0', diff: '', tools };
+  const preferences = orNone(readPreferences());
+  if (ticketId === null) return { ticket: '(none)', criteria: '(none)', brain: '(none)', notes: '(none)', retry: '0', diff: '', tools, base: '(none)', preferences };
 
   const t = readTicket(db, ticketId);
   let diff = '';
@@ -75,7 +77,9 @@ export function buildContext(db: DatabaseSync, repo: string, ticketId: number | 
     notes: orNone(failureNotes(db, t.id)),
     retry: String(t.retry),
     diff,
+    base: opts.base ?? '(none)',
     tools,
+    preferences,
   };
 }
 

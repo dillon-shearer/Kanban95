@@ -193,6 +193,85 @@ describe('ui', { timeout: 60_000 }, () => {
     expect(existsSync(join(dir, 'image.png'))).toBe(true);
   });
 
+  it('lists a failed merge in the Inbox with its note and the buttons that fix it, and counts it in the taskbar', async () => {
+    const id = ticket('Stuck merge', { status: 'done', needs_human: 1 });
+    const body = `merge conflict with main: CONFLICT (add/add) in shared.txt\nTo resolve: in .worktrees/t-${id} run git merge with the base branch, then Retry merge.`;
+    db.prepare("INSERT INTO notes (ticket_id, role, kind, body) VALUES (?, 'tester', 'failure', ?)").run(id, body);
+    try {
+      await page.goto(base);
+      await until(() => column(id), 'the card');
+      const n = (await (await fetch(`${base}api/inbox`, { headers: { cookie: `k95=${srv.secret}` } })).json()).length;
+      expect(await page.evaluate(`document.getElementById('inbox-count').textContent`)).toBe(`Inbox ${n}`);
+      await click('#inbox-count');
+      const box = `.k95-flag[data-ticket="${id}"]`;
+      await until(() => page.evaluate(`!!document.querySelector('${box}')`), 'the failure in the Inbox');
+      expect(await page.evaluate(`document.querySelector('${box} pre').textContent`)).toBe(body);
+      expect(await page.evaluate(`[...document.querySelectorAll('${box} button')].map((b) => b.textContent)`)).toEqual(['Open ticket', 'Retry merge']);
+      await click(`${box} button`);
+      const facts = `[data-win="ticket-${id}"] .k95-facts`;
+      await until(() => page.evaluate(`!!document.querySelector('${facts}')`), 'the ticket window');
+      expect(await page.evaluate(`document.querySelector('${facts}').textContent`)).toContain('needs human (the Inbox says why)');
+    } finally {
+      db.prepare("UPDATE tickets SET needs_human = 0, merged_at = 'x' WHERE id = ?").run(id);
+    }
+  });
+
+  it('keeps an ended terminal open while its ticket exists; deleting the ticket closes its terminal and Ticket window', async () => {
+    const id = ticket('Delete me');
+    await page.goto(base);
+    await until(() => column(id), 'the card');
+    const win = (wid: string) => page.evaluate<boolean>(`!!document.querySelector('[data-win="${wid}"]')`);
+    const tasks = () => page.evaluate<number>(`[...document.querySelectorAll('#tasks .task')].filter((b) => /#${id}\\b/.test(b.textContent)).length`);
+    const launchAgent = async () => {
+      expect((await fetch(`${base}api/tickets/${id}/launch`, { method: 'POST', headers: { cookie: `k95=${srv.secret}` } })).status).toBe(200);
+      await until(() => page.evaluate(`!!document.querySelector('[data-win^="term-"]:not(.ended) .xterm')`), 'the terminal');
+      return page.evaluate<string>(`document.querySelector('[data-win^="term-"]:not(.ended)').dataset.win`);
+    };
+
+    const first = await launchAgent();
+    const grant = (db.prepare('SELECT id FROM grants WHERE ticket_id = ? AND revoked_at IS NULL').get(id) as { id: number }).id;
+    await fetch(`${base}api/grants/${grant}`, { method: 'DELETE', headers: { cookie: `k95=${srv.secret}` } });
+    await until(() => page.evaluate(`document.querySelector('[data-win="${first}"]').classList.contains('ended')`), 'the ended terminal');
+    expect(await page.evaluate<string>(`document.querySelector('[data-win="${first}"] .title-bar-text').textContent`)).toMatch(/\(ended\)$/);
+
+    db.prepare("UPDATE tickets SET status = 'backlog' WHERE id = ?").run(id);
+    const second = await launchAgent();
+    await page.evaluate(`document.querySelector('.card[data-id="${id}"]').dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))`);
+    await until(() => win(`ticket-${id}`), 'the Ticket window');
+    expect(await tasks()).toBe(3);
+
+    expect((await fetch(`${base}api/tickets/${id}`, { method: 'DELETE', headers: { cookie: `k95=${srv.secret}` } })).status).toBe(204);
+    await until(async () => !(await win(`ticket-${id}`)) && !(await win(first)) && !(await win(second)), 'the windows to close', 5000);
+    expect(await tasks()).toBe(0);
+  });
+
+  it('offers Resume in the card menu and the Inbox for a flagged running ticket whose agent is gone; Resume starts it again', async () => {
+    const id = ticket('Died', { status: 'in_progress', needs_human: 1, retry: 2 });
+    db.prepare("INSERT INTO notes (ticket_id, role, kind, body) VALUES (?, 'worker', 'failure', 'agent exited without reporting')").run(id);
+    try {
+      await page.goto(base);
+      await until(() => column(id), 'the card');
+      const item = (label: string) => `[...document.querySelectorAll('.k95-menu li')].find((li) => li.firstChild.textContent === '${label}')`;
+      await page.evaluate(`document.querySelector('.card[data-id="${id}"]').dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 50, clientY: 50 }))`);
+      expect(await page.evaluate(`${item('Resume')}?.getAttribute('aria-disabled') ?? 'enabled'`)).toBe('enabled');
+      expect(await page.evaluate(`${item('Launch')}?.getAttribute('aria-disabled') ?? 'enabled'`)).toBe('enabled');
+      await page.evaluate(`document.querySelector('.k95-menu').remove()`);
+
+      await click('#inbox-count');
+      const box = `.k95-flag[data-ticket="${id}"]`;
+      await until(() => page.evaluate(`!!document.querySelector('${box} button')`), 'the failure in the Inbox');
+      expect(await page.evaluate(`document.querySelector('${box} pre').textContent`)).toBe('agent exited without reporting');
+      expect(await page.evaluate(`[...document.querySelectorAll('${box} button')].map((b) => b.textContent)`)).toEqual(['Open ticket', 'Resume', 'Reset to Backlog']);
+      await click(`${box} button:nth-child(2)`);
+      await until(() => !(db.prepare('SELECT needs_human FROM tickets WHERE id = ?').get(id) as { needs_human: number }).needs_human, 'the flag to clear', 5000);
+      expect(db.prepare('SELECT status, retry FROM tickets WHERE id = ?').get(id)).toEqual({ status: 'in_progress', retry: 2 });
+      expect((db.prepare("SELECT prompt_rendered FROM runs WHERE ticket_id = ? AND phase = 'execute'").get(id) as { prompt_rendered: string }).prompt_rendered)
+        .toContain('agent exited without reporting');
+    } finally {
+      db.prepare("UPDATE tickets SET status = 'done', merged_at = 'x', needs_human = 0 WHERE id = ?").run(id);
+    }
+  });
+
   it('pins a compact tray right after Start on one taskbar row', async () => {
     await page.goto(base);
     await until(() => page.evaluate(`!!document.querySelector('#clock').textContent`), 'the clock');
@@ -254,6 +333,23 @@ describe('ui', { timeout: 60_000 }, () => {
     await page.evaluate(`Object.assign(document.querySelector('[data-win="settings"]').style, { left: '0px', top: '0px' })`);
     const s = await page.center('[data-icon="Board"]');
     expect(await page.evaluate(`!!document.elementFromPoint(${s.x}, ${s.y}).closest('[data-win]')`)).toBe(true);
+  });
+
+  it('saves preferences from Settings > Prompts and shows a refusal over 16 KB', async () => {
+    const file = join(process.env.USERPROFILE!, '.kanban95', 'preferences.md');
+    await page.goto(base);
+    await until(() => page.evaluate(`!!document.querySelector('[data-win="board"]')`), 'the board');
+    await page.evaluate(`document.querySelector('[data-icon="Settings"]').dispatchEvent(new MouseEvent('dblclick'))`);
+    await page.evaluate(`[...document.querySelectorAll('[data-win="settings"] [role=tab] a')].find((t) => t.textContent === 'Prompts').click()`);
+    await until(() => page.evaluate(`!!document.querySelector('#preferences')`), 'the Prompts tab');
+    const save = (text: string) => page.evaluate(`(() => { document.querySelector('#preferences').value = ${JSON.stringify(text)};
+      [...document.querySelectorAll('[data-win="settings"] button')].find((b) => b.textContent === 'Save').click(); })()`);
+    await save('no em dashes');
+    await until(() => existsSync(file) && readFileSync(file, 'utf8') === 'no em dashes', 'preferences.md');
+    await save('x'.repeat(16 * 1024 + 1));
+    await until(async () => (await statusBar()).includes('over 16 KB'), 'the refusal in the status bar');
+    expect(readFileSync(file, 'utf8')).toBe('no em dashes');
+    rmSync(file);
   });
 
   it('keeps a window the same size while it is dragged', async () => {
