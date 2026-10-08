@@ -182,6 +182,20 @@ describe('launch', () => {
     expect(existsSync(join(repo, '.worktrees', 't-7'))).toBe(true); // the operator decides about the worktree
   });
 
+  it('deleting the ticket ends its session within a second: grant gone, pty killed, session map cleared', async () => {
+    const s = launch('claude');
+    await waitFor(() => s.scrollback().includes('FAKE UP'));
+    const t0 = Date.now();
+    const r = await fetch(`http://127.0.0.1:${srv.port}/api/tickets/7`, { method: 'DELETE', headers: { cookie: `k95=${srv.secret}` } });
+    expect(r.status).toBe(204);
+    await s.done;
+    expect(Date.now() - t0).toBeLessThan(1000);
+    expect(sessions.has(s.runId)).toBe(false);
+    expect(grantRow(s.grantId)).toBeUndefined(); // revoked, then cascaded away with the ticket
+    expect(existsSync(s.dir)).toBe(false);
+    await waitFor(() => !alive(fakeOut(s).pid), 1000 - (Date.now() - t0));
+  });
+
   it('an agent that dies on its own (exit 3) still revokes the grant and removes the session dir', async () => {
     const s = launch('claude', 'exit3');
     await s.done;

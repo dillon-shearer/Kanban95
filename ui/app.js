@@ -42,7 +42,9 @@ async function refreshTicket(id) {
     if (t.flags.needs_human && !was) say(await flagReason(id));
   } catch (e) {
     if (e.status !== 404) throw e;
-    tickets.delete(id); // deleted: it leaves the board
+    tickets.delete(id); // deleted: it leaves the board, and its windows close (its agents were stopped by the delete)
+    close(`ticket-${id}`);
+    for (const [wid, ticket] of terms) if (ticket === id) close(wid);
   }
 }
 async function refreshShared() {
@@ -375,6 +377,7 @@ function ticketForm(w, t) {
 // ---- terminals ----
 
 const seen = new Set();
+const terms = new Map(); // open terminal window id → its session's ticket id
 function openNewTerminals() {
   for (const s of sessions) if (!seen.has(s.id)) openTerminal(s, true);
 }
@@ -394,7 +397,8 @@ function openTerminal(s, auto = false) {
   const fit = new FitAddon();
   const ro = new ResizeObserver(() => fit.fit());
   // Spoken words are typed into the agent's terminal without Enter; the operator presses it.
-  const w = open(wid, { title, w: 760, h: 440, background: auto, extra: [micButton((text) => send({ data: text }))], onClose: () => { ro.disconnect(); ws.close(); term.dispose(); } });
+  const w = open(wid, { title, w: 760, h: 440, background: auto, extra: [micButton((text) => send({ data: text }))], onClose: () => { terms.delete(wid); ro.disconnect(); ws.close(); term.dispose(); } });
+  terms.set(wid, s.ticket_id);
   w.body.classList.add('k95-term');
   term.loadAddon(fit);
   term.open(w.body);
