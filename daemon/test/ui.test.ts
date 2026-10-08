@@ -421,14 +421,14 @@ describe('ui', { timeout: 60_000 }, () => {
     expect(await page.evaluate('window.__noReload')).toBe(true);
   });
 
-  it('pins a compact tray right after Start on one taskbar row', async () => {
+  it('pins a compact tray at the far right of one taskbar row', async () => {
     await page.goto(base);
     await until(() => page.evaluate(`!!document.querySelector('#clock').textContent`), 'the clock');
     const m = await page.evaluate<Record<string, number>>(`(() => {
       const r = (s) => document.querySelector(s).getBoundingClientRect(), bar = document.getElementById('taskbar');
       const start = r('#start'), tray = r('#tray'), tasks = r('#tasks');
-      return { gap: tray.left - start.right, trayH: tray.height, startH: start.height,
-        trayW: tray.width, tasksAfter: tasks.left - tray.right, overflow: bar.scrollWidth - bar.clientWidth,
+      return { gap: bar.getBoundingClientRect().right - tray.right, trayH: tray.height, startH: start.height,
+        trayW: tray.width, tasksAfter: tray.left - tasks.right, overflow: bar.scrollWidth - bar.clientWidth,
         font: parseFloat(getComputedStyle(document.getElementById('agents')).fontSize) };
     })()`);
     expect(m.gap).toBeLessThanOrEqual(4);
@@ -618,7 +618,7 @@ describe('ui', { timeout: 60_000 }, () => {
     const mission = 'Rename the janitor log & keep {{tools}} literal.';
     await page.evaluate(`document.querySelector('dialog[open] textarea').value = ${JSON.stringify(mission)}`);
     await press('Start');
-    await until(() => page.evaluate(`[...document.querySelectorAll('[data-win^="term-"] .title-bar-text')].some((t) => t.textContent === 'Operator — plan')`), 'the Operator terminal');
+    await until(() => page.evaluate(`[...document.querySelectorAll('[data-win^="term-"] .title-bar-text')].some((t) => t.textContent === 'Operator — CLI default')`), 'the Operator terminal');
     const g = db.prepare("SELECT id FROM grants WHERE role = 'operator' AND revoked_at IS NULL").get() as { id: number };
     expect(readFileSync(join(repo, '.kanban95', 'sessions', String(-g.id), 'prompt.md'), 'utf8')).toContain(`## Mission\n\n${mission}\n`);
     await fetch(`${base}api/grants/${g.id}`, { method: 'DELETE', headers: { cookie: `k95=${srv.secret}` } });
