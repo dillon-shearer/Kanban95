@@ -14,18 +14,20 @@ Each session starts from one rendered template. The board pushes only this; ever
 | `{{notes}}` | `failure` notes written since the latest execute run of this ticket started, i.e. what went wrong in the attempt being retried. Earlier cycles are left out |
 | `{{retry}}` | the ticket's retry count, `0` on the first attempt |
 | `{{diff}}` | test sessions only: `git diff <base>...HEAD` in the worktree. Empty in every other template |
-| `{{base}}` | the branch the ticket's worktree forked from and merges into (the main checkout's current branch); `(none)` for a brainstorm |
+| `{{base}}` | the branch the ticket's worktree forked from and merges into (the main checkout's current branch); `(none)` for a brainstorm or operator terminal |
 | `{{tools}}` | the MCP tools this session's role may call, with the access cell from `docs/MCP.md` |
 | `{{preferences}}` | the operator's standing instructions, `~/.kanban95/preferences.md` as written (Settings → Prompts), under every template's "## Operator preferences" heading |
+| `{{mission}}` | operator terminals only: the mission the operator typed, verbatim. `(none)` everywhere else |
 
-Empty values render as `(none)`, except `{{diff}}` outside a test session (empty) and the attachments block (left out when there are none). Values are inserted literally: a brain note containing `{{ticket}}` stays that text.
+Empty values render as `(none)`, except `{{diff}}` outside a test session (empty) and the attachments block (left out when there are none). Values are inserted literally: a brain note containing `{{ticket}}` stays that text. A template naming a variable that has no value is refused, never rendered.
 
 ## Templates and roles
 
 | template | grant role | `runs.phase` | job |
 |---|---|---|---|
 | `brainstorm.md` | planner | no run (no ticket) | interview the operator, create tickets |
-| `plan.md` | worker | plan | design pass for one ticket, write a `plan` note. The board does not launch it today: the lifecycle starts only `execute`, `housekeeping` and `test` sessions, and the `plan` phase settings in `models.json` are used by brainstorms |
+| `operator.md` | operator | no run (no ticket) | carry out the operator's typed mission with the operator's reach on the board |
+| `plan.md` | worker | plan | design pass for one ticket, write a `plan` note. The board does not launch it today: the lifecycle starts only `execute`, `housekeeping` and `test` sessions, and the `plan` phase settings in `models.json` are used by brainstorms and operator terminals |
 | `execute.md` | worker | execute | build the ticket in its worktree |
 | `housekeeping.md` | worker | execute | clean stale docs, dead modules, leftover artefacts |
 | `test.md` | tester | test | check the work against the criteria |
@@ -33,6 +35,8 @@ Empty values render as `(none)`, except `{{diff}}` outside a test session (empty
 ## Expected behaviour
 
 **Planner (brainstorm).** Interviews the operator before proposing anything, reads the code and brain, agrees the list with the operator, then calls `create_ticket` for each: imperative title, a body saying what and why, measurable acceptance criteria one per line, `depends_on`, and `model`/`effort` only when clearly warranted (`low` for trivial, `high` for hard). Writes no code. Ends by listing what it created.
+
+**Operator terminal (operator).** The operator's hand on the board. Reads `CLAUDE.md`, pulls only the context the mission needs (`list_tickets`, `get_ticket`, `brain_search`), does the work, and records decisions and gotchas with `brain_add`. Changes code only in a worktree under `.worktrees/op-<time>` and merges it into the main checkout itself once the tests pass, because ticket agents may be running and the merge queue merges there. Commits as the operator with a plain imperative subject. Creates tickets only when the mission says so. Ends with a short written summary in its terminal. Never calls `report_test`.
 
 **Planner of one ticket (plan; not launched by the board today).** Reads the code, decides files, steps, how each criterion will be proven and the risks. Sharpens vague criteria with `update_ticket`. Writes one short `plan` note. Does not code or move the ticket.
 

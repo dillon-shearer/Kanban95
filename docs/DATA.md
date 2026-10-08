@@ -9,7 +9,7 @@ Living document. Update it in the same change that alters the schema.
 - `<repo>/.kanban95/attachments/<ticket-id>/<filename>`: files the operator attached to a ticket (pasted screenshots, dropped files), written by `POST /api/tickets/:id/attachments` (`daemon/src/attachments.ts`). Plain files, no table: the directory listing is the list. The `{{ticket}}` prompt variable and MCP `get_ticket` name each by absolute path so an agent opens it with its own file reader. Removed with the ticket.
 - `<repo>/.worktrees/t-<id>/`: the ticket's git worktree on branch `ticket/<id>`, excluded through `.git/info/exclude`. Removed with the branch once the ticket merges (`docs/LIFECYCLE.md` → Janitor).
 - `<repo>/.kanban95/notepad.md`: the operator's Notepad window, free text, at most 256 KB, read and written whole by `GET`/`PUT /api/notepad`. Git-ignored (the inner `.gitignore` lists it) and never given to an agent. Absent means empty.
-- `<repo>/.kanban95/config.json`: optional, committed, no secrets. Read by the lifecycle: `housekeeping_every` (default 10). The daemon never writes it.
+- `<repo>/.kanban95/config.json`: optional, committed, no secrets. Read by the lifecycle: `housekeeping_every` (default 10) and `operator: { model, effort }` (either or both; the operator terminal's model and effort, default the plan phase's). The daemon never writes it.
 - `~/.kanban95/` is the board's config directory, overridable as a whole by the `KANBAN95_HOME` environment variable (the only override; `daemon/src/settings.ts` `boardHome`). The four entries below are written there and nowhere else. Under vitest the daemon refuses the real one and throws unless `KANBAN95_HOME` is set, which `daemon/test/home.ts` does for every test file.
 - `~/.kanban95/models.json`: the operator's model catalog, read at each launch (`docs/LIFECYCLE.md` → Run settings). Written by Settings → Models → Save after a schema check. No secrets.
 - `~/.kanban95/settings.json`: `paths` (`claude`, `codex`: an absolute path to the executable, empty for PATH), `sounds` (boolean, default true), `voice` (`backend`: `local`; `mode`: `push` or `toggle`). Absent means all defaults. Written by Settings after a schema check. No secrets.
@@ -67,7 +67,7 @@ The REST API presents the two flags as `flags: { needs_human, blocked_on_deps }`
 How the kinds are written over MCP: `add_note` takes `plan` `decision` `failure` `summary`; `ask_operator` writes `question` and sets `needs_human`; the operator's answer (`POST /api/tickets/:id/answer`) is `answer` with role `operator`; the lifecycle writes `failure` notes for an agent that exited without reporting or failed to launch (role of that session), for the retry cap (`stopped after 4 failed tests`, role `tester`), for a merge conflict (`merge conflict with <base>: <git output>`, role `tester`) and for a base still dirty after the merge queue's wait (role `tester`). Every note written with a `needs_human` flag, except a `question`, ends with a line starting `To resolve:` naming the operator's next step (`docs/LIFECYCLE.md` → Needs human); `GET /api/inbox` lists the unanswered `question` notes of flagged tickets and, when no newer question is open, the newest `failure`; `report_test` writes `summary` on pass and `failure` on fail, body `PASS|FAIL: <summary>` followed by one `- ` line per evidence item; `report_cleanup` writes `summary` with one `- <action> \`<path>\`: <reason>` line per item. `role` is always the grant's role. Prompts include only `failure` notes created at or after the `started_at` of the ticket's latest `execute` run (`context.failureNotes`), so each retry sees the failures of the attempt before it and nothing older.
 
 ### brain, brain_fts
-`brain(id, title, body, tags, ticket_id nullable FK set-null, created_at)`. `brain_add` over MCP sets `ticket_id` to the grant's ticket (null for a planner). `brain_fts` is an FTS5 external-content index over `title, body, tags` kept in sync by triggers `brain_ai`, `brain_au`, `brain_ad`. Query it with `brain_fts MATCH ? ORDER BY rank` and join `brain` on `rowid = id`.
+`brain(id, title, body, tags, ticket_id nullable FK set-null, created_at)`. `brain_add` over MCP sets `ticket_id` to the grant's ticket (null for a planner or operator). `brain_fts` is an FTS5 external-content index over `title, body, tags` kept in sync by triggers `brain_ai`, `brain_au`, `brain_ad`. Query it with `brain_fts MATCH ? ORDER BY rank` and join `brain` on `rowid = id`.
 
 ### runs
 | column | type | notes |
@@ -86,8 +86,8 @@ How the kinds are written over MCP: `add_note` takes `plan` `decision` `failure`
 |---|---|---|
 | id | INTEGER PK | |
 | token_hash | TEXT UNIQUE | SHA-256 hex of the bearer token. The token itself is never stored. |
-| ticket_id | INTEGER FK | null for `planner`, required for `worker`/`tester` (CHECK), cascade delete |
-| role | TEXT | `planner` `worker` `tester` |
+| ticket_id | INTEGER FK | null for `planner`/`operator`, required for `worker`/`tester` (CHECK), cascade delete |
+| role | TEXT | `planner` `worker` `tester` `operator`. `operator` added in `004-operator-grants.sql` (a rebuild of the table that keeps `audit.grant_id`) |
 | expires_at | TEXT | |
 | revoked_at | TEXT | null while live |
 | created_at | TEXT | |
@@ -100,7 +100,7 @@ A grant is live when `revoked_at IS NULL AND expires_at > now`. Rows are kept af
 | id | INTEGER PK | |
 | grant_id | INTEGER FK | null for operator actions over REST; set-null on grant delete |
 | ticket_id | INTEGER FK | null when the action was not about one ticket, or the ticket no longer exists; set-null on delete |
-| tool | TEXT | REST: `tickets.create` `tickets.update` `tickets.delete` `grants.revoke` `tickets.launch` `tickets.launch_all` `tickets.answer` `tickets.merge` `tickets.resume` `tickets.housekeeping` `brainstorm.launch` `brain.add` `attachments.add` `attachments.remove` `config.write` `trust.clear` `voice.download`. MCP: the tool name (`create_ticket`, `move_ticket`, ..., see `docs/MCP.md`). Board: `trust.write` (a key written into an agent CLI's config, `docs/SECURITY.md`) and `janitor.worktree` `janitor.session` `janitor.grant` `janitor.run` `janitor.scrollback` (`docs/LIFECYCLE.md`), all with a null grant. |
+| tool | TEXT | REST: `tickets.create` `tickets.update` `tickets.delete` `grants.revoke` `tickets.launch` `tickets.launch_all` `tickets.answer` `tickets.merge` `tickets.resume` `tickets.housekeeping` `brainstorm.launch` `operator.launch` `brain.add` `attachments.add` `attachments.remove` `config.write` `trust.clear` `voice.download`. MCP: the tool name (`create_ticket`, `move_ticket`, ..., see `docs/MCP.md`). Board: `trust.write` (a key written into an agent CLI's config, `docs/SECURITY.md`) and `janitor.worktree` `janitor.session` `janitor.grant` `janitor.run` `janitor.scrollback` (`docs/LIFECYCLE.md`), all with a null grant. |
 | args_summary | TEXT | JSON of the request, truncated to 200 characters. Callers must never put a token in it. |
 | outcome | TEXT | `ok` `denied` `error` |
 | created_at | TEXT | |

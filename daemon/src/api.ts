@@ -8,7 +8,7 @@ import { isConstraintError } from './db.js';
 import { ticketDiff } from './git.js';
 import { audit, revoke } from './grants.js';
 import { killGrantSession, sessions, sessionsOf, type Session } from './launcher.js';
-import { apply, brainstorm, changed, housekeeping, launchAll, Refused, type Board } from './lifecycle.js';
+import { apply, brainstorm, changed, housekeeping, launchAll, operator, Refused, type Board } from './lifecycle.js';
 import { BadConfig, CONFIGS, configPath, knownModels, preferencesPath, readPreferences, writeConfig, writePreferences, type ConfigName } from './settings.js';
 import { trustStatus, untrustClaude } from './trust.js';
 import { download, status as voiceStatus } from './voice.js';
@@ -239,7 +239,29 @@ const routes: [method: string, path: RegExp, mutation: string | null, handler: (
   }],
   // Live agent terminals, for the UI's terminal windows and the taskbar count. `id` is the /pty/<id> key.
   ['GET', /^\/api\/sessions$/, null, () => ({ status: 200, body: [...sessions.values()].map(sessionView) })],
+  // The operator's X on a terminal: the agent stops for good. A ticket's is flagged so it can be resumed; `closed` keeps
+  // the exit handler from writing a second note.
+  ['DELETE', /^\/api\/sessions\/(-?\d+)$/, 'sessions.end', ({ board, db, params }) => {
+    const s = sessions.get(Number(params[0]));
+    if (!s) throw new HttpError(404, 'no such session');
+    s.outcome = 'closed';
+    revoke(db, s.grantId);
+    s.pty.kill();
+    if (s.ticketId !== null) {
+      try {
+        apply(board, s.ticketId, 'exit', { note: { role: 'operator', kind: 'failure', body: 'ended by the operator from the terminal window' } });
+      } catch (e) {
+        if (!(e instanceof Refused)) throw e; // the ticket has moved on; nothing to flag
+      }
+    }
+    return { status: 204 };
+  }],
   ['POST', /^\/api\/brainstorm$/, 'brainstorm.launch', ({ board }) => ({ status: 201, body: sessionView(brainstorm(board)) })],
+  // An operator terminal: the typed mission goes into its brief verbatim (docs/SECURITY.md → Operator terminal).
+  ['POST', /^\/api\/operator$/, 'operator.launch', ({ board, body }) => {
+    if (typeof body.mission !== 'string' || !body.mission.trim()) throw new HttpError(400, 'mission must be a non-empty string');
+    return { status: 201, body: sessionView(operator(board, body.mission)) };
+  }],
   // <repo>/.kanban95/notepad.md, the operator's scratch notes, whole file in `value` both ways ('' when absent).
   // Not audited: it autosaves every pause in typing and is nothing an agent reads.
   ['GET', /^\/api\/notepad$/, null, ({ board }) => {

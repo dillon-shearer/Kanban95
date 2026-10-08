@@ -46,7 +46,7 @@ Kanban95's daemon is the MCP server, at `http://127.0.0.1:<port>/mcp`, reachable
 
 ## 3. Grants: what each agent is allowed to do
 
-**What it is.** A grant is a permission slip the board writes for one agent session: a random token, the role it carries (`planner`, `worker` or `tester`), the ticket it is bound to, and an expiry. The agent presents the token with every MCP call (`Authorization: Bearer <token>`); the daemon looks it up and applies the role's rules. The database stores only a hash of the token, so a copy of `board.db` cannot be used to impersonate an agent.
+**What it is.** A grant is a permission slip the board writes for one agent session: a random token, the role it carries (`planner`, `worker`, `tester` or `operator`), the ticket it is bound to, and an expiry. The agent presents the token with every MCP call (`Authorization: Bearer <token>`); the daemon looks it up and applies the role's rules. The database stores only a hash of the token, so a copy of `board.db` cannot be used to impersonate an agent.
 
 **Why the board uses it.** Without grants any agent could call any tool on any ticket: a worker could mark its own work done and skip the tester, or edit another agent's ticket. A grant keeps each one in its lane:
 
@@ -55,6 +55,7 @@ Kanban95's daemon is the MCP server, at `http://127.0.0.1:<port>/mcp`, reachable
 | planner | a brainstorm with you | create tickets, read the whole board | write files (Codex runs read-only; Claude Code runs without its edit, shell and subagent tools) |
 | worker | building one ticket | read its ticket and its dependencies, add notes, ask you, move it to Testing | touch another ticket, move it to Done |
 | tester | checking one ticket | report a test result, move it to Done or back to In Progress | move it to Done without first reporting a pass |
+| operator | an operator terminal you start with a typed mission | anything you could do by hand on the board, on any ticket; edit and commit in the repo | report a test result (only a tester proves a ticket) |
 
 A grant is also **revocable** and **short-lived**. It is revoked the moment the session ends for any reason (the agent finished, crashed, or you pressed Revoke in Settings), and revoking it kills the agent's terminal. A token copied out of a session is useless once that session is over.
 

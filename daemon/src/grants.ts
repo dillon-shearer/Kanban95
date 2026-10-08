@@ -2,7 +2,7 @@
 import { createHash, randomBytes } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
 
-export type Role = 'planner' | 'worker' | 'tester';
+export type Role = 'planner' | 'worker' | 'tester' | 'operator';
 export interface Grant {
   id: number;
   ticket_id: number | null;
