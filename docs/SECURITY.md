@@ -120,7 +120,7 @@ The mic button's speech model is the only thing the board ever downloads, and th
 
 `daemon/src/templates.ts`, `daemon/src/context.ts`; what agents receive is listed in `docs/AGENTS.md`.
 
-- An agent is pushed only its ticket, criteria, up to 5 brain rows (4000 characters at most), the failure notes of the attempt being retried, the retry count, the base branch, the operator's preferences, the absolute paths of the ticket's attachments, the diff stat and a capped code diff (test only), its tool list and, for an operator terminal, the mission the operator typed. No transcript, no other ticket, no environment, no file contents.
+- An agent is pushed only its ticket, criteria, up to 8 brain rows (2500 characters at most), the failure notes of the attempt being retried, the retry count, the base branch, the operator's preferences, the absolute paths of the ticket's attachments, the diff stat and a capped code diff (test only), its tool list and, for an operator terminal, the mission the operator typed. No transcript, no other ticket, no environment, no file contents.
 - A template may only name the known variables (`VARS` in `daemon/src/templates.ts`, listed in `docs/AGENTS.md`), and every one it names must have a value. Anything else (for example `{{transcript}}`) is refused when the template is loaded, before any context is built or any run row is written.
 - Values are substituted in one pass, so text an agent wrote into the brain or a note (including `{{...}}`) is inserted literally and cannot pull in another variable.
 - The template name is checked against a fixed set before any path is built, so it cannot read a file outside `.kanban95/templates/`.
@@ -159,6 +159,7 @@ Permissions are off and the agent is the operator's user, so the worktree is whe
 - **Use the network** with no egress filter: exfiltrate what it reads, push with the operator's git credentials.
 - **Change git directly**: commit to the base branch in the main checkout or rewrite other branches; the merge queue only orders the board's own merges.
 - **As a tester, pass bad work**: the board trusts the tester's verdict.
+- **Plant code the board runs**: what it writes into the main checkout (`daemon/`, `package.json` scripts) runs at the next Start → Restart board (`npm run build`, then the rebuilt daemon), as it would at the next `Kanban95.cmd`.
 
 Ceiling and upgrade path: run worker and tester CLIs as a separate low-privilege Windows account (or an AppContainer) with only its worktree ACL'd to it, and an egress allowlist for the provider's API. Then owner-only session dirs, `board.db` and the WebView2 profile become real boundaries and the rows above are the whole reach.
 

@@ -36,7 +36,9 @@ describe('transition table', () => {
     ['worker exits silently', { status: 'in_progress' }, 'exit', { to: 'in_progress', set: { needs_human: 1 }, effects: ['note', 'chord'] }],
     ['tester exits silently', { status: 'testing', live: false }, 'exit', { to: 'testing', set: { needs_human: 1 }, effects: ['note', 'chord'] }],
     ['merge ok', { status: 'done' }, 'merged', { to: 'done', set: { merged: true, needs_human: 0 }, effects: ['ding', 'remove_worktree', 'release_dependents', 'housekeeping'] }],
-    ['merge conflict goes back to the worker', { status: 'done', retry: MAX_RETRY - 1 }, 'conflict', { to: 'in_progress', set: { retry: '+1' }, effects: ['note', 'spawn_execute'] }],
+    ['base will not merge in on submit: back to the worker', { status: 'in_progress', retry: 0 }, 'conflict', { to: 'in_progress', set: { retry: '+1' }, effects: ['end_session', 'note', 'spawn_execute'] }],
+    ['base will not merge in on submit at the retry cap stops', { status: 'in_progress', retry: MAX_RETRY }, 'conflict', { to: 'in_progress', set: { needs_human: 1 }, effects: ['end_session', 'note', 'chord'] }],
+    ['merge conflict goes back to the worker', { status: 'done', retry: MAX_RETRY - 1 }, 'conflict', { to: 'in_progress', set: { retry: '+1' }, effects: ['end_session', 'note', 'spawn_execute'] }],
     ['merge conflict at the retry cap stops', { status: 'done', retry: MAX_RETRY }, 'conflict', { to: 'done', set: { needs_human: 1 }, effects: ['note', 'chord'] }],
     ['base still dirty after the wait', { status: 'done' }, 'dirty', { to: 'done', set: { needs_human: 1 }, effects: ['note', 'chord'] }],
     ['operator retries a failed merge', { status: 'done', needs_human: true }, 'merge', { to: 'done', set: {}, effects: ['enqueue_merge'] }],
@@ -47,7 +49,7 @@ describe('transition table', () => {
 
   const allowed: Record<Status, Event[]> = {
     backlog: ['launch'],
-    in_progress: ['launch', 'resume', 'restart', 'submit', 'ask', 'answer', 'exit'],
+    in_progress: ['launch', 'resume', 'restart', 'submit', 'ask', 'answer', 'exit', 'conflict'],
     testing: ['launch', 'resume', 'restart', 'pass', 'fail', 'ask', 'answer', 'exit'],
     done: ['merged', 'conflict', 'merge', 'dirty'],
   };
@@ -60,7 +62,7 @@ describe('transition table', () => {
         n++;
       }
     }
-    expect(n).toBe(4 * EVENTS.length - 20);
+    expect(n).toBe(4 * EVENTS.length - 21);
   });
 
   it('refuses a guarded row whose guard fails, saying why', () => {
@@ -78,15 +80,16 @@ describe('transition table', () => {
 
   it('every row that raises needs_human writes one note, and all but a question end it with what resolves it', () => {
     const flagged = TABLE.filter((r) => r.set?.needs_human === 1);
-    expect(flagged.map((r) => r.event)).toEqual(['fail', 'ask', 'exit', 'conflict', 'dirty']);
+    expect(flagged.map((r) => r.event)).toEqual(['fail', 'ask', 'exit', 'conflict', 'conflict', 'dirty']);
     for (const r of flagged) {
       expect(r.effects.filter((e) => e === 'note'), r.event).toHaveLength(1);
       expect(r.resolve === undefined, r.event).toBe(r.event === 'ask');
     }
-    const fix = (e: Event) => flagged.find((r) => r.event === e)!.resolve!(7, 'C:/repo');
+    const fix = (e: Event, from: Status = 'done') => flagged.find((r) => r.event === e && r.from.includes(from))!.resolve!(7, 'C:/repo');
     expect(fix('conflict')).toMatch(/\.worktrees\/t-7 .*Retry merge/);
+    expect(fix('conflict', 'in_progress')).toMatch(/\.worktrees\/t-7 .*uncommitted .*git merge .*Resume/);
     expect(fix('dirty')).toMatch(/main checkout \(C:\/repo\).*Retry merge/);
-    expect(`To resolve: ${fix('exit')}`).toBe(TO_RESOLVE);
+    expect(`To resolve: ${fix('exit', 'in_progress')}`).toBe(TO_RESOLVE);
   });
 });
 
@@ -122,7 +125,8 @@ console.log('FAKE ' + model);
 if (brief.startsWith('# Test') && model !== 'hang') {
   if (model === 'escalate') await call('set_model', { model: 'work-big', effort: 'high' });
   const passed = model === 'pass';
-  await call('report_test', { passed, summary: passed ? 'every criterion passes' : 'criterion 1 fails' });
+  const tested = execFileSync('git', ['log', '-1', '--format=%s'], { encoding: 'utf8' }).trim();
+  await call('report_test', { passed, summary: (passed ? 'every criterion passes' : 'criterion 1 fails') + ' (tested: ' + tested + ')' });
   await call('move_ticket', { status: passed ? 'done' : 'in_progress' });
 } else if (model === 'silent') {
   process.exit(0);
@@ -133,7 +137,18 @@ if (brief.startsWith('# Test') && model !== 'hang') {
   } else if (model === 'conflict' && brief.includes('merge conflict with main')) {
     try { execFileSync('git', ['merge', '-q', 'main'], { stdio: 'ignore' }); } catch { commit('shared.txt', 'both\\n'); }
   } else if (model === 'conflict') commit('shared.txt', name + '\\n');
-  else commit(name + '.txt', 'done\\n');
+  else if (model === 'lines' || model === 'dirty') {
+    if (!brief.includes('Retry count: 0 ')) await new Promise(() => process.stdin.resume()); // sent back: stays up for the test to look at
+    if (model === 'dirty') writeFileSync('a.txt', 'half done\\n'); // an agent that never committed
+    else {
+      // The answer "N TEXT" replaces line N of lines.txt.
+      await call('ask_operator', { question: 'Which line?' });
+      const [n, text] = (await line()).split(' ');
+      const lines = readFileSync('lines.txt', 'utf8').split('\\n');
+      lines[n - 1] = text;
+      commit('lines.txt', lines.join('\\n'));
+    }
+  } else commit(name + '.txt', 'done\\n');
   await call('move_ticket', { status: 'testing' });
 }
 process.stdin.resume();
@@ -182,6 +197,14 @@ const until = async (f: () => unknown, what: string, ms = 30_000) => {
 const launchTogether = (n: number) => {
   writeFileSync(join(repo, '.kanban95', 'config.json'), JSON.stringify({ runner_concurrency: n }));
   return fetch(`http://127.0.0.1:${srv.port}/api/runner`, { method: 'PUT', headers: { 'content-type': 'application/json', cookie: `k95=${srv.secret}` }, body: '{"on":true}' });
+};
+const mergeInProgress = (dir: string) => {
+  try {
+    execFileSync('git', ['rev-parse', '-q', '--verify', 'MERGE_HEAD'], { cwd: dir, stdio: 'ignore' });
+    return true;
+  } catch {
+    return false;
+  }
 };
 const landed = (id: number) => until(() => t(id).merged_at && !existsSync(join(repo, '.worktrees', `t-${id}`)), `ticket ${id} merged and cleaned`);
 
@@ -352,6 +375,7 @@ ${TO_RESOLVE}`]);
     expect(runs(lost)[2].prompt_rendered).toMatch(/merge conflict with main: [^]*git merge main/); // the note, and the brief's base
     expect([one, two].map((id) => t(id).flags.needs_human)).toEqual([false, false]);
     expect(git('show', 'HEAD:shared.txt')).toBe('both');
+    expect(mergeInProgress(repo)).toBe(false);
     expect(sounds.filter((s) => s.sound === 'chord')).toEqual([]);
   });
 
@@ -369,6 +393,7 @@ ${TO_RESOLVE}`]);
     expect(existsSync(join(repo, '.worktrees', `t-${lost}`))).toBe(true);
     expect(git('status', '--porcelain', '--untracked-files=no')).toBe('');
     expect(existsSync(join(repo, '.git', 'MERGE_HEAD'))).toBe(false);
+    expect(mergeInProgress(join(repo, '.worktrees', `t-${lost}`))).toBe(false); // the conflict was met and aborted there
     expect(git('show', 'HEAD:shared.txt')).toBe(`t-${won}`);
     expect(sounds.filter((s) => s.sound === 'chord')).toEqual([{ sound: 'chord', ticket: lost }]);
 
@@ -385,6 +410,66 @@ ${TO_RESOLVE}`]);
     expect(t(lost).flags.needs_human).toBe(false);
     expect(git('show', 'HEAD:shared.txt')).toBe('both');
     expect((await post(`/api/tickets/${lost}/merge`)).status).toBe(409); // already merged
+  });
+
+  describe('main merged into the worktree on submit', () => {
+    beforeEach(() => {
+      writeFileSync(join(repo, 'lines.txt'), '1\n2\n3\n4\n5\n');
+      git('add', 'lines.txt');
+      git('commit', '-qm', 'Add lines');
+    });
+    const answer = async (id: number, text: string) => {
+      await until(() => t(id).flags.needs_human, `ticket ${id}'s question`);
+      expect((await post(`/api/tickets/${id}/answer`, { answer: text })).status).toBe(200);
+    };
+    // B forks before A lands and submits after it: B's branch is stale when its worker submits.
+    const aLandsWhileBWorks = async (a: number, b: number) => {
+      for (const id of [b, a]) expect((await post(`/api/tickets/${id}/launch`)).status).toBe(200);
+      await answer(a, '1 one');
+      await landed(a);
+    };
+    const sentBack = (id: number) => until(() => runs(id).length === 2 && runs(id)[0].outcome === 'conflict', 'sent back to the worker');
+
+    it('a clean merge: a merge commit from main by the operator, tested combined, landed with no conflict note', async () => {
+      const a = ticket('Edit line one', { model: 'lines' });
+      const b = ticket('Edit line five', { model: 'lines' });
+      await aLandsWhileBWorks(a, b);
+      await answer(b, '5 five');
+      await landed(b);
+      expect(notes(b, 'failure')).toEqual([]);
+      expect(runs(b).map((x) => [x.phase, x.outcome])).toEqual([['execute', 'submit'], ['test', 'pass']]);
+      expect(notes(b, 'summary')).toEqual([`PASS: every criterion passes (tested: Merge main into ticket/${b})`]); // synced before the tester ran
+      expect(git('log', '-1', '--format=%an <%ae>|%s', 'HEAD^2')).toBe(`Op Erator <op@example.com>|Merge main into ticket/${b}`);
+      expect(git('rev-list', '--parents', '-1', 'HEAD^2').split(' ')).toHaveLength(3); // a real merge commit
+      expect(git('show', 'HEAD:lines.txt')).toBe('one\n2\n3\n4\nfive');
+    });
+
+    it('a conflict: back to the worker in its kept worktree, retry + 1, no tester round, no merge left in progress', async () => {
+      const a = ticket('Edit line one', { model: 'lines' });
+      const b = ticket('Also edit line one', { model: 'lines' });
+      await aLandsWhileBWorks(a, b);
+      await answer(b, '1 uno');
+      await sentBack(b);
+      const wt = join(repo, '.worktrees', `t-${b}`);
+      expect(t(b)).toMatchObject({ status: 'in_progress', retry: 1, flags: { needs_human: false } });
+      expect(notes(b, 'failure')).toEqual([expect.stringMatching(/^merge conflict with main: [^]*CONFLICT[^]*lines\.txt/)]);
+      expect(runs(b).map((x) => x.phase)).toEqual(['execute', 'execute']);
+      expect(runs(b)[1].prompt_rendered).toMatch(/merge conflict with main: [^]*git merge main/);
+      expect(sessionsOf(b)).toHaveLength(1);
+      expect(mergeInProgress(wt)).toBe(false);
+      expect(execFileSync('git', ['status', '--porcelain', '--untracked-files=no'], { cwd: wt, encoding: 'utf8' })).toBe('');
+      expect(execFileSync('git', ['log', '-1', '--format=%s'], { cwd: wt, encoding: 'utf8' }).trim()).toBe('Add lines.txt');
+    });
+
+    it('uncommitted tracked changes: back to the worker with a note saying so, the changes untouched', async () => {
+      const id = ticket('Leave it half done', { model: 'dirty' });
+      expect((await post(`/api/tickets/${id}/launch`)).status).toBe(200);
+      await sentBack(id);
+      expect(t(id)).toMatchObject({ status: 'in_progress', retry: 1, flags: { needs_human: false } });
+      expect(notes(id, 'failure')).toEqual(['worktree has uncommitted changes; commit or discard them, then submit again:\n M a.txt']);
+      expect(readFileSync(join(repo, '.worktrees', `t-${id}`, 'a.txt'), 'utf8')).toBe('half done\n');
+      expect(runs(id).map((x) => x.phase)).toEqual(['execute', 'execute']);
+    });
   });
 
   describe('a dirty main checkout', () => {
@@ -409,6 +494,20 @@ ${TO_RESOLVE}`]);
       await landed(id);
       expect(t(id).flags.needs_human).toBe(false);
       expect(sounds).toEqual([{ sound: 'ding', ticket: id }]);
+    });
+
+    it('the operator commits instead: the queue merges the new main into the worktree first, then lands it', async () => {
+      Object.assign(DIRTY_WAIT, { every: 50, max: 60_000 });
+      const id = ticket('Add behind main');
+      await launchThenDirty(id);
+      await until(() => t(id).status === 'done', 'done');
+      git('commit', '-qam', 'Edit a');
+      await landed(id);
+      expect(notes(id, 'failure')).toEqual([]);
+      expect(git('log', '-1', '--format=%an <%ae>|%s', 'HEAD^2')).toBe(`Op Erator <op@example.com>|Merge main into ticket/${id}`);
+      expect(git('log', '-1', '--format=%s', 'HEAD')).toBe('Add behind main');
+      expect(git('show', 'HEAD:a.txt')).toBe('the operator is editing');
+      expect(mergeInProgress(repo)).toBe(false);
     });
 
     it('still dirty after the wait: flagged with the changed files and the fix; Retry merge lands it once clean', async () => {
@@ -557,6 +656,20 @@ describe('resume', { timeout: 60_000 }, () => {
       expect((await r.json()).error).toContain(why);
     }
     expect(runs(unflagged)).toEqual([]);
+  });
+
+  it('an agent killed by the board shutting down is not flagged, so the next start resumes it (Restart board)', async () => {
+    models({ execute: 'hang' });
+    const id = ticket('Live');
+    expect((await post(`/api/tickets/${id}/launch`)).status).toBe(200);
+    await until(() => sessionsOf(id).length, 'the agent');
+    await srv.close();
+    srv = await start({ repo });
+    db = srv.db;
+    expect(notes(id, 'failure')).toEqual([RESTARTED]); // no 'agent exited without reporting' from the shutdown
+    expect(t(id).flags.needs_human).toBe(false);
+    expect(runs(id)).toHaveLength(2);
+    expect(runs(id)[1].prompt_rendered).toContain(RESTARTED);
   });
 
   it('restart resumes a running ticket once by itself; an agent that then exits silently flags it with what to do', async () => {

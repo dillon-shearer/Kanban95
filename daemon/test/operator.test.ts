@@ -174,7 +174,7 @@ describe('POST /api/operator', () => {
     const r = await post('/operator', { mission });
     expect(r.status).toBe(201);
     const view = await r.json();
-    expect(view).toMatchObject({ ticket_id: null, run_id: null, role: 'operator', phase: 'operator', model: 'plan-m' });
+    expect(view).toMatchObject({ ticket_id: null, run_id: null, role: 'operator', phase: 'operator', model: '' }); // no operator row: the CLI's default model, no --model flag
     expect(lastAudit()).toMatchObject({ outcome: 'ok' });
     const s = sessions.get(view.id)!;
     expect(s.dir).toBe(join(repo, '.kanban95', 'sessions', String(view.id)));
@@ -186,6 +186,18 @@ describe('POST /api/operator', () => {
     await end(s);
     expect(verify(srv.db, token)).toBeNull();
     expect(existsSync(s.dir)).toBe(false);
+  });
+
+  it('runs with the operator row of models.json when set, the CLI default (no --model) when not', async () => {
+    const file = join(process.env.USERPROFILE!, '.kanban95', 'models.json'), saved = readFileSync(file, 'utf8');
+    try {
+      writeFileSync(file, JSON.stringify({ ...JSON.parse(saved), claude: { ...JSON.parse(saved).claude, operator: { model: 'row-m', effort: 'low' } } }));
+      const view = await (await post('/operator', { mission: 'go' })).json();
+      expect(view.model).toBe('row-m');
+      await end(sessions.get(view.id)!);
+    } finally {
+      writeFileSync(file, saved);
+    }
   });
 
   it('runs with .kanban95/config.json operator model and effort when set, and refuses a bad one', async () => {

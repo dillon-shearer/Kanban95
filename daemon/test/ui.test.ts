@@ -421,14 +421,14 @@ describe('ui', { timeout: 60_000 }, () => {
     expect(await page.evaluate('window.__noReload')).toBe(true);
   });
 
-  it('pins a compact tray right after Start on one taskbar row', async () => {
+  it('pins a compact tray at the far right of one taskbar row', async () => {
     await page.goto(base);
     await until(() => page.evaluate(`!!document.querySelector('#clock').textContent`), 'the clock');
     const m = await page.evaluate<Record<string, number>>(`(() => {
       const r = (s) => document.querySelector(s).getBoundingClientRect(), bar = document.getElementById('taskbar');
       const start = r('#start'), tray = r('#tray'), tasks = r('#tasks');
-      return { gap: tray.left - start.right, trayH: tray.height, startH: start.height,
-        trayW: tray.width, tasksAfter: tasks.left - tray.right, overflow: bar.scrollWidth - bar.clientWidth,
+      return { gap: bar.getBoundingClientRect().right - tray.right, trayH: tray.height, startH: start.height,
+        trayW: tray.width, tasksAfter: tray.left - tasks.right, overflow: bar.scrollWidth - bar.clientWidth,
         font: parseFloat(getComputedStyle(document.getElementById('agents')).fontSize) };
     })()`);
     expect(m.gap).toBeLessThanOrEqual(4);
@@ -540,6 +540,31 @@ describe('ui', { timeout: 60_000 }, () => {
     rmSync(file);
   });
 
+  it('edits and deletes a brain row from the Brain window; the next search shows the change', async () => {
+    const id = Number(db.prepare("INSERT INTO brain (title, body, tags) VALUES ('gutter width', 'old fact', 'layout')").run().lastInsertRowid);
+    const body = () => db.prepare('SELECT body FROM brain WHERE id = ?').get(id) as { body: string } | undefined;
+    const row = `[...document.querySelectorAll('[data-win="brain"] li.note')].find((l) => l.textContent.startsWith('#${id} '))`;
+    const button = (scope: string, label: string) => `[...${scope}.querySelectorAll('button')].find((b) => b.textContent === '${label}').click()`;
+    await page.goto(base);
+    await until(() => page.evaluate(`!!document.querySelector('[data-win="board"]')`), 'the board');
+    await page.evaluate(`document.querySelector('[data-icon="Brain"]').dispatchEvent(new MouseEvent('dblclick'))`);
+    await until(() => page.evaluate(`!!${row}`), 'the row in the Brain window');
+
+    await page.evaluate(button(row, 'Edit'));
+    await until(() => page.evaluate(`!!document.querySelector('dialog textarea')`), 'the edit dialog');
+    expect(await page.evaluate(`document.querySelector('dialog textarea').value`)).toBe('old fact');
+    await page.evaluate(`document.querySelector('dialog textarea').value = 'new fact'`);
+    await page.evaluate(button(`document.querySelector('dialog')`, 'Save'));
+    await until(() => body()?.body === 'new fact', 'the edit in the db');
+    await until(() => page.evaluate(`${row}?.querySelector('pre').textContent === 'new fact'`), 'the edit in the window');
+
+    await page.evaluate(button(row, 'Delete'));
+    await until(() => page.evaluate(`!!document.querySelector('dialog')`), 'the delete confirm');
+    await page.evaluate(button(`document.querySelector('dialog')`, 'Delete'));
+    await until(() => body() === undefined, 'the row deleted');
+    await until(() => page.evaluate(`!${row}`), 'the row gone from the window');
+  });
+
   it('autosaves the Notepad, brings the text back after a reload, and drafts a ticket from the selection', async () => {
     const file = join(repo, '.kanban95', 'notepad.md');
     const area = '[data-win="notepad"] textarea';
@@ -593,12 +618,40 @@ describe('ui', { timeout: 60_000 }, () => {
     const mission = 'Rename the janitor log & keep {{tools}} literal.';
     await page.evaluate(`document.querySelector('dialog[open] textarea').value = ${JSON.stringify(mission)}`);
     await press('Start');
-    await until(() => page.evaluate(`[...document.querySelectorAll('[data-win^="term-"] .title-bar-text')].some((t) => t.textContent === 'Operator — plan')`), 'the Operator terminal');
+    await until(() => page.evaluate(`[...document.querySelectorAll('[data-win^="term-"] .title-bar-text')].some((t) => t.textContent === 'Operator — CLI default')`), 'the Operator terminal');
     const g = db.prepare("SELECT id FROM grants WHERE role = 'operator' AND revoked_at IS NULL").get() as { id: number };
     expect(readFileSync(join(repo, '.kanban95', 'sessions', String(-g.id), 'prompt.md'), 'utf8')).toContain(`## Mission\n\n${mission}\n`);
     await fetch(`${base}api/grants/${g.id}`, { method: 'DELETE', headers: { cookie: `k95=${srv.secret}` } });
     await until(() => ![...sessions.values()].some((s) => s.role === 'operator'), 'the operator agent to exit');
     writeFileSync(models, before);
+  });
+
+  it('Start → Restart board confirms with the agent count and the shell caveat, and shows a failed build in a dialog', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'k95-root-'));
+    mkdirSync(join(root, 'daemon', 'src'), { recursive: true });
+    writeFileSync(join(root, 'package.json'), JSON.stringify({ scripts: { build: `node -e "console.log('error TS2322: nope'); process.exit(2)"` } }));
+    let shutdowns = 0;
+    Object.assign(srv.board, { root, shutdown: () => shutdowns++ });
+    await page.goto(base);
+    await until(() => page.evaluate(`!!document.querySelector('[data-win="board"]')`), 'the board');
+    const dialog = (title: string) => page.evaluate<string | null>(`[...document.querySelectorAll('dialog[open]')].find((d) => d.querySelector('.title-bar-text').textContent === '${title}')?.querySelector('.window-body').textContent ?? null`);
+    const press = (button: string) => page.evaluate(`[...document.querySelectorAll('dialog[open] button')].find((b) => b.textContent === '${button}').click()`);
+
+    await click('#start');
+    await page.evaluate(`[...document.querySelectorAll('.k95-menu li')].find((li) => li.textContent === 'Restart board').click()`);
+    await until(() => dialog('Restart board'), 'the confirm');
+    const text = (await dialog('Restart board'))!;
+    const agents = [...sessions.values()].filter((s) => s.ticketId !== null).length; // earlier tests may leave some running
+    expect(text).toContain(agents ? `${agents} agent${agents === 1 ? ' is' : 's are'} running; they are resumed after the restart.` : 'No agents are running.');
+    expect(text).toContain('Shell changes need a full relaunch');
+    await press('Restart');
+    await until(() => dialog('Board not restarted'), 'the build error', 30_000);
+    expect(await dialog('Board not restarted')).toContain('error TS2322: nope');
+    await press('OK');
+    expect(await statusBar()).toBe('Board not restarted: see the dialog');
+    expect(shutdowns).toBe(0);
+    Object.assign(srv.board, { root: undefined, shutdown: undefined });
+    rmSync(root, { recursive: true, force: true });
   });
 
   it('keeps a window the same size while it is dragged', async () => {

@@ -75,13 +75,37 @@ describe('context', () => {
     expect(out).not.toContain('gardening');
   });
 
-  it('brain: the character budget truncates and marks the cut', () => {
-    brain('merge queue', 'x'.repeat(3000));
-    brain('merge conflict', 'y'.repeat(3000));
-    const out = brainFor(db, 'merge', 5, 1000);
-    expect(out.length).toBe(1000);
+  it('brain: bodies for the top two only, an index line with tags for the rest', () => {
+    const ids = ['first', 'second', 'third'].map((n) => Number(brain(`queue ${n}`, `${n} body`, `queue ${n}tag`).lastInsertRowid));
+    expect(brainFor(db, 'queue', 5).split('\n')).toEqual([
+      `- [#${ids[0]}] queue first: first body`,
+      `- [#${ids[1]}] queue second: second body`,
+      `- [#${ids[2]}] queue third · queue thirdtag`,
+    ]);
+  });
+
+  it('brain: a body over the budget falls back to its index line, never a partial body', () => {
+    const a = Number(brain('merge queue', 'x'.repeat(3000)).lastInsertRowid);
+    const b = Number(brain('merge conflict', 'y'.repeat(3000)).lastInsertRowid);
+    expect(brainFor(db, 'merge', 5, 1000)).toBe(`- [#${a}] merge queue\n- [#${b}] merge conflict`);
+    expect(brainFor(db, 'merge', 5, 100_000)).toContain('y'.repeat(3000));
+  });
+
+  it('brain: the budget cuts between rows and marks the cut', () => {
+    for (let i = 0; i < 8; i++) brain(`cache entry ${i} ${'t'.repeat(60)}`, 'b', 'cache');
+    const out = brainFor(db, 'cache', 8, 400);
+    expect(out.length).toBeLessThanOrEqual(400);
     expect(out.endsWith(BRAIN_TRUNCATED)).toBe(true);
-    expect(brainFor(db, 'merge', 5, 100_000)).not.toContain(BRAIN_TRUNCATED);
+    const rows = out.slice(0, -BRAIN_TRUNCATED.length).split('\n');
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows.length).toBeLessThan(8);
+    for (const r of rows) expect(r).toMatch(/^- \[#\d+\] cache entry \d t{60}(: b| · cache)$/);
+  });
+
+  it('brain: a title hit outranks the same word repeated in a body', () => {
+    brain('misc', 'socket '.repeat(4) + 'filler '.repeat(40));
+    const titled = Number(brain('socket close', 'filler '.repeat(40)).lastInsertRowid);
+    expect(brainFor(db, 'socket', 5).startsWith(`- [#${titled}] socket close: `)).toBe(true);
   });
 
   it('notes: only failures since the latest execute run, not earlier cycles or other kinds', () => {

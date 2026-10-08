@@ -90,6 +90,8 @@ describe('role matrix: every "no" cell is refused and audited as denied', () => 
     ['tester', () => tester3, 'create_ticket', { title: 'x' }],
     ['tester', () => tester3, 'update_ticket', { body: 'x' }],
     ['tester', () => tester3, 'report_cleanup', { items: [{ path: 'a', action: 'deleted', reason: 'r' }] }],
+    ['worker', () => worker3, 'brain_delete', { id: 1 }],
+    ['tester', () => tester3, 'brain_delete', { id: 1 }],
   ];
   for (const [role, client, tool, args] of cells) {
     it(`${role} cannot call ${tool}`, async () => {
@@ -244,9 +246,32 @@ describe('brain', () => {
     const all = (await call(tester3, 'brain_search', { query: 'sqlite' })).json;
     expect(all.map((r: { title: string }) => r.title)).toEqual(['sqlite sqlite sqlite', 'sqlite wal']);
     expect((await call(tester3, 'brain_search', { query: 'sqlite', limit: 1 })).json).toHaveLength(1);
-    expect((await call(tester3, 'brain_search', { query: 'sqlite', limit: 21 })).denied).toBe(true);
+    expect((await call(tester3, 'brain_search', { query: 'sqlite', limit: 51 })).denied).toBe(true);
     expect((await call(tester3, 'brain_search', { query: 'nothing-here' })).json).toEqual([]);
     expect((await call(tester3, 'brain_search', { query: 'sqlite" OR "ports' })).json).toEqual([]);
+  });
+
+  it('fetches one row by id, or lists the newest with no query', async () => {
+    const { id } = (await call(planner, 'brain_add', { title: 'by id', body: 'fetch me' })).json;
+    expect((await call(worker3, 'brain_search', { id })).json).toMatchObject([{ id, title: 'by id', body: 'fetch me' }]);
+    expect((await call(worker3, 'brain_search', { id: 99999 })).json).toEqual([]);
+    expect((await call(worker3, 'brain_search', { limit: 1 })).json).toMatchObject([{ id }]);
+  });
+
+  it('any role updates a row in place; only planner and operator delete; unknown ids and long bodies fail', async () => {
+    const { id } = (await call(planner, 'brain_add', { title: 'wal mode', body: 'stale fact', tags: 'sqlite' })).json;
+    const r = await call(tester3, 'brain_update', { id, body: 'checkpoint after merge' });
+    expect(r.json).toMatchObject({ id, title: 'wal mode', body: 'checkpoint after merge', tags: 'sqlite' });
+    expect((await call(worker3, 'brain_search', { query: 'checkpoint' })).json.map((x: { id: number }) => x.id)).toEqual([id]);
+    expect((await call(worker3, 'brain_update', { id: 99999, body: 'x' })).denied).toBe(true);
+    expect(lastAudit()).toMatchObject({ tool: 'brain_update', outcome: 'error' });
+    expect((await call(worker3, 'brain_update', { id })).denied).toBe(true);
+    expect((await call(worker3, 'brain_add', { title: 't', body: 'x'.repeat(1501) })).denied).toBe(true);
+    expect((await call(worker3, 'brain_update', { id, body: 'x'.repeat(1501) })).denied).toBe(true);
+
+    expect((await call(planner, 'brain_delete', { id })).json).toEqual({ id });
+    expect((await call(worker3, 'brain_search', { id })).json).toEqual([]);
+    expect((await call(planner, 'brain_delete', { id })).denied).toBe(true);
   });
 });
 
