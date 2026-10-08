@@ -1,4 +1,4 @@
-// Kanban95 daemon: static UI, /health and /api on 127.0.0.1:<random port>, backed by <repo>/.kanban95/board.db.
+// Kanban95 daemon: static UI, /health, /api (operator) and /mcp (agents) on 127.0.0.1:<random port>, backed by <repo>/.kanban95/board.db.
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
@@ -6,6 +6,7 @@ import { extname, resolve, sep } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { handleApi } from './api.js';
 import { openDb } from './db.js';
+import { handleMcp } from './mcp.js';
 
 export const UI_DIR = resolve(import.meta.dirname, '../../ui');
 const LOOPBACK = '127.0.0.1';
@@ -56,6 +57,7 @@ async function handle(db: DatabaseSync, self: string, req: IncomingMessage, res:
 
   const url = new URL(req.url ?? '/', `http://${self}`);
   if (url.pathname.startsWith('/api/')) return handleApi(db, req, res, url);
+  if (url.pathname === '/mcp') return handleMcp(db, req, res);
   if (req.method !== 'GET' && req.method !== 'HEAD') return send(res, 405, 'method not allowed');
   if (url.pathname === '/health') return send(res, 200, JSON.stringify({ ok: true }), 'application/json');
 

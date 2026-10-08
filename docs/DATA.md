@@ -6,7 +6,7 @@ Living document. Update it in the same change that alters the schema.
 
 - `<repo>/.kanban95/board.db`, one SQLite file per repo, WAL mode, foreign keys on. Created on first daemon start together with `.kanban95/.gitignore` (ignores `board.db`, `board.db-*`, `sessions/`).
 - Nothing in the database leaves the machine. There is no sync, no telemetry, no export yet (export is explicit when it arrives).
-- The daemon is the only writer. The UI goes through REST, agents go through MCP (phase 2).
+- The daemon is the only writer. The UI goes through REST, agents go through MCP (`docs/MCP.md`).
 
 ## Migrations
 
@@ -51,8 +51,10 @@ The REST API presents the two flags as `flags: { needs_human, blocked_on_deps }`
 | body | TEXT | |
 | created_at | TEXT | |
 
+How the kinds are written over MCP: `add_note` takes `plan` `decision` `failure` `summary`; `ask_operator` writes `question` and sets `needs_human`; the operator's answer (phase 5) is `answer`; `report_test` writes `summary` on pass and `failure` on fail, body `PASS|FAIL: <summary>` followed by one `- ` line per evidence item; `report_cleanup` writes `summary` with one `- <action> \`<path>\`: <reason>` line per item. `role` is always the grant's role.
+
 ### brain, brain_fts
-`brain(id, title, body, tags, ticket_id nullable FK set-null, created_at)`. `brain_fts` is an FTS5 external-content index over `title, body, tags` kept in sync by triggers `brain_ai`, `brain_au`, `brain_ad`. Query it with `brain_fts MATCH ? ORDER BY rank` and join `brain` on `rowid = id`.
+`brain(id, title, body, tags, ticket_id nullable FK set-null, created_at)`. `brain_add` over MCP sets `ticket_id` to the grant's ticket (null for a planner). `brain_fts` is an FTS5 external-content index over `title, body, tags` kept in sync by triggers `brain_ai`, `brain_au`, `brain_ad`. Query it with `brain_fts MATCH ? ORDER BY rank` and join `brain` on `rowid = id`.
 
 ### runs
 | column | type | notes |
@@ -84,7 +86,7 @@ A grant is live when `revoked_at IS NULL AND expires_at > now`. Rows are kept af
 | id | INTEGER PK | |
 | grant_id | INTEGER FK | null for operator actions over REST; set-null on grant delete |
 | ticket_id | INTEGER FK | null when the action was not about one ticket, or the ticket no longer exists; set-null on delete |
-| tool | TEXT | REST: `tickets.create` `tickets.update` `tickets.delete` `grants.revoke`. MCP tool names from phase 2. |
+| tool | TEXT | REST: `tickets.create` `tickets.update` `tickets.delete` `grants.revoke`. MCP: the tool name (`create_ticket`, `move_ticket`, ..., see `docs/MCP.md`). |
 | args_summary | TEXT | JSON of the request, truncated to 200 characters. Callers must never put a token in it. |
 | outcome | TEXT | `ok` `denied` `error` |
 | created_at | TEXT | |

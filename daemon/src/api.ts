@@ -43,7 +43,13 @@ function ticketColumns(body: Json): { cols: string[]; vals: unknown[]; deps?: nu
   return { cols, vals, deps };
 }
 
-function readTicket(db: DatabaseSync, id: number) {
+export interface Ticket {
+  id: number; title: string; body: string; criteria: string; status: string; cli: string | null; model: string | null;
+  effort: string | null; retry: number; created_at: string; updated_at: string;
+  flags: { needs_human: boolean; blocked_on_deps: boolean }; depends_on: number[];
+}
+
+export function readTicket(db: DatabaseSync, id: number): Ticket {
   const row = db.prepare('SELECT * FROM tickets WHERE id = ?').get(id) as Json | undefined;
   if (!row) throw new HttpError(404, 'no such ticket');
   const { needs_human, blocked_on_deps, ...rest } = row;
@@ -52,16 +58,16 @@ function readTicket(db: DatabaseSync, id: number) {
     ...rest,
     flags: { needs_human: needs_human === 1, blocked_on_deps: blocked_on_deps === 1 },
     depends_on: deps.map((d) => d.depends_on_id as number),
-  };
+  } as Ticket;
 }
 
-function setDeps(db: DatabaseSync, id: number, deps: number[]) {
+export function setDeps(db: DatabaseSync, id: number, deps: number[]) {
   db.prepare('DELETE FROM ticket_deps WHERE ticket_id = ?').run(id);
   const ins = db.prepare('INSERT INTO ticket_deps (ticket_id, depends_on_id) VALUES (?, ?)');
   for (const d of deps) ins.run(id, d);
 }
 
-function transaction<T>(db: DatabaseSync, fn: () => T): T {
+export function transaction<T>(db: DatabaseSync, fn: () => T): T {
   db.exec('BEGIN');
   try {
     const out = fn();
@@ -71,6 +77,13 @@ function transaction<T>(db: DatabaseSync, fn: () => T): T {
     db.exec('ROLLBACK');
     throw e;
   }
+}
+
+/** Ranked FTS5 search over the brain; an empty query lists the newest rows. Shared by REST and MCP. */
+export function brainSearch(db: DatabaseSync, q: string, limit: number) {
+  return q.trim()
+    ? db.prepare('SELECT b.* FROM brain_fts f JOIN brain b ON b.id = f.rowid WHERE brain_fts MATCH ? ORDER BY rank LIMIT ?').all(ftsQuery(q), limit)
+    : db.prepare('SELECT * FROM brain ORDER BY id DESC LIMIT ?').all(limit);
 }
 
 function ftsQuery(q: string): string {
@@ -118,9 +131,7 @@ const routes: [method: string, path: RegExp, mutation: string | null, handler: (
   ['GET', /^\/api\/brain$/, null, ({ db, url }) => {
     const q = url.searchParams.get('q') ?? '';
     const limit = Math.min(Number(url.searchParams.get('limit') ?? 20) || 20, 100);
-    const rows = q.trim()
-      ? db.prepare('SELECT b.* FROM brain_fts f JOIN brain b ON b.id = f.rowid WHERE brain_fts MATCH ? ORDER BY rank LIMIT ?').all(ftsQuery(q), limit)
-      : db.prepare('SELECT * FROM brain ORDER BY id DESC LIMIT ?').all(limit);
+    const rows = brainSearch(db, q, limit);
     return { status: 200, body: rows };
   }],
   ['GET', /^\/api\/grants$/, null, ({ db }) => ({
