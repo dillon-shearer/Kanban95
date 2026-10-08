@@ -336,14 +336,14 @@ function rootSession(b: Board, o: Parameters<typeof launchRoot>[1]): Session {
 /** A brainstorm session: a planner with plan-phase settings. */
 export const brainstorm = (b: Board) => rootSession(b, { ...runSettings(null, 'plan'), template: 'brainstorm' });
 
-/** An operator terminal: plan-phase settings unless `.kanban95/config.json` has `operator: { model, effort }` (either or both). */
+/** An operator terminal: the operator phase (Settings → Models; the CLI's default model when unset) unless `.kanban95/config.json` has `operator: { model, effort }` (either or both). */
 export function operator(b: Board, mission: string): Session {
   const o = repoConfig(b.repo).operator ?? {};
   const where = `${repoConfigPath(b.repo)} operator`;
   if (typeof o !== 'object' || Array.isArray(o)) throw new BadConfig(`${where} must be an object`);
   if (o.model !== undefined && (typeof o.model !== 'string' || !o.model)) throw new BadConfig(`${where}.model must be a non-empty string`);
   if (o.effort !== undefined && !EFFORT.includes(o.effort)) throw new BadConfig(`${where}.effort must be one of ${EFFORT.join(', ')}`);
-  const plan = runSettings(null, 'plan');
+  const plan = runSettings(null, 'operator');
   return rootSession(b, { ...plan, model: o.model ?? plan.model, effort: (o.effort as Effort) ?? plan.effort, template: 'operator', mission });
 }
 

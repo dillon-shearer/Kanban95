@@ -22,7 +22,7 @@ async function api(method, path, body) {
 const COLUMNS = [['backlog', 'Backlog'], ['in_progress', 'In Progress'], ['testing', 'Testing'], ['done', 'Done']];
 const LABEL = Object.fromEntries(COLUMNS);
 const EFFORTS = ['low', 'medium', 'high', 'max'];
-const PHASES = ['plan', 'execute', 'test'];
+const PHASES = ['plan', 'execute', 'test', 'operator'];
 const CLIS = ['claude', 'codex'];
 /** Where the operator may drag a ticket. Everything onward is the agents' job; anything may go back to Backlog (reset). */
 const MOVES = { backlog: ['in_progress'], in_progress: ['backlog'], testing: ['backlog'], done: ['backlog'] };
@@ -554,7 +554,7 @@ function openTerminal(s, auto = false) {
   seen.add(s.id);
   const wid = `term-${s.id}`;
   if (isOpen(wid)) return focus(wid);
-  const title = s.ticket_id === null ? `${s.role === 'operator' ? 'Operator' : 'Brainstorm'} — ${s.model}` : `#${s.ticket_id} — ${s.phase} — ${s.model}`;
+  const title = s.ticket_id === null ? `${s.role === 'operator' ? 'Operator' : 'Brainstorm'} — ${s.model || 'CLI default'}` : `#${s.ticket_id} — ${s.phase} — ${s.model}`;
   const ws = new WebSocket(`ws://${location.host}/pty/${s.id}`);
   const send = (msg) => ws.readyState === WebSocket.OPEN && ws.send(JSON.stringify(msg));
   const term = new Terminal({ fontFamily: 'Consolas, "Courier New", monospace', fontSize: 13, scrollback: 5000 });
@@ -731,7 +731,7 @@ function openSettings() {
         models = (await api('PUT', '/config/models', out)).value;
         drawBoard();
       }, `Saved ${path}.`);
-      p.replaceChildren(h('p', {}, `Which CLI runs agents, and the model and effort per phase (plan is the brainstorm). A ticket's own model and effort override execute. ${path}`),
+      p.replaceChildren(h('p', {}, `Which CLI runs agents, and the model and effort per phase (plan is the brainstorm; operator is the operator terminal, the CLI's default model when blank). A ticket's own model and effort override execute. ${path}`),
         h('div', { class: 'field-row' }, h('label', {}, 'Default CLI'), cli),
         h('table', { class: 'k95-models' }, h('thead', {}, h('tr', {}, h('th', {}), CLIS.flatMap((c) => [h('th', {}, `${c} model`), h('th', {}, 'effort')]))), h('tbody', {}, rows)),
         h('button', { onclick: save }, 'Save'));

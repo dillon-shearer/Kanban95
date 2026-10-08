@@ -12,14 +12,14 @@
   <main id="desktop"></main>
   <footer id="taskbar">
     <button id="start"><b>Start</b></button>
+    <button id="tasks-left" class="task-scroll" aria-label="Scroll taskbar left" hidden>&#9664;</button>
+    <div id="tasks"></div>
+    <button id="tasks-right" class="task-scroll" aria-label="Scroll taskbar right" hidden>&#9654;</button>
     <div id="tray" class="status-bar-field">
       <button id="inbox-count" class="tray-button">Inbox 0</button>
       <span id="agents">0 agents</span>
       <span id="clock"></span>
     </div>
-    <button id="tasks-left" class="task-scroll" aria-label="Scroll taskbar left" hidden>&#9664;</button>
-    <div id="tasks"></div>
-    <button id="tasks-right" class="task-scroll" aria-label="Scroll taskbar right" hidden>&#9654;</button>
   </footer>
   <script type="module" src="/app.js"></script>
 </body>

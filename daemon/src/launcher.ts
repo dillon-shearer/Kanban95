@@ -51,7 +51,8 @@ export function buildArgv(a: ArgvIn): string[] {
   switch (a.cli) {
     case 'claude':
       // --mcp-config and --disallowedTools are variadic, so each is followed by another flag, never by the message.
-      return ['claude', '--mcp-config', a.mcpConfigPath, '--strict-mcp-config', '--model', a.model, '--effort', a.effort,
+      // An empty model (an operator terminal with no operator row in models.json) runs the CLI's own default model.
+      return ['claude', '--mcp-config', a.mcpConfigPath, '--strict-mcp-config', ...(a.model ? ['--model', a.model] : []), '--effort', a.effort,
         ...(planner ? ['--disallowedTools', ...PLANNER_DENY] : []), '--dangerously-skip-permissions', message];
     case 'codex': {
       // Unquoted -c values fail TOML parsing and are taken as literal strings, which keeps `"` out of the cmd.exe line.
@@ -59,7 +60,7 @@ export function buildArgv(a: ArgvIn): string[] {
       if (a.repo.includes("'")) throw new Error(`cannot pre-trust a repo path containing ' for Codex: ${a.repo}`);
       // Workers and testers keep the bypass: under -s workspace-write Codex on Windows runs commands as a sandbox account
       // and git refuses the worktree ("dubious ownership"), so an agent could not commit (docs/CLIS.md).
-      return ['codex', '--model', a.model, '-c', `model_reasoning_effort=${a.effort}`,
+      return ['codex', ...(a.model ? ['--model', a.model] : []), '-c', `model_reasoning_effort=${a.effort}`,
         '-c', `mcp_servers.kanban95.url=${a.mcpUrl}`, '-c', `mcp_servers.kanban95.bearer_token_env_var=${TOKEN_ENV}`,
         // The board's own tools are pre-approved (`approve`; `auto` still asks); the grant already scopes them. Without this a
         // planner under -a never is refused every MCP call ("requires approval, but approval policy is never"; checked live).

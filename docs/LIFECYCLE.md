@@ -143,7 +143,8 @@ The board names no model. Each run's CLI, model and effort come from `~/.kanban9
   "claude": {
     "plan": { "model": "<model id>", "effort": "medium" },
     "execute": { "model": "<model id>", "effort": "medium" },
-    "test": { "model": "<model id>", "effort": "medium" }
+    "test": { "model": "<model id>", "effort": "medium" },
+    "operator": { "model": "<model id>", "effort": "medium" }
   },
   "codex": {
     "execute": { "model": "<model id>", "effort": "medium" },
@@ -152,7 +153,7 @@ The board names no model. Each run's CLI, model and effort come from `~/.kanban9
 }
 ```
 
-The ticket's `cli` overrides `cli`; its `model` and `effort` override the execute phase. `plan` is the brainstorm's phase. Effort defaults to `medium`. A missing file, CLI, model or a bad effort fails the launch, which flags the ticket with the reason. Settings → CLIs can name the executable per CLI (`~/.kanban95/settings.json` → `paths`); unset, the CLI is found on `PATH`.
+The ticket's `cli` overrides `cli`; its `model` and `effort` override the execute phase. `plan` is the brainstorm's phase; `operator` the operator terminal's, and the only one that may be absent (the CLI then runs its own default model). Effort defaults to `medium`. A missing file, CLI, model or a bad effort fails the launch, which flags the ticket with the reason. Settings → CLIs can name the executable per CLI (`~/.kanban95/settings.json` → `paths`); unset, the CLI is found on `PATH`.
 
 ## Operator preferences
 
