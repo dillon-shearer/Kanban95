@@ -239,6 +239,23 @@ const routes: [method: string, path: RegExp, mutation: string | null, handler: (
   }],
   // Live agent terminals, for the UI's terminal windows and the taskbar count. `id` is the /pty/<id> key.
   ['GET', /^\/api\/sessions$/, null, () => ({ status: 200, body: [...sessions.values()].map(sessionView) })],
+  // The operator's X on a terminal: the agent stops for good. A ticket's is flagged so it can be resumed; `closed` keeps
+  // the exit handler from writing a second note.
+  ['DELETE', /^\/api\/sessions\/(-?\d+)$/, 'sessions.end', ({ board, db, params }) => {
+    const s = sessions.get(Number(params[0]));
+    if (!s) throw new HttpError(404, 'no such session');
+    s.outcome = 'closed';
+    revoke(db, s.grantId);
+    s.pty.kill();
+    if (s.ticketId !== null) {
+      try {
+        apply(board, s.ticketId, 'exit', { note: { role: 'operator', kind: 'failure', body: 'ended by the operator from the terminal window' } });
+      } catch (e) {
+        if (!(e instanceof Refused)) throw e; // the ticket has moved on; nothing to flag
+      }
+    }
+    return { status: 204 };
+  }],
   ['POST', /^\/api\/brainstorm$/, 'brainstorm.launch', ({ board }) => ({ status: 201, body: sessionView(brainstorm(board)) })],
   // <repo>/.kanban95/notepad.md, the operator's scratch notes, whole file in `value` both ways ('' when absent).
   // Not audited: it autosaves every pause in typing and is nothing an agent reads.
