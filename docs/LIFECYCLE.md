@@ -128,7 +128,7 @@ A repo's prompts come from its own `.kanban95/templates/`, copied from `template
 
 ## Janitor
 
-`daemon/src/janitor.ts`. Every deletion writes an audit row (`janitor.worktree`, `janitor.session`, `janitor.grant`, `janitor.run`, `janitor.scrollback`; no grant).
+`daemon/src/janitor.ts`. Every deletion writes an audit row (`janitor.worktree`, `janitor.session`, `janitor.grant`, `janitor.run`, `janitor.scrollback`; no grant). A directory that cannot be deleted (Windows refuses while a process still holds a file or sits in it) is audited as `error` and left for the next sweep; it never stops the daemon.
 
 - **After a merge**: the ticket's worktree is removed (forced: the committed work is on the base; what is left is build output and test leftovers) and its branch deleted. Windows holds a directory for a moment after the agent in it exits, so removal is retried for about two seconds. Session dirs are already gone: each is removed when its terminal closes.
 - **When a ticket is deleted**: each of its live sessions has its grant revoked and its pty killed before the row goes (its runs, notes and grants cascade away with it); the UI closes the ticket's window and its terminals. The worktree is left to the next sweep.

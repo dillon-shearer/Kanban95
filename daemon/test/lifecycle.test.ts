@@ -1,4 +1,4 @@
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
@@ -91,7 +91,7 @@ describe('transition table', () => {
 // The brief's heading says which phase it is in; the model name says how it behaves (see `behave` below).
 const bin = mkdtempSync(join(tmpdir(), 'k95-bin-'));
 const FAKE = `
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { basename } from 'node:path';
 const argv = process.argv.slice(2);
@@ -457,6 +457,24 @@ describe('janitor on daemon start', () => {
       { tool: 'janitor.grant', n: 1 }, { tool: 'janitor.run', n: 1 }, { tool: 'janitor.scrollback', n: 1 },
       { tool: 'janitor.session', n: 1 }, { tool: 'janitor.worktree', n: 3 },
     ]);
+  });
+});
+
+describe('janitor on a locked leftover', () => {
+  it('audits the failure and the daemon still starts', async () => {
+    const dir = join(repo, '.worktrees', 't-97', 'target');
+    mkdirSync(dir, { recursive: true });
+    await srv.close();
+    // A live process sitting in the directory is what Windows refuses to delete.
+    const holder = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { cwd: dir, stdio: 'ignore' });
+    try {
+      srv = await start({ repo });
+      db = srv.db;
+      const row = db.prepare("SELECT outcome FROM audit WHERE tool = 'janitor.worktree' ORDER BY id DESC LIMIT 1").get() as { outcome: string };
+      expect(row.outcome).toBe(process.platform === 'win32' ? 'error' : 'ok');
+    } finally {
+      holder.kill();
+    }
   });
 });
 

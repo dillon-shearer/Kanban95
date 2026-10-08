@@ -13,6 +13,14 @@ type Board = { db: DatabaseSync; repo: string };
 const log = (db: DatabaseSync, ticket: number | null, tool: string, args: unknown, outcome: 'ok' | 'error' = 'ok') =>
   audit(db, { grant_id: null, ticket_id: ticket, tool, args, outcome });
 const message = (e: unknown) => ((e as { stderr?: string }).stderr || (e as Error).message).trim();
+// A directory something still holds open (a running exe, an editor, OneDrive) is left for the next sweep, never fatal.
+const remove = (path: string): string | undefined => {
+  try {
+    rmSync(path, { recursive: true, force: true });
+  } catch (e) {
+    return message(e);
+  }
+};
 
 /**
  * After a ticket's branch has landed: its worktree (forced, the committed work is on the base now; what is left is build
@@ -60,8 +68,8 @@ export function sweep(b: Board): void {
           log(db, ticket, 'janitor.worktree', { path, error: message(e) }, 'error');
           continue;
         }
-        rmSync(path, { recursive: true, force: true }); // a directory git does not know: left over, not a worktree
-        log(db, ticket, 'janitor.worktree', { path, registered: false });
+        const error = remove(path); // a directory git does not know: left over, not a worktree
+        log(db, ticket, 'janitor.worktree', { path, registered: false, error }, error ? 'error' : 'ok');
       }
     }
   }
@@ -70,8 +78,8 @@ export function sweep(b: Board): void {
   if (existsSync(sessRoot)) {
     for (const name of readdirSync(sessRoot)) {
       if (sessions.has(Number(name))) continue;
-      rmSync(join(sessRoot, name), { recursive: true, force: true });
-      log(db, null, 'janitor.session', { dir: join(sessRoot, name) });
+      const error = remove(join(sessRoot, name));
+      log(db, null, 'janitor.session', { dir: join(sessRoot, name), error }, error ? 'error' : 'ok');
     }
   }
 
