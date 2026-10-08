@@ -134,7 +134,7 @@ The first full cycle on a throwaway repo, 2026-10-08, kept here as a worked exam
 
 **Launch all.** One ticket started; the rest waited on their dependencies and started by themselves as each one merged. #2 and #3 went In Progress → Testing → Done → merged with no help, about 4 minutes each. #4's worker started with a model id that did not exist (`work`, read from `~/.kanban95/models.json` at that moment). Claude Code printed "There's an issue with the selected model" and sat at its prompt, so the ticket stayed In Progress for 15 minutes without being flagged. Reset to Backlog then Launch restarted it with the right model, and #4, #5 and #6 merged by themselves. Total: about 35 minutes, 5 of 5 merged, zero needs_human flags, and `npm test` in the sample passed 5 of 5.
 
-**Manual touches** (each one filed as a ticket on this board):
+**Manual touches.** A worker grant cannot call `create_ticket`, so these are not filed yet: the operator files them, or a planner session from this list. The operator has agreed that agents may create and edit follow-up tickets, so a later change can let the worker file its own.
 
 1. The planner asked through a throwaway ticket instead of its terminal. Its brief lists `ask_operator`, which only works on a ticket that has left Backlog. The operator had to type into the terminal to unblock it.
 2. The planner cannot delete tickets, so its leftover ticket had to be deleted by the operator.
