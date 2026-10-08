@@ -1,3 +1,4 @@
+import './home.ts'; // also here, not only in vitest.config.ts: a run from the repo root skips that config and wrote the real home
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
