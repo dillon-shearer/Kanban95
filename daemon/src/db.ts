@@ -4,15 +4,19 @@ import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, write
 import { join, resolve } from 'node:path';
 
 export const MIGRATIONS_DIR = resolve(import.meta.dirname, '../migrations');
-const INNER_GITIGNORE = 'board.db\nboard.db-*\nsessions/\nattachments/\n';
+const INNER_GITIGNORE = 'board.db\nboard.db-*\nsessions/\nattachments/\nnotepad.md\n';
 
 export function openDb(repo: string, opts: { migrationsDir?: string } = {}): DatabaseSync {
   const dir = join(repo, '.kanban95');
   mkdirSync(dir, { recursive: true });
   const ignore = join(dir, '.gitignore');
   if (!existsSync(ignore)) writeFileSync(ignore, INNER_GITIGNORE);
-  // A board made before attachments existed gets the line too: operator screenshots must never be committed.
-  else if (!readFileSync(ignore, 'utf8').split(/\r?\n/).includes('attachments/')) appendFileSync(ignore, '\nattachments/\n');
+  else {
+    // An older board gets the lines added since: operator screenshots and notes must never be committed.
+    const have = readFileSync(ignore, 'utf8').split(/\r?\n/);
+    const missing = INNER_GITIGNORE.split('\n').filter((l) => l && !have.includes(l));
+    if (missing.length) appendFileSync(ignore, `\n${missing.join('\n')}\n`);
+  }
 
   const db = new DatabaseSync(join(dir, 'board.db'));
   db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;');

@@ -85,6 +85,7 @@ Every `/api/*` request needs the `k95` cookie holding the shell secret, or gets 
 | GET | `/api/sessions` | live agent sessions: `id` (the `/pty/<id>` key), `ticket_id`, `run_id`, `grant_id`, `role`, `phase`, `model` |
 | POST | `/api/brainstorm` | starts a brainstorm session (planner, repo root); returns it in the `/api/sessions` shape |
 | GET, PUT | `/api/config/models` `/api/config/settings` | `~/.kanban95/models.json` / `settings.json`: GET returns `{path, value}` as written (`null` when absent), PUT checks the whole file against its schema (`400` naming the field) and writes it |
+| GET, PUT | `/api/notepad` | `<repo>/.kanban95/notepad.md` as plain text: `{value}`, `''` when absent; PUT refuses a non-string with `400` and more than 256 KB with `413`. Not audited |
 | GET, PUT | `/api/config/preferences` | `~/.kanban95/preferences.md` as plain text: `{path, value}`, `value` is `''` when absent; PUT refuses a non-string or more than 16 KB with `400` |
 | GET | `/api/models` | `{claude: string[], codex: string[]}`: the model names each installed CLI knows (Codex's `~/.codex/models_cache.json`, Claude's `--help` and executable), for the Settings → Models dropdowns |
 | GET, DELETE | `/api/trust` | Claude Code's trust entry for this repo root: status, or clear it (`docs/CLIS.md` → First-run prompts) |

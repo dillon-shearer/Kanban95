@@ -262,3 +262,17 @@ describe('operator preferences', () => {
     expect(existsSync(`${file()}.tmp`)).toBe(false);
   });
 });
+
+describe('notepad', () => {
+  it('reads empty when absent, saves the whole text, refuses over 256 KB with 413 without touching the file', async () => {
+    const file = join(repo, '.kanban95', 'notepad.md');
+    expect(await (await call('GET', '/api/notepad')).json()).toEqual({ value: '' });
+    expect((await call('PUT', '/api/notepad', { value: 'x'.repeat(256 * 1024) })).status).toBe(200);
+    expect(readFileSync(file, 'utf8')).toBe('x'.repeat(256 * 1024));
+    const big = await call('PUT', '/api/notepad', { value: 'é'.repeat(128 * 1024 + 1) }); // 256 KB + 2 bytes in UTF-8
+    expect(big.status).toBe(413);
+    expect((await big.json()).error).toMatch(/256 KB/);
+    expect(readFileSync(file, 'utf8')).toBe('x'.repeat(256 * 1024));
+    expect((await call('PUT', '/api/notepad', { value: null })).status).toBe(400);
+  });
+});
