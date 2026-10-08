@@ -22,6 +22,8 @@ Retry count: {{retry}} (after 3 failed retries the ticket stops and goes to the 
 
 ## The change under test
 
+`git diff --stat` of every changed file, then the diff of code and config only: markdown, `docs/` and lockfiles are listed in the stat but not shown, and a long diff ends at a truncation marker. Pull any file not shown with `git diff {{base}}...HEAD -- <path>`, and do so for every criterion about such a file.
+
 ```diff
 {{diff}}
 ```

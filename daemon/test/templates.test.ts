@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { BRAIN_TRUNCATED, brainFor, buildContext, startRun } from '../src/context.ts';
+import { BRAIN_TRUNCATED, brainFor, buildContext, gitDiff, startRun } from '../src/context.ts';
 import { openDb } from '../src/db.ts';
 import { preferencesPath } from '../src/settings.ts';
 import { DEFAULTS_DIR, initTemplates, render, TEMPLATES, VARS, type Ctx, type TemplateName } from '../src/templates.ts';
@@ -118,8 +118,48 @@ describe('context', () => {
     git('-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '-m', 'add a');
     const t = ticket('diffed');
     expect(buildContext(db, repo, t, 'worker').diff).toBe('');
-    expect(buildContext(db, repo, t, 'tester', { worktree: repo, base: 'main' }).diff).toMatch(/^diff --git a\/a\.txt[\s\S]*\+hello/);
+    expect(buildContext(db, repo, t, 'tester', { worktree: repo, base: 'main' }).diff).toMatch(/^a\.txt \| 1 \+[\s\S]*\ndiff --git a\/a\.txt[\s\S]*\+hello/);
     expect(() => buildContext(db, repo, t, 'tester')).toThrow('worktree and base');
+  });
+
+  describe('gitDiff', () => {
+    const git = (...a: string[]) => execFileSync('git', a, { cwd: repo, encoding: 'utf8' });
+    const commit = (files: Record<string, string>) => {
+      for (const [f, body] of Object.entries(files)) {
+        mkdirSync(dirname(join(repo, f)), { recursive: true });
+        writeFileSync(join(repo, f), body);
+      }
+      git('add', ...Object.keys(files));
+      git('-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '-m', 'change');
+    };
+    beforeEach(() => {
+      git('init', '-q', '-b', 'main');
+      git('-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '--allow-empty', '-m', 'base');
+      git('checkout', '-q', '-b', 'ticket/1');
+    });
+
+    it('names markdown, docs and lockfiles in the stat but leaves their hunks out', () => {
+      commit({ 'src/a.ts': 'code\n', 'README.md': 'readme words\n', 'docs/img/x.svg': '<svg/>\n', 'package-lock.json': '{}\n', 'shell/Cargo.lock': 'lock\n' });
+      const d = gitDiff(repo, 'main');
+      for (const f of ['src/a.ts', 'README.md', 'docs/img/x.svg', 'package-lock.json', 'shell/Cargo.lock']) expect(d).toContain(` ${f} `);
+      expect(d).toContain('diff --git a/src/a.ts');
+      expect(d.match(/^diff --git/gm)).toHaveLength(1);
+      expect(d).not.toContain('readme words');
+    });
+
+    it('cuts a long diff at the budget with a marker naming how to pull the rest', () => {
+      commit({ 'a.ts': 'x'.repeat(5000) + '\n' });
+      const d = gitDiff(repo, 'main', 1000);
+      expect(d).toMatch(/\n\[diff truncated: run git diff main\.\.\.HEAD -- <path>\]$/);
+      expect(d.length).toBeLessThan(1000 + 200); // budget plus the stat
+      expect(gitDiff(repo, 'main')).not.toContain('[diff truncated');
+    });
+
+    it('is empty when nothing changed, and a docs-only change still shows its stat', () => {
+      expect(gitDiff(repo, 'main')).toBe('');
+      commit({ 'docs/X.md': 'doc\n' });
+      expect(gitDiff(repo, 'main')).toMatch(/^ docs\/X\.md \| 1 \+\n 1 file changed, 1 insertion\(\+\)$/);
+    });
   });
 
   it('ticket lists each attachment by absolute path, and nothing when there are none', () => {

@@ -50,9 +50,23 @@ function attachmentList(repo: string, ticketId: number): string {
   return files.length ? `Attachments (open with your file reader):\n${files.map((f) => `- ${f.path}`).join('\n')}` : '';
 }
 
-function gitDiff(worktree: string, base: string): string {
-  // ponytail: the whole diff is injected; truncate with a marker if prompts outgrow the CLIs' input limits.
-  return execFileSync('git', ['diff', '--no-color', '--no-ext-diff', `${base}...HEAD`], { cwd: worktree, encoding: 'utf8', maxBuffer: 16 << 20 });
+/** Left out of the inline diff (still named in the stat): docs and lockfiles were 40-100% of the large tester prompts (ticket #43). */
+const DIFF_SKIP = [':(exclude)*.md', ':(exclude)docs/**', ':(exclude)*package-lock.json', ':(exclude)*.lock'];
+export const DIFF_CHARS = 32000;
+
+/**
+ * The tester's view of the change: `git diff --stat` of every file, then the diff of code and config only, capped at `chars`
+ * with a marker telling the tester how to pull the rest. Push identifiers, not content: the tester reads what it needs per file.
+ */
+export function gitDiff(worktree: string, base: string, chars = DIFF_CHARS): string {
+  const git = (...a: string[]) =>
+    execFileSync('git', ['diff', '--no-color', '--no-ext-diff', ...a], { cwd: worktree, encoding: 'utf8', maxBuffer: 16 << 20 });
+  const stat = git('--stat=200', `${base}...HEAD`).trimEnd();
+  if (!stat) return '';
+  const marker = `\n[diff truncated: run git diff ${base}...HEAD -- <path>]`;
+  let body = git(`${base}...HEAD`, '--', ...DIFF_SKIP);
+  if (body.length > chars) body = body.slice(0, chars - marker.length) + marker;
+  return `${stat}\n\n${body}`.trimEnd();
 }
 
 /** A null ticket is a brainstorm or operator session: tools only, nothing pushed. `mission` is the operator terminal's, set by its launcher. */

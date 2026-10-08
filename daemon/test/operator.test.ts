@@ -123,10 +123,12 @@ describe('operator over MCP', () => {
 });
 
 describe('operator argv', () => {
-  const base = { repo: 'C:\\r', promptPath: 'C:/r/.kanban95/sessions/-3/prompt.md', mcpConfigPath: 'C:/r/.kanban95/sessions/-3/mcp.json', mcpUrl: 'http://127.0.0.1:5/mcp', cwd: 'C:/r', model: 'm', effort: 'high' };
+  const base = { repo: 'C:\\r', promptPath: 'C:/r/.kanban95/sessions/-3/prompt.md', mcpConfigPath: 'C:/r/.kanban95/sessions/-3/mcp.json', settingsPath: 'C:/r/.kanban95/sessions/-3/settings.json', mcpUrl: 'http://127.0.0.1:5/mcp', cwd: 'C:/r', model: 'm', effort: 'high' };
   it.each(['claude', 'codex'])("%s: the worker's permissions, not the planner deny list", (cli) => {
     const argv = buildArgv({ ...base, cli, role: 'operator' } as ArgvIn);
-    expect(argv).toEqual(buildArgv({ ...base, cli, role: 'worker' } as ArgvIn));
+    // The operator watches its terminal, so it keeps its own Claude settings and skills, which an unattended worker drops.
+    const lean = ['--setting-sources', 'project,local', '--settings', base.settingsPath, '--disable-slash-commands'];
+    expect(argv).toEqual(buildArgv({ ...base, cli, role: 'worker' } as ArgvIn).filter((a) => !lean.includes(a)));
     expect(argv).not.toEqual(buildArgv({ ...base, cli, role: 'planner' } as ArgvIn));
     expect(argv).toContain(cli === 'claude' ? '--dangerously-skip-permissions' : '--dangerously-bypass-approvals-and-sandbox');
   });
