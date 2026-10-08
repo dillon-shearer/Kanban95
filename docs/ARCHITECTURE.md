@@ -23,14 +23,17 @@ Living document. Update it in the same change that alters the shape described he
 
 ## Port handshake
 
-1. Shell mints a random secret and spawns the daemon with it in `KANBAN95_SECRET` (environment, never argv) and `stdin` and `stdout` piped.
-2. Daemon binds `127.0.0.1:0` (kernel-assigned port), then prints exactly one line to stdout: `KANBAN95 port=<n>`.
-3. Shell reads that line, builds `http://127.0.0.1:<n>/?k95=<secret>` and creates the main webview window on it; the daemon trades that for an HttpOnly cookie and redirects to `/`. Any other first line is a fatal handshake error; the shell kills the child and exits.
-4. Shell keeps draining daemon stdout to its own stderr prefixed `[daemon]` so the pipe can never fill and block the daemon.
+1. Before spawning, the shell runs `node --version`. Missing or older than 24: a native error dialog names the problem and the Node download link, and the shell exits with code 1.
+2. Shell mints a random secret and spawns the daemon with it in `KANBAN95_SECRET` (environment, never argv) and `stdin` and `stdout` piped.
+3. Daemon binds `127.0.0.1:0` (kernel-assigned port), then prints exactly one line to stdout: `KANBAN95 port=<n>`.
+4. Shell reads that line, builds `http://127.0.0.1:<n>/?k95=<secret>` and creates the main webview window on it; the daemon trades that for an HttpOnly cookie and redirects to `/`. Any other first line is a handshake error; the shell kills the child, shows an error dialog and exits.
+5. Shell keeps draining daemon stdout to its own stderr prefixed `[daemon]` so the pipe can never fill and block the daemon.
 
-## Daemon lifetime, two belts
+## Daemon lifetime
 
-- **Kill on exit**: on Tauri's `RunEvent::Exit` the shell calls `kill()` then `wait()` on the child.
+- **Job object**: the shell's first act is to put itself in a Windows job with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`. The daemon and WebView2's `msedgewebview2.exe` processes inherit it, and only the shell holds the job handle, so when the shell process ends for any reason (window close, crash, `taskkill /f`, logoff, shutdown) Windows kills every process in the tree.
+- **Restart once**: a supervisor thread polls the daemon every 250 ms. The first unexpected exit starts a new daemon with a fresh secret, moves the navigation lock to its new port and navigates the window to `/?k95=<secret>` there (a new origin, so the UI's `localStorage`, window positions included, starts empty). A second exit, or a failed restart, shows a native error dialog and closes the board. No loop. `cargo test --manifest-path shell/Cargo.toml` covers this with stand-in daemons that crash at once.
+- **Kill on exit**: on Tauri's `RunEvent::Exit` the shell takes the child out of the supervisor's slot (which stops the supervisor) and calls `kill()` then `wait()` on it.
 - **Stdin EOF**: the daemon holds `process.stdin` open and exits with code 0 when it ends. The shell never writes to it; the pipe simply closes when the shell process dies, including on a crash. An orphaned daemon is therefore not possible. Consequence: if you start the daemon by hand with stdin closed (`< /dev/null`, `stdio: 'ignore'`), it exits immediately after printing the port. That is intended.
 
 ## Network boundary

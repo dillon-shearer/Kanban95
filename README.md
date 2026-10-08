@@ -17,7 +17,7 @@ Spec: `PLAN.md`. Design: `docs/ARCHITECTURE.md`, schema `docs/DATA.md`, security
 
 **One click: `Kanban95.cmd`.** Double-click it to open the board on this repo, or drop a project folder (a git repository) onto it to open the board on that project; `Kanban95.cmd C:\path\to\project` does the same from a terminal, and a desktop shortcut to it works too. It finds Node 24 even when an older Node is first on PATH (through fnm), runs `npm install` the first time, builds and starts the window. Its console window shows the daemon's log; closing the board window ends both.
 
-By hand (Node 24 must be the `node` on PATH, because the shell starts the daemon with it; otherwise the shell stops with `bad daemon handshake ""`):
+By hand (Node 24 must be the `node` on PATH, because the shell starts the daemon with it; otherwise the shell shows an error dialog naming the Node it found and the download link):
 
 ```
 npm install
