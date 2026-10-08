@@ -205,6 +205,7 @@ const routes: [method: string, path: RegExp, mutation: string | null, handler: (
   // Lifecycle (docs/LIFECYCLE.md). A transition the table does not have is 409.
   ['POST', /^\/api\/tickets\/(\d+)\/launch$/, 'tickets.launch', ({ board, params }) => ({ status: 200, body: apply(board, Number(params[0]), 'launch').ticket })],
   ['POST', /^\/api\/tickets\/(\d+)\/resume$/, 'tickets.resume', ({ board, params }) => ({ status: 200, body: apply(board, Number(params[0]), 'resume').ticket })],
+  ['POST', /^\/api\/tickets\/(\d+)\/restart$/, 'tickets.restart', ({ board, params }) => ({ status: 200, body: apply(board, Number(params[0]), 'restart').ticket })],
   ['POST', /^\/api\/tickets\/launch-all$/, 'tickets.launch_all', ({ board }) => ({ status: 200, body: launchAll(board) })],
   ['POST', /^\/api\/tickets\/(\d+)\/answer$/, 'tickets.answer', ({ board, params, body }) => {
     if (typeof body.answer !== 'string' || !body.answer.trim()) throw new HttpError(400, 'answer must be a non-empty string');
