@@ -5,7 +5,7 @@ Living document. Update it in the same change that alters the schema.
 ## Where
 
 - `<repo>/.kanban95/board.db`, one SQLite file per repo, WAL mode, foreign keys on. Created on first daemon start together with `.kanban95/.gitignore` (ignores `board.db`, `board.db-*`, `sessions/`, `attachments/`; an older board's `.gitignore` gets the `attachments/` line on the next start).
-- `<repo>/.kanban95/sessions/<run-id>/`: per-run `prompt.md` and (Claude Code) `mcp.json`, owner-only, deleted when the run's pty exits. Not data to keep; the prompt is also in `runs.prompt_rendered`.
+- `<repo>/.kanban95/sessions/<run-id>/` (a brainstorm, which has no run, uses `-<grant-id>`): per-run `prompt.md` and (Claude Code) `mcp.json`, owner-only for Claude Code (not for Codex, `docs/CLIS.md` → Reach by role), deleted when the run's pty exits. Not data to keep; the prompt is also in `runs.prompt_rendered`.
 - `<repo>/.kanban95/attachments/<ticket-id>/<filename>`: files the operator attached to a ticket (pasted screenshots, dropped files), written by `POST /api/tickets/:id/attachments` (`daemon/src/attachments.ts`). Plain files, no table: the directory listing is the list. The `{{ticket}}` prompt variable and MCP `get_ticket` name each by absolute path so an agent opens it with its own file reader. Removed with the ticket.
 - `<repo>/.worktrees/t-<id>/`: the ticket's git worktree on branch `ticket/<id>`, excluded through `.git/info/exclude`. Removed with the branch once the ticket merges (`docs/LIFECYCLE.md` → Janitor).
 - `<repo>/.kanban95/config.json`: optional, committed, no secrets. Read by the lifecycle: `housekeeping_every` (default 10). The daemon never writes it.
@@ -13,7 +13,7 @@ Living document. Update it in the same change that alters the schema.
 - `~/.kanban95/settings.json`: `paths` (`claude`, `codex`: an absolute path to the executable, empty for PATH), `sounds` (boolean, default true), `voice` (`backend`: `local`; `mode`: `push` or `toggle`). Absent means all defaults. Written by Settings after a schema check. No secrets.
 - `~/.kanban95/preferences.md`: the operator's standing instructions for every agent, free text, at most 16 KB. Injected into every prompt as `{{preferences}}` (`docs/AGENTS.md`). Absent means none. Written by Settings → Prompts → Save. Do not put secrets in it: it is copied into every session's prompt.md.
 - `~/.kanban95/models/whisper-base.en/`: the speech model, downloaded on the operator's OK and hash-checked (`docs/SECURITY.md` → Voice model). Not data; delete it to free 80 MB, the mic will offer the download again.
-- `localStorage` in the webview: window positions and sizes only.
+- `localStorage` in the webview: window positions, sizes and maximized state only.
 - Nothing in the database leaves the machine. There is no sync, no telemetry, no export yet (export is explicit when it arrives).
 - The daemon is the only writer. The UI goes through REST, agents go through MCP (`docs/MCP.md`).
 
@@ -39,7 +39,7 @@ Living document. Update it in the same change that alters the schema.
 | status | TEXT | `backlog` `in_progress` `testing` `done`, default `backlog` |
 | needs_human | INTEGER | 0/1 flag |
 | blocked_on_deps | INTEGER | 0/1 flag |
-| cli | TEXT | nullable, harness name as known to the launcher (phase 4 validates it against config) |
+| cli | TEXT | nullable, harness name, `claude` or `codex`; REST stores any string, the launch refuses an unknown one |
 | model | TEXT | nullable, null = phase default from `~/.kanban95/models.json` |
 | effort | TEXT | nullable, `low` `medium` `high` `max`, null = phase default |
 | retry | INTEGER | `>= 0`, default 0; failed tests so far, written by the lifecycle |
@@ -98,7 +98,7 @@ A grant is live when `revoked_at IS NULL AND expires_at > now`. Rows are kept af
 | id | INTEGER PK | |
 | grant_id | INTEGER FK | null for operator actions over REST; set-null on grant delete |
 | ticket_id | INTEGER FK | null when the action was not about one ticket, or the ticket no longer exists; set-null on delete |
-| tool | TEXT | REST: `tickets.create` `tickets.update` `tickets.delete` `grants.revoke` `tickets.launch` `tickets.launch_all` `tickets.answer` `tickets.merge` `tickets.resume` `tickets.housekeeping` `brainstorm.launch` `brain.add` `config.write` `trust.clear` `voice.download`. MCP: the tool name (`create_ticket`, `move_ticket`, ..., see `docs/MCP.md`). Board: `trust.write` (a key written into an agent CLI's config, `docs/SECURITY.md`) and `janitor.worktree` `janitor.session` `janitor.grant` `janitor.run` `janitor.scrollback` (`docs/LIFECYCLE.md`), all with a null grant. |
+| tool | TEXT | REST: `tickets.create` `tickets.update` `tickets.delete` `grants.revoke` `tickets.launch` `tickets.launch_all` `tickets.answer` `tickets.merge` `tickets.resume` `tickets.housekeeping` `brainstorm.launch` `brain.add` `attachments.add` `attachments.remove` `config.write` `trust.clear` `voice.download`. MCP: the tool name (`create_ticket`, `move_ticket`, ..., see `docs/MCP.md`). Board: `trust.write` (a key written into an agent CLI's config, `docs/SECURITY.md`) and `janitor.worktree` `janitor.session` `janitor.grant` `janitor.run` `janitor.scrollback` (`docs/LIFECYCLE.md`), all with a null grant. |
 | args_summary | TEXT | JSON of the request, truncated to 200 characters. Callers must never put a token in it. |
 | outcome | TEXT | `ok` `denied` `error` |
 | created_at | TEXT | |
