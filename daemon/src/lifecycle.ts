@@ -190,7 +190,12 @@ export function apply(b: Board, id: number, event: Event, x: { note?: Note; answ
       case 'enqueue_merge': queueMerge(b, id); break;
       case 'note': break; // written above, in the transaction
       case 'answer_pty':
-        for (const s of sessionsOf(id)) s.pty.write(oneLine(x.answer ?? '') + '\r');
+        // Text, then Enter as its own write: Claude Code reads one burst as a paste, where \r is a newline, not Enter.
+        // ponytail: fixed 300 ms gap, a very slow pty may still merge the two; upgrade is to wait for the echo before Enter.
+        for (const s of sessionsOf(id)) {
+          s.pty.write(oneLine(x.answer ?? ''));
+          setTimeout(() => s.pty.write('\r'), 300);
+        }
         break;
       case 'chord': case 'ding': events.emit('event', { sound: e, ticket: id }); break;
       case 'remove_worktree': pending.push(cleanTicket(b, id)); break;

@@ -42,7 +42,7 @@ Status is one of **backlog → in_progress → testing → done**. Two flags sit
 | testing | fail | `retry` < 3 | in_progress | `retry` + 1 | tester session ended, execute agent again, with the failure notes and the ticket's (possibly escalated) model |
 | testing | fail | `retry` = 3 | in_progress | `retry` + 1, `needs_human` on | tester session ended, failure note "stopped after 4 failed tests", chord. Stops |
 | running | ask | | same | `needs_human` on | question note, chord. The agent's terminal stays open |
-| running | answer | `needs_human` on and an agent session is live | same | `needs_human` off | answer note; the answer typed into the agent's terminal as one line + Enter |
+| running | answer | `needs_human` on and an agent session is live | same | `needs_human` off | answer note; the answer typed into the agent's terminal as one line, then Enter as a separate keystroke 300 ms later (one burst would read as a paste, leaving the answer unsubmitted) |
 | running | exit | | same | `needs_human` on | failure note ("agent exited without reporting" or "launch failed: …", then a "To resolve:" line naming Resume and Reset to Backlog), chord |
 | done | merged | | done | `merged_at` set, `needs_human` off | ding, worktree and branch removed, held dependents launched, housekeeping check |
 | done | conflict | `retry` < 3 | in_progress | `retry` + 1 | failure note "merge conflict with <base>: <git output>", execute agent again in the kept worktree. It merges the base in, resolves, and submits; the tester runs and the merge is queued again |

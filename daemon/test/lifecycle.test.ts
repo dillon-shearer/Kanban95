@@ -284,6 +284,8 @@ describe('lifecycle', { timeout: 60_000 }, () => {
     expect(notes(id, 'question')).toEqual(['Which colour?']);
     expect(sounds).toEqual([{ sound: 'chord', ticket: id }]);
     expect(sessionsOf(id)).toHaveLength(1); // the pty stays alive
+    const pty = sessionsOf(id)[0].pty, writes: string[] = [], write = pty.write.bind(pty);
+    pty.write = (d: string) => { writes.push(d); write(d); };
 
     expect((await post(`/api/tickets/${id}/answer`, { answer: '  ' })).status).toBe(400);
     const r = await post(`/api/tickets/${id}/answer`, { answer: 'blue,\r\nand bold' });
@@ -291,6 +293,8 @@ describe('lifecycle', { timeout: 60_000 }, () => {
     expect((await r.json()).flags.needs_human).toBe(false);
     expect(notes(id, 'answer')).toEqual(['blue,\r\nand bold']);
     expect((await post(`/api/tickets/${id}/answer`, { answer: 'again' })).status).toBe(409); // nothing is asked now
+    await until(() => writes.length === 2, 'the Enter');
+    expect(writes).toEqual(['blue, and bold', '\r']); // Enter on its own, or Claude Code takes the burst as a paste
 
     await landed(id);
     expect(git('show', 'HEAD:answer.txt')).toBe('blue, and bold');
