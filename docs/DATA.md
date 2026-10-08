@@ -96,7 +96,7 @@ A grant is live when `revoked_at IS NULL AND expires_at > now`. Rows are kept af
 | id | INTEGER PK | |
 | grant_id | INTEGER FK | null for operator actions over REST; set-null on grant delete |
 | ticket_id | INTEGER FK | null when the action was not about one ticket, or the ticket no longer exists; set-null on delete |
-| tool | TEXT | REST: `tickets.create` `tickets.update` `tickets.delete` `grants.revoke` `tickets.launch` `tickets.launch_all` `tickets.answer` `tickets.merge` `tickets.housekeeping` `brainstorm.launch` `brain.add` `config.write` `trust.clear` `voice.download`. MCP: the tool name (`create_ticket`, `move_ticket`, ..., see `docs/MCP.md`). Board: `trust.write` (a key written into an agent CLI's config, `docs/SECURITY.md`) and `janitor.worktree` `janitor.session` `janitor.grant` `janitor.run` `janitor.scrollback` (`docs/LIFECYCLE.md`), all with a null grant. |
+| tool | TEXT | REST: `tickets.create` `tickets.update` `tickets.delete` `grants.revoke` `tickets.launch` `tickets.launch_all` `tickets.answer` `tickets.merge` `tickets.resume` `tickets.housekeeping` `brainstorm.launch` `brain.add` `config.write` `trust.clear` `voice.download`. MCP: the tool name (`create_ticket`, `move_ticket`, ..., see `docs/MCP.md`). Board: `trust.write` (a key written into an agent CLI's config, `docs/SECURITY.md`) and `janitor.worktree` `janitor.session` `janitor.grant` `janitor.run` `janitor.scrollback` (`docs/LIFECYCLE.md`), all with a null grant. |
 | args_summary | TEXT | JSON of the request, truncated to 200 characters. Callers must never put a token in it. |
 | outcome | TEXT | `ok` `denied` `error` |
 | created_at | TEXT | |

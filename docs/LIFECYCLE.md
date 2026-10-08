@@ -19,6 +19,7 @@ Status is one of **backlog → in_progress → testing → done**. Two flags sit
 | `exit` | the agent's terminal closed without a `move_ticket`, or its launch failed |
 | `merged`, `conflict` | the merge queue |
 | `merge` | the operator retrying a failed merge, `POST /api/tickets/:id/merge` |
+| `resume` | the operator, Resume in the card menu or the Inbox, `POST /api/tickets/:id/resume` |
 
 ## The table
 
@@ -28,16 +29,22 @@ Status is one of **backlog → in_progress → testing → done**. Two flags sit
 |---|---|---|---|---|---|
 | backlog | launch | every dependency merged | in_progress | `blocked_on_deps` off | worktree, worker grant, execute agent |
 | backlog | launch | a dependency not merged | backlog | `blocked_on_deps` on | none; launched again when the dependency merges |
+| in_progress | launch | no live agent session | in_progress | `needs_human` off | execute agent again in the same worktree, `retry` unchanged. Refused while an agent is live: "it already has a running agent; open its terminal, or Reset to Backlog to stop it" |
+| testing | launch | no live agent session | testing | `needs_human` off | test agent again in the same worktree, `retry` unchanged. Refused while an agent is live, as above |
+| in_progress | resume | `needs_human` on and no live agent session | in_progress | `needs_human` off | execute agent again, as for launch |
+| testing | resume | `needs_human` on and no live agent session | testing | `needs_human` off | test agent again, as for launch |
 | in_progress | submit | | testing | | worker session ended (grant revoked, pty killed), tester grant, test agent |
 | testing | pass | the tester called `report_test(passed: true)` during this test run | done | | tester session ended, merge queued |
 | testing | fail | `retry` < 3 | in_progress | `retry` + 1 | tester session ended, execute agent again, with the failure notes and the ticket's (possibly escalated) model |
 | testing | fail | `retry` = 3 | in_progress | `retry` + 1, `needs_human` on | tester session ended, chord. Stops |
 | running | ask | | same | `needs_human` on | question note, chord. The agent's terminal stays open |
 | running | answer | `needs_human` on and an agent session is live | same | `needs_human` off | answer note; the answer typed into the agent's terminal as one line + Enter |
-| running | exit | | same | `needs_human` on | failure note ("agent exited without reporting" or "launch failed: …"), chord |
+| running | exit | | same | `needs_human` on | failure note ("agent exited without reporting" or "launch failed: …", then a "To resolve:" line naming Resume and Reset to Backlog), chord |
 | done | merged | | done | `merged_at` set, `needs_human` off | ding, worktree and branch removed, held dependents launched, housekeeping check |
 | done | conflict | | done | `needs_human` on | failure note with git's output, chord. Worktree kept |
 | done | merge | not merged yet | done | | merge queued again |
+
+Resume and launch on a running ticket are not in the original spec. Before them, the only way past a silent exit was Reset to Backlog and Launch, which threw away `retry` and the phase. The new prompt carries the exit's failure note like any retry (`failureNotes` in `daemon/src/context.ts`: failure notes since the latest execute run). Resume is the strict form (only a flagged ticket); Launch on a running ticket also starts an unflagged one with no agent, such as one dragged by hand into a running column.
 
 The last row is not in the original spec: it is how a conflict is resolved. The operator fixes the branch in its worktree (for example merges the base into it and commits), then retries the merge.
 
@@ -55,7 +62,9 @@ Both CLIs run interactive sessions that never exit by themselves. When an agent'
 
 ### Restart
 
-No agent survives a daemon restart. On start, every running ticket without a live session and without `needs_human` gets the `exit` row ("agent exited without reporting (the daemon restarted)"), and every done ticket that never merged and is not flagged is queued for merge again.
+No agent survives a daemon restart, and an agent killed by one did nothing wrong. On start, every running ticket without a live session and without `needs_human` gets a failure note ("agent exited without reporting (the daemon restarted)") and the running-ticket `launch` row: the agent for its phase starts again in the same worktree with that note in its prompt, `retry` unchanged, no operator action. If that agent then exits without reporting, the ordinary `exit` row flags the ticket. A ticket already flagged before the restart stays flagged until the operator resumes it. Every done ticket that never merged and is not flagged is queued for merge again.
+
+There is no Pause yet; when it exists, a paused board flags these tickets (`exit`, with the "To resolve:" line) instead of resuming them.
 
 ## Launch all
 
@@ -121,5 +130,6 @@ The count is derived from the database (`template = 'execute' AND merged_at IS N
 | POST | `/api/tickets/launch-all` | `launch` on every backlog ticket, in dependency order; returns them |
 | POST | `/api/tickets/:id/answer` | `answer`; body `{ "answer": "..." }`, non-empty |
 | POST | `/api/tickets/:id/merge` | `merge` |
+| POST | `/api/tickets/:id/resume` | `resume` |
 
-Each returns the ticket (`200`), `409` with the refusal when the table has no row, and is audited like every REST mutation (`tickets.launch`, `tickets.launch_all`, `tickets.answer`, `tickets.merge`).
+Each returns the ticket (`200`), `409` with the refusal when the table has no row, and is audited like every REST mutation (`tickets.launch`, `tickets.launch_all`, `tickets.answer`, `tickets.merge`, `tickets.resume`).

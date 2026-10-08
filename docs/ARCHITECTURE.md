@@ -55,10 +55,10 @@ Every `/api/*` request needs the `k95` cookie holding the shell secret, or gets 
 | GET | `/api/brain?q=&limit=` | FTS5 ranked search, limit at most 100; no `q` lists newest |
 | GET | `/api/grants` | all grants, never the hash |
 | DELETE | `/api/grants/:id` | revoke and kill the session's pty; 404 if not live |
-| POST | `/api/tickets/:id/launch` `/api/tickets/launch-all` `/api/tickets/:id/answer` `/api/tickets/:id/merge` | lifecycle events (`docs/LIFECYCLE.md`); `409` when the state machine has no such transition |
+| POST | `/api/tickets/:id/launch` `/api/tickets/launch-all` `/api/tickets/:id/answer` `/api/tickets/:id/merge` `/api/tickets/:id/resume` | lifecycle events (`docs/LIFECYCLE.md`); `409` when the state machine has no such transition |
 | POST | `/api/tickets/housekeeping` | creates a housekeeping ticket and launches it (the Housekeeping button) |
 | GET | `/api/tickets/:id/diff` | `{diff}`: the worktree against its fork point, uncommitted tracked changes included; `null` without a worktree |
-| GET | `/api/inbox` | unanswered `question` notes on tickets still flagged `needs_human` |
+| GET | `/api/inbox` | what flagged tickets wait on: unanswered `question` notes, and the newest `failure` note when no newer question is open (`kind`, ticket `status`) |
 | POST | `/api/brain` | add a note: `title`, `body`, optional `tags` |
 | GET | `/api/sessions` | live agent sessions: `id` (the `/pty/<id>` key), `ticket_id`, `run_id`, `grant_id`, `role`, `phase`, `model` |
 | POST | `/api/brainstorm` | starts a brainstorm session (planner, repo root); returns it in the `/api/sessions` shape |
