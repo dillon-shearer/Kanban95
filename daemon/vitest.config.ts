@@ -5,7 +5,8 @@ import { defineConfig } from 'vitest/config';
 // Absolute paths, so the repo-root vitest.config.ts, which re-exports this one, loads the same files.
 const here = (f: string) => fileURLToPath(new URL(f, import.meta.url));
 // The ui-*.test.ts files each start a daemon and a browser; they run as a second group, after the rest, so their load
-// does not time out the other files.
+// does not time out the other files, and one at a time: parallel Chromes on Windows still lock their profile dirs at
+// afterAll (rmSync EPERM).
 const UI = 'test/ui-*.test.ts';
 export default defineConfig({
   test: {
@@ -13,7 +14,7 @@ export default defineConfig({
     globalSetup: [here('test/real-home-guard.ts')],
     projects: [
       { extends: true, test: { name: 'unit', include: ['test/**/*.test.ts'], exclude: [UI] } },
-      { extends: true, test: { name: 'ui', include: [UI], sequence: { groupOrder: 1 } } },
+      { extends: true, test: { name: 'ui', include: [UI], sequence: { groupOrder: 1 }, fileParallelism: false } },
     ],
   },
 });

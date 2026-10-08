@@ -89,7 +89,7 @@ beforeAll(async () => {
   // As the shell does: open on ?k95=<secret>, which the daemon trades for a cookie and redirects to /.
   await page.send('Page.navigate', { url: `${base}?k95=${srv.secret}` });
   await until(() => page.evaluate(`document.readyState === 'complete' && location.href === ${JSON.stringify(base)}`), 'the redirect to /');
-}, 120_000); // the ui-*.test.ts files start their browsers in parallel
+}, 120_000); // a cold browser start on a loaded machine
 afterAll(async () => {
   await page?.close();
   await srv?.close();
