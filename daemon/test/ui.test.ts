@@ -30,7 +30,6 @@ const line = () => new Promise((ok) => process.stdin.setEncoding('utf8').once('d
 console.log('FAKE ' + model);
 if (brief.startsWith('# Test')) {
   await call('report_test', { passed: true, summary: 'ok' });
-  await call('move_ticket', { status: 'done' });
 } else if (model === 'ask') {
   await call('ask_operator', { question: 'Which colour?' });
   writeFileSync('answer.txt', await line());

@@ -44,8 +44,8 @@ Retry count: {{retry}} (after 3 failed retries the ticket stops and goes to the 
 
 ## Finish
 
-1. Call `report_test` with `passed`, a summary naming each criterion and its result, and the evidence (commands run, test output, screenshot paths).
-2. Then call `move_ticket`: `done` if every criterion passes, otherwise `in_progress` so the worker retries with your failure report.
+1. Call `report_test` with `passed` (true only if every criterion passes), a summary naming each criterion and its result, and the evidence (commands run, test output, screenshot paths).
+2. That one call is the verdict and ends your session: the board moves the ticket to `done` (and merges it) or back to `in_progress` (the worker retries with your failure report). Do not call `move_ticket`; nothing after `report_test` is read.
 
 ## Tools you may call
 
