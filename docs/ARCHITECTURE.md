@@ -17,13 +17,13 @@ Living document. Update it in the same change that alters the shape described he
                                             │  GET /voice-model/* → the speech model's files (manifest-listed only)
 ```
 
-- **Shell** (`shell/`): owns the OS window and the daemon's lifetime. No app logic. In dev it runs `node daemon/dist/server.js` from PATH; packaging Node as a real sidecar is phase 7.
+- **Shell** (`shell/`): owns the OS window and the daemon's lifetime. No app logic. It runs `node` from PATH on the daemon staged next to its exe (installed) or on `daemon/dist/server.js` in the repo (dev); see Packaging.
 - **Daemon** (`daemon/src/`): the only process with state. `server.ts` is the HTTP plumbing (bind, origin guard, static files, `/health`, routes `/api/*` to `api.ts`). `db.ts` opens and migrates the per-repo SQLite file (schema in `docs/DATA.md`). `grants.ts` mints, verifies, revokes bearer grants and writes audit rows (`docs/SECURITY.md`). `mcp.ts` is the agent-facing MCP server at `/mcp`: one table of tools, each with a description, a role access cell and a handler, enforced per grant and audited per call. `mcp-doc.ts` renders `docs/MCP.md` from that table. `templates.ts` copies the default prompt templates from `templates/` into `<repo>/.kanban95/templates/` once and renders them; `context.ts` builds the variables for a ticket and records the rendered prompt on a `runs` row (`startRun`) before anything is spawned (see Prompts below). `git.ts` creates and removes the per-ticket worktree. `launcher.ts` launches an agent (worktree, run row, grant, session dir, argv, pty) and tears it down (see Launch below); `pty.ts` spawns the CLI in a pseudo-terminal with an env allowlist and keeps a 2000-line scrollback. `trust.ts` pre-trusts the repo root for Claude Code before a launch. `lifecycle.ts` is the ticket state machine: one table of transitions, `apply(board, ticket, event)` and Launch all (`docs/LIFECYCLE.md`). `merge.ts` is the one serialized merge queue. `janitor.ts` removes worktrees, branches, session dirs, grants and old scrollback nobody needs any more. `settings.ts` reads and writes the operator's `~/.kanban95/models.json` and `settings.json` (schema-checked) and resolves a run's CLI, model, effort and executable. `voice.ts` downloads, verifies and serves the speech model (see Voice below). The repo it serves is `argv[2]`, defaulting to the cwd.
 - **UI** (`ui/`): plain files served by the daemon, ES modules, no bundler (see UI below). 98.css, xterm.js and transformers.js are vendored in `ui/vendor/` so nothing loads from a CDN at runtime.
 
 ## Port handshake
 
-1. Before spawning, the shell runs `node --version`. Missing or older than 24: a native error dialog names the problem and the Node download link, and the shell exits with code 1.
+1. Before spawning, the shell runs `node --version`. Missing or older than 24: a native Yes/No dialog names the problem and the Node download link and offers to open it in the default browser (`ShellExecuteW`, from the shell, not the webview), and the shell exits with code 1.
 2. Shell mints a random secret and spawns the daemon with it in `KANBAN95_SECRET` (environment, never argv) and `stdin` and `stdout` piped.
 3. Daemon binds `127.0.0.1:0` (kernel-assigned port), then prints exactly one line to stdout: `KANBAN95 port=<n>`.
 4. Shell reads that line, builds `http://127.0.0.1:<n>/?k95=<secret>` and creates the main webview window on it; the daemon trades that for an HttpOnly cookie and redirects to `/`. Any other first line is a handshake error; the shell kills the child, shows an error dialog and exits.
@@ -35,6 +35,26 @@ Living document. Update it in the same change that alters the shape described he
 - **Restart once**: a supervisor thread polls the daemon every 250 ms. The first unexpected exit starts a new daemon with a fresh secret, moves the navigation lock to its new port and navigates the window to `/?k95=<secret>` there (a new origin, so the UI's `localStorage`, window positions included, starts empty). A second exit, or a failed restart, shows a native error dialog and closes the board. No loop. `cargo test --manifest-path shell/Cargo.toml` covers this with stand-in daemons that crash at once.
 - **Kill on exit**: on Tauri's `RunEvent::Exit` the shell takes the child out of the supervisor's slot (which stops the supervisor) and calls `kill()` then `wait()` on it.
 - **Stdin EOF**: the daemon holds `process.stdin` open and exits with code 0 when it ends. The shell never writes to it; the pipe simply closes when the shell process dies, including on a crash. An orphaned daemon is therefore not possible. Consequence: if you start the daemon by hand with stdin closed (`< /dev/null`, `stdio: 'ignore'`), it exits immediately after printing the port. That is intended.
+
+## Packaging
+
+`npm run installer` builds a per-user NSIS installer (no admin prompt) at `shell/target/release/bundle/nsis/Kanban95_<version>_x64-setup.exe`:
+
+1. `npm run build` compiles the daemon.
+2. `shell/stage.mjs` copies what the daemon needs at runtime into `shell/target/app/` in the repo's own layout (`daemon/dist`, `daemon/migrations`, `daemon/voice-model.json`, `ui/`, `templates/`, the package files) and runs `npm ci --omit=dev --ignore-scripts` there. `--ignore-scripts` is safe because node-pty ships Windows prebuilds; the workspace link `node_modules/@kanban95` is deleted (a junction back to `daemon/` the bundler would walk forever).
+3. `tauri build --config shell/tauri.bundle.json` builds the release shell and bundles `target/app/` as the resource `app/`. `shell/tauri.conf.json` keeps `bundle.active: false` so `cargo build` and `npm run dev` stay unbundled.
+
+Installed, the shell finds `app/daemon/dist/server.js` next to its exe and runs it with `node` from PATH, so **the installed app needs Node 24 on PATH**; without it the first run shows the download dialog (Port handshake, step 1). The board's repo is the shell's first argument, defaulting to the working directory, the same as in dev.
+
+**Node single-executable applications (SEA), investigated, not implemented.** Node 24 can embed one script into a copy of `node.exe` (`node --experimental-sea-config`, then `postject` injects the blob). For this daemon that is not trivial:
+
+- Inside a SEA, `require` resolves only built-in modules. The daemon is ESM over `node_modules` (MCP SDK, ws, zod, node-pty and their dependencies), so it would first need a bundler producing one CommonJS file: a new dependency and a build step.
+- node-pty is a native addon (`pty.node`, `conpty.node`, `conpty.dll`, `winpty-agent.exe`). Native code cannot load from the blob; it would have to be shipped as files beside the exe or extracted to a temp dir and `process.dlopen`ed, and conpty starts its helpers by path.
+- `ui/`, `templates/` and `migrations/` are read from disk at runtime; they would become SEA assets (`sea.getAsset`) or stay as files, which is most of the staging above anyway.
+- Injecting a blob invalidates `node.exe`'s Authenticode signature; it has to be stripped and the result re-signed, or SmartScreen warns on every machine.
+- The sidecar would be the full Node runtime (~80 MB) per release, rebuilt for every Node security update.
+
+Upgrade path, cheaper than SEA: ship the official `node.exe` (Node 24 LTS) as a Tauri `bundle.externalBin` sidecar and spawn it on `app/daemon/dist/server.js` instead of `node` from PATH. That removes the Node prerequisite (and the dialog) without bundling or re-signing, at ~80 MB per installer and an installer rebuild per Node security release.
 
 ## Network boundary
 
@@ -88,7 +108,7 @@ package.json      npm workspace root: build / test / dev scripts
 daemon/           src/{server,api,db,grants,mcp,mcp-doc,templates,context,git,pty,launcher,trust,lifecycle,merge,janitor,settings,voice}.ts, voice-model.json (the pinned speech model), migrations/*.sql, test/ (test/cdp.ts drives headless Edge/Chrome; test/.cache/ is gitignored), tsconfig.json; compiled to dist/ (gitignored)
 ui/               index.html, app.js (data layer and windows), wm.js (window manager), voice.js (mic and transcription), app.css, sounds/{ding,chord}.wav, vendor/{98.css and fonts, xterm/, transformers/}
 templates/        default prompt templates (brainstorm, plan, execute, test, housekeeping), copied into each repo once
-shell/            Cargo.toml, build.rs, tauri.conf.json, src/main.rs, icons/icon.ico
+shell/            Cargo.toml, build.rs, tauri.conf.json, tauri.bundle.json (installer overlay), stage.mjs (stages the installed daemon), src/main.rs, icons/icon.ico
 docs/             this file, LIFECYCLE.md (state machine, merge queue, janitor), CLIS.md (how each CLI is launched), DATA.md (schema), AGENTS.md (what agents receive and how they behave), SECURITY.md (grants, audit, network), MCP.md (generated tool reference), handoffs/ (ephemeral) and handoffs/log/ (phase log)
 <repo>/.kanban95/ board.db (gitignored), .gitignore, sessions/ (gitignored), templates/*.md (committed, operator-editable); created by the daemon on first start. config.json (optional, committed)
 ~/.kanban95/      models.json (model catalog, read at each launch), settings.json (CLI paths, sounds, voice), models/ (the downloaded speech model); written only from Settings or the download dialog

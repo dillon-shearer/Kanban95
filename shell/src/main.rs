@@ -39,15 +39,20 @@ fn mint_secret() -> String {
     b.iter().map(|x| format!("{x:02x}")).collect()
 }
 
+/// The daemon the installer staged next to this exe (`app/`, shell/stage.mjs), else the repo's build (dev).
+fn daemon_script() -> std::path::PathBuf {
+    let installed = std::env::current_exe().ok().and_then(|e| Some(e.parent()?.join("app/daemon/dist/server.js")));
+    installed.filter(|p| p.is_file()).unwrap_or_else(|| concat!(env!("CARGO_MANIFEST_DIR"), "/../daemon/dist/server.js").into())
+}
+
 /// Starts `node daemon/dist/server.js` and returns the child plus the port from its first stdout line.
 /// The child's stdin stays piped and open for as long as this process lives: the daemon exits on stdin EOF.
 /// The secret goes in the child's environment, never on its command line, which other processes can read.
 fn spawn_daemon(secret: &str) -> Result<(Child, u16), String> {
-    // ponytail: dev mode runs `node` from PATH against the built daemon. Bundling Node as a sidecar is still open.
-    let script = concat!(env!("CARGO_MANIFEST_DIR"), "/../daemon/dist/server.js");
+    // ponytail: runs `node` from PATH; shipping Node itself is open (docs/ARCHITECTURE.md -> Packaging).
     // The shell's first argument, if any, is the repo the board works on; the daemon defaults to the cwd.
     let mut child = Command::new("node")
-        .arg(script)
+        .arg(daemon_script())
         .args(std::env::args().nth(1))
         .env("KANBAN95_SECRET", secret)
         .stdin(Stdio::piped())
@@ -160,10 +165,35 @@ fn window<R: Runtime, M: Manager<R>>(app: &M, url: Url, live: Arc<AtomicU16>) ->
         .build()
 }
 
+/// A missing or old Node is the one first-run problem the operator fixes outside the board, so offer the page.
+#[cfg(windows)]
+fn node_dialog(text: &str) {
+    use windows_sys::Win32::UI::Shell::ShellExecuteW;
+    use windows_sys::Win32::UI::WindowsAndMessaging::*;
+    let wide = |s: &str| s.encode_utf16().chain([0]).collect::<Vec<u16>>();
+    let text = format!("{text}\n\nOpen the download page now?");
+    // SAFETY: as in error_dialog; ShellExecuteW gets NUL-terminated strings that outlive the call.
+    unsafe {
+        let style = MB_YESNO | MB_ICONERROR | MB_SETFOREGROUND;
+        if MessageBoxW(std::ptr::null_mut(), wide(&text).as_ptr(), wide("Kanban95").as_ptr(), style) == IDYES {
+            let (op, url) = (wide("open"), wide(NODE_DOWNLOAD));
+            ShellExecuteW(std::ptr::null_mut(), op.as_ptr(), url.as_ptr(), std::ptr::null(), std::ptr::null(), SW_SHOWNORMAL);
+        }
+    }
+}
+#[cfg(not(windows))]
+fn node_dialog(text: &str) {
+    error_dialog(text);
+}
+
 fn main() {
     kill_children_with_us();
+    if let Err(e) = check_node() {
+        node_dialog(&e);
+        std::process::exit(1);
+    }
     let secret = mint_secret();
-    let (child, port) = match check_node().and_then(|_| spawn_daemon(&secret)) {
+    let (child, port) = match spawn_daemon(&secret) {
         Ok(started) => started,
         Err(e) => {
             error_dialog(&e);
