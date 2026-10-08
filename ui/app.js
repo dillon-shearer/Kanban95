@@ -561,6 +561,17 @@ const START = [
   { label: 'Housekeeping', run: housekeeping },
 ];
 
+/** Desktop icons for the Start menu's first entries, under every window. Click selects; double-click or Enter opens. */
+function desktopIcons() {
+  const run = Object.fromEntries(START.filter((s) => s.run).map((s) => [s.label, s.run]));
+  const icon = (label) => h('div', { class: 'k95-icon', role: 'button', tabindex: 0, 'data-icon': label,
+    ondblclick: run[label], onkeydown: (e) => e.key === 'Enter' && run[label]() },
+  h('img', { src: `icons/${label.toLowerCase().replace(' ', '-')}.svg`, alt: '', width: 32, height: 32, draggable: 'false' }),
+  h('span', {}, label));
+  document.getElementById('desktop').prepend(h('nav', { id: 'icons' },
+    ['Board', 'Inbox', 'Brain', 'Settings', 'New ticket', 'New brainstorm'].map(icon)));
+}
+
 function taskbar() {
   document.getElementById('agents').textContent = `${sessions.length} agent${sessions.length === 1 ? '' : 's'}`;
   const q = document.getElementById('inbox-count');
@@ -597,6 +608,7 @@ async function boot() {
     Object.assign(m.style, { left: `${r.left}px`, top: `${r.top - m.offsetHeight}px` });
   });
   document.getElementById('inbox-count').addEventListener('click', openInbox);
+  desktopIcons();
   clock();
   setInterval(clock, 10_000);
   listen();
