@@ -163,6 +163,37 @@ describe('ui', { timeout: 60_000 }, () => {
     expect(await pos()).toEqual(moved);
   });
 
+  it('opens Settings from a double-clicked desktop icon and Inbox from Enter; icons stay under windows', async () => {
+    await page.goto(base);
+    await until(() => page.evaluate(`!!document.querySelector('[data-win="board"]')`), 'the board');
+    expect(await page.evaluate(`[...document.querySelectorAll('#icons .k95-icon')].map((e) => e.textContent)`))
+      .toEqual(['Board', 'Inbox', 'Brain', 'Settings', 'New ticket', 'New brainstorm']);
+    await page.evaluate(`document.querySelector('[data-win="board"] [aria-label="Close"]').click()`); // the board may sit over the icons
+    // Every image loaded from our origin: a CSP block or a missing file leaves naturalWidth at 0.
+    await until(() => page.evaluate(`[...document.querySelectorAll('#icons img')].every((i) => i.complete && i.naturalWidth === 32)`), 'the icon images');
+
+    const { x, y } = await page.center('[data-icon="Settings"]');
+    expect(await page.evaluate(`document.elementFromPoint(${x}, ${y}).closest('.k95-icon')?.dataset.icon ?? null`)).toBe('Settings');
+    await page.send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', buttons: 1, clickCount: 1 });
+    await page.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', buttons: 0, clickCount: 1 });
+    expect(await page.evaluate(`document.activeElement.dataset.icon`)).toBe('Settings');
+    expect(await page.evaluate(`getComputedStyle(document.activeElement.querySelector('span')).backgroundColor`)).toBe('rgb(0, 0, 128)');
+    expect(await page.evaluate(`!!document.querySelector('[data-win="settings"]')`)).toBe(false); // one click only selects
+    await page.send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', buttons: 1, clickCount: 2 });
+    await page.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', buttons: 0, clickCount: 2 });
+    await until(() => page.evaluate(`!!document.querySelector('[data-win="settings"]')`), 'the Settings window');
+
+    await page.evaluate(`document.querySelector('[data-icon="Inbox"]').focus()`);
+    await page.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 });
+    await page.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 });
+    await until(() => page.evaluate(`!!document.querySelector('[data-win="inbox"]')`), 'the Inbox window');
+
+    // A window dragged over the icons covers them.
+    await page.evaluate(`Object.assign(document.querySelector('[data-win="settings"]').style, { left: '0px', top: '0px' })`);
+    const s = await page.center('[data-icon="Board"]');
+    expect(await page.evaluate(`!!document.elementFromPoint(${s.x}, ${s.y}).closest('[data-win]')`)).toBe(true);
+  });
+
   it('shows the download dialog on the first mic press and fetches nothing until OK', async () => {
     rmSync(modelDir(MANIFEST), { recursive: true, force: true });
     await page.goto(base);

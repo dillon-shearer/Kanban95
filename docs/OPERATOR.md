@@ -55,6 +55,8 @@ A merged ticket's worktree and branch are removed by the board. Every ten merged
 | Brain | Start → Brain | search what agents learned, add a note yourself |
 | Settings | Start → Settings | Models, CLI paths and trusted folders, Grants, Voice, sounds |
 
+The desktop has an icon for Board, Inbox, Brain, Settings, New ticket and New brainstorm down its left edge: click selects, double-click or Enter does what the Start menu entry does. Icons sit under every window.
+
 Windows can be dragged by the title bar, resized from the corner and minimized to the taskbar. Board, Brain, Inbox and Settings remember where you left them.
 
 ## Cards
