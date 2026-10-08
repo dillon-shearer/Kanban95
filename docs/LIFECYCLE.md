@@ -82,7 +82,7 @@ The first execute run is attempt 0. Each failed test adds one to `retry` and run
 
 ### Escalation
 
-A tester that thinks the work needs a bigger model calls `set_model` before sending the ticket back. The ticket's `model` and `effort` override the execute phase only, so the retry runs with them; test runs keep the phase default.
+The ticket's `model` and `effort` override the execute phase only, so a retry runs with the same ones; test runs keep the phase default. Only the planner (`set_model`, `create_ticket`) and the operator (UI or the operator terminal) set them; a worker or tester that thinks the work needs a bigger model says so in its note.
 
 ### Ending a session
 

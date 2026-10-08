@@ -266,15 +266,15 @@ describe('lifecycle', { timeout: 60_000 }, () => {
     expect(runs(id)[2].prompt_rendered).toContain('FAIL: criterion 1 fails'); // the retry sees what failed
   });
 
-  it("escalation: the tester's set_model is what the retry runs with", async () => {
+  it("a tester cannot escalate: its set_model is refused and the retry runs with the ticket's own model", async () => {
     models({ test: 'escalate' });
     const id = ticket('Hard one');
     await post(`/api/tickets/${id}/launch`);
     await until(() => runs(id).filter((x) => x.phase === 'execute').length === 2, 'the retry');
     models({ test: 'pass' });
     await landed(id);
-    expect(runs(id).filter((x) => x.phase === 'execute').map((x) => x.model)).toEqual(['work', 'work-big']);
-    expect(t(id)).toMatchObject({ model: 'work-big', effort: 'high', retry: 1 });
+    expect(runs(id).filter((x) => x.phase === 'execute').map((x) => x.model)).toEqual(['work', 'work']);
+    expect(t(id)).toMatchObject({ model: null, effort: null, retry: 1 });
   });
 
   it('ask_operator round trip: chord, the answer reaches the agent as one line and clears the flag', async () => {
