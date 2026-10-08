@@ -658,6 +658,20 @@ describe('resume', { timeout: 60_000 }, () => {
     expect(runs(unflagged)).toEqual([]);
   });
 
+  it('an agent killed by the board shutting down is not flagged, so the next start resumes it (Restart board)', async () => {
+    models({ execute: 'hang' });
+    const id = ticket('Live');
+    expect((await post(`/api/tickets/${id}/launch`)).status).toBe(200);
+    await until(() => sessionsOf(id).length, 'the agent');
+    await srv.close();
+    srv = await start({ repo });
+    db = srv.db;
+    expect(notes(id, 'failure')).toEqual([RESTARTED]); // no 'agent exited without reporting' from the shutdown
+    expect(t(id).flags.needs_human).toBe(false);
+    expect(runs(id)).toHaveLength(2);
+    expect(runs(id)[1].prompt_rendered).toContain(RESTARTED);
+  });
+
   it('restart resumes a running ticket once by itself; an agent that then exits silently flags it with what to do', async () => {
     const id = ticket('Cut off', { status: 'in_progress', retry: 1 });
     createWorktree(repo, id);
