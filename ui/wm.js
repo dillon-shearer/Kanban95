@@ -82,8 +82,9 @@ export function open(id, { title, w = 480, h: height = 320, persist = false, bac
 /** Keeps at least the title bar on the desktop. */
 function clamp(el) {
   const d = desktop.getBoundingClientRect();
-  el.style.width = `${Math.min(el.offsetWidth, d.width)}px`;
-  el.style.height = `${Math.min(el.offsetHeight, d.height)}px`;
+  // Write size only when it overflows: offsetWidth includes padding, so writing it back grows a content-box window.
+  if (el.offsetWidth > d.width) el.style.width = `${d.width}px`;
+  if (el.offsetHeight > d.height) el.style.height = `${d.height}px`;
   el.style.left = `${Math.max(0, Math.min(el.offsetLeft, d.width - el.offsetWidth))}px`;
   el.style.top = `${Math.max(0, Math.min(el.offsetTop, d.height - 24))}px`;
 }

@@ -166,6 +166,16 @@ describe('ui', { timeout: 60_000 }, () => {
     expect(await pos()).toEqual(moved);
   });
 
+  it('keeps a window the same size while it is dragged', async () => {
+    await page.goto(base + '?resize');
+    await until(() => page.evaluate(`!!document.querySelector('[data-win="board"]')`), 'the board');
+    const size = () => page.evaluate<[number, number]>(`(() => { const e = document.querySelector('[data-win="board"]'); return [e.offsetWidth, e.offsetHeight]; })()`);
+    const before = await size();
+    const bar = await page.center('[data-win="board"] .title-bar-text');
+    await page.drag(bar, { x: bar.x + 200, y: bar.y });
+    expect(await size()).toEqual(before);
+  });
+
   it('shows the download dialog on the first mic press and fetches nothing until OK', async () => {
     rmSync(modelDir(MANIFEST), { recursive: true, force: true });
     await page.goto(base);
