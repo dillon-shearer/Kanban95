@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { delimiter, join, resolve } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { sessions } from '../src/launcher.ts';
 import { start } from '../src/server.ts';
 import { MANIFEST, modelDir, status } from '../src/voice.ts';
 import { browser, until, type Page } from './cdp.ts';
@@ -244,6 +245,7 @@ describe('ui', { timeout: 60_000 }, () => {
     expect((await fetch(`${base}api/tickets/${id}`, { method: 'DELETE', headers: { cookie: `k95=${srv.secret}` } })).status).toBe(204);
     await until(async () => !(await win(`ticket-${id}`)) && !(await win(first)) && !(await win(second)), 'the windows to close', 5000);
     expect(await tasks()).toBe(0);
+    await until(() => sessions.size === 0, 'the killed agents to exit'); // the next ticket reuses this id
   });
 
   it('offers Resume in the card menu and the Inbox for a flagged running ticket whose agent is gone; Resume starts it again', async () => {
