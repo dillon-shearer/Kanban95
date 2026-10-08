@@ -9,6 +9,7 @@ body { background: linear-gradient(transparent 55%, rgb(0 0 0 / 0.22)),
 /* Desktop and windows */
 #desktop { position: fixed; inset: 0 0 28px 0; overflow: hidden; }
 .k95-win { position: absolute; box-sizing: border-box; display: flex; flex-direction: column; min-width: 220px; min-height: 120px; resize: both; overflow: hidden; }
+.k95-win.max { left: 0 !important; top: 0 !important; width: 100% !important; height: 100% !important; resize: none; }
 .k95-win > .window-body { flex: 1; min-height: 0; overflow: auto; margin: 4px; display: flex; flex-direction: column; gap: 4px; }
 .k95-win .title-bar { touch-action: none; user-select: none; flex: none; }
 .k95-win.ended .title-bar { background: linear-gradient(90deg, #808080, #b5b5b5); }

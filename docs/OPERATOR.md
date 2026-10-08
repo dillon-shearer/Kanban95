@@ -57,7 +57,7 @@ A merged ticket's worktree and branch are removed by the board. Every ten merged
 
 The desktop has an icon for Board, Inbox, Brain, Settings, New ticket and New brainstorm down its left edge: click selects, double-click or Enter does what the Start menu entry does. Icons sit under every window.
 
-Windows can be dragged by the title bar, resized from the corner and minimized to the taskbar. Board, Brain, Inbox and Settings remember where you left them.
+Windows can be dragged by the title bar, resized from the corner, minimized to the taskbar and maximized to fill the desktop (Maximize button or double-click the title bar; Restore puts it back). Board, Brain, Inbox and Settings remember where you left them, maximized or not.
 
 ## Cards
 
