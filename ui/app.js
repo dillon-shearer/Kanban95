@@ -22,7 +22,7 @@ async function api(method, path, body) {
 const COLUMNS = [['backlog', 'Backlog'], ['in_progress', 'In Progress'], ['testing', 'Testing'], ['done', 'Done']];
 const LABEL = Object.fromEntries(COLUMNS);
 const EFFORTS = ['low', 'medium', 'high', 'max'];
-const PHASES = ['plan', 'execute', 'test'];
+const PHASES = ['plan', 'execute', 'test', 'operator'];
 const CLIS = ['claude', 'codex'];
 /** Where the operator may drag a ticket. Everything onward is the agents' job; anything may go back to Backlog (reset). */
 const MOVES = { backlog: ['in_progress'], in_progress: ['backlog'], testing: ['backlog'], done: ['backlog'] };
@@ -44,6 +44,7 @@ async function refreshTicket(id) {
   } catch (e) {
     if (e.status !== 404) throw e;
     tickets.delete(id); // deleted: it leaves the board, and its windows close (its agents were stopped by the delete)
+    selection.delete(id);
     close(`ticket-${id}`);
     for (const [wid, ticket] of terms) if (ticket === id) close(wid);
   }
@@ -67,13 +68,36 @@ function listen() {
     await refreshShared();
     redraw(e.ticket);
   };
-  // ponytail: no reconnect; the daemon lives exactly as long as the window (shell sidecar).
-  ws.onclose = () => say('Lost the connection to the daemon. Restart Kanban95.');
+  // Only Restart board reconnects: the shell navigates this window to the new daemon, which reloads the page.
+  ws.onclose = () => {
+    if (!restarting) return say('Lost the connection to the daemon. Restart Kanban95.');
+    say('Restarting…');
+    setTimeout(listen, 1000);
+  };
 }
+let restarting = false;
 
 // ---- board ----
 
-let selected = null;
+// The Board's selection. Every card action takes the selected tickets, so a new bulk action is one more menu item.
+const selection = new Set();
+let anchor = null; // the last clicked card, where a Shift+click range starts
+const picked = () => [...selection].map((id) => tickets.get(id)).filter(Boolean);
+
+function pick(t, e) {
+  if (e.shiftKey && tickets.get(anchor)?.status === t.status) {
+    const ids = [...tickets.values()].filter((x) => x.status === t.status).map((x) => x.id); // the column, in board order
+    const [a, b] = [ids.indexOf(anchor), ids.indexOf(t.id)].sort((x, y) => x - y);
+    selection.clear();
+    for (const id of ids.slice(a, b + 1)) selection.add(id);
+  } else {
+    if (!e.ctrlKey) selection.clear();
+    if (e.ctrlKey && selection.has(t.id)) selection.delete(t.id);
+    else selection.add(t.id);
+    anchor = t.id;
+  }
+  drawBoard();
+}
 let say = (msg) => console.log(msg); // the Board's status bar while it is open
 
 const defaults = (t) => models?.[t.cli ?? models.cli]?.execute ?? {};
@@ -83,10 +107,14 @@ const live = (ticketId) => sessions.filter((s) => s.ticket_id === ticketId);
 function card(t) {
   const d = defaults(t);
   const el = h('div', {
-    class: `card${t.id === selected ? ' selected' : ''}${t.flags.needs_human ? ' alert' : ''}`, 'data-id': t.id, tabindex: 0,
-    onclick: () => { selected = t.id; drawBoard(); },
+    class: `card${selection.has(t.id) ? ' selected' : ''}${t.flags.needs_human ? ' alert' : ''}`, 'data-id': t.id, tabindex: 0,
+    onclick: (e) => pick(t, e),
     ondblclick: () => openTicket(t.id),
-    oncontextmenu: (e) => { e.preventDefault(); cardMenu(t, e.clientX, e.clientY); },
+    oncontextmenu: (e) => {
+      e.preventDefault();
+      if (!selection.has(t.id)) pick(t, {});
+      cardMenu(picked(), e.clientX, e.clientY);
+    },
   },
   h('div', { class: 'card-title' }, h('b', {}, `#${t.id}`), ' ', t.title),
   h('div', { class: 'badges' },
@@ -139,18 +167,38 @@ async function drop(t, to) {
   if (!allowed.includes(to)) {
     return say(`#${t.id} cannot be dragged from ${LABEL[t.status]} to ${LABEL[to]}. Allowed: ${allowed.map((s) => LABEL[s]).join(', ')}.`);
   }
-  if (to === 'backlog') return reset(t);
+  if (to === 'backlog') return reset([t]);
   await act(() => api('PATCH', `/tickets/${t.id}`, { status: to }), `#${t.id} moved to ${LABEL[to]} by hand; no agent was started.`);
 }
 
 /** Back to Backlog, flags and retries cleared. A running agent is stopped after the move, so its exit flags nothing. */
-async function reset(t) {
-  const running = live(t.id);
-  if (running.length && (await dialog('Reset ticket', `#${t.id} has a running agent. Stop it and move the ticket to Backlog?`, ['Reset', 'Cancel'])) !== 'Reset') return;
-  await act(async () => {
+async function reset(ts) {
+  const running = ts.filter((t) => live(t.id).length);
+  const ask = ts.length > 1
+    ? `Reset ${count(ts)} to Backlog?${running.length ? ` ${count(running)} with a running agent will be stopped.` : ''}`
+    : running.length && `#${ts[0].id} has a running agent. Stop it and move the ticket to Backlog?`;
+  if (ask && (await dialog('Reset to Backlog', ask, ['Reset', 'Cancel'])) !== 'Reset') return;
+  await each(ts, async (t) => {
+    const stop = live(t.id);
     await api('PATCH', `/tickets/${t.id}`, { status: 'backlog', needs_human: false, blocked_on_deps: false, retry: 0 });
-    for (const s of running) await api('DELETE', `/grants/${s.grant_id}`).catch(() => {});
-  }, `#${t.id} reset to Backlog.`);
+    for (const s of stop) await api('DELETE', `/grants/${s.grant_id}`).catch(() => {});
+  }, (n) => `${n} reset to Backlog.`);
+}
+
+const count = (ts) => (ts.length === 1 ? `#${ts[0].id}` : `${ts.length} tickets`);
+/** Runs fn on each ticket in turn; one that refuses is named and the rest still go. Says the outcome once. */
+async function each(ts, fn, ok) {
+  const done = [];
+  const refused = [];
+  for (const t of ts) {
+    try {
+      await fn(t);
+      done.push(t);
+    } catch (e) {
+      refused.push(`#${t.id} refused: ${e.message}`);
+    }
+  }
+  say([done.length && ok(count(done)), ...refused].filter(Boolean).join(' '));
 }
 
 async function act(fn, ok) {
@@ -168,22 +216,25 @@ async function flagReason(id) {
   return `#${id} needs you: ${n ? n.body.replace(/\s+/g, ' ') : 'open the ticket for details'}`;
 }
 // A launch can be refused at once (no models, dirty base); the refusal then wins over "launched".
-async function sayLaunched(ids) {
+async function sayLaunched(ids, more = []) {
   for (const id of ids) await refreshTicket(id);
   const flagged = ids.find((id) => tickets.get(id)?.flags.needs_human);
-  if (flagged != null) return say(await flagReason(flagged));
-  say(ids.length ? `Launched ${ids.map((id) => `#${id}`).join(', ')}.` : 'Nothing in Backlog.');
+  const head = flagged != null ? await flagReason(flagged) : ids.length ? `Launched ${ids.map((id) => `#${id}`).join(', ')}.` : more.length ? '' : 'Nothing in Backlog.';
+  say([head, ...more].filter(Boolean).join(' '));
 }
-const launch = (id) => act(async () => {
-  await api('POST', `/tickets/${id}/launch`);
-  await sayLaunched([id]);
-});
-// A running ticket whose agent is gone: the agent for its phase starts again in the same worktree.
+// A running ticket whose agent is gone: the agent for its phase starts again in the same worktree (Launch does the same).
 const resumable = (t) => (t.status === 'in_progress' || t.status === 'testing') && t.flags.needs_human && !live(t.id).length;
-const resume = (id) => act(async () => {
-  await api('POST', `/tickets/${id}/resume`);
-  await sayLaunched([id]);
-});
+const launchable = (t) => t.status === 'backlog' || resumable(t);
+/** Launches (or resumes) each ticket that can start; the rest are skipped and counted, and a refusal is named. */
+async function launch(ts, verb = 'launch') {
+  const go = ts.filter(verb === 'launch' ? launchable : resumable);
+  if (!go.length) return say(verb === 'launch' ? 'Select a Backlog ticket first.' : 'Nothing to resume.');
+  const ok = [];
+  const more = [];
+  for (const t of go) await api('POST', `/tickets/${t.id}/${verb}`).then(() => ok.push(t.id), (e) => more.push(`#${t.id} refused: ${e.message}`));
+  if (go.length < ts.length) more.push(`Skipped ${ts.length - go.length} ${verb === 'launch' ? 'not in Backlog' : 'with nothing to resume'}.`);
+  await act(() => sayLaunched(ok, more));
+}
 const toggleRunner = () => act(async () => {
   runner = await api('PUT', '/runner', { on: !runner.on });
   drawBoard();
@@ -210,45 +261,80 @@ async function newOperator() {
   if ((await dialog('New operator terminal', body, ['Start', 'Cancel'])) !== 'Start') return;
   await act(async () => openTerminal(await api('POST', '/operator', { mission: mission.value })), 'Operator terminal started.');
 }
+/** Start → Restart board: the daemon rebuilds, exits 75, and the shell starts it again (docs/OPERATOR.md → Restart board). */
+async function restartBoard() {
+  const agents = sessions.filter((s) => s.ticket_id !== null).length;
+  const terminals = sessions.length - agents;
+  const body = h('div', {},
+    h('p', {}, agents ? `${agents} agent${agents === 1 ? ' is' : 's are'} running; they are resumed after the restart.` : 'No agents are running.'),
+    terminals > 0 && h('p', {}, `${terminals} brainstorm or operator terminal${terminals === 1 ? '' : 's'} will close.`),
+    h('p', {}, 'The daemon is rebuilt and the UI reloads. Shell changes need a full relaunch (close Kanban95 and start it again).'));
+  if ((await dialog('Restart board', body, ['Restart', 'Cancel'])) !== 'Restart') return;
+  say('Building…');
+  try {
+    restarting = true;
+    const r = await api('POST', '/restart');
+    if (!r.shell) {
+      restarting = false;
+      say('The daemon stopped. No shell is running it: start it again by hand.');
+    } else say('Restarting…');
+  } catch (e) {
+    restarting = false;
+    say(`Board not restarted: ${e.status === 409 ? 'see the dialog' : e.message}`);
+    // 409: the compiler output (the board keeps running the code it has), or a restart already under way.
+    if (e.status === 409) await dialog('Board not restarted', h('pre', { class: 'k95-pre' }, e.message));
+  }
+}
 const housekeeping = () => act(async () => {
   const t = await api('POST', '/tickets/housekeeping');
   say(`Housekeeping ticket #${t.id} created and launched.`);
 });
 
-function cardMenu(t, x, y) {
-  const set = (body) => act(() => api('PATCH', `/tickets/${t.id}`, body));
-  const cli = t.cli ?? models?.cli;
-  const known = [...new Set(PHASES.map((p) => models?.[cli]?.[p]?.model).filter(Boolean))];
+/** The card menu for the selected tickets, one or many. A ✓ marks a value every one of them has. */
+function cardMenu(ts, x, y) {
+  const same = (k) => (new Set(ts.map((t) => t[k] ?? null)).size === 1 ? ts[0][k] ?? null : undefined);
+  const tick = (k, v) => (same(k) === v ? ' ✓' : '');
+  const set = (k, v) => each(ts, (t) => api('PATCH', `/tickets/${t.id}`, { [k]: v }),
+    (n) => `${k === 'cli' ? 'CLI' : k[0].toUpperCase() + k.slice(1)} set to ${v ?? 'the default'} on ${n}.`);
+  const clis = new Set(ts.map((t) => t.cli ?? models?.cli));
+  const known = [...new Set([...clis].flatMap((c) => PHASES.map((p) => models?.[c]?.[p]?.model)).filter(Boolean))];
+  const resettable = ts.filter((t) => t.status !== 'backlog' || t.flags.blocked_on_deps);
+  const unmerged = ts.filter((t) => t.status === 'done' && !t.merged_at);
   menu(x, y, [
-    { label: 'Open', run: () => openTicket(t.id) },
-    { label: 'Launch', disabled: t.status !== 'backlog' && !resumable(t), run: () => launch(t.id) },
-    { label: 'Resume', disabled: !resumable(t), run: () => resume(t.id) },
-    ...(restartable(t) ? [{ label: 'Restart', run: () => restart(t.id) }] : []),
+    { label: 'Open', run: () => {
+      ts.slice(0, 8).forEach((t) => openTicket(t.id));
+      if (ts.length > 8) say(`Opened 8 of ${ts.length} tickets; at most 8 open at once.`);
+    } },
+    { label: 'Launch', disabled: !ts.some(launchable), run: () => launch(ts) },
+    { label: 'Resume', disabled: !ts.some(resumable), run: () => launch(ts, 'resume') },
+    ...(ts.length === 1 && restartable(ts[0]) ? [{ label: 'Restart', run: () => restart(ts[0].id) }] : []),
     '-',
     { label: 'Model', items: [
-      { label: `Phase default${t.model ? '' : ' ✓'}`, run: () => set({ model: null }) },
-      ...known.map((m) => ({ label: `${m}${t.model === m ? ' ✓' : ''}`, run: () => set({ model: m }) })),
+      { label: `Phase default${tick('model', null)}`, run: () => set('model', null) },
+      ...known.map((m) => ({ label: `${m}${tick('model', m)}`, run: () => set('model', m) })),
       { label: 'Other…', run: async () => {
-        const input = h('input', { type: 'text', 'data-mic': 'off', value: t.model ?? '', size: 32 });
-        if ((await dialog(`Model for #${t.id}`, h('div', { class: 'field-row-stacked' }, h('label', {}, 'Model id'), input), ['OK', 'Cancel'])) === 'OK') {
-          set({ model: input.value.trim() || null });
+        const input = h('input', { type: 'text', 'data-mic': 'off', value: same('model') ?? '', size: 32 });
+        if ((await dialog(`Model for ${count(ts)}`, h('div', { class: 'field-row-stacked' }, h('label', {}, 'Model id'), input), ['OK', 'Cancel'])) === 'OK') {
+          set('model', input.value.trim() || null);
         }
       } },
     ] },
     { label: 'Effort', items: [
-      { label: `Phase default${t.effort ? '' : ' ✓'}`, run: () => set({ effort: null }) },
-      ...EFFORTS.map((e) => ({ label: `${e}${t.effort === e ? ' ✓' : ''}`, run: () => set({ effort: e }) })),
+      { label: `Phase default${tick('effort', null)}`, run: () => set('effort', null) },
+      ...EFFORTS.map((e) => ({ label: `${e}${tick('effort', e)}`, run: () => set('effort', e) })),
     ] },
     { label: 'CLI', items: [
-      { label: `Default${t.cli ? '' : ' ✓'}`, run: () => set({ cli: null }) },
-      ...CLIS.map((c) => ({ label: `${c}${t.cli === c ? ' ✓' : ''}`, run: () => set({ cli: c }) })),
+      { label: `Default${tick('cli', null)}`, run: () => set('cli', null) },
+      ...CLIS.map((c) => ({ label: `${c}${tick('cli', c)}`, run: () => set('cli', c) })),
     ] },
     '-',
-    { label: 'Retry merge', disabled: !(t.status === 'done' && !t.merged_at), run: () => act(() => api('POST', `/tickets/${t.id}/merge`), `Merge of #${t.id} queued.`) },
-    { label: 'Reset to Backlog', disabled: t.status === 'backlog' && !t.flags.blocked_on_deps, run: () => reset(t) },
+    { label: 'Retry merge', disabled: !unmerged.length, run: () => each(unmerged, (t) => api('POST', `/tickets/${t.id}/merge`), (n) => `Merge of ${n} queued.`) },
+    { label: 'Reset to Backlog', disabled: !resettable.length, run: () => reset(resettable) },
     { label: 'Delete', run: async () => {
-      if ((await dialog('Delete ticket', `Delete #${t.id} ${t.title}? Its notes and runs go with it.`, ['Delete', 'Cancel'])) === 'Delete') {
-        act(() => api('DELETE', `/tickets/${t.id}`), `#${t.id} deleted.`);
+      const ask = ts.length === 1 ? `Delete #${ts[0].id} ${ts[0].title}? Its notes and runs go with it.`
+        : `Delete ${count(ts)} (${ts.map((t) => `#${t.id}`).join(', ')})? Their notes and runs go with them.`;
+      if ((await dialog(ts.length === 1 ? 'Delete ticket' : 'Delete tickets', ask, ['Delete', 'Cancel'])) === 'Delete') {
+        each(ts, (t) => api('DELETE', `/tickets/${t.id}`), (n) => `${n} deleted.`);
       }
     } },
   ]);
@@ -261,11 +347,13 @@ function openBoard() {
   const count = h('p', { class: 'status-bar-field k95-count' });
   const run = h('button', { onclick: toggleRunner, title: 'Ctrl+L' });
   const runField = h('p', { class: 'status-bar-field k95-runner' });
-  const cols = h('div', { class: 'k95-columns' });
+  const cols = h('div', { class: 'k95-columns', onclick: (e) => { // a click on empty column space clears the selection
+    if (!e.target.closest('.card')) selection.clear(), drawBoard();
+  } });
   w.body.classList.add('k95-board');
   w.body.append(
     h('div', { class: 'k95-toolbar' },
-      h('button', { onclick: () => (selected ? launch(selected) : say('Select a Backlog ticket first.')) }, 'Launch'),
+      h('button', { onclick: () => launch(picked()) }, 'Launch'),
       run,
       h('button', { onclick: newBrainstorm, title: 'Ctrl+N' }, 'New brainstorm'),
       h('button', { onclick: () => openTicket(null) }, 'New ticket'),
@@ -446,7 +534,7 @@ function ticketForm(w, t) {
     h('div', { class: 'field-row-stacked' }, h('label', {}, 'Acceptance criteria, one per line'), criteria),
     h('div', { class: 'field-row-stacked' }, h('label', {}, 'Depends on'), deps),
     h('div', { class: 'field-row' }, h('button', { onclick: save }, t ? 'Save' : 'Create'),
-      t && h('button', { disabled: t.status !== 'backlog', onclick: () => launch(t.id) }, 'Launch'),
+      t && h('button', { disabled: t.status !== 'backlog', onclick: () => launch([t]) }, 'Launch'),
       t && h('button', { onclick: () => restart(t.id) }, 'Restart')));
 }
 
@@ -466,7 +554,7 @@ function openTerminal(s, auto = false) {
   seen.add(s.id);
   const wid = `term-${s.id}`;
   if (isOpen(wid)) return focus(wid);
-  const title = s.ticket_id === null ? `${s.role === 'operator' ? 'Operator' : 'Brainstorm'} — ${s.model}` : `#${s.ticket_id} — ${s.phase} — ${s.model}`;
+  const title = s.ticket_id === null ? `${s.role === 'operator' ? 'Operator' : 'Brainstorm'} — ${s.model || 'CLI default'}` : `#${s.ticket_id} — ${s.phase} — ${s.model}`;
   const ws = new WebSocket(`ws://${location.host}/pty/${s.id}`);
   const send = (msg) => ws.readyState === WebSocket.OPEN && ws.send(JSON.stringify(msg));
   const term = new Terminal({ fontFamily: 'Consolas, "Courier New", monospace', fontSize: 13, scrollback: 5000 });
@@ -518,8 +606,28 @@ function openBrain() {
   const search = async () => {
     const rows = await api('GET', `/brain?q=${encodeURIComponent(q.value)}`);
     results.replaceChildren(...(rows.length ? rows.map((b) => h('li', { class: 'note' },
-      h('div', { class: 'note-head' }, `#${b.id} ${b.title}`, b.ticket_id && ` · ticket #${b.ticket_id}`, b.tags && ` · ${b.tags}`),
+      h('div', { class: 'note-head' }, `#${b.id} ${b.title}`, b.tags && ` · ${b.tags}`),
+      // Provenance: a row from a ticket that never landed may describe code that does not exist.
+      h('div', { class: 'note-meta' }, fmt(b.created_at), b.ticket_id && ` · ticket #${b.ticket_id} (${b.ticket_status ?? 'deleted'})`,
+        h('button', { onclick: () => edit(b) }, 'Edit'), h('button', { onclick: () => remove(b) }, 'Delete')),
       h('pre', {}, b.body))) : [h('li', {}, 'Nothing found.')]));
+  };
+  // Merge = edit the survivor, delete the rest.
+  const edit = async (b) => {
+    const f = { title: h('input', { type: 'text', value: b.title }), tags: h('input', { type: 'text', 'data-mic': 'off', value: b.tags }), body: h('textarea', { rows: 10 }, b.body) };
+    const form = h('div', { class: 'k95-brain-edit' }, ...Object.entries(f).map(([k, el]) => h('div', { class: 'field-row-stacked' }, h('label', {}, k), el)));
+    if ((await dialog(`Edit brain #${b.id}`, form, ['Save', 'Cancel'])) !== 'Save') return;
+    act(async () => {
+      await api('PATCH', `/brain/${b.id}`, { title: f.title.value, body: f.body.value, tags: f.tags.value });
+      await search();
+    }, `Brain #${b.id} saved.`);
+  };
+  const remove = async (b) => {
+    if ((await dialog('Delete brain note', `Delete #${b.id} "${b.title}"? No agent will see it again.`, ['Delete', 'Cancel'])) !== 'Delete') return;
+    act(async () => {
+      await api('DELETE', `/brain/${b.id}`);
+      await search();
+    }, `Brain #${b.id} deleted.`);
   };
   const title = h('input', { type: 'text', placeholder: 'Title' });
   const tags = h('input', { type: 'text', 'data-mic': 'off', placeholder: 'tags' });
@@ -556,9 +664,9 @@ function openInbox() {
           h('div', { class: 'field-row' },
             h('button', { onclick: () => openTicket(q.ticket_id) }, 'Open ticket'),
             q.status === 'done' && !q.merged_at && h('button', { onclick: () => act(() => api('POST', `/tickets/${q.ticket_id}/merge`), `Merge of #${q.ticket_id} queued.`) }, 'Retry merge'),
-            (q.status === 'in_progress' || q.status === 'testing') && h('button', { onclick: () => resume(q.ticket_id) }, 'Resume'),
+            (q.status === 'in_progress' || q.status === 'testing') && t && h('button', { onclick: () => launch([t], 'resume') }, 'Resume'),
             (q.status === 'in_progress' || q.status === 'testing') && h('button', { onclick: () => restart(q.ticket_id) }, 'Restart'),
-            q.status !== 'done' && t && h('button', { onclick: () => reset(t) }, 'Reset to Backlog')));
+            q.status !== 'done' && t && h('button', { onclick: () => reset([t]) }, 'Reset to Backlog')));
       }
       const answer = h('textarea', { rows: 3, placeholder: 'Your answer' });
       return h('fieldset', { class: 'k95-question', 'data-ticket': q.ticket_id }, legend,
@@ -623,7 +731,7 @@ function openSettings() {
         models = (await api('PUT', '/config/models', out)).value;
         drawBoard();
       }, `Saved ${path}.`);
-      p.replaceChildren(h('p', {}, `Which CLI runs agents, and the model and effort per phase (plan is the brainstorm). A ticket's own model and effort override execute. ${path}`),
+      p.replaceChildren(h('p', {}, `Which CLI runs agents, and the model and effort per phase (plan is the brainstorm; operator is the operator terminal, the CLI's default model when blank). A ticket's own model and effort override execute. ${path}`),
         h('div', { class: 'field-row' }, h('label', {}, 'Default CLI'), cli),
         h('table', { class: 'k95-models' }, h('thead', {}, h('tr', {}, h('th', {}), CLIS.flatMap((c) => [h('th', {}, `${c} model`), h('th', {}, 'effort')]))), h('tbody', {}, rows)),
         h('button', { onclick: save }, 'Save'));
@@ -718,6 +826,8 @@ const START = [
   { label: 'New operator terminal', run: newOperator },
   { get label() { return runner.on ? 'Stop' : 'Run'; }, run: toggleRunner },
   { label: 'Housekeeping', run: housekeeping },
+  '-',
+  { label: 'Restart board', run: restartBoard },
 ];
 
 /** Desktop icons for the Start menu's first entries, under every window. Click selects; double-click or Enter opens. */
@@ -740,7 +850,8 @@ function taskbar() {
 
 const clock = () => { document.getElementById('clock').textContent = new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }); };
 
-// Esc closes the focused window, Ctrl+L turns the runner on or off, Ctrl+N starts a brainstorm, Ctrl+Shift+N an operator terminal, Ctrl+R restarts the focused ticket's agent. Inside a terminal every key goes to the
+// Esc closes the focused window, Ctrl+L turns the runner on or off, Ctrl+A selects every card on a focused Board, Ctrl+N starts a
+// brainstorm, Ctrl+Shift+N an operator terminal, Ctrl+R restarts the focused ticket's agent. Inside a terminal every key goes to the
 // agent instead (Esc interrupts Claude Code, Ctrl+L clears the screen).
 addEventListener('keydown', (e) => {
   if (document.querySelector('dialog[open]') || e.target.closest?.('.xterm')) return;
@@ -753,6 +864,10 @@ addEventListener('keydown', (e) => {
   } else if (plainCtrl && e.key.toLowerCase() === 'l') {
     e.preventDefault();
     toggleRunner();
+  } else if (plainCtrl && e.key.toLowerCase() === 'a' && focused()?.el.dataset.win === 'board' && !e.target.closest?.('input, textarea, select, [contenteditable]')) {
+    e.preventDefault();
+    for (const id of tickets.keys()) selection.add(id);
+    drawBoard();
   } else if (plainCtrl && e.key.toLowerCase() === 'n') {
     e.preventDefault();
     newBrainstorm();

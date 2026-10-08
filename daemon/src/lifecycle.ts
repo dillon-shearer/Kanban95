@@ -5,6 +5,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { readTicket, transaction, type Ticket } from './api.js';
+import { syncWorktree } from './git.js';
 import { revoke, type Role } from './grants.js';
 import { cleanTicket } from './janitor.js';
 import { launch, launchRoot, sessionsOf, type Session } from './launcher.js';
@@ -24,7 +25,8 @@ export type Event =
   | 'ask' // ask_operator
   | 'answer' // the operator answers over REST
   | 'exit' // the agent's pty exited without a move_ticket, or its launch failed
-  | 'merged' | 'conflict' // the merge queue's verdict
+  | 'merged' // the merge queue's verdict
+  | 'conflict' // the base would not merge into the worktree (on submit or in the merge queue), or the worktree was dirty
   | 'dirty' // the merge queue gave up waiting for the main checkout to be clean (DIRTY_WAIT)
   | 'merge' // the operator retries a merge that failed
   | 'resume' // the operator restarts the agent of a flagged running ticket whose agent is gone
@@ -91,7 +93,10 @@ export const TABLE: Row[] = [
   { from: RUNNING, event: 'exit', set: { needs_human: 1 }, effects: ['note', 'chord'],
     resolve: () => RESUME },
   { from: ['done'], event: 'merged', set: { merged: true, needs_human: 0 }, effects: ['ding', 'remove_worktree', 'release_dependents', 'housekeeping'] },
-  { from: ['done'], event: 'conflict', when: (f) => f.retry < MAX_RETRY, to: 'in_progress', set: { retry: '+1' }, effects: ['note', 'spawn_execute'] },
+  // A submit whose base will not merge in (lifecycle submit) and a merge-queue conflict share the way back to the worker.
+  { from: ['in_progress', 'done'], event: 'conflict', when: (f) => f.retry < MAX_RETRY, to: 'in_progress', set: { retry: '+1' }, effects: ['end_session', 'note', 'spawn_execute'] },
+  { from: ['in_progress'], event: 'conflict', when: (f) => f.retry >= MAX_RETRY, set: { needs_human: 1 }, effects: ['end_session', 'note', 'chord'],
+    resolve: (id) => `in .worktrees/t-${id} commit or discard any uncommitted changes, run git merge with the base branch, fix the conflicting files keeping both sides' intent, run the tests, commit, then Resume; the worker submits again.` },
   { from: ['done'], event: 'conflict', when: (f) => f.retry >= MAX_RETRY, set: { needs_human: 1 }, effects: ['note', 'chord'],
     resolve: (id) => `in .worktrees/t-${id} run git merge with the base branch, fix the conflicting files keeping both sides' intent, run the tests, commit, then Retry merge.` },
   { from: ['done'], event: 'dirty', set: { needs_human: 1 }, effects: ['note', 'chord'],
@@ -122,8 +127,14 @@ export interface Board {
   db: DatabaseSync;
   repo: string;
   port: number;
-  /** Set by close(): nothing new is spawned. */
+  /** Set by close(): nothing new is spawned, and agents killed by the shutdown are not flagged, so `recover` resumes them. */
   closing?: boolean;
+  /** Kanban95's own install root (the repo checkout or the installer's `app/`). Defaults to the one this code runs from. */
+  root?: string;
+  /** Closes the board and exits the process with `code`. Set only when the daemon runs as its own process. */
+  shutdown?: (code: number) => void;
+  /** The Tauri shell started this daemon and restarts it on exit code 75. */
+  shell?: boolean;
 }
 
 /**
@@ -159,6 +170,11 @@ type Note = { role: Role | 'operator'; kind: 'question' | 'answer' | 'failure'; 
 export function apply(b: Board, id: number, event: Event, x: { note?: Note; answer?: string } = {}) {
   const t = readTicket(b.db, id);
   const row = pick(facts(b, t), event);
+  if (event === 'submit') {
+    // The tester tests the branch with the base merged in, so stale code never spends a tester round.
+    const s = syncWorktree(b.repo, id);
+    if (!s.ok) return apply(b, id, 'conflict', { note: { role: 'worker', kind: 'failure', body: s.reason } });
+  }
   const { to = t.status as Status, set = {}, effects } = row;
   let note = x.note ?? (row.says ? ({ role: 'tester', kind: 'failure', body: row.says } as Note) : undefined);
   if (event === 'restart') note = { role: 'operator', kind: 'failure', body: RESTART_NOTE };
@@ -225,7 +241,7 @@ function spawn(b: Board, id: number, template: 'execute' | 'housekeeping' | 'tes
 function exited(b: Board, s: Session) {
   b.db.prepare('UPDATE runs SET outcome = ? WHERE id = ?').run(s.outcome ?? 'exit', s.runId);
   changed(s.ticketId);
-  if (s.outcome) return;
+  if (s.outcome || b.closing) return;
   try {
     apply(b, s.ticketId!, 'exit', { note: { role: s.role, kind: 'failure', body: 'agent exited without reporting' } });
   } catch (e) {
@@ -238,8 +254,9 @@ export const DIRTY_WAIT = { every: 30_000, max: 600_000 };
 const waiting = new Map<number, NodeJS.Timeout>();
 
 /**
- * A conflict goes back to the worker (TABLE). A dirty base is the operator's own edits in the main checkout, not the ticket's
- * fault: the merge waits for them to be committed, and only a base still dirty after DIRTY_WAIT.max is flagged.
+ * A conflict goes back to the worker (TABLE); it is met in the ticket's worktree, never in the main checkout. A dirty base is the
+ * operator's own edits in the main checkout, not the ticket's fault: the merge waits for them to be committed, and only a base
+ * still dirty after DIRTY_WAIT.max is flagged.
  */
 function queueMerge(b: Board, id: number, since = Date.now()) {
   clearTimeout(waiting.get(id)); // the operator's Retry merge restarts a wait
@@ -248,6 +265,12 @@ function queueMerge(b: Board, id: number, since = Date.now()) {
     await Promise.all(sessionsOf(id).map((s) => s.done)); // the tester's pty is still closing
     const t = readTicket(b.db, id);
     if (t.status !== 'done' || t.merged_at) return; // reset or moved by hand while it waited
+    // Main is merged into the worktree first, so the merge into the main checkout is conflict-free by construction; merge.ts's
+    // abort stays as a safety net.
+    // ponytail: lands even when the sync brought in new commits (the worker merged and the tester tested at submit); upgrade is
+    // to send it back to testing when the sync touched files the ticket also touched.
+    const s = syncWorktree(b.repo, id);
+    if (!s.ok) return void (await Promise.all(apply(b, id, 'conflict', { note: { role: 'tester', kind: 'failure', body: s.reason } }).pending));
     const r = await merge(b.repo, id, t.title);
     let out;
     if (r.ok) out = apply(b, id, 'merged');
@@ -313,14 +336,14 @@ function rootSession(b: Board, o: Parameters<typeof launchRoot>[1]): Session {
 /** A brainstorm session: a planner with plan-phase settings. */
 export const brainstorm = (b: Board) => rootSession(b, { ...runSettings(null, 'plan'), template: 'brainstorm' });
 
-/** An operator terminal: plan-phase settings unless `.kanban95/config.json` has `operator: { model, effort }` (either or both). */
+/** An operator terminal: the operator phase (Settings → Models; the CLI's default model when unset) unless `.kanban95/config.json` has `operator: { model, effort }` (either or both). */
 export function operator(b: Board, mission: string): Session {
   const o = repoConfig(b.repo).operator ?? {};
   const where = `${repoConfigPath(b.repo)} operator`;
   if (typeof o !== 'object' || Array.isArray(o)) throw new BadConfig(`${where} must be an object`);
   if (o.model !== undefined && (typeof o.model !== 'string' || !o.model)) throw new BadConfig(`${where}.model must be a non-empty string`);
   if (o.effort !== undefined && !EFFORT.includes(o.effort)) throw new BadConfig(`${where}.effort must be one of ${EFFORT.join(', ')}`);
-  const plan = runSettings(null, 'plan');
+  const plan = runSettings(null, 'operator');
   return rootSession(b, { ...plan, model: o.model ?? plan.model, effort: (o.effort as Effort) ?? plan.effort, template: 'operator', mission });
 }
 

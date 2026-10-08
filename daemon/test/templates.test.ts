@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { BRAIN_TRUNCATED, brainFor, buildContext, startRun } from '../src/context.ts';
+import { BRAIN_TRUNCATED, brainFor, buildContext, gitDiff, startRun } from '../src/context.ts';
 import { openDb } from '../src/db.ts';
 import { preferencesPath } from '../src/settings.ts';
 import { DEFAULTS_DIR, initTemplates, render, TEMPLATES, VARS, type Ctx, type TemplateName } from '../src/templates.ts';
@@ -75,13 +75,37 @@ describe('context', () => {
     expect(out).not.toContain('gardening');
   });
 
-  it('brain: the character budget truncates and marks the cut', () => {
-    brain('merge queue', 'x'.repeat(3000));
-    brain('merge conflict', 'y'.repeat(3000));
-    const out = brainFor(db, 'merge', 5, 1000);
-    expect(out.length).toBe(1000);
+  it('brain: bodies for the top two only, an index line with tags for the rest', () => {
+    const ids = ['first', 'second', 'third'].map((n) => Number(brain(`queue ${n}`, `${n} body`, `queue ${n}tag`).lastInsertRowid));
+    expect(brainFor(db, 'queue', 5).split('\n')).toEqual([
+      `- [#${ids[0]}] queue first: first body`,
+      `- [#${ids[1]}] queue second: second body`,
+      `- [#${ids[2]}] queue third · queue thirdtag`,
+    ]);
+  });
+
+  it('brain: a body over the budget falls back to its index line, never a partial body', () => {
+    const a = Number(brain('merge queue', 'x'.repeat(3000)).lastInsertRowid);
+    const b = Number(brain('merge conflict', 'y'.repeat(3000)).lastInsertRowid);
+    expect(brainFor(db, 'merge', 5, 1000)).toBe(`- [#${a}] merge queue\n- [#${b}] merge conflict`);
+    expect(brainFor(db, 'merge', 5, 100_000)).toContain('y'.repeat(3000));
+  });
+
+  it('brain: the budget cuts between rows and marks the cut', () => {
+    for (let i = 0; i < 8; i++) brain(`cache entry ${i} ${'t'.repeat(60)}`, 'b', 'cache');
+    const out = brainFor(db, 'cache', 8, 400);
+    expect(out.length).toBeLessThanOrEqual(400);
     expect(out.endsWith(BRAIN_TRUNCATED)).toBe(true);
-    expect(brainFor(db, 'merge', 5, 100_000)).not.toContain(BRAIN_TRUNCATED);
+    const rows = out.slice(0, -BRAIN_TRUNCATED.length).split('\n');
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows.length).toBeLessThan(8);
+    for (const r of rows) expect(r).toMatch(/^- \[#\d+\] cache entry \d t{60}(: b| · cache)$/);
+  });
+
+  it('brain: a title hit outranks the same word repeated in a body', () => {
+    brain('misc', 'socket '.repeat(4) + 'filler '.repeat(40));
+    const titled = Number(brain('socket close', 'filler '.repeat(40)).lastInsertRowid);
+    expect(brainFor(db, 'socket', 5).startsWith(`- [#${titled}] socket close: `)).toBe(true);
   });
 
   it('notes: only failures since the latest execute run, not earlier cycles or other kinds', () => {
@@ -118,8 +142,48 @@ describe('context', () => {
     git('-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '-m', 'add a');
     const t = ticket('diffed');
     expect(buildContext(db, repo, t, 'worker').diff).toBe('');
-    expect(buildContext(db, repo, t, 'tester', { worktree: repo, base: 'main' }).diff).toMatch(/^diff --git a\/a\.txt[\s\S]*\+hello/);
+    expect(buildContext(db, repo, t, 'tester', { worktree: repo, base: 'main' }).diff).toMatch(/^a\.txt \| 1 \+[\s\S]*\ndiff --git a\/a\.txt[\s\S]*\+hello/);
     expect(() => buildContext(db, repo, t, 'tester')).toThrow('worktree and base');
+  });
+
+  describe('gitDiff', () => {
+    const git = (...a: string[]) => execFileSync('git', a, { cwd: repo, encoding: 'utf8' });
+    const commit = (files: Record<string, string>) => {
+      for (const [f, body] of Object.entries(files)) {
+        mkdirSync(dirname(join(repo, f)), { recursive: true });
+        writeFileSync(join(repo, f), body);
+      }
+      git('add', ...Object.keys(files));
+      git('-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '-m', 'change');
+    };
+    beforeEach(() => {
+      git('init', '-q', '-b', 'main');
+      git('-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '--allow-empty', '-m', 'base');
+      git('checkout', '-q', '-b', 'ticket/1');
+    });
+
+    it('names markdown, docs and lockfiles in the stat but leaves their hunks out', () => {
+      commit({ 'src/a.ts': 'code\n', 'README.md': 'readme words\n', 'docs/img/x.svg': '<svg/>\n', 'package-lock.json': '{}\n', 'shell/Cargo.lock': 'lock\n' });
+      const d = gitDiff(repo, 'main');
+      for (const f of ['src/a.ts', 'README.md', 'docs/img/x.svg', 'package-lock.json', 'shell/Cargo.lock']) expect(d).toContain(` ${f} `);
+      expect(d).toContain('diff --git a/src/a.ts');
+      expect(d.match(/^diff --git/gm)).toHaveLength(1);
+      expect(d).not.toContain('readme words');
+    });
+
+    it('cuts a long diff at the budget with a marker naming how to pull the rest', () => {
+      commit({ 'a.ts': 'x'.repeat(5000) + '\n' });
+      const d = gitDiff(repo, 'main', 1000);
+      expect(d).toMatch(/\n\[diff truncated: run git diff main\.\.\.HEAD -- <path>\]$/);
+      expect(d.length).toBeLessThan(1000 + 200); // budget plus the stat
+      expect(gitDiff(repo, 'main')).not.toContain('[diff truncated');
+    });
+
+    it('is empty when nothing changed, and a docs-only change still shows its stat', () => {
+      expect(gitDiff(repo, 'main')).toBe('');
+      commit({ 'docs/X.md': 'doc\n' });
+      expect(gitDiff(repo, 'main')).toMatch(/^ docs\/X\.md \| 1 \+\n 1 file changed, 1 insertion\(\+\)$/);
+    });
   });
 
   it('ticket lists each attachment by absolute path, and nothing when there are none', () => {

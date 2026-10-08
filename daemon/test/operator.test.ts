@@ -123,10 +123,12 @@ describe('operator over MCP', () => {
 });
 
 describe('operator argv', () => {
-  const base = { repo: 'C:\\r', promptPath: 'C:/r/.kanban95/sessions/-3/prompt.md', mcpConfigPath: 'C:/r/.kanban95/sessions/-3/mcp.json', mcpUrl: 'http://127.0.0.1:5/mcp', cwd: 'C:/r', model: 'm', effort: 'high' };
+  const base = { repo: 'C:\\r', promptPath: 'C:/r/.kanban95/sessions/-3/prompt.md', mcpConfigPath: 'C:/r/.kanban95/sessions/-3/mcp.json', settingsPath: 'C:/r/.kanban95/sessions/-3/settings.json', mcpUrl: 'http://127.0.0.1:5/mcp', cwd: 'C:/r', model: 'm', effort: 'high' };
   it.each(['claude', 'codex'])("%s: the worker's permissions, not the planner deny list", (cli) => {
     const argv = buildArgv({ ...base, cli, role: 'operator' } as ArgvIn);
-    expect(argv).toEqual(buildArgv({ ...base, cli, role: 'worker' } as ArgvIn));
+    // The operator watches its terminal, so it keeps its own Claude settings and skills, which an unattended worker drops.
+    const lean = ['--setting-sources', 'project,local', '--settings', base.settingsPath, '--disable-slash-commands'];
+    expect(argv).toEqual(buildArgv({ ...base, cli, role: 'worker' } as ArgvIn).filter((a) => !lean.includes(a)));
     expect(argv).not.toEqual(buildArgv({ ...base, cli, role: 'planner' } as ArgvIn));
     expect(argv).toContain(cli === 'claude' ? '--dangerously-skip-permissions' : '--dangerously-bypass-approvals-and-sandbox');
   });
@@ -172,7 +174,7 @@ describe('POST /api/operator', () => {
     const r = await post('/operator', { mission });
     expect(r.status).toBe(201);
     const view = await r.json();
-    expect(view).toMatchObject({ ticket_id: null, run_id: null, role: 'operator', phase: 'operator', model: 'plan-m' });
+    expect(view).toMatchObject({ ticket_id: null, run_id: null, role: 'operator', phase: 'operator', model: '' }); // no operator row: the CLI's default model, no --model flag
     expect(lastAudit()).toMatchObject({ outcome: 'ok' });
     const s = sessions.get(view.id)!;
     expect(s.dir).toBe(join(repo, '.kanban95', 'sessions', String(view.id)));
@@ -184,6 +186,18 @@ describe('POST /api/operator', () => {
     await end(s);
     expect(verify(srv.db, token)).toBeNull();
     expect(existsSync(s.dir)).toBe(false);
+  });
+
+  it('runs with the operator row of models.json when set, the CLI default (no --model) when not', async () => {
+    const file = join(process.env.USERPROFILE!, '.kanban95', 'models.json'), saved = readFileSync(file, 'utf8');
+    try {
+      writeFileSync(file, JSON.stringify({ ...JSON.parse(saved), claude: { ...JSON.parse(saved).claude, operator: { model: 'row-m', effort: 'low' } } }));
+      const view = await (await post('/operator', { mission: 'go' })).json();
+      expect(view.model).toBe('row-m');
+      await end(sessions.get(view.id)!);
+    } finally {
+      writeFileSync(file, saved);
+    }
   });
 
   it('runs with .kanban95/config.json operator model and effort when set, and refuses a bad one', async () => {

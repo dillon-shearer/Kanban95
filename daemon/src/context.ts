@@ -3,13 +3,16 @@ import { execFileSync } from 'node:child_process';
 import type { DatabaseSync } from 'node:sqlite';
 import { readTicket } from './api.js';
 import { attachments } from './attachments.js';
+import { BRAIN_RANK } from './db.js';
 import type { Role } from './grants.js';
 import { TOOLS } from './mcp.js';
 import { readPreferences } from './settings.js';
 import { fill, loadTemplate, TEMPLATES, type Ctx, type TicketTemplate } from './templates.js';
 
-const BRAIN_LIMIT = 5;
-const BRAIN_CHARS = 4000;
+const BRAIN_LIMIT = 8;
+/** How many of the top rows carry their body; the rest are one line each, fetched with brain_search `id` when they apply. */
+const BRAIN_BODIES = 2;
+const BRAIN_CHARS = 2500;
 export const BRAIN_TRUNCATED = '\n[brain truncated; search for more with brain_search]';
 
 interface ContextOpts {
@@ -23,15 +26,27 @@ interface ContextOpts {
 const orNone = (s: string) => s.trim() || '(none)';
 const bullet = (head: string, body: string) => `- ${head}${body.replaceAll('\n', '\n  ')}`;
 
-/** Top matches for any word of the ticket's title and body, best first, as a list capped at `chars` with a visible marker when cut. */
+/**
+ * Top matches for any word of the ticket's title and body, best first: the first BRAIN_BODIES with their body, the rest as an
+ * index line. Cut on row boundaries within `chars`, with a visible marker; a body that does not fit falls back to its index line.
+ */
 export function brainFor(db: DatabaseSync, text: string, limit = BRAIN_LIMIT, chars = BRAIN_CHARS): string {
   const words = [...new Set(text.toLowerCase().match(/[\p{L}\p{N}_]{3,}/gu) ?? [])];
   if (words.length === 0) return '';
   const rows = db
-    .prepare('SELECT b.id, b.title, b.body FROM brain_fts f JOIN brain b ON b.id = f.rowid WHERE brain_fts MATCH ? ORDER BY rank, b.id LIMIT ?')
-    .all(words.map((w) => `"${w}"`).join(' OR '), limit) as { id: number; title: string; body: string }[];
-  const out = rows.map((r) => bullet(`[#${r.id}] ${r.title}: `, r.body)).join('\n');
-  return out.length > chars ? out.slice(0, chars - BRAIN_TRUNCATED.length) + BRAIN_TRUNCATED : out;
+    .prepare(`SELECT b.id, b.title, b.body, b.tags FROM brain_fts f JOIN brain b ON b.id = f.rowid WHERE brain_fts MATCH ? ORDER BY ${BRAIN_RANK}, b.id LIMIT ?`)
+    .all(words.map((w) => `"${w}"`).join(' OR '), limit) as { id: number; title: string; body: string; tags: string }[];
+  const room = chars - BRAIN_TRUNCATED.length;
+  const lines: string[] = [];
+  let used = -1; // no newline before the first line
+  for (const [i, r] of rows.entries()) {
+    const index = `- [#${r.id}] ${r.title}${r.tags ? ` · ${r.tags}` : ''}`;
+    const line = [i < BRAIN_BODIES && bullet(`[#${r.id}] ${r.title}: `, r.body), index].find((l) => l && used + 1 + l.length <= room);
+    if (!line) return lines.join('\n') + BRAIN_TRUNCATED;
+    lines.push(line);
+    used += 1 + line.length;
+  }
+  return lines.join('\n');
 }
 
 /** Failure notes written since the latest execute run started: what went wrong in the attempt now being retried. Older cycles are left out. */
@@ -50,9 +65,23 @@ function attachmentList(repo: string, ticketId: number): string {
   return files.length ? `Attachments (open with your file reader):\n${files.map((f) => `- ${f.path}`).join('\n')}` : '';
 }
 
-function gitDiff(worktree: string, base: string): string {
-  // ponytail: the whole diff is injected; truncate with a marker if prompts outgrow the CLIs' input limits.
-  return execFileSync('git', ['diff', '--no-color', '--no-ext-diff', `${base}...HEAD`], { cwd: worktree, encoding: 'utf8', maxBuffer: 16 << 20 });
+/** Left out of the inline diff (still named in the stat): docs and lockfiles were 40-100% of the large tester prompts (ticket #43). */
+const DIFF_SKIP = [':(exclude)*.md', ':(exclude)docs/**', ':(exclude)*package-lock.json', ':(exclude)*.lock'];
+export const DIFF_CHARS = 32000;
+
+/**
+ * The tester's view of the change: `git diff --stat` of every file, then the diff of code and config only, capped at `chars`
+ * with a marker telling the tester how to pull the rest. Push identifiers, not content: the tester reads what it needs per file.
+ */
+export function gitDiff(worktree: string, base: string, chars = DIFF_CHARS): string {
+  const git = (...a: string[]) =>
+    execFileSync('git', ['diff', '--no-color', '--no-ext-diff', ...a], { cwd: worktree, encoding: 'utf8', maxBuffer: 16 << 20 });
+  const stat = git('--stat=200', '--stat-graph-width=20', `${base}...HEAD`).trimEnd();
+  if (!stat) return '';
+  const marker = `\n[diff truncated: run git diff ${base}...HEAD -- <path>]`;
+  let body = git(`${base}...HEAD`, '--', ...DIFF_SKIP);
+  if (body.length > chars) body = body.slice(0, chars - marker.length) + marker;
+  return `${stat}\n\n${body}`.trimEnd();
 }
 
 /** A null ticket is a brainstorm or operator session: tools only, nothing pushed. `mission` is the operator terminal's, set by its launcher. */
