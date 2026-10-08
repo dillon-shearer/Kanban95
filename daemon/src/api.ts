@@ -174,14 +174,13 @@ const routes: [method: string, path: RegExp, mutation: string | null, handler: (
     readTicket(board.db, Number(params[0]));
     return { status: 200, body: { diff: ticketDiff(board.repo, Number(params[0])) } };
   }],
-  // Questions an agent asked with ask_operator that have no answer yet, on tickets still flagged.
+  // Every flagged ticket with the note that flagged it: its newest question or failure (the lifecycle writes one with each flag).
   ['GET', /^\/api\/inbox$/, null, ({ db }) => ({
     status: 200,
     body: db.prepare(`
-      SELECT n.id, n.ticket_id, n.role, n.body, n.created_at, t.title FROM notes n JOIN tickets t ON t.id = n.ticket_id
-      WHERE n.kind = 'question' AND t.needs_human = 1
-        AND NOT EXISTS (SELECT 1 FROM notes a WHERE a.ticket_id = n.ticket_id AND a.kind = 'answer' AND a.id > n.id)
-      ORDER BY n.id`).all(),
+      SELECT n.id, n.ticket_id, n.role, n.kind, n.body, n.created_at, t.title, t.status, t.merged_at FROM tickets t
+      JOIN notes n ON n.id = (SELECT max(id) FROM notes WHERE ticket_id = t.id AND kind IN ('question', 'failure'))
+      WHERE t.needs_human = 1 ORDER BY n.id`).all(),
   })],
   ['POST', /^\/api\/brain$/, 'brain.add', ({ db, body }) => {
     const { title, body: text, tags = '' } = body;

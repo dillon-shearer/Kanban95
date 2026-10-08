@@ -33,5 +33,6 @@ Node 24+, TypeScript, vitest. `node:sqlite`. Vanilla UI + 98.css + xterm.js. Tau
 - Tokens are stored hashed. Grants expire with the ticket.
 - Keep diffs small. No abstraction with one implementation. No scaffolding "for later."
 - Commits, by hand or by the board, are authored as the operator (their `git config user.name`/`user.email`), with no `Co-Authored-By` or other trailer. Subject: a plain imperative sentence saying what changed, no ticket or phase ids. Body only when the why is not obvious from the subject.
+- Never leave uncommitted changes in the main checkout while the board runs; the merge queue merges there. Work in a worktree.
 - Mark deliberate shortcuts with a `// ponytail:` comment naming the ceiling and the upgrade path.
 - When a phase is done, write `docs/handoffs/log/<NN>-<name>.md`: what was built, what deviated from the handoff and why, gotchas for the next phase, how to run and test it. Then delete the handoff file you executed.

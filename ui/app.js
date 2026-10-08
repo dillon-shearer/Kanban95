@@ -330,7 +330,7 @@ function openTicket(id) {
 }
 
 function facts(t) {
-  return h('p', { class: 'k95-facts' }, LABEL[t.status], t.flags.needs_human && ' · needs human', t.flags.blocked_on_deps && ' · waiting on dependencies',
+  return h('p', { class: 'k95-facts' }, LABEL[t.status], t.flags.needs_human && ' · needs human (the Inbox says why)', t.flags.blocked_on_deps && ' · waiting on dependencies',
     ` · retry ${t.retry}`, t.template === 'housekeeping' && ' · housekeeping', t.merged_at && ` · merged ${fmt(t.merged_at)}`);
 }
 
@@ -448,12 +448,23 @@ function openInbox() {
     if (ids === shown) return; // unchanged: keep whatever the operator is typing
     shown = ids;
     w.body.replaceChildren(...(inbox.length ? inbox.map((q) => {
+      const legend = h('legend', {}, `#${q.ticket_id} ${q.title}`);
+      if (q.kind === 'failure') {
+        // The note ends with "To resolve: …" (docs/LIFECYCLE.md → Needs human); the buttons are the actions it names.
+        const t = tickets.get(q.ticket_id);
+        return h('fieldset', { class: 'k95-flag', 'data-ticket': q.ticket_id }, legend,
+          h('div', { class: 'note-head' }, `${fmt(q.created_at)} · ${q.role} · stopped:`), h('pre', {}, q.body),
+          h('div', { class: 'field-row' },
+            h('button', { onclick: () => openTicket(q.ticket_id) }, 'Open ticket'),
+            q.status === 'done' && !q.merged_at && h('button', { onclick: () => act(() => api('POST', `/tickets/${q.ticket_id}/merge`), `Merge of #${q.ticket_id} queued.`) }, 'Retry merge'),
+            q.status !== 'done' && t && h('button', { onclick: () => reset(t) }, 'Reset to Backlog')));
+      }
       const answer = h('textarea', { rows: 3, placeholder: 'Your answer' });
-      return h('fieldset', { class: 'k95-question', 'data-ticket': q.ticket_id }, h('legend', {}, `#${q.ticket_id} ${q.title}`),
+      return h('fieldset', { class: 'k95-question', 'data-ticket': q.ticket_id }, legend,
         h('div', { class: 'note-head' }, `${fmt(q.created_at)} · the ${q.role} asks:`), h('pre', {}, q.body),
         h('div', { class: 'field-row' }, answer),
         h('button', { onclick: () => act(() => api('POST', `/tickets/${q.ticket_id}/answer`, { answer: answer.value }), `Answer sent to #${q.ticket_id}.`) }, 'Answer'));
-    }) : [h('p', {}, 'No open questions.')]));
+    }) : [h('p', {}, 'Nothing needs you.')]));
   };
   views.set('inbox', draw);
   draw();

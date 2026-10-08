@@ -32,7 +32,9 @@ The ticket moves on its own: In Progress → Testing → Done. A failed test sen
 
 ### 4. When the board needs you
 
-You hear the **chord** and a card turns red when an agent asks a question, exits without reporting, hits the retry cap, or its merge conflicts. The Board's status bar says why at that moment (`#n needs you: …`, the card's newest failure note or question; hover it for the whole text). A launch the board refuses outright (no models saved, uncommitted changes on the base branch) starts no agent and opens no terminal, so that line is where its reason shows. Questions land in the **Inbox** (the "Inbox n" button in the taskbar tray, just right of Start). Type the answer and press **Answer**; it is typed into the agent's terminal and the card's badge clears.
+The board fixes what it can before it asks you. A merge that conflicts goes back to the worker: the ticket returns to In Progress (retry + 1) and the agent merges the base into its worktree, resolves the conflict, and goes through testing again. A merge refused only because the main checkout has uncommitted changes is not flagged: the board retries it every 30 seconds and it lands once you commit or stash. So never leave edits in the main checkout while the board runs; work in a worktree.
+
+You hear the **chord** and a card turns red when an agent asks a question, exits without reporting, hits the retry cap, its merge still conflicts at the retry cap, or the main checkout is still dirty after 10 minutes. Every one of these lands in the **Inbox** (the "Inbox n" button in the taskbar tray, just right of Start; n counts them all), and the ticket's facts line says "needs human (the Inbox says why)". A question has an answer box: type the answer and press **Answer**; it is typed into the agent's terminal and the card's badge clears. Anything else shows the note that flagged it: what happened, then a line starting **To resolve:** with your next step (it names the worktree, e.g. `.worktrees/t-12`, and the button). Its buttons are **Open ticket**, **Retry merge** (a done ticket that has not merged) and **Reset to Backlog** (otherwise). The Board's status bar also says why at the moment a card turns red (`#n needs you: …`). A launch the board refuses outright (no models saved, uncommitted changes on the base branch) starts no agent and opens no terminal, so that line is where its reason shows.
 
 ![Inbox](img/inbox.png)
 
@@ -51,7 +53,7 @@ A merged ticket's worktree and branch are removed by the board. Every ten merged
 | Board | Start → Board | the four columns, the toolbar, the status bar |
 | Ticket | double-click a card, **New ticket** | fields, notes timeline, runs and prompts, diff, live grants (Revoke), audit trail |
 | Terminal | opens by itself; Ticket → Runs → Terminal | one agent session, keyboard and mic |
-| Inbox | taskbar "Inbox n", Start → Inbox | open questions from agents |
+| Inbox | taskbar "Inbox n", Start → Inbox | every ticket that needs you: questions to answer, and failures with what resolves them |
 | Brain | Start → Brain | search what agents learned, add a note yourself |
 | Settings | Start → Settings | Models, CLI paths and trusted folders, Grants, Voice, sounds |
 
@@ -61,7 +63,7 @@ Windows can be dragged by the title bar, resized from the corner and minimized t
 
 ## Cards
 
-Right-click a card for its menu: Open, Launch, **Model**, **Effort** and **CLI** (set or clear this ticket's override without opening it), Retry merge (after a conflict you fixed), Reset to Backlog (also on a card waiting on a dependency: it cancels the wait, so it will not launch by itself), Delete.
+Right-click a card for its menu: Open, Launch, **Model**, **Effort** and **CLI** (set or clear this ticket's override without opening it), Retry merge (after you fixed a conflict or cleaned the main checkout), Reset to Backlog (also on a card waiting on a dependency: it cancels the wait, so it will not launch by itself), Delete.
 
 ![Card menu](img/card-menu.png)
 

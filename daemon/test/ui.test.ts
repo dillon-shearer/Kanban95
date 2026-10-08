@@ -169,6 +169,29 @@ describe('ui', { timeout: 60_000 }, () => {
     expect(git('show', 'HEAD:answer.txt')).toBe('Navy blue');
   });
 
+  it('lists a failed merge in the Inbox with its note and the buttons that fix it, and counts it in the taskbar', async () => {
+    const id = ticket('Stuck merge', { status: 'done', needs_human: 1 });
+    const body = `merge conflict with main: CONFLICT (add/add) in shared.txt\nTo resolve: in .worktrees/t-${id} run git merge with the base branch, then Retry merge.`;
+    db.prepare("INSERT INTO notes (ticket_id, role, kind, body) VALUES (?, 'tester', 'failure', ?)").run(id, body);
+    try {
+      await page.goto(base);
+      await until(() => column(id), 'the card');
+      const n = (await (await fetch(`${base}api/inbox`, { headers: { cookie: `k95=${srv.secret}` } })).json()).length;
+      expect(await page.evaluate(`document.getElementById('inbox-count').textContent`)).toBe(`Inbox ${n}`);
+      await click('#inbox-count');
+      const box = `.k95-flag[data-ticket="${id}"]`;
+      await until(() => page.evaluate(`!!document.querySelector('${box}')`), 'the failure in the Inbox');
+      expect(await page.evaluate(`document.querySelector('${box} pre').textContent`)).toBe(body);
+      expect(await page.evaluate(`[...document.querySelectorAll('${box} button')].map((b) => b.textContent)`)).toEqual(['Open ticket', 'Retry merge']);
+      await click(`${box} button`);
+      const facts = `[data-win="ticket-${id}"] .k95-facts`;
+      await until(() => page.evaluate(`!!document.querySelector('${facts}')`), 'the ticket window');
+      expect(await page.evaluate(`document.querySelector('${facts}').textContent`)).toContain('needs human (the Inbox says why)');
+    } finally {
+      db.prepare("UPDATE tickets SET needs_human = 0, merged_at = 'x' WHERE id = ?").run(id);
+    }
+  });
+
   it('pins a compact tray right after Start on one taskbar row', async () => {
     await page.goto(base);
     await until(() => page.evaluate(`!!document.querySelector('#clock').textContent`), 'the clock');

@@ -82,7 +82,7 @@ menu[role=tablist] { flex: none; margin-bottom: -2px !important; }
 .sunken-panel { flex: none; max-height: 220px; overflow: auto; }
 .sunken-panel table { width: 100%; }
 .k95-args { font-family: Consolas, monospace; word-break: break-all; }
-.k95-pre, .k95-notes pre, .k95-question pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-family: Consolas, monospace; font-size: 11px; }
+.k95-pre, .k95-notes pre, .k95-question pre, .k95-flag pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-family: Consolas, monospace; font-size: 11px; }
 .k95-pre { flex: 1; min-height: 80px; overflow: auto; background: #fff; padding: 4px;
   box-shadow: inset -1px -1px #fff, inset 1px 1px grey, inset -2px -2px #dfdfdf, inset 2px 2px #0a0a0a; }
 .k95-notes { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 4px; }

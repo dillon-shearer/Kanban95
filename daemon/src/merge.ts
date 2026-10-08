@@ -17,21 +17,24 @@ export function enqueue(job: () => Promise<void>): Promise<void> {
 /** Resolves when the queue is empty. */
 export const idle = () => tail;
 
-export type MergeResult = { ok: true } | { ok: false; reason: string };
+/** `dirty`: refused before git merge ran; `reason` is then the `git status` lines. Otherwise `reason` is git's output. */
+export type MergeResult = { ok: true } | { ok: false; dirty: boolean; base: string; reason: string };
 
 /**
  * `git merge --no-ff ticket/<id>` into whatever branch the main working tree has checked out, authored by the repo's own
  * git identity. The message is the ticket title, one line, nothing appended. Any failure is aborted, leaving the base as it was.
+ * A base with uncommitted changes is never merged into, so `merge --abort` never runs over the operator's edits.
  */
 export async function merge(repo: string, ticketId: number, title: string): Promise<MergeResult> {
+  const base = (await git(repo, 'rev-parse', '--abbrev-ref', 'HEAD')).stdout.trim();
   const { stdout: dirty } = await git(repo, 'status', '--porcelain', '--untracked-files=no');
-  if (dirty.trim()) return { ok: false, reason: `the base working tree has uncommitted changes:\n${dirty.trimEnd()}` };
+  if (dirty.trim()) return { ok: false, dirty: true, base, reason: dirty.trimEnd() };
   try {
     await git(repo, 'merge', '--no-ff', '--no-edit', '-m', title.split(/\r?\n/)[0].trim(), branchName(ticketId));
     return { ok: true };
   } catch (e) {
     await git(repo, 'merge', '--abort').catch(() => {}); // nothing to abort when the merge never started
     const { stdout, stderr } = e as { stdout?: string; stderr?: string };
-    return { ok: false, reason: `${stdout ?? ''}${stderr ?? ''}`.trim() || (e as Error).message };
+    return { ok: false, dirty: false, base, reason: `${stdout ?? ''}${stderr ?? ''}`.trim() || (e as Error).message };
   }
 }

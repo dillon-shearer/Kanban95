@@ -25,6 +25,7 @@ export type Event =
   | 'answer' // the operator answers over REST
   | 'exit' // the agent's pty exited without a move_ticket, or its launch failed
   | 'merged' | 'conflict' // the merge queue's verdict
+  | 'dirty' // the merge queue gave up waiting for the main checkout to be clean (DIRTY_WAIT)
   | 'merge'; // the operator retries a merge that failed
 export type Effect =
   | 'spawn_execute' | 'spawn_test' | 'end_session' | 'enqueue_merge' | 'note' | 'answer_pty'
@@ -50,6 +51,13 @@ interface Row {
   to?: Status;
   set?: { needs_human?: 0 | 1; blocked_on_deps?: 0 | 1; retry?: '+1'; merged?: true };
   effects: Effect[];
+  /** The note this row writes when the event brings none of its own. */
+  says?: string;
+  /**
+   * Every row that raises needs_human writes one note: what happened, then `To resolve: <this>`, the operator's next step.
+   * A question has none: the Inbox's Answer box is its fix.
+   */
+  resolve?: (id: number, repo: string) => string;
 }
 
 const RUNNING: Status[] = ['in_progress', 'testing'];
@@ -59,23 +67,35 @@ export const TABLE: Row[] = [
   { from: ['in_progress'], event: 'submit', to: 'testing', effects: ['end_session', 'spawn_test'] },
   { from: ['testing'], event: 'pass', when: (f) => f.passReported, why: 'call report_test with passed: true first', to: 'done', effects: ['end_session', 'enqueue_merge'] },
   { from: ['testing'], event: 'fail', when: (f) => f.retry < MAX_RETRY, to: 'in_progress', set: { retry: '+1' }, effects: ['end_session', 'spawn_execute'] },
-  { from: ['testing'], event: 'fail', when: (f) => f.retry >= MAX_RETRY, to: 'in_progress', set: { retry: '+1', needs_human: 1 }, effects: ['end_session', 'chord'] },
+  { from: ['testing'], event: 'fail', when: (f) => f.retry >= MAX_RETRY, to: 'in_progress', set: { retry: '+1', needs_human: 1 }, effects: ['end_session', 'note', 'chord'],
+    says: `stopped after ${MAX_RETRY + 1} failed tests`,
+    resolve: () => "read the tester's failure notes on the ticket. Fix its body or criteria if they ask for the wrong thing, then Reset to Backlog and Launch; the agent starts again in the same worktree." },
   { from: RUNNING, event: 'ask', set: { needs_human: 1 }, effects: ['note', 'chord'] },
   { from: RUNNING, event: 'answer', when: (f) => f.needs_human && f.live, why: 'no flagged question with a live agent session', set: { needs_human: 0 }, effects: ['note', 'answer_pty'] },
-  { from: RUNNING, event: 'exit', set: { needs_human: 1 }, effects: ['note', 'chord'] },
+  { from: RUNNING, event: 'exit', set: { needs_human: 1 }, effects: ['note', 'chord'],
+    resolve: (id) => `open the ticket; its Runs tab shows where the agent stopped. Fix what it names (a launch failure says why), then Reset to Backlog and Launch; .worktrees/t-${id} is kept.` },
   { from: ['done'], event: 'merged', set: { merged: true, needs_human: 0 }, effects: ['ding', 'remove_worktree', 'release_dependents', 'housekeeping'] },
-  { from: ['done'], event: 'conflict', set: { needs_human: 1 }, effects: ['note', 'chord'] },
+  { from: ['done'], event: 'conflict', when: (f) => f.retry < MAX_RETRY, to: 'in_progress', set: { retry: '+1' }, effects: ['note', 'spawn_execute'] },
+  { from: ['done'], event: 'conflict', when: (f) => f.retry >= MAX_RETRY, set: { needs_human: 1 }, effects: ['note', 'chord'],
+    resolve: (id) => `in .worktrees/t-${id} run git merge with the base branch, fix the conflicting files keeping both sides' intent, run the tests, commit, then Retry merge.` },
+  { from: ['done'], event: 'dirty', set: { needs_human: 1 }, effects: ['note', 'chord'],
+    resolve: (_, repo) => `commit or stash those changes in the main checkout (${repo}), then Retry merge. While the board runs, work in a worktree, never in the main checkout.` },
   { from: ['done'], event: 'merge', when: (f) => !f.merged, why: 'already merged', effects: ['enqueue_merge'] },
 ];
 
 /** A transition the table does not have. Refused, never forced. */
 export class Refused extends Error {}
 
-/** The one row that applies, or a refusal naming why. */
-export function transition(f: Facts, event: Event): { to: Status; set: NonNullable<Row['set']>; effects: Effect[] } {
+function pick(f: Facts, event: Event): Row {
   const rows = TABLE.filter((r) => r.event === event && r.from.includes(f.status));
   const row = rows.find((r) => !r.when || r.when(f));
   if (!row) throw new Refused(`cannot ${event} a ticket in ${f.status}${rows.find((r) => r.why) ? `: ${rows.find((r) => r.why)!.why}` : ''}`);
+  return row;
+}
+
+/** The one row that applies, or a refusal naming why. */
+export function transition(f: Facts, event: Event): { to: Status; set: NonNullable<Row['set']>; effects: Effect[] } {
+  const row = pick(f, event);
   return { to: row.to ?? f.status, set: row.set ?? {}, effects: row.effects };
 }
 
@@ -119,15 +139,18 @@ type Note = { role: Role | 'operator'; kind: 'question' | 'answer' | 'failure'; 
  */
 export function apply(b: Board, id: number, event: Event, x: { note?: Note; answer?: string } = {}) {
   const t = readTicket(b.db, id);
-  const { to, set, effects } = transition(facts(b, t), event);
-  if (effects.includes('note') !== (x.note !== undefined)) throw new Error(`${event} ${x.note ? 'takes no' : 'needs a'} note`);
+  const row = pick(facts(b, t), event);
+  const { to = t.status as Status, set = {}, effects } = row;
+  let note = x.note ?? (row.says ? ({ role: 'tester', kind: 'failure', body: row.says } as Note) : undefined);
+  if (note && row.resolve) note = { ...note, body: `${note.body}\nTo resolve: ${row.resolve(id, b.repo)}` };
+  if (effects.includes('note') !== (note !== undefined)) throw new Error(`${event} ${note ? 'takes no' : 'needs a'} note`);
   const noteId = transaction(b.db, () => {
     b.db.prepare(`
       UPDATE tickets SET status = ?, needs_human = coalesce(?, needs_human), blocked_on_deps = coalesce(?, blocked_on_deps),
         retry = retry + ?, merged_at = CASE WHEN ? THEN strftime('%Y-%m-%dT%H:%M:%fZ', 'now') ELSE merged_at END
       WHERE id = ?`).run(to, set.needs_human ?? null, set.blocked_on_deps ?? null, set.retry ? 1 : 0, set.merged ? 1 : 0, id);
-    if (!x.note) return undefined;
-    const r = b.db.prepare('INSERT INTO notes (ticket_id, role, kind, body) VALUES (?, ?, ?, ?)').run(id, x.note.role, x.note.kind, x.note.body);
+    if (!note) return undefined;
+    const r = b.db.prepare('INSERT INTO notes (ticket_id, role, kind, body) VALUES (?, ?, ?, ?)').run(id, note.role, note.kind, note.body);
     return Number(r.lastInsertRowid);
   });
 
@@ -184,13 +207,31 @@ function exited(b: Board, s: Session) {
   }
 }
 
-function queueMerge(b: Board, id: number) {
+/** A merge refused for a dirty main checkout is tried again every `every` ms and flagged once it has waited `max`. Tests shorten it. */
+export const DIRTY_WAIT = { every: 30_000, max: 600_000 };
+const waiting = new Map<number, NodeJS.Timeout>();
+
+/**
+ * A conflict goes back to the worker (TABLE). A dirty base is the operator's own edits in the main checkout, not the ticket's
+ * fault: the merge waits for them to be committed, and only a base still dirty after DIRTY_WAIT.max is flagged.
+ */
+function queueMerge(b: Board, id: number, since = Date.now()) {
+  clearTimeout(waiting.get(id)); // the operator's Retry merge restarts a wait
+  waiting.delete(id);
   void enqueue(async () => {
     await Promise.all(sessionsOf(id).map((s) => s.done)); // the tester's pty is still closing
-    const r = await merge(b.repo, id, readTicket(b.db, id).title);
-    const out = r.ok
-      ? apply(b, id, 'merged')
-      : apply(b, id, 'conflict', { note: { role: 'tester', kind: 'failure', body: `merge failed; the worktree is kept.\n${r.reason}` } });
+    const t = readTicket(b.db, id);
+    if (t.status !== 'done' || t.merged_at) return; // reset or moved by hand while it waited
+    const r = await merge(b.repo, id, t.title);
+    let out;
+    if (r.ok) out = apply(b, id, 'merged');
+    else if (r.dirty && Date.now() - since < DIRTY_WAIT.max) {
+      waiting.set(id, setTimeout(() => b.closing || queueMerge(b, id, since), DIRTY_WAIT.every).unref());
+      return;
+    } else if (r.dirty) {
+      const body = `merge did not run: the main checkout (${r.base}) still has uncommitted changes after the wait:\n${r.reason}`;
+      out = apply(b, id, 'dirty', { note: { role: 'tester', kind: 'failure', body } });
+    } else out = apply(b, id, 'conflict', { note: { role: 'tester', kind: 'failure', body: `merge conflict with ${r.base}: ${r.reason}` } });
     await Promise.all(out.pending);
   });
 }
