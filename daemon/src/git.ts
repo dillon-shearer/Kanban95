@@ -35,6 +35,28 @@ export function createWorktree(repo: string, ticketId: number): { path: string; 
 }
 
 /**
+ * Merges the base branch (whatever the main checkout has) into the ticket's worktree, as a commit on the ticket branch authored
+ * by the repo's git identity. Runs on submit and again in the merge queue, so conflicts are met here, never in the main checkout.
+ * A conflict is aborted, leaving the worktree as it was. Uncommitted tracked changes are refused untouched; untracked files
+ * (build output, test leftovers) are ignored. No worktree means nothing to sync. `reason` is the failure note.
+ */
+export function syncWorktree(repo: string, ticketId: number): { ok: true } | { ok: false; reason: string } {
+  const path = worktreePath(repo, ticketId);
+  if (!existsSync(path)) return { ok: true };
+  const dirty = execFileSync('git', ['status', '--porcelain', '--untracked-files=no'], { cwd: path, encoding: 'utf8' }).trimEnd(); // git() would trim the first line's status column
+  if (dirty) return { ok: false, reason: `worktree has uncommitted changes; commit or discard them, then submit again:\n${dirty}` };
+  const base = git(repo, 'rev-parse', '--abbrev-ref', 'HEAD');
+  try {
+    git(path, 'merge', '--no-edit', '-m', `Merge ${base} into ${branchName(ticketId)}`, base);
+    return { ok: true };
+  } catch (e) {
+    try { git(path, 'merge', '--abort'); } catch { /* nothing to abort when the merge never started */ }
+    const { stdout, stderr } = e as { stdout?: string; stderr?: string };
+    return { ok: false, reason: `merge conflict with ${base}: ${`${stdout ?? ''}${stderr ?? ''}`.trim() || (e as Error).message}` };
+  }
+}
+
+/**
  * Removes the worktree and deletes the branch only if it is merged. Without `force` git refuses a worktree holding uncommitted
  * or untracked files; the janitor forces only once the branch has landed, when what is left is build output and test leftovers.
  */

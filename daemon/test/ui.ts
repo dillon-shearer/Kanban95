@@ -59,10 +59,11 @@ export const ticket = (title: string, cols: Record<string, unknown> = {}) => {
 export const statusOf = (id: number) => (db.prepare('SELECT status FROM tickets WHERE id = ?').get(id) as { status: string }).status;
 export const column = (id: number) => page.evaluate<string | null>(`document.querySelector('.card[data-id="${id}"]')?.closest('[data-status]')?.dataset.status ?? null`);
 export const statusBar = () => page.evaluate<string>(`document.querySelector('.k95-board .status-bar-field').textContent`);
-export const click = async (selector: string) => {
+/** A real click; `modifiers` is CDP's bit field (2 Ctrl, 8 Shift). */
+export const click = async (selector: string, modifiers = 0) => {
   const { x, y } = await page.center(selector);
-  await page.send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', buttons: 1, clickCount: 1 });
-  await page.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', buttons: 0, clickCount: 1 });
+  await page.send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, modifiers, button: 'left', buttons: 1, clickCount: 1 });
+  await page.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, modifiers, button: 'left', buttons: 0, clickCount: 1 });
 };
 
 beforeAll(async () => {

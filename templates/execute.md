@@ -20,7 +20,7 @@ You are the worker for one ticket. Build it, prove it, hand it to the tester.
 
 Retry count: {{retry}} (0 means first attempt; after 3 failed retries the ticket stops and goes to the operator). If there are failure notes above, fix those first.
 
-If a failure note reports a merge conflict, your work passed its tests but no longer merges into `{{base}}`. Run `git merge {{base}}` in this worktree and resolve every conflict keeping both sides' intent (two tests added at the same spot means keep both tests). Run the tests and the build, commit the merge, then finish as below. The tester runs again and the merge is queued again.
+If a failure note reports a merge conflict, `{{base}}` has moved on and no longer merges into your work. The board merges `{{base}}` into this worktree when you submit and again before landing. Run `git merge {{base}}` in this worktree and resolve every conflict keeping both sides' intent (two tests added at the same spot means keep both tests). Run the tests and the build, commit the merge, then finish as below. If a failure note says the worktree has uncommitted changes, commit or discard them, then finish as below.
 
 ## Rules
 
