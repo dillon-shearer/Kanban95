@@ -85,6 +85,8 @@ describe('role matrix: every "no" cell is refused and audited as denied', () => 
     ['planner', () => planner, 'report_cleanup', { ticket_id: 1, items: [{ path: 'a', action: 'deleted', reason: 'r' }] }],
     ['worker', () => worker3, 'create_ticket', { title: 'x' }],
     ['worker', () => worker3, 'report_test', { passed: true, summary: 'x' }],
+    ['worker', () => worker3, 'set_model', { effort: 'high' }],
+    ['tester', () => tester3, 'set_model', { effort: 'high' }],
     ['tester', () => tester3, 'create_ticket', { title: 'x' }],
     ['tester', () => tester3, 'update_ticket', { body: 'x' }],
     ['tester', () => tester3, 'report_cleanup', { items: [{ path: 'a', action: 'deleted', reason: 'r' }] }],
@@ -106,7 +108,6 @@ describe('ticket scope', () => {
       ['move_ticket', { ticket_id: 4, status: 'testing' }],
       ['add_note', { ticket_id: 4, kind: 'plan', body: 'x' }],
       ['update_ticket', { ticket_id: 4, body: 'x' }],
-      ['set_model', { ticket_id: 4, effort: 'low' }],
       ['ask_operator', { ticket_id: 4, question: 'x' }],
     ] as const) {
       const r = await call(worker3, tool, args);
@@ -184,9 +185,7 @@ describe('tools', () => {
     expect(lastAudit()).toMatchObject({ grant_id: grantIds.planner, ticket_id: 5, tool: 'create_ticket', outcome: 'ok' });
     expect((await call(planner, 'create_ticket', { title: 'x', depends_on: [99] })).text).toMatch(/FOREIGN KEY/);
     expect((await call(planner, 'set_model', { ticket_id: 5, model: 'm1' })).json).toMatchObject({ model: 'm1', effort: 'low' });
-    expect((await call(worker4, 'set_model', { effort: 'high' })).json).toMatchObject({ id: 4, effort: 'high' });
-    expect((await call(tester3, 'set_model', { model: 'big', effort: 'max' })).json).toMatchObject({ id: 3, model: 'big', effort: 'max' });
-    expect((await call(tester3, 'set_model', {})).text).toBe('give model and/or effort');
+    expect((await call(planner, 'set_model', { ticket_id: 5 })).text).toBe('give model and/or effort');
     expect(lastAudit()).toMatchObject({ tool: 'set_model', outcome: 'error' });
   });
 

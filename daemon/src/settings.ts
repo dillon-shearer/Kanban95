@@ -29,7 +29,17 @@ export type ConfigName = keyof typeof FILES;
 type Config<N extends ConfigName> = z.output<(typeof FILES)[N]>;
 export const CONFIGS = Object.keys(FILES) as ConfigName[];
 
-export const configPath = (name: ConfigName) => join(homedir(), '.kanban95', `${name}.json`);
+/**
+ * The board's own config directory: $KANBAN95_HOME, else ~/.kanban95. Every operator-level file (models.json, settings.json,
+ * preferences.md, voice models) lives here and nowhere else. Under vitest the real one is refused, so no test can overwrite it.
+ */
+export function boardHome(): string {
+  if (process.env.KANBAN95_HOME) return process.env.KANBAN95_HOME;
+  if (process.env.VITEST) throw new Error('refusing the real ~/.kanban95 under vitest: set KANBAN95_HOME (test/home.ts does)');
+  return join(homedir(), '.kanban95');
+}
+
+export const configPath = (name: ConfigName) => join(boardHome(), `${name}.json`);
 
 /** A file that does not pass its schema. REST answers it with 400. */
 export class BadConfig extends Error {}
@@ -140,7 +150,7 @@ export function runSettings(t: Ticket | null, phase: 'plan' | 'execute' | 'test'
 }
 
 /** ~/.kanban95/preferences.md: the operator's standing instructions, injected into every prompt as {{preferences}}. */
-export const preferencesPath = () => join(homedir(), '.kanban95', 'preferences.md');
+export const preferencesPath = () => join(boardHome(), 'preferences.md');
 const PREFERENCES_MAX = 16 * 1024;
 
 /** A missing file is an empty string. */

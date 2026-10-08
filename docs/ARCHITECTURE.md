@@ -85,6 +85,7 @@ Every `/api/*` request needs the `k95` cookie holding the shell secret, or gets 
 | GET | `/api/sessions` | live agent sessions: `id` (the `/pty/<id>` key), `ticket_id`, `run_id`, `grant_id`, `role`, `phase`, `model` |
 | DELETE | `/api/sessions/:id` | the operator's X on a terminal: ends the session (`runs.outcome` = `closed`, grant revoked, pty killed); a ticket session also flags its ticket (`exit` with an operator note). 404 when not live. Audited as `sessions.end` |
 | POST | `/api/brainstorm` | starts a brainstorm session (planner, repo root); returns it in the `/api/sessions` shape |
+| POST | `/api/operator` | `{ mission }` (non-empty): starts an operator terminal (operator grant, repo root, the mission in its brief); returns it in the `/api/sessions` shape |
 | GET, PUT | `/api/config/models` `/api/config/settings` | `~/.kanban95/models.json` / `settings.json`: GET returns `{path, value}` as written (`null` when absent), PUT checks the whole file against its schema (`400` naming the field) and writes it |
 | GET, PUT | `/api/notepad` | `<repo>/.kanban95/notepad.md` as plain text: `{value}`, `''` when absent; PUT refuses a non-string with `400` and more than 256 KB with `413`. Not audited |
 | GET, PUT | `/api/config/preferences` | `~/.kanban95/preferences.md` as plain text: `{path, value}`, `value` is `''` when absent; PUT refuses a non-string or more than 16 KB with `400` |
@@ -113,7 +114,7 @@ The template is read from disk on every render, so operator edits apply without 
 package.json      npm workspace root: build / test / dev scripts
 daemon/           src/{server,api,db,grants,mcp,mcp-doc,templates,context,git,pty,launcher,trust,lifecycle,merge,janitor,settings,attachments,voice}.ts, voice-model.json (the pinned speech model), migrations/*.sql, test/ (test/cdp.ts drives headless Edge/Chrome; test/.cache/ is gitignored), tsconfig.json, vitest.config.ts; compiled to dist/ (gitignored)
 ui/               index.html, app.js (data layer and windows), wm.js (window manager), voice.js (mic and transcription), app.css, icons/*.svg (desktop icons), sounds/{ding,chord}.wav, vendor/{98.css and fonts, xterm/, transformers/}
-templates/        default prompt templates (brainstorm, plan, execute, test, housekeeping), copied into each repo once
+templates/        default prompt templates (brainstorm, operator, plan, execute, test, housekeeping), copied into each repo once
 skills/           the Claude Code plugin `kanban95` (.claude-plugin/plugin.json and one folder per skill; docs/AGENTS.md)
 Kanban95.cmd      double-click launcher: finds Node 24, installs, builds, runs the shell on a repo
 shell/            Cargo.toml, build.rs, tauri.conf.json, tauri.bundle.json (installer overlay), stage.mjs (stages the installed daemon), src/main.rs, icons/icon.ico
@@ -135,17 +136,17 @@ docs/             this file, LEARNING.md (guided tour for newcomers), OPERATOR.m
 
 The lifecycle owns Launch: `POST /api/tickets/:id/launch` and the transitions after it call `launch` with the run settings from `~/.kanban95/models.json` (and the CLI path from `settings.json`, when set).
 
-A **brainstorm** (`launchBrainstorm`, `POST /api/brainstorm`) shares steps 3 to 6 but has no ticket: no worktree, no `runs` row, a planner grant with no ticket, `cwd` = the repo root, the plan-phase settings. Its session key is minus its grant id (there is no run id), so its session dir is `.kanban95/sessions/-<grant>/` and its terminal `/pty/-<grant>`. A session dir is owner-only when it holds a bearer (Claude Code's `mcp.json`); a Codex session's dir holds only `prompt.md`, which Codex's read-only sandbox (another Windows account) must be able to read.
+A **brainstorm** (`POST /api/brainstorm`) and an **operator terminal** (`POST /api/operator`) share steps 3 to 6 through one function, `launchRoot`, but have no ticket: no worktree, no `runs` row, a grant with no ticket, `cwd` = the repo root, the plan-phase settings. A brainstorm runs the `brainstorm.md` brief on a planner grant (no file writes). An operator terminal runs `operator.md` with the operator's typed `{{mission}}` on an `operator` grant: the worker's CLI flags, and over MCP what the operator could do by hand on the board (every planner tool, plus editing, moving, noting and re-modelling any ticket; never `report_test`). It only starts from the operator's click in the UI, its model and effort come from `.kanban95/config.json` `operator` when set, and its grant is revoked when its pty exits, like every session's (`docs/SECURITY.md` → Operator terminal). Either one's session key is minus its grant id (there is no run id), so its session dir is `.kanban95/sessions/-<grant>/` and its terminal `/pty/-<grant>`. A session dir is owner-only when it holds a bearer (Claude Code's `mcp.json`); a Codex session's dir holds only `prompt.md`, which Codex's read-only sandbox (another Windows account) must be able to read.
 
 Any failure after the run row is written revokes the grant and removes the session dir before the error is rethrown. Revoking the grant over REST kills the pty, which runs the same teardown. `close()` stops new spawns, kills every live pty, waits for their teardown and for the merge queue to drain, then closes the database. On start the daemon runs the janitor sweep and the lifecycle's recovery (`docs/LIFECYCLE.md` → Restart), and the sweep again every 24 hours.
 
 ### Terminal websocket
 
-`/pty/<key>` (the run id, or minus the grant id for a brainstorm) with a websocket upgrade, same-origin only. The server first sends the scrollback so far, then every pty output chunk as a text frame, and closes when the pty exits. The client sends JSON: `{"data": "..."}` is written to the pty as typed input, `{"resize": [cols, rows]}` resizes it (1 to 999 each). Anything else is ignored. Several clients may watch one run.
+`/pty/<key>` (the run id, or minus the grant id for a brainstorm or operator terminal) with a websocket upgrade, same-origin only. The server first sends the scrollback so far, then every pty output chunk as a text frame, and closes when the pty exits. The client sends JSON: `{"data": "..."}` is written to the pty as typed input, `{"resize": [cols, rows]}` resizes it (1 to 999 each). Anything else is ignored. Several clients may watch one run.
 
 ## Events
 
-`/events` is a same-origin websocket that only sends. `{"sound": "ding" | "chord", "ticket": n}` when a ticket merges or needs the operator; `{"ticket": n}` whenever something about ticket `n` changed (any lifecycle transition, an operator REST mutation, an agent's successful MCP call, a session of that ticket ending); `{"ticket": null}` when the set of live sessions changed without a ticket (a brainstorm started or ended). The UI never polls the board: it refetches what an event names.
+`/events` is a same-origin websocket that only sends. `{"sound": "ding" | "chord", "ticket": n}` when a ticket merges or needs the operator; `{"ticket": n}` whenever something about ticket `n` changed (any lifecycle transition, an operator REST mutation, an agent's successful MCP call, a session of that ticket ending); `{"ticket": null}` when the set of live sessions changed without a ticket (a brainstorm or operator terminal started or ended). The UI never polls the board: it refetches what an event names.
 
 ## UI
 

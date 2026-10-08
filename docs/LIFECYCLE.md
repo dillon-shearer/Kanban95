@@ -21,6 +21,7 @@ Status is one of **backlog → in_progress → testing → done**. Two flags sit
 | `dirty` | the merge queue, once the main checkout has had uncommitted changes for the whole wait (10 min) |
 | `merge` | the operator retrying a failed merge, `POST /api/tickets/:id/merge` |
 | `resume` | the operator, Resume in the card menu or the Inbox, `POST /api/tickets/:id/resume` |
+| `restart` | the operator, Restart in the card menu, the ticket window (Ctrl+R) or the Inbox, `POST /api/tickets/:id/restart` |
 
 ## The table
 
@@ -34,6 +35,8 @@ Status is one of **backlog → in_progress → testing → done**. Two flags sit
 | testing | launch | no live agent session | testing | `needs_human` off | test agent again in the same worktree, `retry` unchanged. Refused while an agent is live, as above |
 | in_progress | resume | `needs_human` on and no live agent session | in_progress | `needs_human` off | execute agent again, as for launch |
 | testing | resume | `needs_human` on and no live agent session | testing | `needs_human` off | test agent again, as for launch |
+| in_progress | restart | | in_progress | `needs_human` off | end every live session (outcome `restart`, grant revoked, pty killed), operator failure note, execute agent again |
+| testing | restart | | testing | `needs_human` off | as above, then test agent again (the diff is re-rendered from the worktree) |
 | in_progress | submit | | testing | | worker session ended (grant revoked, pty killed), tester grant, test agent |
 | testing | pass | the tester called `report_test(passed: true)` during this test run | done | | tester session ended, merge queued |
 | testing | fail | `retry` < 3 | in_progress | `retry` + 1 | tester session ended, execute agent again, with the failure notes and the ticket's (possibly escalated) model |
@@ -48,6 +51,16 @@ Status is one of **backlog → in_progress → testing → done**. Two flags sit
 | done | merge | not merged yet | done | | merge queued again |
 
 Resume and launch on a running ticket are not in the original spec. Before them, the only way past a silent exit was Reset to Backlog and Launch, which threw away `retry` and the phase. The new prompt carries the exit's failure note like any retry (`failureNotes` in `daemon/src/context.ts`: failure notes since the latest execute run). Resume is the strict form (only a flagged ticket); Launch on a running ticket also starts an unflagged one with no agent, such as one dragged by hand into a running column.
+
+### Resume, Restart and Reset
+
+| | When | Agent | Phase, worktree, `retry` |
+|---|---|---|---|
+| Resume | flagged running ticket, no live agent | starts one | kept |
+| Restart | any running ticket, live agent or not, flagged or not | ends the live one, starts a new one | kept |
+| Reset to Backlog | any ticket | ends the live one, starts none | back to Backlog, `retry` 0 |
+
+Restart is for an agent that is live but stuck: idle, hung, or its CLI died without the pty closing. The old session's outcome is set to `restart` before the kill (as `end_session` does for a reported move), so its exit is expected and does not raise the `exit` row's flag. The operator note ("restarted by the operator; the previous session was ended without reporting. Continue from the state of this worktree: read `git status` and `git log` first") lands under "What failed on the last attempt" in the new prompt. Restart has no `done` row: a done ticket that did not merge has Retry merge (`merge`).
 
 The `merge` row is not in the original spec: it is how the operator finishes a flagged merge. They fix the branch in its worktree (merge the base into it and commit) or clean the main checkout, then retry the merge.
 
@@ -69,7 +82,7 @@ The first execute run is attempt 0. Each failed test adds one to `retry` and run
 
 ### Escalation
 
-A tester that thinks the work needs a bigger model calls `set_model` before sending the ticket back. The ticket's `model` and `effort` override the execute phase only, so the retry runs with them; test runs keep the phase default.
+The ticket's `model` and `effort` override the execute phase only, so a retry runs with the same ones; test runs keep the phase default. Only the planner (`set_model`, `create_ticket`) and the operator (UI or the operator terminal) set them; a worker or tester that thinks the work needs a bigger model says so in its note.
 
 ### Ending a session
 
@@ -153,5 +166,6 @@ The count is derived from the database (`template = 'execute' AND merged_at IS N
 | POST | `/api/tickets/:id/answer` | `answer`; body `{ "answer": "..." }`, non-empty |
 | POST | `/api/tickets/:id/merge` | `merge` |
 | POST | `/api/tickets/:id/resume` | `resume` |
+| POST | `/api/tickets/:id/restart` | `restart` |
 
-Each returns the ticket (`200`), `409` with the refusal when the table has no row, and is audited like every REST mutation (`tickets.launch`, `tickets.launch_all`, `tickets.answer`, `tickets.merge`, `tickets.resume`).
+Each returns the ticket (`200`), `409` with the refusal when the table has no row, and is audited like every REST mutation (`tickets.launch`, `tickets.launch_all`, `tickets.answer`, `tickets.merge`, `tickets.resume`, `tickets.restart`).
