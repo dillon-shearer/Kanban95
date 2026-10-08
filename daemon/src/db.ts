@@ -4,7 +4,7 @@ import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, write
 import { join, resolve } from 'node:path';
 
 export const MIGRATIONS_DIR = resolve(import.meta.dirname, '../migrations');
-const INNER_GITIGNORE = 'board.db\nboard.db-*\nsessions/\nattachments/\nnotepad.md\n';
+const INNER_GITIGNORE = 'board.db\nboard.db-*\nsessions/\nattachments/\nnotepad.md\nrunner.json\n';
 
 export function openDb(repo: string, opts: { migrationsDir?: string } = {}): DatabaseSync {
   const dir = join(repo, '.kanban95');

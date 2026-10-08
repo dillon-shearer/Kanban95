@@ -175,6 +175,11 @@ const until = async (f: () => unknown, what: string, ms = 30_000) => {
     await new Promise((r) => setTimeout(r, 25));
   }
 };
+// Every backlog ticket at once, in one request (so none can finish before the last starts): the runner with room for all.
+const launchTogether = (n: number) => {
+  writeFileSync(join(repo, '.kanban95', 'config.json'), JSON.stringify({ runner_concurrency: n }));
+  return fetch(`http://127.0.0.1:${srv.port}/api/runner`, { method: 'PUT', headers: { 'content-type': 'application/json', cookie: `k95=${srv.secret}` }, body: '{"on":true}' });
+};
 const landed = (id: number) => until(() => t(id).merged_at && !existsSync(join(repo, '.worktrees', `t-${id}`)), `ticket ${id} merged and cleaned`);
 
 beforeEach(async () => {
@@ -235,15 +240,12 @@ describe('lifecycle', { timeout: 60_000 }, () => {
     ws.close();
   });
 
-  it('holds a dependent and launches it the moment its last dependency is merged; Launch all goes in dependency order', async () => {
+  it('holds a dependent and launches it the moment its last dependency is merged', async () => {
     const b = ticket('Second step');
     const a = ticket('First step');
     db.prepare('INSERT INTO ticket_deps VALUES (?, ?)').run(b, a);
-    const r = await post('/api/tickets/launch-all');
-    expect((await r.json()).map((x: { id: number; status: string; flags: object }) => [x.id, x.status, x.flags])).toEqual([
-      [a, 'in_progress', { needs_human: false, blocked_on_deps: false }],
-      [b, 'backlog', { needs_human: false, blocked_on_deps: true }],
-    ]);
+    expect(await (await post(`/api/tickets/${b}/launch`)).json()).toMatchObject({ status: 'backlog', flags: { needs_human: false, blocked_on_deps: true } });
+    await post(`/api/tickets/${a}/launch`);
     await landed(a);
     await landed(b);
     expect(runs(b)[0].started_at >= t(a).merged_at!).toBe(true);
@@ -309,7 +311,7 @@ describe('lifecycle', { timeout: 60_000 }, () => {
   it('merge conflict: the worker merges the base in its kept worktree and both tickets land with no operator action', async () => {
     const one = ticket('Write shared one', { model: 'conflict' });
     const two = ticket('Write shared two', { model: 'conflict' });
-    await post('/api/tickets/launch-all');
+    await launchTogether(2);
     await until(() => [one, two].some((id) => t(id).retry === 1), 'the conflict sent back');
     const [won, lost] = t(one).retry === 1 ? [two, one] : [one, two];
     await landed(won);
@@ -325,7 +327,7 @@ describe('lifecycle', { timeout: 60_000 }, () => {
   it('merge conflict at the retry cap: flagged with the worktree kept, the base clean, the fix in the note and the Inbox; a retried merge lands it', async () => {
     const one = ticket('Write shared one', { model: 'conflict', retry: MAX_RETRY });
     const two = ticket('Write shared two', { model: 'conflict', retry: MAX_RETRY });
-    await post('/api/tickets/launch-all');
+    await launchTogether(2);
     await until(() => [one, two].every((id) => t(id).status === 'done') && [one, two].some((id) => t(id).flags.needs_human), 'both done, one flagged');
     const [won, lost] = t(one).merged_at ? [one, two] : [two, one];
     await landed(won);
@@ -394,7 +396,7 @@ describe('lifecycle', { timeout: 60_000 }, () => {
 
   it('five tickets at once: five ptys, one merge queue, every branch lands in a straight line of merges', async () => {
     const ids = [1, 2, 3, 4, 5].map((i) => ticket(`Add file ${i}`));
-    await post('/api/tickets/launch-all');
+    await launchTogether(5);
     expect(ids.map((id) => sessionsOf(id).length)).toEqual([1, 1, 1, 1, 1]);
     for (const id of ids) await landed(id);
     expect(ids.map((id) => t(id).flags.needs_human)).toEqual([false, false, false, false, false]);
@@ -403,13 +405,15 @@ describe('lifecycle', { timeout: 60_000 }, () => {
     expect(readdirSync(join(repo, '.worktrees'))).toEqual([]);
   });
 
-  it('the 10th merged ticket creates exactly one housekeeping ticket, launched like any other; the 11th does not', async () => {
+  it('the 10th merged ticket creates exactly one housekeeping ticket, left in Backlog for the runner; the 11th does not', async () => {
     for (let i = 0; i < 9; i++) ticket(`Old ${i}`, { status: 'done', merged_at: '2026-01-01T00:00:00.000Z' });
     const tenth = ticket('Tenth');
     await post(`/api/tickets/${tenth}/launch`);
     await landed(tenth);
     const hk = () => db.prepare("SELECT id FROM tickets WHERE template = 'housekeeping'").all() as { id: number }[];
     expect(hk()).toHaveLength(1);
+    expect(t(hk()[0].id).status).toBe('backlog');
+    await post(`/api/tickets/${hk()[0].id}/launch`);
     await landed(hk()[0].id);
     expect(runs(hk()[0].id)[0].prompt_rendered).toMatch(/^# Housekeeping/);
     const eleventh = ticket('Eleventh');

@@ -10,7 +10,7 @@ Status is one of **backlog → in_progress → testing → done**. Two flags sit
 
 | event | raised by |
 |---|---|
-| `launch` | the operator (Launch, Launch all), or the board when the last dependency of a held ticket merges |
+| `launch` | the operator (Launch), the runner, or the board when the last dependency of a held ticket merges |
 | `submit` | the worker's `move_ticket(testing)` |
 | `pass` | the tester's `move_ticket(done)` |
 | `fail` | the tester's `move_ticket(in_progress)` |
@@ -81,9 +81,19 @@ No agent survives a daemon restart, and an agent killed by one did nothing wrong
 
 There is no Pause yet; when it exists, a paused board flags these tickets (`exit`, with the "To resolve:" line) instead of resuming them.
 
-## Launch all
+## The runner
 
-`POST /api/tickets/launch-all` takes every backlog ticket, orders them so a dependency comes before its dependents (ids ascending otherwise) and applies `launch` to each. Tickets whose dependencies have not merged are held with `blocked_on_deps`. Dependency cycles cannot exist: `create_ticket`, `update_ticket` and `PATCH /api/tickets/:id` refuse a dependency list that would make a ticket depend on itself through any chain.
+**Run** (Board toolbar, Start menu, Ctrl+L) lets the board work the backlog by itself, one ticket start to finish (execute, test, merge) before the next. `tick` in `daemon/src/lifecycle.ts` runs after every `apply` and once on daemon start, after `recover`. While the runner is on and fewer than `runner_concurrency` tickets are running (`<repo>/.kanban95/config.json`, default 1), it applies `launch` to the next candidate.
+
+- **Running** means not flagged and in `in_progress` or `testing`, or in `done` and not merged yet: the next ticket starts only once the previous one has merged. A flagged ticket does not count; it waits for the operator in the Inbox while the runner goes on.
+- **A candidate** is a backlog ticket with `needs_human = 0` whose every dependency is merged. The runner never launches a flagged ticket or one whose dependency has not merged; it takes the next one instead.
+- **Order**: effort `low` < `medium` < `high` < `max` (unset counts as `medium`), then fewer non-blank acceptance-criteria lines, then lower id. It is a rough size; a size estimate from the planner would replace it.
+- **It stops itself** when nothing is running and no candidate is left: the flag goes off with `why: "nothing left to launch"`, a `ding` (`ticket: null`) plays and the status bar says "Runner stopped: nothing left to launch". A backlog ticket held only on a running ticket's merge is not "nothing left": the runner waits for that merge. Tickets that stay behind (flagged, or held on a flagged ticket) wait for the operator.
+- **Stop** turns the flag off. Running agents finish their current phase and their merges land, but nothing new starts. The operator's own Launch on a card works either way. A ticket that hits the retry cap and flags never stops the runner.
+- **A restart** keeps the flag (`<repo>/.kanban95/runner.json`, git-ignored); `recover` resumes the running tickets and the runner carries on from there.
+- **Housekeeping** tickets created after every `housekeeping_every` merges are candidates like any other and sort by their effort.
+
+Tickets held with `blocked_on_deps` by a manual Launch keep their own path: the board launches them when their last dependency merges, runner or not. Dependency cycles cannot exist: `create_ticket`, `update_ticket` and `PATCH /api/tickets/:id` refuse a dependency list that would make a ticket depend on itself through any chain.
 
 ## The merge queue
 
@@ -136,7 +146,7 @@ A repo's prompts come from its own `.kanban95/templates/`, copied from `template
 
 ## Housekeeping
 
-Every time the number of merged tickets (housekeeping tickets not counted) reaches a multiple of `housekeeping_every`, the board creates a ticket that runs the `housekeeping.md` template and launches it like any other: same worktree, test, retry and merge path. The interval lives in `<repo>/.kanban95/config.json` and defaults to 10:
+Every time the number of merged tickets (housekeeping tickets not counted) reaches a multiple of `housekeeping_every`, the board creates a ticket that runs the `housekeeping.md` template and leaves it in Backlog, where the runner picks it up like any other (or the operator launches it): same worktree, test, retry and merge path. The **Housekeeping** button creates one and launches it at once. The interval lives in `<repo>/.kanban95/config.json` and defaults to 10:
 
 ```json
 { "housekeeping_every": 10 }
@@ -149,9 +159,10 @@ The count is derived from the database (`template = 'execute' AND merged_at IS N
 | method | path | event |
 |---|---|---|
 | POST | `/api/tickets/:id/launch` | `launch` |
-| POST | `/api/tickets/launch-all` | `launch` on every backlog ticket, in dependency order; returns them |
 | POST | `/api/tickets/:id/answer` | `answer`; body `{ "answer": "..." }`, non-empty |
 | POST | `/api/tickets/:id/merge` | `merge` |
 | POST | `/api/tickets/:id/resume` | `resume` |
 
-Each returns the ticket (`200`), `409` with the refusal when the table has no row, and is audited like every REST mutation (`tickets.launch`, `tickets.launch_all`, `tickets.answer`, `tickets.merge`, `tickets.resume`).
+Each returns the ticket (`200`), `409` with the refusal when the table has no row, and is audited like every REST mutation (`tickets.launch`, `tickets.answer`, `tickets.merge`, `tickets.resume`).
+
+`GET /api/runner` returns `{on, why?, running: [ids], left, backlog}`: the flag, why it last stopped itself, the tickets it waits on, the candidates left and the number of backlog tickets. `PUT /api/runner` with `{"on": true | false}` turns it on (and launches at once) or off and returns the same; audited as `runner.set`.

@@ -1,7 +1,7 @@
 // The ticket state machine, documented row by row in docs/LIFECYCLE.md. TABLE is every transition there is: transition()
 // picks a row or refuses, apply() writes the row and runs its effects. Nothing else changes a ticket's status or flags.
 import { EventEmitter } from 'node:events';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { readTicket, transaction, type Ticket } from './api.js';
@@ -17,7 +17,7 @@ const HOUSEKEEPING_EVERY = 10;
 
 export type Status = 'backlog' | 'in_progress' | 'testing' | 'done';
 export type Event =
-  | 'launch' // operator Launch / Launch all, or the last dependency landing
+  | 'launch' // operator Launch, the runner, or the last dependency landing
   | 'submit' // worker move_ticket(testing)
   | 'pass' // tester move_ticket(done), after report_test(passed: true)
   | 'fail' // tester move_ticket(in_progress)
@@ -194,6 +194,7 @@ export function apply(b: Board, id: number, event: Event, x: { note?: Note; answ
     }
   }
   changed(id);
+  tick(b);
   return { ticket: readTicket(b.db, id), noteId, pending };
 }
 
@@ -258,25 +259,34 @@ function releaseDependents(b: Board, id: number) {
   for (const r of rows) apply(b, r.id, 'launch'); // one still waiting on another dependency stays held
 }
 
-/** `.kanban95/config.json` → `housekeeping_every` (default 10). Merged execute tickets are counted; housekeeping ones are not. */
-function maybeHousekeeping(b: Board, t: Ticket) {
-  if (t.template !== 'execute') return;
+/** `.kanban95/config.json`: the operator's settings for this repo, committed. The daemon reads it and never writes it. */
+function config(b: Board, key: string, fallback: number): number {
   const file = join(b.repo, '.kanban95', 'config.json');
-  const every = Number((existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : {}).housekeeping_every ?? HOUSEKEEPING_EVERY);
-  if (!Number.isInteger(every) || every < 1) throw new Error(`housekeeping_every in ${file} must be a positive integer`);
-  const { n } = b.db.prepare("SELECT count(*) AS n FROM tickets WHERE template = 'execute' AND merged_at IS NOT NULL").get() as { n: number };
-  if (n % every !== 0) return;
-  housekeeping(b, `Scheduled after ${n} tickets reached Done. Follow the housekeeping brief.`);
+  const n = Number((existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : {})[key] ?? fallback);
+  if (!Number.isInteger(n) || n < 1) throw new Error(`${key} in ${file} must be a positive integer`);
+  return n;
 }
 
-/** Creates a housekeeping ticket and launches it like any other. The Housekeeping button and the automatic trigger both land here. */
-export function housekeeping(b: Board, body: string): Ticket {
+/** `housekeeping_every` (default 10). Merged execute tickets are counted; housekeeping ones are not. The ticket waits in Backlog for the runner. */
+function maybeHousekeeping(b: Board, t: Ticket) {
+  if (t.template !== 'execute') return;
+  const every = config(b, 'housekeeping_every', HOUSEKEEPING_EVERY);
+  const { n } = b.db.prepare("SELECT count(*) AS n FROM tickets WHERE template = 'execute' AND merged_at IS NOT NULL").get() as { n: number };
+  if (n % every !== 0) return;
+  housekeeping(b, `Scheduled after ${n} tickets reached Done. Follow the housekeeping brief.`, false);
+}
+
+/** Creates a housekeeping ticket. The Housekeeping button launches it at once; the automatic trigger leaves it to the runner. */
+export function housekeeping(b: Board, body: string, launchNow = true): Ticket {
   const r = b.db.prepare("INSERT INTO tickets (title, body, criteria, template) VALUES (?, ?, ?, 'housekeeping')").run(
     'Clean up stale docs, unused modules and leftover artefacts',
     body,
     'The tests and the build pass exactly as before.\nNo living document is removed.\nEvery deleted or updated path is listed with report_cleanup and a reason.',
   );
-  return apply(b, Number(r.lastInsertRowid), 'launch').ticket;
+  const id = Number(r.lastInsertRowid);
+  if (launchNow) return apply(b, id, 'launch').ticket;
+  changed(id);
+  return readTicket(b.db, id);
 }
 
 /** A brainstorm session: a planner in the repo root, plan-phase settings. It touches no ticket, so the lifecycle has no row for it. */
@@ -287,18 +297,78 @@ export function brainstorm(b: Board): Session {
   return s;
 }
 
-/** Launch all: every backlog ticket, dependencies before dependents, ids ascending otherwise. Those waiting on a dependency are held. */
-export function launchAll(b: Board): Ticket[] {
-  const ids = (b.db.prepare("SELECT id FROM tickets WHERE status = 'backlog' ORDER BY id").all() as { id: number }[]).map((r) => r.id);
-  const deps = new Map(ids.map((id) => [id, readTicket(b.db, id).depends_on.filter((d) => ids.includes(d))]));
-  const order: number[] = [];
-  while (order.length < ids.length) {
-    const next = ids.find((id) => !order.includes(id) && deps.get(id)!.every((d) => order.includes(d)));
-    if (next === undefined) throw new Error('dependency cycle among backlog tickets'); // refused at write time; never expected
-    order.push(next);
-    apply(b, next, 'launch');
+// ---- the runner (docs/LIFECYCLE.md → The runner) ----
+
+/** `.kanban95/runner.json`, git-ignored: whether the runner is on, and why it last stopped itself. Absent means off. */
+export type Runner = { on: boolean; why?: string };
+const runnerFile = (b: Board) => join(b.repo, '.kanban95', 'runner.json');
+export function runner(b: Board): Runner {
+  try {
+    return JSON.parse(readFileSync(runnerFile(b), 'utf8'));
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return { on: false };
+    throw e;
   }
-  return order.map((id) => readTicket(b.db, id));
+}
+
+/** Turns the runner on (and launches at once) or off. Off lets running agents finish; nothing new starts. */
+export function setRunner(b: Board, on: boolean, why?: string) {
+  writeFileSync(runnerFile(b), JSON.stringify(why ? { on, why } : { on }));
+  changed(null);
+  if (on) tick(b);
+}
+
+/** Tickets the runner waits on: unflagged and running, or done and not merged yet. A flagged one waits for the operator instead. */
+const running = (b: Board) => (b.db.prepare(`
+  SELECT id FROM tickets WHERE needs_human = 0 AND (status IN ('in_progress', 'testing') OR (status = 'done' AND merged_at IS NULL))
+  ORDER BY id`).all() as { id: number }[]).map((r) => r.id);
+
+const EFFORT_RANK: Record<string, number> = { low: 0, medium: 1, high: 2, max: 3 };
+const lines = (s: string) => s.split(/\r?\n/).filter((l) => l.trim()).length;
+
+/**
+ * Backlog tickets the runner may launch, next first: unflagged, every dependency merged.
+ * ponytail: effort then criteria lines is a rough size; upgrade to a size estimate the planner writes on each ticket.
+ */
+export function candidates(b: Board): number[] {
+  const rows = b.db.prepare(`
+    SELECT id, effort, criteria FROM tickets t WHERE status = 'backlog' AND needs_human = 0 AND NOT EXISTS (
+      SELECT 1 FROM ticket_deps d JOIN tickets x ON x.id = d.depends_on_id WHERE d.ticket_id = t.id AND x.merged_at IS NULL)`).all() as
+    { id: number; effort: string | null; criteria: string }[];
+  const rank = (r: (typeof rows)[number]) => EFFORT_RANK[r.effort ?? 'medium'];
+  return rows.sort((x, y) => rank(x) - rank(y) || lines(x.criteria) - lines(y.criteria) || x.id - y.id).map((r) => r.id);
+}
+
+/** What the status bar shows: the flag, the tickets it waits on, candidates left of everything in Backlog. */
+export function runnerState(b: Board) {
+  const { n } = b.db.prepare("SELECT count(*) AS n FROM tickets WHERE status = 'backlog'").get() as { n: number };
+  return { ...runner(b), running: running(b), left: candidates(b).length, backlog: n };
+}
+
+let ticking = false;
+
+/**
+ * Runs after every apply and on daemon start: while the runner is on and fewer than `runner_concurrency` (config.json,
+ * default 1) tickets are running, launch the next candidate. Nothing running and nothing to launch: it turns itself off.
+ * A ticket held on a running one is not "nothing": the runner waits for that merge.
+ */
+export function tick(b: Board) {
+  if (ticking || b.closing || !runner(b).on) return;
+  ticking = true; // its own launches call apply, which calls tick
+  try {
+    const max = config(b, 'runner_concurrency', 1);
+    while (running(b).length < max) {
+      const next = candidates(b)[0];
+      if (next === undefined) break;
+      apply(b, next, 'launch');
+    }
+    if (running(b).length === 0 && candidates(b).length === 0) {
+      setRunner(b, false, 'nothing left to launch');
+      events.emit('event', { sound: 'ding', ticket: null });
+    }
+  } finally {
+    ticking = false;
+  }
 }
 
 export const RESTARTED = 'agent exited without reporting (the daemon restarted)';
