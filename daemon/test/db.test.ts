@@ -46,7 +46,7 @@ describe('openDb', () => {
     const db = openDb(repo);
     try {
       expect(migrate(db, MIGRATIONS_DIR)).toEqual([]);
-      expect(db.prepare('SELECT count(*) AS n FROM schema_migrations').get()).toEqual({ n: readdirSync(MIGRATIONS_DIR).length });
+      expect(db.prepare('SELECT count(*) AS n FROM schema_migrations').get()).toEqual({ n: readdirSync(MIGRATIONS_DIR).filter((f) => f.endsWith('.sql')).length });
     } finally {
       db.close();
     }

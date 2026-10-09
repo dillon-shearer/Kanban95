@@ -4,8 +4,8 @@ import type { DatabaseSync } from 'node:sqlite';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import * as z from 'zod';
-import { brainDelete, brainSearch, brainUpdate, deleteTicket, normaliseTags, readTicket, setDeps, transaction } from './api.js';
-import { BRAIN_BODY_MAX } from './db.js';
+import { brainAdd, brainDelete, brainGet, brains, brainSearch, brainUpdate, deleteTicket, normaliseTags, readTicket, setDeps, transaction } from './api.js';
+import { BRAIN_BODY_MAX, SCOPES } from './db.js';
 import { attachments } from './attachments.js';
 import { audit, verify, type Grant, type Role } from './grants.js';
 import { apply, changed, Refused, type Board } from './lifecycle.js';
@@ -27,6 +27,9 @@ const WORKER_FIELDS = ['body', 'criteria'] as const;
 /** What a worker may edit on a follow-up its own grant created, while it is in Backlog. */
 const FOLLOWUP_FIELDS = ['title', 'body', 'criteria', 'tags', 'depends_on'] as const;
 const BRAIN_SEARCH_MAX = 50;
+/** An id is per brain file, so a row is `scope` + `id`. */
+const scope = z.enum(SCOPES).default('project')
+  .describe('project (default): this repo\x27s brain, facts about this codebase. global: the brain every board shares, facts that hold in any repo (a tool, the OS, a CLI).');
 
 /** A refusal. Audited as `denied`; anything else thrown is `error`. */
 class Deny extends Error {}
@@ -272,61 +275,70 @@ export const TOOLS: Record<string, Tool<z.ZodRawShape>> = {
 
   brain_add: tool({
     description:
-      'Save one fact a future agent would trip on to the project brain: a gotcha, a non-obvious decision, or how an external tool behaves (with version and date). ' +
+      'Save one fact a future agent would trip on to the brain: a gotcha, a non-obvious decision, or how an external tool behaves (with version and date). ' +
+      'scope global when it holds in any repo (a CLI, git, Windows, a library); project, the default, when it is about this codebase. ' +
       'brain_search the subject first; if a row already covers it, correct that row with brain_update instead of adding a near-duplicate. ' +
       'Title: a sentence naming the trap ("X does Y; do Z"). Body: what happens, why, what to do instead, and the file or function, for a reader with no context. ' +
       'Tags: words the title of a future ticket would contain. Never write ticket status or plans ("pending", "until #N merges"): they go stale; unbuilt work belongs in a ticket. ' +
-      'Skip what the code, docs or templates already say. Returns the brain row id.',
+      'Skip what the code, docs or templates already say. Returns the brain row id and scope.',
     access: { planner: 'yes', worker: 'yes', tester: 'yes', operator: 'yes' },
     input: {
       title: z.string().min(1),
       body: z.string().min(1).max(BRAIN_BODY_MAX).describe(`Markdown, at most ${BRAIN_BODY_MAX} characters.`),
       tags: z.string().default('').describe('Space-separated keywords used for matching.'),
+      scope,
     },
-    run(c, a) {
-      const r = c.db.prepare('INSERT INTO brain (title, body, tags, ticket_id) VALUES (?, ?, ?, ?)').run(a.title, a.body, a.tags, c.grant.ticket_id);
-      return { id: Number(r.lastInsertRowid) };
+    run(c, { scope: s, ...f }) {
+      const r = brainAdd(brains(c.board), s, f, c.grant.ticket_id);
+      return { id: r.id, scope: r.scope };
     },
   }),
 
   brain_update: tool({
     description:
       'Correct a brain row in place: when your change made it false, when it duplicates what you were about to add, or to merge rows (edit the survivor; ask for the rest to be deleted in your summary). ' +
-      'Omitted fields are left unchanged. Returns the row.',
-    access: { planner: 'yes', worker: 'yes', tester: 'yes', operator: 'yes' },
+      'Name the row by scope and id, as brain_search returned them. Omitted fields are left unchanged. move_to moves the row to the other brain under a new id. Returns the row.',
+    access: { planner: 'yes, and move_to', worker: 'yes, not move_to', tester: 'yes, not move_to', operator: 'yes, and move_to' },
     input: {
       id: z.number().int().positive(),
+      scope,
       title: z.string().min(1).optional(),
       body: z.string().min(1).max(BRAIN_BODY_MAX).optional().describe(`Markdown, at most ${BRAIN_BODY_MAX} characters.`),
       tags: z.string().optional(),
+      move_to: z.enum(SCOPES).optional().describe('Move the row to this brain (insert there, delete here).'),
     },
-    run: (c, { id, ...fields }) => brainUpdate(c.db, id, fields),
+    run(c, { id, scope: s, move_to, ...fields }) {
+      if (move_to !== undefined && move_to !== s && !unbound(c.grant.role)) throw new Deny(`${an(c.grant.role)} may not move a brain row between scopes: name it in your summary note`);
+      return brainUpdate(brains(c.board), s, id, fields, move_to);
+    },
   }),
 
   brain_delete: tool({
-    description: 'Delete a brain row that is stale or duplicates another row or the docs. Workers and testers update rows instead and name the ones to delete in their summary note. Returns the deleted id.',
+    description: 'Delete a brain row (scope and id) that is stale or duplicates another row or the docs. Workers and testers update rows instead and name the ones to delete in their summary note. Returns the deleted id and scope.',
     access: { planner: 'yes', operator: 'yes' },
-    input: { id: z.number().int().positive() },
+    input: { id: z.number().int().positive(), scope },
     run(c, a) {
-      brainDelete(c.db, a.id);
-      return { id: a.id };
+      brainDelete(brains(c.board), a.scope, a.id);
+      return { id: a.id, scope: a.scope };
     },
   }),
 
   brain_search: tool({
     description:
-      'Full-text search the project brain, best match first (title and tags weigh more than the body). Search before making a decision another ticket may already have made, before brain_add, ' +
-      'and when you meet an unfamiliar subsystem. Give `id` instead to fetch one row, such as one your prompt listed by title only; give neither to list the newest rows. ' +
-      `Returns up to limit rows (default 5, max ${BRAIN_SEARCH_MAX}) with title, body and tags.`,
+      'Full-text search the project brain and the global brain together, best match first (title and tags weigh more than the body); every row carries its scope. ' +
+      'Search before making a decision another ticket may already have made, before brain_add, ' +
+      'and when you meet an unfamiliar subsystem. Give `id` (with its scope) instead to fetch one row, such as one your prompt listed by title only; give neither to list the newest rows. ' +
+      `Returns up to limit rows (default 5, max ${BRAIN_SEARCH_MAX}) with scope, title, body and tags.`,
     access: { planner: 'yes', worker: 'yes', tester: 'yes', operator: 'yes' },
     input: {
       query: z.string().min(1).optional().describe('Keywords; each word must match.'),
       id: z.number().int().positive().optional().describe('Fetch this one row instead of searching.'),
+      scope: scope.describe('With id: which brain the row is in. Ignored by a search, which covers both.'),
       limit: z.number().int().min(1).max(BRAIN_SEARCH_MAX).default(5),
     },
     run(c, a) {
-      if (a.id !== undefined) return c.db.prepare('SELECT * FROM brain WHERE id = ?').all(a.id);
-      return brainSearch(c.db, a.query ?? '', a.limit);
+      if (a.id !== undefined) return [brainGet(brains(c.board), a.scope, a.id)].filter(Boolean);
+      return brainSearch(brains(c.board), a.query ?? '', a.limit);
     },
   }),
 

@@ -20,6 +20,9 @@ export function mapped(paths: string[], testDir: string): string[] {
     // By import, as daemon/vitest.config.ts sorts its browser project, so a renamed or split ui test is still found.
     if (p.startsWith('ui/')) for (const f of tests) if (readFileSync(join(testDir, f), 'utf8').includes(`from './cdp.ts'`)) out.add(f);
     if (p.startsWith('templates/') || p.startsWith('skills/')) out.add('templates.test.ts');
+    // SQL is read from disk at start, so no test imports it.
+    if (p.startsWith('daemon/migrations/global/')) out.add('brain-global.test.ts');
+    else if (p.startsWith('daemon/migrations/')) out.add('db.test.ts');
     if (DOC_TESTS[p]) out.add(DOC_TESTS[p]);
   }
   return [...out].filter((f) => tests.includes(f)).sort();
