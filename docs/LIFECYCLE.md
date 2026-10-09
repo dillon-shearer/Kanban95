@@ -10,7 +10,7 @@ Status is one of **backlog → in_progress → testing → done**. Two flags sit
 
 | event | raised by |
 |---|---|
-| `launch` | the operator (Launch), the runner, or the board when the last dependency of a held ticket merges |
+| `launch` | the operator (Launch), the runner, or the board when the last dependency of a held ticket merges (runner on only, see Stop below) |
 | `submit` | the worker's `move_ticket(testing)` |
 | `pass` | the tester's `report_test(passed: true)` (an operator's `move_ticket(done)` after it) |
 | `fail` | the tester's `report_test(passed: false)`, or an operator's `move_ticket(in_progress)` on a ticket in testing |
@@ -34,7 +34,7 @@ The tester's verdict is the move: `report_test` writes the PASS or FAIL note, th
 | from | event | guard | to | flags / counters | side effects |
 |---|---|---|---|---|---|
 | backlog | launch | every dependency merged | in_progress | `blocked_on_deps` off | worktree, worker grant, execute agent |
-| backlog | launch | a dependency not merged | backlog | `blocked_on_deps` on | none; launched again when the dependency merges |
+| backlog | launch | a dependency not merged | backlog | `blocked_on_deps` on | none; launched again when the dependency merges, if the runner is on |
 | in_progress | launch | no live agent session | in_progress | `needs_human` off | execute agent again in the same worktree, `retry` unchanged. Refused while an agent is live: "it already has a running agent; open its terminal, or Reset to Backlog to stop it" |
 | testing | launch | no live agent session | testing | `needs_human` off | test agent again in the same worktree, `retry` unchanged. Refused while an agent is live, as above |
 | in_progress | resume | `needs_human` on and no live agent session | in_progress | `needs_human` off | execute agent again, as for launch |
@@ -123,11 +123,25 @@ There is no Pause yet; when it exists, a paused board flags these tickets (`exit
 - **Order**: effort `low` < `medium` < `high` < `max` (unset counts as `medium`), then fewer non-blank acceptance-criteria lines, then lower id. It is a rough size; a size estimate from the planner would replace it.
 - **Shared files**: while tickets are running, a candidate that shares a file with one of them is deferred and the runner takes the next candidate that shares none. A ticket names a file when its body or criteria contains a path (`[w./-]+.w+`) that exists in the repo; a running ticket also touches what `git diff --name-only <base>...ticket/<id>` lists. `docs/**` and `*.md` never count: every ticket touches docs and the merge sync handles them. When every remaining candidate shares a file, the first launches anyway (the merge sync below resolves it; waiting forever would be worse). `GET /api/runner` lists the deferrals as `waits: [{id, on}]` and the status bar says "#id waits: shares files with #n". It is a heuristic; a files list the planner writes on each ticket would replace it.
 - **It stops itself** when nothing is running and no candidate is left: the flag goes off with `why: "nothing left to launch"`, a `ding` (`ticket: null`) plays and the status bar says "Runner stopped: nothing left to launch". A backlog ticket held only on a running ticket's merge is not "nothing left": the runner waits for that merge. Tickets that stay behind (flagged, or held on a flagged ticket) wait for the operator.
-- **Stop** turns the flag off. Running agents finish their current phase and their merges land, but nothing new starts. The operator's own Launch on a card works either way. A ticket that hits the retry cap and flags never stops the runner.
+- **Stop** turns the flag off. Running agents finish their current phase and their merges land, but nothing new starts, not even by the board's own triggers (Stop holds every automatic launch, below). The operator's own Launch on a card works either way. A ticket that hits the retry cap and flags never stops the runner.
 - **A restart** keeps the flag (`<repo>/.kanban95/runner.json`, git-ignored); `recover` resumes the running tickets and the runner carries on from there.
 - **Housekeeping** tickets created after every `housekeeping.every` merges are candidates like any other and sort by their effort.
 
-Tickets held with `blocked_on_deps` by a manual Launch keep their own path: the board launches them when their last dependency merges, runner or not. Dependency cycles cannot exist: `create_ticket`, `update_ticket` and `PATCH /api/tickets/:id` refuse a dependency list that would make a ticket depend on itself through any chain.
+Tickets held with `blocked_on_deps` by a manual Launch keep their own path: the board launches them when their last dependency merges, while the runner is on. Dependency cycles cannot exist: `create_ticket`, `update_ticket` and `PATCH /api/tickets/:id` refuse a dependency list that would make a ticket depend on itself through any chain.
+
+### Stop holds every automatic launch
+
+The board starts an agent without an operator click in three places: a held dependent whose last dependency merged (`releaseDependents`), the scheduled housekeeping ticket, and a `conflict` below the retry cap sent back to the worker (on submit or in the merge queue). While the runner is off none of them starts an agent. The check is in one place, `apply` in `daemon/src/lifecycle.ts`: the board's own launches pass `auto`, and an `auto` event whose row would spawn an execute agent while the runner is off is held.
+
+- **A held dependent** is not applied at all: it stays in Backlog with `blocked_on_deps` on, and is a candidate the runner launches once **Run** is on.
+- **Housekeeping** is filed in Backlog and never launched by the trigger (runner on or off); the runner picks it up like any candidate.
+- **A conflict retry** writes its row (In Progress, `retry` + 1, the failure note, the worker session ended) without the spawn. The ticket sits In Progress, unflagged, with no agent, and counts as running. `tick` starts its worker first when **Run** is turned on. The set of held retries is in memory: a restart forgets it and `recover` resumes the ticket like any running one.
+
+Agents already running carry on, and the operator's own Launch, Resume, Restart and Reject never pass `auto`, so they work with the runner off.
+
+### Cancel wait
+
+`PATCH /api/tickets/:id {"blocked_on_deps": false}` clears a hold and nothing else: status, `retry` and notes stay, and a later merge of the dependency launches nothing; the ticket starts when the operator launches it or the runner picks it up as a candidate. The card menu's **Cancel wait** sends it for the selected held cards; **Cancel waiting** on the Board toolbar sends it for every held Backlog ticket after a confirm that lists them. Reset to Backlog also clears the hold, but resets `retry` and `needs_human` too. No event is needed: no status changes and no effect runs. The Board's status bar shows "n waiting to launch by themselves" while any Backlog ticket has `blocked_on_deps` on.
 
 ### Sync: the base merged into the worktree
 

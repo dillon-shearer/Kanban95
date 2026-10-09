@@ -191,6 +191,7 @@ Gotchas collected while the board was built. Each one cost a phase some time.
 - `DatabaseSync.exec` with several statements leaves a transaction open if a middle one throws. `migrate` and `api.ts`'s `transaction()` use explicit `BEGIN` / `COMMIT` / `ROLLBACK`; do the same anywhere else.
 - `audit.ticket_id` is a foreign key: attributing an audit row to a ticket that does not exist throws. Check existence or pass `null`.
 - `apply` is synchronous and may spawn agents (`execFileSync git`, a pty) inside an MCP request. Effects run after the transaction commits, so a failing effect (a launch) re-enters `apply` with `exit`.
+- With the runner off (no `runner.json`, the default in tests) the board starts no agent by itself: a held dependent stays held when its dependency merges and a conflict below the retry cap waits with no agent (`apply`'s `auto`, docs/LIFECYCLE.md → Stop holds every automatic launch). A test that expects either to run on its own must turn the runner on, and keep something running (a `hang` ticket) if a flagged ticket would otherwise let it stop itself.
 - `sessions` in `launcher.ts` is module-level, shared by every `start()` in one process: one daemon per process.
 - A merge that touches `daemon/` or `shell/` takes effect only after a board restart (`Kanban95.cmd` rebuilds); `ui/` changes show at once.
 
