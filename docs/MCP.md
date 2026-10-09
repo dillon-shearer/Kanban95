@@ -21,8 +21,8 @@ A refused call returns a tool error whose text says why and, for `move_ticket`, 
 | set_model | any | no | no | any |
 | move_ticket | no | own → testing | own → done / in_progress | any → in_progress / testing / done |
 | add_note | any | own | own | any |
-| get_ticket | yes | own + its deps | own | yes |
-| list_tickets | yes | own + its deps | own | yes |
+| get_ticket | yes | own + its deps | own + its deps | yes |
+| list_tickets | yes | own + its deps | own + its deps | yes |
 | brain_add | yes | yes | yes | yes |
 | brain_update | yes | yes | yes | yes |
 | brain_delete | yes | no | no | yes |
@@ -102,7 +102,7 @@ Attach a note to a ticket. Kinds: plan (how you intend to do the work, post it b
 
 ### get_ticket
 
-Read one ticket in full: title, body, acceptance criteria, status, flags, dependencies, model settings, the absolute paths of files the operator attached (screenshots and the like: open them with your file reader), and every note on it in order. A worker may also read the tickets its own ticket depends on, to see what they delivered.
+Read one ticket in full: title, body, acceptance criteria, status, flags, dependencies, model settings, the absolute paths of files the operator attached (screenshots and the like: open them with your file reader), and every note on it in order. A worker or tester may also read the tickets its own ticket depends on, to see what they delivered or decided.
 
 | argument | type | required | description |
 |---|---|---|---|
@@ -110,7 +110,7 @@ Read one ticket in full: title, body, acceptance criteria, status, flags, depend
 
 ### list_tickets
 
-List tickets with id, title, status, tags, flags and dependencies, optionally filtered by status. A planner or operator sees the whole board; a worker sees its own ticket and the ones it depends on; a tester sees its own. Use get_ticket for the body and notes.
+List tickets with id, title, status, tags, flags and dependencies, optionally filtered by status. A planner or operator sees the whole board; a worker or tester sees its own ticket and the ones it depends on. Use get_ticket for the body and notes.
 
 | argument | type | required | description |
 |---|---|---|---|
