@@ -75,7 +75,7 @@ If you review a Done ticket and it is not right, **Reject** it (card menu, or th
 | Terminal | opens by itself; Ticket → Runs → Terminal | one agent session, keyboard and mic |
 | Inbox | taskbar "Inbox n", Start → Inbox | every ticket that needs you: questions to answer, and failures with what resolves them |
 | Brain | Start → Brain | search what agents learned (no query lists the newest), add a note yourself. Each row shows when it was written and from which ticket, with that ticket's status, so a row written for work that never landed stands out. **Edit** changes a row in place, **Delete** removes it after a confirm; merge rows by editing the survivor and deleting the rest. Agents name rows to delete in their summary notes, since only you and the planner can delete |
-| Settings | Start → Settings | Models, CLI paths and trusted folders (**Clear Claude trust**), Prompts (preferences, templates), Grants, Limits, Voice, sounds |
+| Settings | Start → Settings | Models, CLI paths and trusted folders (**Clear Claude trust**), Prompts (preferences, templates), Grants, Limits, Voice, Projects, sounds |
 | Notepad | Start → Notepad | your own scratch notes for this repo, saved as you type |
 | Limits | Start → Limits, taskbar limit | the same as Settings → Limits in a small window to keep open beside the board |
 
@@ -126,6 +126,12 @@ Inside a terminal every key goes to the agent instead: Esc interrupts Claude Cod
 ## Zoom
 
 The zoom scales everything together: windows, cards, menus, dialogs, the taskbar and the terminals' text, so the Win95 layout keeps its proportions. **Settings → General → Zoom** shows the current level and sets it, 80% to 200% in steps of 10%. It is `zoom` in `~/.kanban95/settings.json` (1 is 100%), so it survives a reload and a restart and applies in every repo. Remembered window places are kept in unzoomed units; at any zoom a window is kept on the desktop, and one larger than the zoomed-in desktop is shrunk to fit it. A terminal refits to its window, so a larger zoom gives it fewer columns and rows of larger text.
+
+## Projects
+
+Each board works on one repo, so with several boards open they are told apart by name and colour. The window title and its taskbar entry read `<repo folder> — Kanban95`, and each project has its own wallpaper colour under the same blueprint grid.
+
+**Settings → Projects** lists every repo a board has run on (`~/.kanban95/projects.json`, shared by all boards; a board adds its own repo the first time it starts, in the default teal). Each row has the folder name, the path, a colour picker and **Remove**. Pick a colour and it is saved at once; for this board's own project the wallpaper repaints straight away and keeps the colour after a reload or restart. To add a project, type its path in **Repo path** (the window cannot open a folder picker) and press **Add**: it must be an existing git repo, or the status bar says why and nothing changes. The board's own project, marked "(this board)", cannot be removed.
 
 ## Preferences
 

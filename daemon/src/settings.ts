@@ -1,10 +1,10 @@
 // The operator's own settings in ~/.kanban95/, edited in the Settings window. No secrets live here.
 // models.json: which CLI, and the model and effort per phase (docs/LIFECYCLE.md → Run settings). settings.json: CLI paths,
-// sounds, voice, housekeeping, auto-opened terminals, UI zoom. Both are read on every use, so an edit applies to the next run without a restart.
+// sounds, voice, housekeeping, auto-opened terminals, UI zoom. projects.json: every repo with a board and its wallpaper colour. All are read on every use, so an edit applies to the next run without a restart.
 import { execFile } from 'node:child_process';
-import { createReadStream, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
+import { createReadStream, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { delimiter, dirname, isAbsolute, join } from 'node:path';
+import { basename, delimiter, dirname, isAbsolute, join, resolve } from 'node:path';
 import * as z from 'zod';
 import type { Ticket } from './api.js';
 
@@ -210,4 +210,73 @@ export function writePreferences(value: unknown): string {
   writeFileSync(`${file}.tmp`, value);
   renameSync(`${file}.tmp`, file);
   return value;
+}
+
+/**
+ * ~/.kanban95/projects.json: `[{ path, colour }]`, one entry per repo the operator runs a board on (Settings → Projects).
+ * `colour` is the wallpaper's base: a hex colour, or a hue (0 to 360) painted at the teal's saturation and lightness.
+ * The display name is the folder's basename, never stored.
+ */
+export const projectsPath = () => join(boardHome(), 'projects.json');
+export const DEFAULT_COLOUR = '#008080';
+const projectList = z.array(z.object({
+  path: z.string().refine(isAbsolute, 'must be an absolute path'),
+  colour: z.union([z.string().regex(/^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i, 'must be #rgb or #rrggbb'), z.number().min(0).max(360)]),
+}).strict());
+export type Project = z.output<typeof projectList>[number];
+
+/** Absolute, resolved and in the file system's own spelling (case, 8.3 names), so one repo is one entry. */
+const normal = (p: string) => {
+  try {
+    return realpathSync.native(resolve(p));
+  } catch {
+    return resolve(p);
+  }
+};
+const same = (a: string, b: string) => (process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b);
+
+/** A missing file is an empty list. Only the shape is checked on read: a repo deleted since does not break every board. */
+export function readProjects(): Project[] {
+  const file = projectsPath();
+  if (!existsSync(file)) return [];
+  const r = projectList.safeParse(JSON.parse(readFileSync(file, 'utf8')));
+  if (!r.success) throw new BadConfig(`${file}: ${z.prettifyError(r.error).replaceAll('\n', '; ')}`);
+  return r.data;
+}
+
+function saveProjects(list: Project[]) {
+  const file = projectsPath();
+  mkdirSync(dirname(file), { recursive: true });
+  writeFileSync(`${file}.tmp`, JSON.stringify(list, null, 2) + '\n');
+  renameSync(`${file}.tmp`, file);
+}
+
+/** The whole list, checked before anything is written: every path an existing git repo, listed once, `keep` among them. */
+export function writeProjects(value: unknown, keep: string): Project[] {
+  const r = projectList.safeParse(value);
+  if (!r.success) throw new BadConfig(`projects.json: ${z.prettifyError(r.error).replaceAll('\n', '; ')}`);
+  const list = r.data.map((p) => ({ ...p, path: normal(p.path) }));
+  for (const [i, p] of list.entries()) {
+    if (!existsSync(join(p.path, '.git'))) throw new BadConfig(`projects.json: ${p.path} is not a git repo`);
+    if (list.findIndex((q) => same(q.path, p.path)) !== i) throw new BadConfig(`projects.json: ${p.path} is listed twice`);
+  }
+  if (!list.some((p) => same(p.path, normal(keep)))) throw new BadConfig(`projects.json: this board's own project ${normal(keep)} cannot be removed`);
+  saveProjects(list);
+  return list;
+}
+
+/** On daemon start: list the repo it serves, with the default colour, unless it is listed already. */
+export function addProject(repo: string) {
+  const list = readProjects();
+  if (!list.some((p) => same(p.path, normal(repo)))) saveProjects([...list, { path: normal(repo), colour: DEFAULT_COLOUR }]);
+}
+
+/** This board's project. Unlisted (a broken file) reads as the default colour. */
+export function project(repo: string): Project & { name: string } {
+  const path = normal(repo);
+  let colour: Project['colour'] = DEFAULT_COLOUR;
+  try {
+    colour = readProjects().find((p) => same(p.path, path))?.colour ?? colour;
+  } catch { /* the default */ }
+  return { path, name: basename(path), colour };
 }
