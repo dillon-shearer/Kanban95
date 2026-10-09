@@ -32,6 +32,7 @@ Living document. Update it in the same change that alters the schema.
   - `housekeeping` (`auto`: boolean, default true; `every`: a positive integer, default 10)
   - `idle_minutes` (a positive integer, default 20: how long a running agent's transcript may gain no line before its ticket is flagged, `docs/LIFECYCLE.md` → Silent agents)
   - `paths` (`claude`, `codex`: an absolute path to the executable, empty for PATH)
+  - `push_after_merge` (boolean, default true: the merge queue pushes the base to its upstream before a ticket counts as merged, `docs/LIFECYCLE.md` → Push)
   - `sounds` (`merge`, `attention`: booleans, default true; an old single boolean applies to both)
   - `terminals` (`auto`: the phases among `plan`, `execute`, `test` whose sessions open a terminal on their own, default `["plan", "execute", "test"]`)
   - `voice` (`backend`: `local`; `mode`: `push` or `toggle`)
@@ -137,6 +138,7 @@ A grant is live when `revoked_at IS NULL AND expires_at > now`. Rows are kept af
 - REST:
   - `attachments.add`
   - `attachments.remove`
+  - `board.push`
   - `brain.add`
   - `brain.delete`
   - `brain.update`

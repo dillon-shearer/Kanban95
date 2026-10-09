@@ -170,11 +170,29 @@ fn title(repo: Option<String>) -> String {
     }
 }
 
+/// The board's own WebView2 profile folder name: FNV-1a of the canonical repo path (the shell's first argument, else
+/// the cwd). A profile has one `msedgewebview2.exe` browser process, started by the first shell to use it and so held
+/// in that shell's kill-on-close job: a shared profile would die with whichever board started first, blanking the rest.
+/// FNV, not `DefaultHasher`, because the name must stay the same across Rust releases.
+fn profile(repo: Option<String>) -> String {
+    let repo = repo.unwrap_or_else(|| ".".into());
+    let dir = std::fs::canonicalize(&repo).map_or(repo, |d| d.to_string_lossy().into_owned());
+    let hash = dir.bytes().fold(0xcbf29ce484222325u64, |h, b| (h ^ b as u64).wrapping_mul(0x100000001b3));
+    format!("{hash:016x}")
+}
+
 /// The board's only window, locked to the daemon's origin. It holds no Tauri capability (there is no `capabilities/`
 /// dir), so every IPC command is refused for it: the UI talks to the daemon over HTTP and never calls Tauri.
 fn window<R: Runtime, M: Manager<R>>(app: &M, url: Url, live: Arc<AtomicU16>) -> tauri::Result<WebviewWindow<R>> {
+    // WebView2 prefers `WEBVIEW2_USER_DATA_FOLDER` to the folder passed here; passing it too keeps Tauri from
+    // creating an unused profile folder.
+    let data = match std::env::var_os("WEBVIEW2_USER_DATA_FOLDER") {
+        Some(dir) => dir.into(),
+        None => app.path().app_local_data_dir()?.join("boards").join(profile(std::env::args().nth(1))),
+    };
     WebviewWindowBuilder::new(app, "main", WebviewUrl::External(url))
         .title(title(std::env::args().nth(1)))
+        .data_directory(data)
         .inner_size(1280.0, 720.0)
         // Any top-level navigation off the live daemon's origin (`http://127.0.0.1:<live port>`) is cancelled. New
         // windows are already refused by wry when no handler is set, and the CSP keeps frames and fetches on the origin.
@@ -379,6 +397,20 @@ mod tests {
         assert_eq!(title(None), format!("{} — Kanban95", cwd.file_name().unwrap().to_string_lossy()));
     }
 
+    #[test]
+    fn each_repo_gets_its_own_stable_webview_profile() {
+        let (a, b) = (std::env::temp_dir().join("k95-profile-a"), std::env::temp_dir().join("k95-profile-b"));
+        std::fs::create_dir_all(&a).unwrap();
+        std::fs::create_dir_all(&b).unwrap();
+        let p = |d: &std::path::Path| profile(Some(d.display().to_string()));
+        assert_ne!(p(&a), p(&b));
+        assert_eq!(p(&a), profile(Some(format!("{}/", a.display())))); // the same repo spelled another way
+        assert_eq!(profile(None), p(&std::env::current_dir().unwrap()));
+        assert_eq!(profile(Some(String::new())), "cbf29ce484222325"); // FNV-1a offset basis: the hash is pinned
+        std::fs::remove_dir(&a).unwrap();
+        std::fs::remove_dir(&b).unwrap();
+    }
+
     /// The UI calls no Tauri command, so none may answer it: core plugin commands and unknown names alike.
     #[test]
     fn webview_cannot_call_any_tauri_command() {
@@ -408,5 +440,7 @@ mod tests {
             .expect_err(cmd);
             assert!(err.to_string().contains("not allowed"), "{cmd}: {err}");
         }
+        // Tauri created the window's (empty) profile folder; a test leaves nothing behind.
+        let _ = std::fs::remove_dir(app.path().app_local_data_dir().unwrap().join("boards").join(profile(std::env::args().nth(1))));
     }
 }
