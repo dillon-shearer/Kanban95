@@ -4,7 +4,8 @@
 import { FitAddon } from './vendor/xterm/addon-fit.mjs';
 import { Terminal } from './vendor/xterm/xterm.mjs';
 import { configure, ensureModel, micButton, micEverywhere } from './voice.js';
-import { close, dialog, focus, focused, h, isOpen, menu, open, remember, scale, setZoom, snapshot } from './wm.js';
+import * as ui from './state.js';
+import { close, dialog, focus, focused, forget, h, isOpen, menu, open, scale, seed, setZoom, snapshot } from './wm.js';
 
 // ---- data ----
 
@@ -380,13 +381,13 @@ function cardMenu(ts, x, y) {
   ]);
 }
 
-// Folded columns, by status. localStorage is per origin and one daemon serves one repo, so the key is per repo as wm.js's geometry is.
-const collapsed = new Set((() => { try { return JSON.parse(localStorage.getItem('k95.collapsed')) ?? []; } catch { return []; } })());
-const saveCollapsed = () => { try { localStorage.setItem('k95.collapsed', JSON.stringify([...collapsed])); } catch { /* storage off: columns reopen */ } };
+// Folded columns, by status, in ui.json as `k95.collapsed`; `boot` fills the set once state.js has loaded.
+const collapsed = new Set();
+const saveCollapsed = () => ui.set('k95.collapsed', [...collapsed]);
 
-// The Board's filter, sort and group, kept per repo like the folded columns.
-const view = { filter: '', sort: 'id', group: 'none', ...(() => { try { return JSON.parse(localStorage.getItem('k95.view')) ?? {}; } catch { return {}; } })() };
-const saveView = () => { try { localStorage.setItem('k95.view', JSON.stringify(view)); } catch { /* storage off: the view resets on reload */ } };
+// The Board's filter, sort and group, in ui.json as `k95.view` like the folded columns; `boot` fills it.
+const view = { filter: '', sort: 'id', group: 'none' };
+const saveView = () => ui.set('k95.view', { ...view });
 const order = new Map(); // status → card ids as drawn, for a Shift+click range
 const SORTS = { id: 'id', updated: 'updated', effort: 'effort', model: 'model', tags: 'tags', human: 'needs-human first' };
 const RANK = { max: 0, high: 1, medium: 2, low: 3 };
@@ -1141,38 +1142,37 @@ function openNotepad() {
 
 // ---- startup layout ----
 
-// Which of these windows `boot` opens and where: [{ id, x, y, w, h, max? }], bottom-most first, under one localStorage key.
-// Boot writes each entry over the window's own remembered place, so a window opened later in the session still opens
-// where the operator last left it.
+// Which of these windows `boot` opens and where: [{ id, x, y, w, h, max? }], bottom-most first, in ui.json as `k95.layout`.
+// The layout says which windows open at start; where is each window's own remembered place, or the layout's for a window
+// the operator has not moved (`seed`: not saved, so the default follows the desktop's size at every start).
+// Reset forgets the layout windows' places, so the default applies in full from the next start.
 const LAYOUT = { board: openBoard, inbox: openInbox, brain: openBrain, settings: () => openSettings() };
 const NAMES = { board: 'Board', inbox: 'Inbox', brain: 'Brain', settings: 'Settings' };
-/** Board in the top right, Inbox under it in the bottom right, sized so 1920×1080 leaves the left side to terminals. */
+/** Board in the top right, Inbox under it in the bottom right, sized so 1920×1080 leaves the left side to terminals and a
+ *  small desktop still shows the desktop icons. */
 function defaultLayout() {
   const d = document.getElementById('desktop');
   const W = d.clientWidth;
   const H = d.clientHeight;
-  const bw = Math.min(1100, W), bh = Math.min(620, Math.round(H * 0.6));
-  const iw = Math.min(760, W), ih = Math.min(420, H - bh);
+  const icons = document.getElementById('icons');
+  const free = W - (icons ? icons.offsetLeft + icons.offsetWidth + 4 : 0);
+  const bw = Math.min(1100, free), bh = Math.min(620, Math.round(H * 0.6));
+  const iw = Math.min(760, free), ih = Math.min(420, H - bh);
   return [{ id: 'inbox', x: W - iw, y: H - ih, w: iw, h: ih }, { id: 'board', x: W - bw, y: 0, w: bw, h: bh }];
 }
 function startupLayout() {
-  try {
-    const l = JSON.parse(localStorage.getItem('k95.layout'));
-    if (Array.isArray(l)) return l.filter((x) => LAYOUT[x?.id] && [x.x, x.y, x.w, x.h].every(Number.isFinite));
-  } catch { /* unreadable: the default */ }
+  const l = ui.get('k95.layout');
+  if (Array.isArray(l)) return l.filter((x) => LAYOUT[x?.id] && [x.x, x.y, x.w, x.h].every(Number.isFinite));
   return defaultLayout();
 }
 function saveLayout() {
   const l = snapshot(Object.keys(LAYOUT));
-  try {
-    localStorage.setItem('k95.layout', JSON.stringify(l));
-    say(l.length ? `Startup layout saved: ${l.map((x) => NAMES[x.id]).join(', ')}.` : 'Startup layout saved: no windows open at startup.');
-  } catch {
-    say('Could not save the startup layout: browser storage is off.');
-  }
+  ui.set('k95.layout', l);
+  say(l.length ? `Startup layout saved: ${l.map((x) => NAMES[x.id]).join(', ')}.` : 'Startup layout saved: no windows open at startup.');
 }
 function resetLayout() {
-  try { localStorage.removeItem('k95.layout'); } catch { /* storage off: nothing was saved */ }
+  ui.set('k95.layout', undefined);
+  for (const id of Object.keys(LAYOUT)) forget(id);
   say('Startup layout reset: Board top right, Inbox bottom right from the next start.');
 }
 
@@ -1298,7 +1298,9 @@ async function boot() {
   setInterval(refreshLimits, 5 * 60_000); // the daemon's cache lives as long, so this reads fresh numbers
   listen();
   paintProject().catch((e) => say(e.message));
-  const [list, st, md] = await Promise.all([api('GET', '/tickets'), api('GET', '/config/settings'), api('GET', '/config/models').catch(() => ({ value: null }))]);
+  const [list, st, md] = await Promise.all([api('GET', '/tickets'), api('GET', '/config/settings'), api('GET', '/config/models').catch(() => ({ value: null })), ui.load()]);
+  for (const s of ui.get('k95.collapsed') ?? []) collapsed.add(s);
+  Object.assign(view, ui.get('k95.view'));
   for (const t of list) tickets.set(t.id, t);
   settings = { ...settings, terminals: { auto: ['plan', 'execute', 'test'] }, ...st.value, voice: { ...settings.voice, ...st.value?.voice }, housekeeping: { ...settings.housekeeping, ...st.value?.housekeeping } };
   models = md.value;
@@ -1306,7 +1308,7 @@ async function boot() {
   applyZoom(settings.zoom);
   micEverywhere();
   for (const { id, ...r } of startupLayout()) {
-    remember(id, r);
+    seed(id, r);
     LAYOUT[id]();
   }
   await refreshShared();
