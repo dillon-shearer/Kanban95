@@ -1,5 +1,5 @@
 // Voice input. A mic button beside every text field and in every terminal title bar: hold to talk (or click to start and stop,
-// Settings → Voice), and the words land at the field's caret or are typed into the terminal without Enter.
+// Settings → Board → Voice), and the words land at the field's caret or are typed into the terminal without Enter.
 // transcribe() runs a Whisper model inside this webview with transformers.js; the audio never leaves the machine. The model is
 // downloaded by the daemon once, after the operator OKs the dialog that shows its source, size and hashes (docs/OPERATOR.md).
 import { dialog, h } from './wm.js';
@@ -109,7 +109,7 @@ export function micButton(onText) {
       state('error', e.message);
       await dialog('Microphone unavailable', h('div', {},
         h('p', {}, e.name === 'NotAllowedError' ? 'Kanban95 is not allowed to use the microphone.' : `No microphone could be opened (${e.name}).`),
-        h('p', {}, 'Windows: Settings → Privacy & security → Microphone. Turn on "Microphone access" and "Let desktop apps access your microphone", then try again.'),
+        h('p', {}, 'Windows: open Privacy & security → Microphone in the Windows Settings app. Turn on "Microphone access" and "Let desktop apps access your microphone", then try again.'),
         h('p', {}, 'Windows dictation (Win+H) also works in any field.')));
       return;
     }

@@ -1,4 +1,4 @@
-// The usage limits of the accounts the CLIs are logged into, for Settings → Limits and the tray (docs/OPERATOR.md → Limits).
+// The usage limits of the accounts the CLIs are logged into, for the Limits window and the tray (docs/OPERATOR.md → Limits).
 // Each CLI is asked through its own login; the board never reads a credential file and never holds a token (docs/SECURITY.md).
 import { execFile, spawn } from 'node:child_process';
 import { tmpdir } from 'node:os';

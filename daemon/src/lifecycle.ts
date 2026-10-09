@@ -522,7 +522,7 @@ function rootSession(b: Board, o: Parameters<typeof launchRoot>[1]): Session {
 /** A brainstorm session: a planner with plan-phase settings, optionally seeded with the operator's text (Notepad). */
 export const brainstorm = (b: Board, mission?: string) => rootSession(b, { ...runSettings(null, 'plan'), template: 'brainstorm', mission });
 
-/** An operator terminal: the operator phase (Settings → Models; the CLI's default model when unset) unless `.kanban95/config.json` has `operator: { model, effort }` (either or both). */
+/** An operator terminal: the operator phase (Settings → Agents; the CLI's default model when unset) unless `.kanban95/config.json` has `operator: { model, effort }` (either or both). */
 export function operator(b: Board, mission: string): Session {
   const o = repoConfig(b.repo).operator ?? {};
   const where = `${repoConfigPath(b.repo)} operator`;
