@@ -84,6 +84,7 @@ describe('role matrix: every "no" cell is refused and audited as denied', () => 
     ['planner', () => planner, 'move_ticket', { ticket_id: 1, status: 'testing' }],
     ['planner', () => planner, 'report_test', { ticket_id: 1, passed: true, summary: 'x' }],
     ['planner', () => planner, 'report_cleanup', { ticket_id: 1, items: [{ path: 'a', action: 'deleted', reason: 'r' }] }],
+    ['planner', () => planner, 'ask_operator', { ticket_id: 1, question: 'x' }],
     ['worker', () => worker3, 'create_ticket', { title: 'x' }],
     ['worker', () => worker3, 'report_test', { passed: true, summary: 'x' }],
     ['worker', () => worker3, 'set_model', { effort: 'high' }],

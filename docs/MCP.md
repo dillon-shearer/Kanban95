@@ -26,7 +26,7 @@ A refused call returns a tool error whose text says why and, for `move_ticket`, 
 | brain_update | yes | yes | yes | yes |
 | brain_delete | yes | no | no | yes |
 | brain_search | yes | yes | yes | yes |
-| ask_operator | yes | own | own | yes |
+| ask_operator | no | own | own | no |
 | report_test | no | no | own | no |
 | report_cleanup | no | own | no | any |
 
