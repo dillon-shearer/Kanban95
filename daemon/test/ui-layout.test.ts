@@ -3,7 +3,7 @@ import './home.ts'; // also here, not only in vitest.config.ts: a run from the r
 import { describe, expect, it } from 'vitest';
 import { sessions } from '../src/launcher.ts';
 import { until } from './cdp.ts';
-import { srv, db, page, base, ticket, column, click, menuPick } from './ui.ts';
+import { srv, db, page, base, ticket, column, click, menuPick, setUi } from './ui.ts';
 
 type Box = [number, number, number, number]; // left, top, right, bottom
 const box = (wid: string) => page.evaluate<Box | null>(`(() => { const e = document.querySelector('[data-win="${wid}"]'); return e && [e.offsetLeft, e.offsetTop, e.offsetLeft + e.offsetWidth, e.offsetTop + e.offsetHeight]; })()`);
@@ -27,7 +27,9 @@ async function expectDefault() {
   const i = (await box('inbox'))!;
   expect([b[1], b[2]]).toEqual([0, W]);
   expect([i[2], i[3]]).toEqual([W, H]);
-  expect(Math.min(b[0], i[0])).toBeGreaterThanOrEqual(0);
+  // Clear of the desktop icons, so they stay visible however small the desktop.
+  const icons = await page.evaluate<number>(`(() => { const e = document.getElementById('icons'); return e.offsetLeft + e.offsetWidth; })()`);
+  expect(Math.min(b[0], i[0])).toBeGreaterThan(icons);
   expect(overlap(b, i)).toBe(0);
   return { b, i, W };
 }
@@ -52,7 +54,7 @@ describe('ui-layout', { timeout: 60_000 }, () => {
     expect(moved[1]).toBe(50);
     await page.evaluate(`document.querySelector('[data-win="inbox"] [aria-label="Close"]').click()`);
     await start('Save startup layout');
-    expect(await page.evaluate(`JSON.parse(localStorage.getItem('k95.layout')).map((w) => w.id)`)).toEqual(['board']);
+    await until(async () => (await (await api('/ui')).json())['k95.layout']?.map((w: { id: string }) => w.id).join() === 'board', 'the layout in ui.json');
 
     await boot('saved');
     expect(await box('board')).toEqual(moved);
@@ -67,7 +69,7 @@ describe('ui-layout', { timeout: 60_000 }, () => {
     await viewport(1920, 1080);
     const [kept, fresh] = [ticket('Kept'), ticket('Fresh')];
     await boot('terms');
-    await page.evaluate(`localStorage.setItem('k95.win.term-ticket-${kept}', JSON.stringify({ x: 30, y: 40, w: 500, h: 300 }))`);
+    await setUi(`k95.win.term-ticket-${kept}`, { x: 30, y: 40, w: 500, h: 300 });
     const keys: Record<number, number> = {};
     for (const id of [kept, fresh]) {
       await until(() => column(id), 'the card');

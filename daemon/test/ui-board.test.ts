@@ -4,7 +4,7 @@ import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { until } from './cdp.ts';
-import { repo, srv, db, page, base, git, ticket, statusOf, column, statusBar, click } from './ui.ts';
+import { repo, srv, db, page, base, git, ticket, statusOf, column, statusBar, click, setUi } from './ui.ts';
 
 describe('ui-board', { timeout: 60_000 }, () => {
   it('snaps an illegal drop back and names the allowed targets; a legal drop moves the card without a reload', async () => {
@@ -184,7 +184,7 @@ describe('ui-board', { timeout: 60_000 }, () => {
       await click('[data-status="done"] > legend');
       await until(async () => (await width('done')) > 24, 'Done expanded');
     } finally {
-      await page.evaluate(`localStorage.removeItem('k95.collapsed')`);
+      await setUi('k95.collapsed', undefined);
       for (const t of [id, flagged]) db.prepare("UPDATE tickets SET status = 'done', merged_at = 'x', needs_human = 0 WHERE id = ?").run(t);
     }
   });
