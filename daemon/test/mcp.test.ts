@@ -182,7 +182,7 @@ describe('move_ticket', () => {
     expect(await call(worker3, 'move_ticket', { status: 'testing' })).toMatchObject({ denied: true, text: 'cannot submit a ticket in backlog' });
     expect(lastAudit()).toMatchObject({ grant_id: grantIds.worker3, ticket_id: 3, tool: 'move_ticket', outcome: 'denied' });
     srv.db.prepare("UPDATE tickets SET status = 'in_progress' WHERE id = 3").run();
-    // This repo is not a git repo, so the tester launch fails and flags the ticket instead of leaving it unattended.
+    // This repo has no commit (the test home has no git identity, so the daemon could not make one): the tester launch fails and flags the ticket instead of leaving it unattended.
     expect((await call(worker3, 'move_ticket', { status: 'testing' })).json).toMatchObject({ status: 'testing', flags: { needs_human: true } });
     expect(lastAudit()).toMatchObject({ grant_id: grantIds.worker3, ticket_id: 3, tool: 'move_ticket', outcome: 'ok' });
     expect((await call(tester3, 'move_ticket', { status: 'done' })).text).toBe('cannot pass a ticket in testing: call report_test with passed: true first');

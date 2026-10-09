@@ -10,12 +10,8 @@ import { boards, entryPath } from '../src/boards.ts';
 import { writeProjects } from '../src/settings.ts';
 import { page, base, repo, srv, statusBar } from './ui.ts';
 
-const other = realpathSync.native(mkdtempSync(join(tmpdir(), 'k95-other-')));
-execFileSync('git', ['init', '-q'], { cwd: other });
-const plain = mkdtempSync(join(tmpdir(), 'k95-plain-'));
-afterAll(() => {
-  for (const d of [other, plain]) rmSync(d, { recursive: true, force: true, maxRetries: 5 });
-});
+const other = realpathSync.native(mkdtempSync(join(tmpdir(), 'k95-other-'))); // a plain folder, no git
+afterAll(() => rmSync(other, { recursive: true, force: true, maxRetries: 5 }));
 
 const saved = () => JSON.parse(readFileSync(join(process.env.USERPROFILE!, '.kanban95', 'projects.json'), 'utf8'));
 const wall = () => page.evaluate<string>(`getComputedStyle(document.body).backgroundColor`);
@@ -41,7 +37,7 @@ describe('ui-projects', { timeout: 60_000 }, () => {
     expect(await wall()).toBe('rgb(0, 128, 128)');
   });
 
-  it('adds, recolours and removes a project, refuses a non-repo and its own removal, and repaints the wallpaper', async () => {
+  it('adds a plain folder, recolours and removes it, refuses a missing folder and its own removal, and repaints the wallpaper', async () => {
     const own = realpathSync.native(repo);
     await page.goto(base);
     await board();
@@ -49,8 +45,8 @@ describe('ui-projects', { timeout: 60_000 }, () => {
     expect(saved()).toEqual([{ path: own, colour: '#008080' }]);
     expect(await page.evaluate(`document.querySelector(${JSON.stringify(`${row(own)} button`)}).disabled`)).toBe(true);
 
-    await add(plain);
-    await until(async () => (await statusBar()).includes('not a git repo'), 'the refusal in the status bar');
+    await add(join(other, 'missing'));
+    await until(async () => (await statusBar()).includes('is not a folder'), 'the refusal in the status bar');
     expect(saved()).toHaveLength(1);
 
     await add(other);
@@ -60,7 +56,8 @@ describe('ui-projects', { timeout: 60_000 }, () => {
     await until(() => saved()[1].colour === '#ff0000', 'the other colour saved');
     expect(await wall()).toBe('rgb(0, 128, 128)'); // another board's colour leaves this wallpaper alone
     await remove(other);
-    await until(() => saved().length === 1, 'the removal saved');
+    // The panel redraws after the reply; a change made before that would save the old list and bring the row back.
+    await until(async () => saved().length === 1 && !(await page.evaluate(`!!document.querySelector(${JSON.stringify(row(other))})`)), 'the removal saved and redrawn');
 
     await colour(own, '#123456');
     await until(async () => (await wall()) === 'rgb(18, 52, 86)', 'the wallpaper repainted without a reload');

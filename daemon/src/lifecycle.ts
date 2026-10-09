@@ -152,6 +152,8 @@ export interface Board {
   shutdown?: (code: number) => void;
   /** The Tauri shell started this daemon and restarts it on exit code 75. */
   shell?: boolean;
+  /** Why the repo could not be made a git repo with a commit on start (git.ts `initRepo`); every ticket launch fails with it. */
+  gitError?: string;
   /** `git rev-parse HEAD` in the repo when the daemon started; unset in a repo with no commits. */
   startCommit?: string;
   /** A merge since start changed what the running daemon was built from: 'shell' when shell/ changed too (docs/OPERATOR.md → Restart board). */
@@ -279,6 +281,7 @@ function spawn(b: Board, id: number, template: 'execute' | 'housekeeping' | 'tes
   const fail = (e: unknown) => apply(b, id, 'exit', { note: { role: TEMPLATES[template].role, kind: 'failure', body: `launch failed: ${(e as Error).message}` } });
   try {
     if (b.closing) throw new Error('the daemon is shutting down');
+    if (b.gitError) throw new Error(b.gitError);
     const settings = runSettings(readTicket(b.db, id), template === 'test' ? 'test' : 'execute');
     const go = () => void launch({ ...b, onExit: (s) => exited(b, s) }, { ticketId: id, template, resume, ...settings });
     const setup = prepareWorktree(b.repo, id, worktreeSetup(b.repo));
@@ -581,7 +584,7 @@ function rootSession(b: Board, o: Parameters<typeof launchRoot>[1]): Session {
 /** A brainstorm session: a planner with plan-phase settings, optionally seeded with the operator's text (Notepad). */
 export const brainstorm = (b: Board, mission?: string) => rootSession(b, { ...runSettings(null, 'plan'), template: 'brainstorm', mission });
 
-/** An operator terminal: the operator phase (Settings → Models; the CLI's default model when unset) unless `.kanban95/config.json` has `operator: { model, effort }` (either or both). */
+/** An operator terminal: the operator phase (Settings → Agents; the CLI's default model when unset) unless `.kanban95/config.json` has `operator: { model, effort }` (either or both). */
 export function operator(b: Board, mission: string): Session {
   const o = repoConfig(b.repo).operator ?? {};
   const where = `${repoConfigPath(b.repo)} operator`;
@@ -671,7 +674,8 @@ export function runnerState(b: Board) {
   const { n } = b.db.prepare("SELECT count(*) AS n FROM tickets WHERE status = 'backlog'").get() as { n: number };
   const cs = candidates(b);
   const waits = [...overlaps(b, cs)].map(([id, on]) => ({ id, on }));
-  return { ...runner(b), concurrency: limit(b), running: running(b), left: cs.length, backlog: n, waits, stale: b.stale ?? false, unpushed: b.unpushed ?? 0 };
+  return { ...runner(b), concurrency: limit(b), running: running(b), left: cs.length, backlog: n, waits, stale: b.stale ?? false, unpushed: b.unpushed ?? 0,
+    ...(b.gitError && { gitError: b.gitError }) };
 }
 
 let ticking = false;
