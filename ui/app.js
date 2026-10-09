@@ -32,7 +32,8 @@ let sessions = [];
 let inbox = [];
 let runner = { on: false, concurrency: 3, running: [], left: 0, backlog: 0, waits: [] }; // GET /api/runner: the Run button and its status-bar line
 let models = null; // ~/.kanban95/models.json as written, for the cards' default model and effort
-let settings = { paths: {}, sounds: { merge: true, attention: true }, voice: { backend: 'local', mode: 'push' }, housekeeping: { auto: true, every: 10 } };
+// Sounds stay off until /config/settings loads: listen() starts first, and a ding in that gap ignored the operator's choice.
+let settings = { paths: {}, sounds: { merge: false, attention: false }, voice: { backend: 'local', mode: 'push' }, housekeeping: { auto: true, every: 10 } };
 let limits = null; // GET /api/limits: { rows, errors, fetched_at }, null until the first answer
 const views = new Map(); // open window id → redraw(ticketId | null)
 
@@ -273,7 +274,8 @@ async function reject(id) {
     await sayLaunched([id]);
   });
 }
-const newBrainstorm = () => act(async () => openTerminal(await api('POST', '/brainstorm')), 'Brainstorm started.');
+/** `mission`: the operator's draft for the planner to start from (Notepad's selection). */
+const newBrainstorm = (mission) => act(async () => openTerminal(await api('POST', '/brainstorm', typeof mission === 'string' ? { mission } : undefined)), 'Brainstorm started.');
 /** An operator terminal: an agent with the operator's reach on the board, given the mission typed here. The daemon refuses an empty one. */
 async function newOperator() {
   const mission = h('textarea', { rows: 8, cols: 60, placeholder: 'What should the agent do?' });
@@ -436,13 +438,11 @@ function keepScroll(p, rebuild) {
   if (sp) sp.scrollTop = inner;
 }
 
-/** `draft`: for a new ticket, text for its Body (replaces what the form holds). */
-function openTicket(id, draft) {
+function openTicket(id) {
   const wid = `ticket-${id ?? 'new'}`;
   const w = open(wid, { title: id ? `Ticket #${id}` : 'New ticket', w: 680, h: 480, onClose: () => views.delete(wid) });
   if (id === null) {
     if (!w.body.firstChild) w.body.append(ticketForm(w, null));
-    if (draft != null) w.body.querySelector('[data-field="body"]').value = draft;
     return;
   }
   if (w.body.firstChild) return;
@@ -928,7 +928,7 @@ function openNotepad() {
   const picked = () => text.value.slice(text.selectionStart, text.selectionEnd) || text.value;
   w.body.append(h('div', { class: 'k95-notepad' }, text),
     h('div', { class: 'field-row' },
-      h('button', { onclick: () => openTicket(null, picked()) }, 'New ticket from selection'),
+      h('button', { onclick: () => newBrainstorm(picked()) }, 'New brainstorm from selection'),
       h('button', { onclick: () => navigator.clipboard.writeText(picked()).then(() => { status.textContent = 'Copied.'; }, (e) => { status.textContent = e.message; }) }, 'Copy')),
     h('div', { class: 'status-bar' }, status));
   api('GET', '/notepad').then(({ value }) => {
