@@ -16,7 +16,7 @@ A refused call returns a tool error whose text says why and, for `move_ticket`, 
 | tool | planner | worker | tester | operator |
 |------|---|---|---|---|
 | create_ticket | yes | yes, Backlog follow-up, no model/effort | no | yes |
-| update_ticket | any ticket | own, body/criteria only; its Backlog follow-ups, title/body/criteria/depends_on | no | any ticket |
+| update_ticket | any ticket | own, body/criteria only; its Backlog follow-ups, title/body/criteria/tags/depends_on | no | any ticket |
 | delete_ticket | Backlog, no notes or runs | its Backlog follow-ups | no | Backlog, no notes or runs |
 | set_model | any | no | no | any |
 | move_ticket | no | own → testing | own → done / in_progress | any → in_progress / testing / done |
@@ -38,7 +38,7 @@ The operator role is an operator terminal: an agent the operator starts from the
 
 ### create_ticket
 
-Create a ticket in the backlog. Give it a title, a body that says what to build and why, and acceptance criteria a tester can check one by one. List depends_on ids when this work must wait for other tickets. Set model and effort only when the work clearly warrants it: trivial work gets effort low, hard work gets high. A worker files a follow-up or a manual touch it found this way instead of widening its own scope: it lands in Backlog, its body starts with "Filed by #<your ticket>", it runs on the operator's default model and effort, and the worker may fix or delete it while it is still in Backlog. Returns the ticket.
+Create a ticket in the backlog. Give it a title, a body that says what to build and why, and acceptance criteria a tester can check one by one. List depends_on ids when this work must wait for other tickets. Tags (lowercase a-z, 0-9, -) group related tickets on the board. Set model and effort only when the work clearly warrants it: trivial work gets effort low, hard work gets high. A worker files a follow-up or a manual touch it found this way instead of widening its own scope: it lands in Backlog, its body starts with "Filed by #<your ticket>", it runs on the operator's default model and effort, and the worker may fix or delete it while it is still in Backlog. Returns the ticket.
 
 | argument | type | required | description |
 |---|---|---|---|
@@ -46,6 +46,7 @@ Create a ticket in the backlog. Give it a title, a body that says what to build 
 | body | string | default `""` | What to build and why, markdown. |
 | criteria | string | default `""` | Acceptance criteria, one checkable statement per line. |
 | depends_on | integer[] | default `[]` | Ticket ids that must be done before this one starts. |
+| tags | string[] | no | Grouping tags, each lowercase a-z, 0-9 and - only, e.g. ["ui", "daemon"]. |
 | model | string | no | Model override; omit for the phase default. |
 | effort | low \| medium \| high \| max | no | Effort override; omit for the phase default. |
 
@@ -59,6 +60,7 @@ Edit a ticket's title, body, criteria or dependencies. A worker may only refine 
 | title | string | no |  |
 | body | string | no |  |
 | criteria | string | no |  |
+| tags | string[] | no | Replaces the full tag list; [] clears it. |
 | depends_on | integer[] | no | Replaces the full dependency list. |
 
 ### delete_ticket
@@ -108,7 +110,7 @@ Read one ticket in full: title, body, acceptance criteria, status, flags, depend
 
 ### list_tickets
 
-List tickets with id, title, status, flags and dependencies, optionally filtered by status. A planner or operator sees the whole board; a worker sees its own ticket and the ones it depends on; a tester sees its own. Use get_ticket for the body and notes.
+List tickets with id, title, status, tags, flags and dependencies, optionally filtered by status. A planner or operator sees the whole board; a worker sees its own ticket and the ones it depends on; a tester sees its own. Use get_ticket for the body and notes.
 
 | argument | type | required | description |
 |---|---|---|---|
