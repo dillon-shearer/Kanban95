@@ -41,17 +41,17 @@ describe('ui-state', { timeout: 60_000 }, () => {
     await page.drag(bar, { x: bar.x - 100, y: bar.y + 60 });
     moved = (await box('board'))!;
     expect(moved.slice(1)).toEqual([60, 900, 400]);
-    await click('[data-status="done"] > legend');
+    await click('[data-status="testing"] > legend');
     await until(async () => {
       const s = await state();
-      return s['k95.collapsed']?.includes('done') && JSON.stringify((({ dw, dh, ...r }) => r)(s['k95.win.board'] ?? {})) === JSON.stringify({ x: moved[0], y: moved[1], w: moved[2], h: moved[3] });
+      return s['k95.collapsed']?.includes('testing') && JSON.stringify((({ dw, dh, ...r }) => r)(s['k95.win.board'] ?? {})) === JSON.stringify({ x: moved[0], y: moved[1], w: moved[2], h: moved[3] });
     }, 'ui.json');
     expect((await state())['k95.layout']).toBeUndefined(); // no layout saved: the default's Board, at its own place
 
     await restarted(async () => {
       expect(await box('board')).toEqual(moved);
       expect(await box('inbox')).not.toBeNull();
-      expect(await page.evaluate(`document.querySelector('[data-status="done"]').classList.contains('collapsed')`)).toBe(true);
+      expect(await page.evaluate(`document.querySelector('[data-status="testing"]').classList.contains('collapsed')`)).toBe(true);
     });
   });
 

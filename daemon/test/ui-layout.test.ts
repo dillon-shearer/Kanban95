@@ -39,11 +39,12 @@ async function expectDefault() {
 }
 
 describe('ui-layout', { timeout: 60_000 }, () => {
-  it('boots a fresh profile with the Board top right and the Inbox bottom right, also on a small screen', async () => {
+  it('boots a fresh profile with the Board top right, the Inbox bottom right and Done folded, also on a small screen', async () => {
     await viewport(1920, 1080);
     await boot('fresh');
     const { b, i, n, W } = await expectDefault();
     expect(Math.min(b[0], i[0], n[0])).toBe(W / 2); // half the desktop is left to the terminals
+    expect(await page.evaluate(`[...document.querySelectorAll('.col.collapsed')].map((c) => c.dataset.status)`)).toEqual(['done']);
     await viewport(1024, 600);
     await boot('small');
     await expectDefault();
@@ -68,6 +69,14 @@ describe('ui-layout', { timeout: 60_000 }, () => {
     await start('Reset startup layout');
     await boot('reset');
     await expectDefault();
+  });
+
+  it('keeps the folded columns saved, even none, over the default', async () => {
+    await boot('folds');
+    await setUi('k95.collapsed', []);
+    await boot('folds-none');
+    expect(await page.evaluate(`document.querySelectorAll('.col.collapsed').length`)).toBe(0);
+    await setUi('k95.collapsed', undefined);
   });
 
   it('tiles live sessions\' terminals at boot left of the layout, never at a place remembered from an earlier phase', async () => {

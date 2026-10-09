@@ -78,6 +78,7 @@ describe('ui-slots', { timeout: 120_000 }, () => {
       for (const id of ids.slice(0, 4)) {
         wids.push(await launch(id));
         await tiled(wids.length);
+        expect(await page.evaluate(`document.querySelector('[data-task="${wids.at(-1)}"] img').getAttribute('src')`)).toBe('icons/execute.svg');
       }
       // Closing one gives its slot to the rest.
       await wm(`close('${wids.shift()}')`);

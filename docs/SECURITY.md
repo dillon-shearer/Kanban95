@@ -6,7 +6,7 @@ Living document. Update it in the same change that moves a boundary described he
 
 - **No provider API keys.** Claude Code and Codex CLI authenticate themselves in their own config. The board never asks for, reads, or stores a provider key, and never reads a `.env`.
 - **Its own grant tokens, hashed.** The only secrets the board creates are per-session bearer tokens. The database stores a SHA-256 of each; the raw token exists in memory at mint time and in the agent's session: Claude Code reads it from `sessions/<run-id>/mcp.json` (owner-only, deleted at teardown), Codex from `KANBAN95_TOKEN` in its own pty environment. It is never put on a command line and must never appear in logs, audit rows, or REST responses.
-- **Everything else is plain project data** (tickets, notes, brain, runs, audit) in `<repo>/.kanban95/board.db`, gitignored, never uploaded.
+- **Everything else is plain project data** (tickets, notes, brain, runs, audit) in `<repo>/.kanban95/board.db`, gitignored, never uploaded, plus the global brain `~/.kanban95/brain.db` (facts shared by every board, `docs/DATA.md`).
 
 ## Grants
 
@@ -91,7 +91,7 @@ An agent the operator starts with a typed mission, for board work outside the ti
 
 ## Operator files the board writes
 
-In `~/.kanban95/` (or `$KANBAN95_HOME` when set; the board writes operator config nowhere else), only on an explicit operator action: `models.json`, `settings.json` and `preferences.md` when **Save** is pressed in Settings (the whole file is checked against its schema first and written through a temp file; a bad value is refused with the field named and the file is not touched), and `models/` when the speech model download is OK'd (see Voice model). No secrets go in `models.json` or `settings.json`; there is no field for one. `preferences.md` is free text copied into every prompt, so the operator is told not to put one there (`docs/DATA.md`).
+In `~/.kanban95/` (or `$KANBAN95_HOME` when set; the board writes operator config nowhere else), only on an explicit operator action: `models.json`, `settings.json` and `preferences.md` when **Save** is pressed in Settings (the whole file is checked against its schema first and written through a temp file; a bad value is refused with the field named and the file is not touched), and `models/` when the speech model download is OK'd (see Voice model). The one exception is `brain.db`, the global brain, which agents write through `brain_add`/`brain_update` with `scope: global` like the project brain. No secrets go in `models.json` or `settings.json`; there is no field for one. `preferences.md` is free text copied into every prompt, so the operator is told not to put one there (`docs/DATA.md`).
 
 In an agent CLI's config, one file, only for Claude Code launches: `~/.claude.json` (or `$CLAUDE_CONFIG_DIR/.claude.json`), key `projects["<repo root>"].hasTrustDialogAccepted = true`, so Claude Code does not stop at its workspace-trust prompt in the board's worktrees (operator decision, 2026-10-07). `daemon/src/trust.ts`:
 
@@ -114,9 +114,17 @@ Settings → Limits and the taskbar's limit (`daemon/src/limits.ts`, `GET /api/l
 - **When.** On board load and every 5 minutes while the board is open (the daemon caches the answer for 5 minutes), plus Refresh. One fetch at a time; a request during a fetch shares it.
 - **What is kept.** Only the parsed rows (window, percent used, reset time) in daemon memory. Codex's reply also carries the account id, plan and credit ids; they are dropped. Raw output is never logged or returned: a failure reports the exit code or a fixed message, never the CLI's text.
 
+## Git push
+
+With `push_after_merge` on (default, `~/.kanban95/settings.json`), the merge queue runs `git push <remote> <base>:<branch>` in the main checkout after each merge, to the base's configured upstream, and the status bar's Push button (`POST /api/push`, shell secret, audited `board.push`) runs the same. `push` in `daemon/src/merge.ts`.
+
+- **The operator's credentials, never the board's.** Git authenticates with whatever the operator's git uses (credential helper, SSH agent). The board does not read, store, pass or log them. It sets `GIT_TERMINAL_PROMPT=0` so a missing credential fails instead of prompting, and puts git's stderr in the ticket's failure note with any `user:token@` in a URL blanked to `***@`.
+- **Only the configured upstream.** The remote and branch come from `branch.<base>.remote` and `branch.<base>.merge`; a base with none is not pushed. Never a force push.
+- **Off switch.** Settings → General → Git; off, nothing is pushed.
+
 ## Voice model
 
-The mic button's speech model is the only thing the board ever downloads, and the download is the only network request the board makes. `daemon/src/voice.ts`, manifest `daemon/voice-model.json`.
+The mic button's speech model is the only thing the board ever downloads, and the download is the only network request the board makes itself (the push below is git's). `daemon/src/voice.ts`, manifest `daemon/voice-model.json`.
 
 - **Operator-initiated.** Nothing is fetched until the operator presses Download in a dialog that shows the model, the source URL with its pinned revision, the size, the license and every file's SHA-256 (tested: pressing a mic with no model shows the dialog, Cancel fetches nothing and audits nothing). `POST /api/voice/download` is audited (`voice.download`).
 - **Pinned and verified.** The URL names a fixed revision; every file has a pinned size and SHA-256. A response larger than pinned is cut off; a size or hash mismatch deletes the file (and its `.part`) and fails the download, naming the file and both hashes (tested). A file already on disk is used only if its hash still matches.
@@ -137,7 +145,7 @@ The mic button's speech model is the only thing the board ever downloads, and th
 - A template may only name the known variables (`VARS` in `daemon/src/templates.ts`, listed in `docs/AGENTS.md`), and every one it names must have a value. Anything else (for example `{{transcript}}`) is refused when the template is loaded, before any context is built or any run row is written.
 - Values are substituted in one pass, so text an agent wrote into the brain or a note (including `{{...}}`) is inserted literally and cannot pull in another variable.
 - The template name is checked against a fixed set before any path is built, so it cannot read a file outside `.kanban95/templates/`.
-- Brain text and notes are agent-written and end up in later prompts. Treat them as untrusted input to the next agent, the same as any file in the repo.
+- Brain text and notes are agent-written and end up in later prompts. Treat them as untrusted input to the next agent, the same as any file in the repo. A global brain row written by an agent on one project reaches the prompts of every other project's agents, so it crosses the per-repo boundary; it is still only text in the brain section, and the operator sees and deletes global rows in any board's Brain window (filter Global).
 
 ## A malicious agent in a worktree
 

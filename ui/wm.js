@@ -87,9 +87,9 @@ const sel = new Set();
 let anchor = null;
 const paint = () => { for (const [id, w] of wins) w.task.classList.toggle('selected', sel.has(id)); };
 
-// Taskbar overflow: once the buttons are at their 60px minimum, arrows at both ends scroll one button per click, as does the wheel.
+// Taskbar overflow: once the icon buttons fill #tasks, arrows at both ends scroll one button per click, as does the wheel.
 const arrows = [document.getElementById('tasks-left'), document.getElementById('tasks-right')];
-const step = () => (tasks.querySelector('.task')?.offsetWidth ?? 60) + 3; // + the 3px flex gap
+const step = () => (tasks.querySelector('.task')?.offsetWidth ?? 28) + 3; // + the 3px flex gap
 arrows.forEach((a, i) => a.addEventListener('click', () => { tasks.scrollLeft += (i ? 1 : -1) * step(); }));
 tasks.addEventListener('wheel', (e) => { e.preventDefault(); tasks.scrollLeft += e.deltaY || e.deltaX; }, { passive: false });
 const overflow = () => { for (const a of arrows) a.hidden = tasks.scrollWidth <= tasks.clientWidth; };
@@ -121,11 +121,7 @@ export function focus(id) {
     o.el.querySelector('.title-bar').classList.add('inactive');
     o.task.classList.remove('active');
   }
-  if (w.el.hidden) {
-    w.el.hidden = false;
-    if (!w.el.classList.contains('max')) clamp(w.el); // the zoom may have changed while it was minimized
-    if (shapes(id)) retileSoon();
-  }
+  unhide(id);
   w.el.style.zIndex = ++z;
   w.el.classList.add('active');
   w.el.querySelector('.title-bar').classList.remove('inactive');
@@ -133,14 +129,31 @@ export function focus(id) {
   w.task.scrollIntoView({ block: 'nearest', inline: 'nearest' });
 }
 
+function unhide(id) {
+  const w = wins.get(id);
+  if (!w.el.hidden) return;
+  w.el.hidden = false;
+  if (!w.el.classList.contains('max')) clamp(w.el); // the zoom may have changed while it was minimized
+  if (shapes(id)) retileSoon();
+}
+
+/** Brings window `id` to the front, out of minimized, without taking focus from the focused window. */
+export function raise(id) {
+  const w = wins.get(id);
+  if (!w) return;
+  unhide(id);
+  w.el.style.zIndex = ++z;
+}
+
 /**
  * Opens window `id`, or focuses it when it is already open. Returns { el, body, title(text), close }.
  * `background`: opens behind the focused window without taking focus (terminals the board opens on its own).
  * `onX`: runs instead of closing when the operator clicks X; `close` and `api.close` still close at once.
  * `items`: extra entries for its taskbar button's menu, as `menu()` takes them.
+ * `icon`: its taskbar button's picture, `icons/<icon>.svg`; the title is the button's tooltip.
  * `tile`: takes a terminal slot (`SLOTS`) instead of a place of its own.
  */
-export function open(id, { title, w = 480, h: height = 320, persist = false, tile = false, background = false, onClose, onX, extra = [], items = [] }) {
+export function open(id, { title, w = 480, h: height = 320, persist = false, tile = false, background = false, onClose, onX, extra = [], items = [], icon = 'window' }) {
   if (wins.has(id)) {
     focus(id);
     return wins.get(id).api;
@@ -159,27 +172,31 @@ export function open(id, { title, w = 480, h: height = 320, persist = false, til
     body);
   el.classList.toggle('max', !!saved?.max);
   Object.assign(el.style, { left: `${r.x}px`, top: `${r.y}px`, width: `${r.w}px`, height: `${r.h}px` });
-  const task = h('button', { class: 'task', 'data-task': id, onclick: (e) => clickTask(id, e),
+  const task = h('button', { class: 'task', 'data-task': id, title, 'aria-label': title, onclick: (e) => clickTask(id, e),
     oncontextmenu: (e) => { e.preventDefault(); taskMenu(id, e.clientX, e.clientY); },
     onkeydown: (e) => {
       if (e.key !== 'ContextMenu' && !(e.key === 'F10' && e.shiftKey)) return;
       e.preventDefault();
       const r = task.getBoundingClientRect();
       taskMenu(id, r.left, r.top);
-    } }, title);
+    } }, h('img', { src: `icons/${icon}.svg`, alt: '', width: 16, height: 16, draggable: 'false' }));
   dragTask(task);
-  const api = { el, body, title: (t) => { text.textContent = t; task.textContent = t; }, close: () => close(id) };
-  wins.set(id, { el, task, onClose, api, toggleMax, items, tile, rebase: () => { last = JSON.stringify(rect(el)); } });
+  const api = { el, body, title: (t) => { text.textContent = t; task.title = t; task.setAttribute('aria-label', t); }, close: () => close(id) };
+  let last; // the geometry last saved
+  const win = { el, task, onClose, api, toggleMax, items, tile, rebase: () => { last = JSON.stringify(rect(el)); } };
+  wins.set(id, win);
   desktop.append(el);
   tasks.append(task);
   overflow(); // before focus() scrolls the button into view, so the arrows are already taking their room
   if (!saved?.max) clamp(el); // clamp reads the maximized box and would overwrite the restore geometry
 
   // Saved only when the geometry changed: a click inside an unmoved window leaves it following its seed (the startup layout).
-  let last = JSON.stringify(rect(el));
+  win.rebase();
   const save = () => {
     const now = JSON.stringify(rect(el));
-    if (key && now !== last) geo.set(key, { ...JSON.parse((last = now)), dw: size[0], dh: size[1] });
+    if (now === last) return;
+    last = now;
+    if (key) geo.set(key, { ...JSON.parse(now), dw: size[0], dh: size[1] });
   };
   const maxBtn = el.querySelector('[aria-label="Maximize"], [aria-label="Restore"]');
   function toggleMax() {

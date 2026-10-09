@@ -5,7 +5,7 @@ import { FitAddon } from './vendor/xterm/addon-fit.mjs';
 import { Terminal } from './vendor/xterm/xterm.mjs';
 import { configure, ensureModel, micButton, micEverywhere } from './voice.js';
 import * as ui from './state.js';
-import { close, dialog, focus, focused, forget, h, isOpen, menu, open, scale, seed, setZoom, snapshot } from './wm.js';
+import { close, dialog, focus, focused, forget, h, isOpen, menu, open, raise, scale, seed, setZoom, snapshot } from './wm.js';
 
 // ---- data ----
 
@@ -31,11 +31,11 @@ const MOVES = { backlog: ['in_progress'], in_progress: ['backlog'], testing: ['b
 const tickets = new Map();
 let sessions = [];
 let inbox = [];
-let runner = { on: false, concurrency: 3, running: [], left: 0, backlog: 0, waits: [] }; // GET /api/runner: the Run button and its status-bar line
+let runner = { on: false, concurrency: 3, running: [], left: 0, backlog: 0, waits: [], unpushed: 0 }; // GET /api/runner: the Run button and its status-bar line
 let models = null; // ~/.kanban95/models.json as written, for the cards' default model and effort
 // Sounds stay off until /config/settings loads: listen() starts first, and a ding in that gap ignored the operator's choice.
 // `terminals` is absent until then too, so no session is opened or passed over before the operator's phases are known.
-let settings = { paths: {}, sounds: { merge: false, attention: false }, voice: { backend: 'local', mode: 'push' }, housekeeping: { auto: true, every: 10 }, zoom: 1 };
+let settings = { paths: {}, sounds: { merge: false, attention: false }, voice: { backend: 'local', mode: 'push' }, housekeeping: { auto: true, every: 10 }, idle_minutes: 20, zoom: 1, push_after_merge: true };
 let limits = null; // GET /api/limits: { rows, errors, fetched_at }, null until the first answer
 const views = new Map(); // open window id → redraw(ticketId | null)
 
@@ -321,6 +321,11 @@ async function restartBoard() {
     if (e.status === 409) await dialog('Board not restarted', h('pre', { class: 'k95-pre' }, e.message));
   }
 }
+const pushBase = () => act(async () => {
+  say('Pushing…');
+  runner = await api('POST', '/push');
+  drawBoard();
+}, 'Pushed.');
 const housekeeping = () => act(async () => {
   const t = await api('POST', '/tickets/housekeeping');
   say(`Housekeeping ticket #${t.id} created and launched.`);
@@ -428,7 +433,7 @@ function columnBody(list) {
 }
 
 function openBoard() {
-  const w = open('board', { title: 'Board', w: 1000, h: 560, persist: true, onClose: () => { views.delete('board'); say = console.log; } });
+  const w = open('board', { title: 'Board', w: 1000, h: 560, persist: true, icon: 'board', onClose: () => { views.delete('board'); say = console.log; } });
   if (w.body.firstChild) return;
   const status = h('p', { class: 'status-bar-field', role: 'status' }, 'Ready');
   const count = h('p', { class: 'status-bar-field k95-count' });
@@ -452,6 +457,9 @@ function openBoard() {
   const choose = (k, opts) => h('select', { class: `k95-${k}`, onchange: (e) => { view[k] = e.target.value; saveView(); drawBoard(); } },
     Object.entries(opts).map(([v, label]) => h('option', { value: v, selected: view[k] === v }, label)));
   const heldField = h('p', { class: 'status-bar-field k95-held' });
+  // runner.unpushed: commits on the base its upstream lacks, counted on start; Push runs the merge queue's push.
+  const unpushedText = h('span');
+  const unpushedField = h('p', { class: 'status-bar-field k95-unpushed' }, unpushedText, ' ', h('button', { onclick: pushBase }, 'Push'));
   const cols = h('div', { class: 'k95-columns', onclick: (e) => { // a click on empty column space clears the selection
     if (!e.target.closest('.card')) selection.clear(), drawBoard();
   } });
@@ -468,7 +476,7 @@ function openBoard() {
       h('label', {}, 'Sort ', choose('sort', SORTS)),
       h('label', {}, 'Group ', choose('group', { none: 'none', tag: 'tag' }))),
     cols,
-    h('div', { class: 'status-bar' }, status, runField, heldField, viewField, count));
+    h('div', { class: 'status-bar' }, status, runField, unpushedField, heldField, viewField, count));
   say = (msg) => { status.textContent = msg; status.title = msg; };
   views.set('board', () => {
     const all = [...tickets.values()];
@@ -499,6 +507,8 @@ function openBoard() {
     const held = heldTickets().length;
     heldField.textContent = held ? `${held} waiting to launch by themselves` : '';
     heldField.hidden = !held;
+    unpushedText.textContent = `${runner.unpushed} commit${runner.unpushed === 1 ? '' : 's'} not pushed`;
+    unpushedField.hidden = !runner.unpushed;
   });
   drawBoard();
 }
@@ -539,7 +549,7 @@ function keepScroll(p, rebuild) {
 
 function openTicket(id) {
   const wid = `ticket-${id ?? 'new'}`;
-  const w = open(wid, { title: id ? `Ticket #${id}` : 'New ticket', w: 680, h: 480, onClose: () => views.delete(wid) });
+  const w = open(wid, { title: id ? `Ticket #${id}` : 'New ticket', w: 680, h: 480, icon: 'ticket', onClose: () => views.delete(wid) });
   if (id === null) {
     if (!w.body.firstChild) w.body.append(ticketForm(w, null));
     return;
@@ -676,6 +686,11 @@ function termState(s, ended) {
   if (s.phase === 'execute' || s.phase === 'test') return s.phase;
   return null;
 }
+/** A terminal's taskbar icon: what kind of agent runs in it. */
+function termIcon(s) {
+  if (s.ticket_id === null) return s.role === 'operator' ? 'operator' : 'brainstorm';
+  return { plan: 'brainstorm', execute: 'execute', test: 'test' }[s.phase] ?? 'window';
+}
 /**
  * Opens a terminal for each new session of a phase in Settings → General (`terminals.auto`); brainstorms and operator
  * terminals always. The rest are marked seen, so they never pop up later; card → Terminal opens one.
@@ -717,9 +732,13 @@ function openTerminal(s, auto = false) {
     }
   };
   const w = open(wid, { title, w: 760, h: 440, tile: true, background: auto, onX, extra: [micButton((text) => send({ data: text }))],
+    icon: termIcon(s),
     items: s.ticket_id === null ? [] : [{ label: 'Open ticket', run: () => openTicket(s.ticket_id) }], onClose: () => { terms.delete(wid); ro.disconnect(); ws.close(); term.dispose(); } });
+  let was = null;
   const paint = () => {
     const state = termState(s, w.el.classList.contains('ended'));
+    if (state === 'human' && was !== 'human') raise(wid); // needs you: in front, without taking the keyboard
+    was = state;
     if (state) w.el.dataset.state = state;
     else delete w.el.dataset.state; // an unknown phase keeps the 98.css look
   };
@@ -759,56 +778,65 @@ function openTerminal(s, auto = false) {
 
 // ---- brain ----
 
+// Two brains (docs/AGENTS.md → The brain): the project's own and the global one every board shares. A row is scope + id.
+const SCOPES = ['project', 'global'];
+const scopePick = (value, label = (s) => s) => h('select', {}, SCOPES.map((s) => h('option', { value: s, selected: s === value }, label(s))));
+const brainPath = (b) => `/brain/${b.id}?scope=${b.scope}`;
+
 function openBrain() {
-  const w = open('brain', { title: 'Brain', w: 560, h: 460, persist: true });
+  const w = open('brain', { title: 'Brain', w: 560, h: 460, persist: true, icon: 'brain' });
   if (w.body.firstChild) return;
   const q = h('input', { type: 'search', placeholder: 'Search notes' });
+  const only = h('select', { class: 'k95-brain-scope', title: 'Which brain', onchange: () => search() },
+    h('option', { value: '' }, 'All'), h('option', { value: 'project' }, 'Project'), h('option', { value: 'global' }, 'Global'));
   const results = h('ol', { class: 'k95-notes' });
   const search = async () => {
-    const rows = await api('GET', `/brain?q=${encodeURIComponent(q.value)}`);
-    results.replaceChildren(...(rows.length ? rows.map((b) => h('li', { class: 'note' },
+    const rows = await api('GET', `/brain?q=${encodeURIComponent(q.value)}&scope=${only.value}`);
+    results.replaceChildren(...(rows.length ? rows.map((b) => h('li', { class: 'note', 'data-scope': b.scope },
       h('div', { class: 'note-head' }, `#${b.id} ${b.title}`, b.tags && ` · ${b.tags}`),
       // Provenance: a row from a ticket that never landed may describe code that does not exist.
-      h('div', { class: 'note-meta' }, fmt(b.created_at), b.ticket_id && ` · ticket #${b.ticket_id} (${b.ticket_status ?? 'deleted'})`,
+      h('div', { class: 'note-meta' }, h('span', { class: 'scope' }, b.scope), ` · ${fmt(b.created_at)}`, b.ticket_id && ` · ticket #${b.ticket_id} (${b.ticket_status ?? 'deleted'})`,
         h('button', { onclick: () => edit(b) }, 'Edit'), h('button', { onclick: () => remove(b) }, 'Delete')),
       h('pre', {}, b.body))) : [h('li', {}, 'Nothing found.')]));
   };
-  // Merge = edit the survivor, delete the rest.
+  // Merge = edit the survivor, delete the rest. Choosing the other scope moves the row there under a new id.
   const edit = async (b) => {
-    const f = { title: h('input', { type: 'text', value: b.title }), tags: h('input', { type: 'text', 'data-mic': 'off', value: b.tags }), body: h('textarea', { rows: 10 }, b.body) };
+    const f = { title: h('input', { type: 'text', value: b.title }), tags: h('input', { type: 'text', 'data-mic': 'off', value: b.tags }), body: h('textarea', { rows: 10 }, b.body), scope: scopePick(b.scope) };
     const form = h('div', { class: 'k95-brain-edit' }, ...Object.entries(f).map(([k, el]) => h('div', { class: 'field-row-stacked' }, h('label', {}, k), el)));
-    if ((await dialog(`Edit brain #${b.id}`, form, ['Save', 'Cancel'])) !== 'Save') return;
+    if ((await dialog(`Edit ${b.scope} brain #${b.id}`, form, ['Save', 'Cancel'])) !== 'Save') return;
+    const move = f.scope.value !== b.scope;
     act(async () => {
-      await api('PATCH', `/brain/${b.id}`, { title: f.title.value, body: f.body.value, tags: f.tags.value });
+      await api('PATCH', brainPath(b), { title: f.title.value, body: f.body.value, tags: f.tags.value, ...(move && { move_to: f.scope.value }) });
       await search();
-    }, `Brain #${b.id} saved.`);
+    }, move ? `Brain #${b.id} moved to the ${f.scope.value} brain.` : `Brain #${b.id} saved.`);
   };
   const remove = async (b) => {
-    if ((await dialog('Delete brain note', `Delete #${b.id} "${b.title}"? No agent will see it again.`, ['Delete', 'Cancel'])) !== 'Delete') return;
+    if ((await dialog('Delete brain note', `Delete ${b.scope} #${b.id} "${b.title}"? No agent will see it again.`, ['Delete', 'Cancel'])) !== 'Delete') return;
     act(async () => {
-      await api('DELETE', `/brain/${b.id}`);
+      await api('DELETE', brainPath(b));
       await search();
     }, `Brain #${b.id} deleted.`);
   };
   const title = h('input', { type: 'text', placeholder: 'Title' });
   const tags = h('input', { type: 'text', 'data-mic': 'off', placeholder: 'tags' });
   const body = h('textarea', { rows: 3, placeholder: 'What the next agent should know' });
+  const scope = scopePick('project', (s) => (s === 'project' ? 'Project: about this codebase' : 'Global: holds in any repo'));
   const add = () => act(async () => {
-    await api('POST', '/brain', { title: title.value, body: body.value, tags: tags.value });
+    await api('POST', '/brain', { title: title.value, body: body.value, tags: tags.value, scope: scope.value });
     title.value = body.value = tags.value = '';
     await search();
   }, 'Note added to the brain.');
   q.addEventListener('keydown', (e) => e.key === 'Enter' && search());
   w.body.classList.add('k95-brain');
-  w.body.append(h('div', { class: 'field-row' }, q, h('button', { onclick: search }, 'Search')), results,
-    h('fieldset', {}, h('legend', {}, 'Add note'), h('div', { class: 'field-row' }, title, tags), h('div', { class: 'field-row' }, body), h('button', { onclick: add }, 'Add')));
+  w.body.append(h('div', { class: 'field-row' }, q, only, h('button', { onclick: search }, 'Search')), results,
+    h('fieldset', {}, h('legend', {}, 'Add note'), h('div', { class: 'field-row' }, title, tags), h('div', { class: 'field-row' }, body), h('div', { class: 'field-row' }, scope, h('button', { onclick: add }, 'Add'))));
   search();
 }
 
 // ---- inbox ----
 
 function openInbox() {
-  const w = open('inbox', { title: 'Inbox', w: 560, h: 400, persist: true, onClose: () => views.delete('inbox') });
+  const w = open('inbox', { title: 'Inbox', w: 560, h: 400, persist: true, icon: 'inbox', onClose: () => views.delete('inbox') });
   if (w.body.firstChild) return;
   let shown = null;
   const draw = () => {
@@ -924,7 +952,7 @@ async function projectsPanel(p) {
 let settingsTabs = null;
 /** `tab`: the tab to show, also when the window is already open. */
 function openSettings(tab) {
-  const w = open('settings', { title: 'Settings', w: 640, h: 440, persist: true, onClose: () => views.delete('settings') });
+  const w = open('settings', { title: 'Settings', w: 640, h: 440, persist: true, icon: 'settings', onClose: () => views.delete('settings') });
   if (w.body.firstChild) return tab && settingsTabs.show(tab);
   const tb = settingsTabs = tabs(['Models', 'CLIs', 'Prompts', 'Grants', 'Limits', 'Voice', 'Projects', 'General'], async (tab, p, first) => {
     if (tab === 'Limits') return limitsPanel(p);
@@ -1029,7 +1057,10 @@ function openSettings(tab) {
         drawBoard();
       }, 'Saved.');
       const hkAuto = h('input', { type: 'checkbox', id: 'hk-auto', checked: settings.housekeeping.auto });
+      const pushAuto = h('input', { type: 'checkbox', id: 'push-after-merge', checked: settings.push_after_merge,
+        onchange: (e) => act(() => saveSettings({ push_after_merge: e.target.checked }), 'Saved.') });
       const hkEvery = h('input', { type: 'number', id: 'hk-every', min: 1, step: 1, value: settings.housekeeping.every });
+      const idle = h('input', { type: 'number', id: 'idle-minutes', min: 1, step: 1, value: settings.idle_minutes });
       const zoom = h('select', { id: 'zoom', onchange: (e) => zoomTo(Number(e.target.value)) },
         ZOOMS.map((f) => h('option', { value: f, selected: f === settings.zoom }, `${Math.round(f * 100)}%`)));
       p.replaceChildren(h('div', { class: 'field-row' }, h('label', { for: 'zoom' }, 'Zoom (Ctrl+= / Ctrl+- / Ctrl+0)'), zoom),
@@ -1044,6 +1075,12 @@ function openSettings(tab) {
         h('fieldset', {}, h('legend', {}, 'Runner'),
           h('div', { class: 'field-row' }, h('label', { for: 'concurrency' }, 'Tickets running at once'), at),
           h('button', { onclick: saveRunner }, 'Save')),
+        h('fieldset', {}, h('legend', {}, 'Git'),
+          h('div', { class: 'field-row' }, pushAuto, h('label', { for: 'push-after-merge' }, 'Push the base branch to its upstream after each merge'))),
+        h('fieldset', {}, h('legend', {}, 'Silent agents'),
+          h('div', { class: 'field-row' }, h('label', { for: 'idle-minutes' }, 'Flag an agent whose transcript is quiet for (minutes)'), idle),
+          h('p', {}, 'Keep it above the 10 min tool timeout, so a long test run is not flagged.'),
+          h('button', { onclick: () => act(() => saveSettings({ idle_minutes: Number(idle.value) }), 'Saved.') }, 'Save')),
         h('fieldset', {}, h('legend', {}, 'Housekeeping'),
           h('div', { class: 'field-row' }, hkAuto, h('label', { for: 'hk-auto' }, 'File a housekeeping ticket after merges')),
           h('div', { class: 'field-row' }, h('label', { for: 'hk-every' }, 'Merged tickets between runs'), hkEvery),
@@ -1095,7 +1132,7 @@ function limitsPanel(p) {
 
 /** A small window to keep open beside the board. */
 function openLimits() {
-  const w = open('limits', { title: 'Limits', w: 420, h: 300, persist: true, onClose: () => views.delete('limits') });
+  const w = open('limits', { title: 'Limits', w: 420, h: 300, persist: true, icon: 'limits', onClose: () => views.delete('limits') });
   if (w.body.firstChild) return;
   views.set('limits', () => limitsPanel(w.body.firstChild));
   w.body.append(h('div', { class: 'k95-limits' }));
@@ -1119,7 +1156,7 @@ function openNotepad() {
       status.textContent = `Not saved: ${e.message}`;
     }
   };
-  const w = open('notepad', { title: 'Notepad', w: 520, h: 380, persist: true, onClose: () => timer && save() });
+  const w = open('notepad', { title: 'Notepad', w: 520, h: 380, persist: true, icon: 'notepad', onClose: () => timer && save() });
   if (w.body.firstChild) return;
   text.addEventListener('input', () => {
     clearTimeout(timer);
@@ -1204,15 +1241,18 @@ const START = [
   { label: 'Restart board', run: restartBoard },
 ];
 
-/** Desktop icons for the Start menu's first entries, under every window. Click selects; double-click or Enter opens. */
+/** Desktop icons for the Start menu's first entries, under every window: click selects, double-click or Enter opens. The same
+ *  entries are pinned to the taskbar after Start, one click each, as Quick Launch was. */
 function desktopIcons() {
   const run = Object.fromEntries(START.filter((s) => s.run).map((s) => [s.label, s.run]));
+  const labels = ['Board', 'Inbox', 'Brain', 'Settings', 'Notepad', 'Limits', 'New ticket', 'New brainstorm'];
+  const img = (label, size) => h('img', { src: `icons/${label.toLowerCase().replace(' ', '-')}.svg`, alt: '', width: size, height: size, draggable: 'false' });
   const icon = (label) => h('div', { class: 'k95-icon', role: 'button', tabindex: 0, 'data-icon': label,
     ondblclick: run[label], onkeydown: (e) => e.key === 'Enter' && run[label]() },
-  h('img', { src: `icons/${label.toLowerCase().replace(' ', '-')}.svg`, alt: '', width: 32, height: 32, draggable: 'false' }),
-  h('span', {}, label));
-  document.getElementById('desktop').prepend(h('nav', { id: 'icons' },
-    ['Board', 'Inbox', 'Brain', 'Settings', 'Notepad', 'Limits', 'New ticket', 'New brainstorm'].map(icon)));
+  img(label, 32), h('span', {}, label));
+  document.getElementById('desktop').prepend(h('nav', { id: 'icons' }, labels.map(icon)));
+  document.getElementById('pinned').append(...labels.map((label) =>
+    h('button', { 'data-pin': label, title: label, 'aria-label': label, onclick: run[label] }, img(label, 16))));
 }
 
 function taskbar() {
@@ -1305,7 +1345,7 @@ async function boot() {
   listen();
   paintProject().catch((e) => say(e.message));
   const [list, st, md] = await Promise.all([api('GET', '/tickets'), api('GET', '/config/settings'), api('GET', '/config/models').catch(() => ({ value: null })), ui.load()]);
-  for (const s of ui.get('k95.collapsed') ?? []) collapsed.add(s);
+  for (const s of ui.get('k95.collapsed') ?? ['done']) collapsed.add(s); // nothing saved: Done starts folded
   Object.assign(view, ui.get('k95.view'));
   for (const t of list) tickets.set(t.id, t);
   settings = { ...settings, terminals: { auto: ['plan', 'execute', 'test'] }, ...st.value, voice: { ...settings.voice, ...st.value?.voice }, housekeeping: { ...settings.housekeeping, ...st.value?.housekeeping } };

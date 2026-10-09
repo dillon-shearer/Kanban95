@@ -10,7 +10,7 @@ import { readTicket } from '../src/api.ts';
 import { createWorktree } from '../src/git.ts';
 import { mint } from '../src/grants.ts';
 import { RESUME_MESSAGE, sessions, sessionsOf } from '../src/launcher.ts';
-import { DIRTY_WAIT, events, MAX_RETRY, Refused, RESTART_NOTE, RESTARTED, TABLE, TO_RESOLVE, transition, type Event, type Facts, type Status } from '../src/lifecycle.ts';
+import { DIRTY_WAIT, events, SILENCE, MAX_RETRY, Refused, RESTART_NOTE, RESTARTED, TABLE, TO_RESOLVE, transition, type Event, type Facts, type Status } from '../src/lifecycle.ts';
 import { start } from '../src/server.ts';
 
 describe('transition table', () => {
@@ -35,12 +35,16 @@ describe('transition table', () => {
     ['operator answers', { status: 'in_progress', needs_human: true }, 'answer', { to: 'in_progress', set: { needs_human: 0 }, effects: ['note', 'answer_pty'] }],
     ['worker exits silently', { status: 'in_progress' }, 'exit', { to: 'in_progress', set: { needs_human: 1 }, effects: ['note', 'chord'] }],
     ['tester exits silently', { status: 'testing', live: false }, 'exit', { to: 'testing', set: { needs_human: 1 }, effects: ['note', 'chord'] }],
+    ['a live worker goes silent', { status: 'in_progress' }, 'silent', { to: 'in_progress', set: { needs_human: 1 }, effects: ['note', 'chord'] }],
+    ['a live tester goes silent', { status: 'testing' }, 'silent', { to: 'testing', set: { needs_human: 1 }, effects: ['note', 'chord'] }],
+    ['a silent agent writes again', { status: 'in_progress', needs_human: true }, 'woke', { to: 'in_progress', set: { needs_human: 0 }, effects: [] }],
     ['merge ok', { status: 'done' }, 'merged', { to: 'done', set: { merged: true, needs_human: 0 }, effects: ['ding', 'remove_worktree', 'release_dependents', 'housekeeping'] }],
     ['base will not merge in on submit: back to the worker', { status: 'in_progress', retry: 0 }, 'conflict', { to: 'in_progress', set: { retry: '+1' }, effects: ['end_session', 'note', 'spawn_execute'] }],
     ['base will not merge in on submit at the retry cap stops', { status: 'in_progress', retry: MAX_RETRY }, 'conflict', { to: 'in_progress', set: { needs_human: 1 }, effects: ['end_session', 'note', 'chord'] }],
     ['merge conflict goes back to the worker', { status: 'done', retry: MAX_RETRY - 1 }, 'conflict', { to: 'in_progress', set: { retry: '+1' }, effects: ['end_session', 'note', 'spawn_execute'] }],
     ['merge conflict at the retry cap stops', { status: 'done', retry: MAX_RETRY }, 'conflict', { to: 'done', set: { needs_human: 1 }, effects: ['note', 'chord'] }],
     ['base still dirty after the wait', { status: 'done' }, 'dirty', { to: 'done', set: { needs_human: 1 }, effects: ['note', 'chord'] }],
+    ['merged but the push failed', { status: 'done' }, 'unpushed', { to: 'done', set: { needs_human: 1 }, effects: ['note', 'chord'] }],
     ['operator rejects a merged ticket', { status: 'done', merged: true, retry: 2, live: false }, 'reject', { to: 'in_progress', set: { needs_human: 0, retry: 0 }, effects: ['note', 'spawn_execute'] }],
     ['operator rejects a flagged unmerged ticket', { status: 'done', needs_human: true, live: false }, 'reject', { to: 'in_progress', set: { needs_human: 0, retry: 0 }, effects: ['note', 'spawn_execute'] }],
     ['operator retries a failed merge', { status: 'done', needs_human: true }, 'merge', { to: 'done', set: {}, effects: ['enqueue_merge'] }],
@@ -51,11 +55,11 @@ describe('transition table', () => {
 
   const allowed: Record<Status, Event[]> = {
     backlog: ['launch'],
-    in_progress: ['launch', 'resume', 'restart', 'submit', 'ask', 'answer', 'exit', 'conflict'],
-    testing: ['launch', 'resume', 'restart', 'pass', 'fail', 'ask', 'answer', 'exit'],
-    done: ['merged', 'conflict', 'merge', 'dirty', 'reject'],
+    in_progress: ['launch', 'resume', 'restart', 'submit', 'ask', 'answer', 'exit', 'silent', 'woke', 'conflict'],
+    testing: ['launch', 'resume', 'restart', 'pass', 'fail', 'ask', 'answer', 'exit', 'silent', 'woke'],
+    done: ['merged', 'conflict', 'merge', 'dirty', 'unpushed', 'reject'],
   };
-  const EVENTS: Event[] = ['launch', 'submit', 'pass', 'fail', 'ask', 'answer', 'exit', 'merged', 'conflict', 'merge', 'dirty', 'resume', 'restart', 'reject'];
+  const EVENTS: Event[] = ['launch', 'submit', 'pass', 'fail', 'ask', 'answer', 'exit', 'silent', 'woke', 'merged', 'conflict', 'merge', 'dirty', 'unpushed', 'resume', 'restart', 'reject'];
   it('refuses every other event in every status', () => {
     let n = 0;
     for (const status of Object.keys(allowed) as Status[]) {
@@ -64,7 +68,7 @@ describe('transition table', () => {
         n++;
       }
     }
-    expect(n).toBe(4 * EVENTS.length - 22);
+    expect(n).toBe(4 * EVENTS.length - 27);
   });
 
   it('refuses a guarded row whose guard fails, saying why', () => {
@@ -79,11 +83,14 @@ describe('transition table', () => {
     expect(() => transition(f({ status: 'in_progress', live: false }), 'resume')).toThrow('cannot resume a ticket in in_progress: it is not flagged');
     expect(() => transition(f({ status: 'backlog', needs_human: true, live: false }), 'resume')).toThrow('cannot resume a ticket in backlog');
     expect(() => transition(f({ status: 'done', needs_human: true, live: false }), 'resume')).toThrow('cannot resume a ticket in done');
+    expect(() => transition(f({ status: 'in_progress', needs_human: true }), 'silent')).toThrow('cannot silent a ticket in in_progress: it has no running agent, or it is flagged already');
+    expect(() => transition(f({ status: 'testing', live: false }), 'silent')).toThrow(/no running agent/);
+    expect(() => transition(f({ status: 'in_progress' }), 'woke')).toThrow(/it is not flagged/);
   });
 
   it('every row that raises needs_human writes one note, and all but a question end it with what resolves it', () => {
     const flagged = TABLE.filter((r) => r.set?.needs_human === 1);
-    expect(flagged.map((r) => r.event)).toEqual(['fail', 'ask', 'exit', 'conflict', 'conflict', 'dirty']);
+    expect(flagged.map((r) => r.event)).toEqual(['fail', 'ask', 'exit', 'silent', 'conflict', 'conflict', 'dirty', 'unpushed']);
     for (const r of flagged) {
       expect(r.effects.filter((e) => e === 'note'), r.event).toHaveLength(1);
       expect(r.resolve === undefined, r.event).toBe(r.event === 'ask');
@@ -92,6 +99,7 @@ describe('transition table', () => {
     expect(fix('conflict')).toMatch(/\.worktrees\/t-7 .*Retry merge/);
     expect(fix('conflict', 'in_progress')).toMatch(/\.worktrees\/t-7 .*uncommitted .*git merge .*Resume/);
     expect(fix('dirty')).toMatch(/main checkout \(C:\/repo\).*Retry merge/);
+    expect(fix('unpushed')).toMatch(/main checkout \(C:\/repo\).*pull .*sign in .*Retry merge/);
     expect(`To resolve: ${fix('exit', 'in_progress')}`).toBe(TO_RESOLVE);
   });
 });
@@ -103,15 +111,17 @@ describe('transition table', () => {
 const bin = mkdtempSync(join(tmpdir(), 'k95-bin-'));
 const FAKE = `
 import { execFileSync, spawn } from 'node:child_process';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { basename, dirname } from 'node:path';
 const argv = process.argv.slice(2);
 const model = argv[argv.indexOf('--model') + 1];
 const mcp = JSON.parse(readFileSync(argv[argv.indexOf('--mcp-config') + 1], 'utf8')).mcpServers.kanban95;
+let transcript;
 if (argv.includes('--session-id')) {
   const project = process.env.USERPROFILE + '/.claude/projects/' + process.cwd().replace(/[^A-Za-z0-9]/g, '-');
   mkdirSync(project, { recursive: true });
-  writeFileSync(project + '/' + argv[argv.indexOf('--session-id') + 1] + '.jsonl', '{}\\n');
+  transcript = project + '/' + argv[argv.indexOf('--session-id') + 1] + '.jsonl';
+  writeFileSync(transcript, '{}\\n');
 }
 if (argv.includes('--resume')) {
   writeFileSync('resumed.json', JSON.stringify({ argv, auth: mcp.headers.Authorization }));
@@ -145,6 +155,10 @@ if (brief.startsWith('# Test') && model !== 'hang') {
   await call('report_test', { passed, summary: (passed ? 'every criterion passes' : 'criterion 1 fails') + ' (tested: ' + tested + ')' });
 } else if (model === 'silent') {
   process.exit(0);
+} else if (model === 'chatty' || model === 'nap') {
+  // chatty: a transcript line every 100 ms, like an agent at work. nap: quiet for 1.5 s first, then the same.
+  if (model === 'nap') await new Promise((r) => setTimeout(r, 1500));
+  setInterval(() => appendFileSync(transcript, '{}\\n'), 100);
 } else if (model !== 'hang') {
   if (model === 'ask') {
     await call('ask_operator', { question: 'Which colour?' });
@@ -657,6 +671,115 @@ ${TO_RESOLVE}`]);
   });
 });
 
+describe('push after merge', { timeout: 60_000 }, () => {
+  let bare: string;
+  const remote = (...a: string[]) => execFileSync('git', a, { cwd: bare, encoding: 'utf8' }).trim();
+  const settings = () => join(process.env.KANBAN95_HOME!, 'settings.json');
+  const runnerState = async () => (await send('GET')('/api/runner')).json();
+  const commitOnBase = (f: string) => {
+    writeFileSync(join(repo, `${f}.txt`), `${f}\n`);
+    git('add', `${f}.txt`);
+    git('commit', '-qm', `Add ${f} on the base`);
+  };
+  const refuse = () => writeFileSync(join(bare, 'hooks', 'pre-receive'), '#!/bin/sh\necho "denied by the remote" >&2\nexit 1\n');
+  const restart = async () => {
+    await srv.close();
+    srv = await start({ repo });
+    db = srv.db;
+  };
+  beforeEach(() => {
+    bare = mkdtempSync(join(tmpdir(), 'k95-remote-'));
+    execFileSync('git', ['init', '-q', '--bare', '-b', 'main'], { cwd: bare });
+    git('remote', 'add', 'origin', bare);
+    git('push', '-q', '-u', 'origin', 'main');
+  });
+  afterEach(() => {
+    rmSync(settings(), { force: true });
+    rmSync(bare, { recursive: true, force: true, maxRetries: 5 });
+  });
+
+  it('pushes the landed merge, and an unpushed commit made on the base before it, by the time the ticket is merged', async () => {
+    commitOnBase('b');
+    const backlog = git('rev-parse', 'HEAD');
+    const id = ticket('Add and push');
+    await post(`/api/tickets/${id}/launch`);
+    await until(() => t(id).merged_at, 'merged_at');
+    expect(remote('rev-parse', 'main')).toBe(git('rev-parse', 'HEAD')); // pushed before merged_at was written
+    expect(remote('log', '-1', '--format=%s', 'main')).toBe('Add and push');
+    expect(remote('merge-base', '--is-ancestor', backlog, 'main')).toBe('');
+    await landed(id);
+  });
+
+  it("a rejected push keeps the merge, leaves merged_at unset, flags with git's message and a chord; Retry merge pushes again", async () => {
+    refuse();
+    const before = remote('rev-parse', 'main');
+    const id = ticket('Add, push refused');
+    await post(`/api/tickets/${id}/launch`);
+    await until(() => t(id).flags.needs_human, 'the flag');
+    expect(t(id)).toMatchObject({ status: 'done', merged_at: null });
+    expect(git('log', '-1', '--format=%s', 'HEAD')).toBe('Add, push refused'); // the merge stays in the base
+    expect(remote('rev-parse', 'main')).toBe(before);
+    expect(existsSync(join(repo, '.worktrees', `t-${id}`))).toBe(true);
+    expect(notes(id, 'failure')).toEqual([expect.stringMatching(/^merged into main, but git push to origin failed, so the ticket is not closed:\n[^]*denied by the remote[^]*\nTo resolve: .*Retry merge; it pushes again\.$/)]);
+    expect(sounds).toEqual([{ sound: 'chord', ticket: id }]);
+
+    rmSync(join(bare, 'hooks', 'pre-receive'));
+    expect((await post(`/api/tickets/${id}/merge`)).status).toBe(200);
+    await landed(id);
+    expect(t(id).flags.needs_human).toBe(false);
+    expect(remote('rev-parse', 'main')).toBe(git('rev-parse', 'HEAD'));
+    expect(git('log', '--merges', '--format=%s').split('\n')).toEqual(['Add, push refused']); // merged once, not again on retry
+  });
+
+  it('a base with no upstream merges and closes the ticket without pushing', async () => {
+    git('branch', '--unset-upstream');
+    const before = remote('rev-parse', 'main');
+    const id = ticket('Add, no upstream');
+    await post(`/api/tickets/${id}/launch`);
+    await landed(id);
+    expect(t(id).flags.needs_human).toBe(false);
+    expect(remote('rev-parse', 'main')).toBe(before);
+  });
+
+  it('with push_after_merge off nothing is pushed and the ticket closes as before', async () => {
+    writeFileSync(settings(), JSON.stringify({ push_after_merge: false }));
+    const before = remote('rev-parse', 'main');
+    const id = ticket('Add, push off');
+    await post(`/api/tickets/${id}/launch`);
+    await landed(id);
+    expect(t(id).flags.needs_human).toBe(false);
+    expect(remote('rev-parse', 'main')).toBe(before);
+  });
+
+  it('a daemon started ahead of its upstream reports the unpushed count; POST /api/push pushes it and clears it', async () => {
+    commitOnBase('b');
+    commitOnBase('c');
+    await restart();
+    await until(async () => (await runnerState()).unpushed === 2, 'the unpushed count');
+    const r = await post('/api/push');
+    expect(r.status).toBe(200);
+    expect((await r.json()).unpushed).toBe(0);
+    expect(remote('rev-parse', 'main')).toBe(git('rev-parse', 'HEAD'));
+    expect(db.prepare("SELECT outcome FROM audit WHERE tool = 'board.push'").all()).toEqual([{ outcome: 'ok' }]);
+  });
+
+  it("a refused Push answers 502 with git's message and keeps the count; with push_after_merge off no count is shown", async () => {
+    commitOnBase('b');
+    refuse();
+    await restart();
+    await until(async () => (await runnerState()).unpushed === 1, 'the unpushed count');
+    const r = await post('/api/push');
+    expect(r.status).toBe(502);
+    expect(await r.text()).toContain('denied by the remote');
+    expect((await runnerState()).unpushed).toBe(1);
+
+    writeFileSync(settings(), JSON.stringify({ push_after_merge: false }));
+    await restart();
+    await new Promise((ok) => setTimeout(ok, 300));
+    expect((await runnerState()).unpushed).toBe(0);
+  });
+});
+
 describe('stale daemon after a merge', { timeout: 60_000 }, () => {
   const stale = async () => (await (await fetch(`http://127.0.0.1:${srv.port}/api/runner`, { headers: { cookie: `k95=${srv.secret}` } })).json()).stale;
   it.each([['daemon', 'daemon'], ['shell', 'shell'], ['ui', false], ['docs', false]])('a merge touching %s/ reports stale: %s', async (dir, want) => {
@@ -900,6 +1023,60 @@ describe('resume', { timeout: 60_000 }, () => {
     expect(notes(id, 'failure')).toEqual([RESTARTED, `agent exited without reporting\n${TO_RESOLVE}`]);
     expect(runs(id)).toHaveLength(1); // not resumed again
     expect(t(id).retry).toBe(1);
+  });
+});
+
+describe('silent agents', { timeout: 60_000 }, () => {
+  // One minute of idle_minutes lasts 400 ms here; the watch looks every 50 ms. Set before the outer beforeEach starts the daemon.
+  const silence0 = { ...SILENCE };
+  const settingsFile = () => join(process.env.USERPROFILE!, '.kanban95', 'settings.json');
+  beforeAll(() => Object.assign(SILENCE, { every: 50, minute: 400 }));
+  afterAll(() => Object.assign(SILENCE, silence0));
+  beforeEach(() => writeFileSync(settingsFile(), JSON.stringify({ idle_minutes: 1 })));
+  afterEach(() => rmSync(settingsFile(), { force: true }));
+
+  it('a live agent whose transcript gains no line for idle_minutes is flagged once, with the minutes and its last terminal lines', async () => {
+    const id = ticket('Frozen', { model: 'hang' });
+    const at = Date.now();
+    await post(`/api/tickets/${id}/launch`);
+    await until(() => t(id).flags.needs_human, 'the silence flag', 10_000);
+    expect(Date.now() - at).toBeGreaterThanOrEqual(400);
+    const [note] = notes(id, 'failure');
+    expect(note).toMatch(/^agent silent for 1 min: its transcript has had no new line since \d{4}-\d\d-\d\dT[\d:.]+Z\. Last lines of its terminal:\n```\n/);
+    expect(note).toMatch(/\nFAKE hang\n```\nTo resolve: open its terminal .*Restart/);
+    expect(sounds).toEqual([{ sound: 'chord', ticket: id }]);
+    expect(sessionsOf(id)).toHaveLength(1); // flagged, not ended: the operator decides
+    await new Promise((r) => setTimeout(r, 1000)); // more than twice the limit again
+    expect(notes(id, 'failure')).toHaveLength(1);
+    expect(sounds).toHaveLength(1);
+  });
+
+  it('an agent that keeps writing to its transcript is not flagged, however long it runs', async () => {
+    const id = ticket('Busy', { model: 'chatty' });
+    await post(`/api/tickets/${id}/launch`);
+    await until(() => sessionsOf(id).length === 1, 'the agent');
+    await new Promise((r) => setTimeout(r, 2000)); // five times the limit
+    expect(t(id).flags.needs_human).toBe(false);
+    expect(notes(id, 'failure')).toEqual([]);
+    expect(sounds).toEqual([]);
+  });
+
+  it('a flagged agent that writes again is unflagged by itself; the note stays as the record', async () => {
+    const id = ticket('Slow start', { model: 'nap' });
+    await post(`/api/tickets/${id}/launch`);
+    await until(() => t(id).flags.needs_human, 'the silence flag', 10_000);
+    await until(() => !t(id).flags.needs_human, 'the flag cleared', 10_000);
+    expect(notes(id, 'failure')).toHaveLength(1);
+    expect(sessionsOf(id)).toHaveLength(1);
+  });
+
+  it('a flag raised by a question is not cleared when the transcript grows', async () => {
+    const id = ticket('Asks while slow', { model: 'nap' });
+    await post(`/api/tickets/${id}/launch`);
+    await until(() => t(id).flags.needs_human, 'the silence flag', 10_000);
+    db.prepare("INSERT INTO notes (ticket_id, role, kind, body) VALUES (?, 'worker', 'question', 'Which colour?')").run(id); // as ask_operator writes it
+    await new Promise((r) => setTimeout(r, 2500)); // the nap is over and the transcript grows
+    expect(t(id).flags.needs_human).toBe(true);
   });
 });
 
