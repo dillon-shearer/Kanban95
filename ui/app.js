@@ -716,8 +716,7 @@ function openTerminal(s, auto = false) {
       say(e.message);
     }
   };
-  // Placed per ticket, not per session: every later phase, retry and relaunch opens where the operator left the last one.
-  const w = open(wid, { title, w: 760, h: 440, persist: s.ticket_id !== null && `term-ticket-${s.ticket_id}`, background: auto, onX, extra: [micButton((text) => send({ data: text }))],
+  const w = open(wid, { title, w: 760, h: 440, tile: true, background: auto, onX, extra: [micButton((text) => send({ data: text }))],
     items: s.ticket_id === null ? [] : [{ label: 'Open ticket', run: () => openTicket(s.ticket_id) }], onClose: () => { terms.delete(wid); ro.disconnect(); ws.close(); term.dispose(); } });
   const paint = () => {
     const state = termState(s, w.el.classList.contains('ended'));
@@ -1146,19 +1145,20 @@ function openNotepad() {
 // The layout says which windows open at start; where is each window's own remembered place, or the layout's for a window
 // the operator has not moved (`seed`: not saved, so the default follows the desktop's size at every start).
 // Reset forgets the layout windows' places, so the default applies in full from the next start.
-const LAYOUT = { board: openBoard, inbox: openInbox, brain: openBrain, settings: () => openSettings() };
-const NAMES = { board: 'Board', inbox: 'Inbox', brain: 'Brain', settings: 'Settings' };
-/** Board in the top right, Inbox under it in the bottom right, sized so 1920×1080 leaves the left side to terminals and a
- *  small desktop still shows the desktop icons. */
+const LAYOUT = { board: openBoard, inbox: openInbox, notepad: openNotepad, brain: openBrain, settings: () => openSettings() };
+const NAMES = { board: 'Board', inbox: 'Inbox', notepad: 'Notepad', brain: 'Brain', settings: 'Settings' };
+/** The action column: Board in the top right, Inbox under it in the bottom right, Notepad left of the Inbox at its height,
+ *  together half the desktop's width (the other half is the terminals' region, wm.js → SLOTS), and clear of the desktop
+ *  icons on a small desktop. */
 function defaultLayout() {
   const d = document.getElementById('desktop');
   const W = d.clientWidth;
   const H = d.clientHeight;
   const icons = document.getElementById('icons');
   const free = W - (icons ? icons.offsetLeft + icons.offsetWidth + 4 : 0);
-  const bw = Math.min(1100, free), bh = Math.min(620, Math.round(H * 0.6));
-  const iw = Math.min(760, free), ih = Math.min(420, H - bh);
-  return [{ id: 'inbox', x: W - iw, y: H - ih, w: iw, h: ih }, { id: 'board', x: W - bw, y: 0, w: bw, h: bh }];
+  const bw = Math.min(Math.round(W / 2), free), bh = Math.round(H * 0.6);
+  const iw = Math.round(bw / 2), nw = bw - iw, ih = H - bh;
+  return [{ id: 'inbox', x: W - iw, y: bh, w: iw, h: ih }, { id: 'notepad', x: W - bw, y: bh, w: nw, h: ih }, { id: 'board', x: W - bw, y: 0, w: bw, h: bh }];
 }
 function startupLayout() {
   const l = ui.get('k95.layout');
@@ -1173,7 +1173,12 @@ function saveLayout() {
 function resetLayout() {
   ui.set('k95.layout', undefined);
   for (const id of Object.keys(LAYOUT)) forget(id);
-  say('Startup layout reset: Board top right, Inbox bottom right from the next start.');
+  say('Startup layout reset: Board top right, Inbox bottom right, Notepad beside it from the next start.');
+}
+
+/** Start → Close ended terminals: the windows of sessions that ended; the live ones take the freed slots. */
+function closeEnded() {
+  for (const wid of [...terms.keys()]) if (document.querySelector(`[data-win="${wid}"]`)?.classList.contains('ended')) close(wid);
 }
 
 // ---- taskbar, keyboard, start ----
@@ -1189,6 +1194,7 @@ const START = [
   { label: 'New ticket', run: () => openTicket(null) },
   { label: 'New brainstorm', run: newBrainstorm },
   { label: 'New operator terminal', run: newOperator },
+  { label: 'Close ended terminals', run: closeEnded },
   { get label() { return runner.on ? 'Stop' : 'Run'; }, run: toggleRunner },
   { label: 'Housekeeping', run: housekeeping },
   '-',
