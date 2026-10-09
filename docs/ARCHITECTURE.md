@@ -167,7 +167,8 @@ daemon/           src/ (see Daemon above):
                     trust.ts
                     voice.ts
                   voice-model.json (the pinned speech model)
-                  migrations/*.sql
+                  migrations/*.sql (the repo's board.db)
+                  migrations/global/*.sql (the global brain, ~/.kanban95/brain.db)
                   test/ (test/cdp.ts drives headless Edge/Chrome, test/ui.ts is the shared daemon-plus-browser setup of the ui-<area>.test.ts files, which vitest.config.ts runs as a second group after the rest; test/changed.ts is `npm run test:changed`; test/.cache/ is gitignored)
                   tsconfig.json, vitest.config.ts; compiled to dist/ (gitignored)
 ui/               index.html, app.js (data layer and windows), wm.js (window manager), voice.js (mic and transcription), app.css, icons/*.svg (desktop icons), sounds/{ding,chord}.wav, vendor/{98.css and fonts, xterm/, transformers/}
@@ -179,7 +180,8 @@ Kanban95.command  macOS launcher: the same steps as Kanban95.cmd
 shell/            Cargo.toml, build.rs, tauri.conf.json, tauri.bundle.json (installer overlay), stage.mjs (stages the installed daemon), src/main.rs, icons/icon.ico
 docs/             this file, LEARNING.md (guided tour for newcomers), OPERATOR.md (driving the board), img/ (its screenshots), LIFECYCLE.md (state machine, merge queue, janitor), CLIS.md (how each CLI is launched), DATA.md (schema), AGENTS.md (what agents receive and how they behave), SECURITY.md (grants, audit, network), MCP.md (generated tool reference)
 <repo>/.kanban95/ board.db (gitignored), .gitignore, sessions/ (gitignored), attachments/ (gitignored), templates/*.md (committed, operator-editable) and templates/.shipped.json (the defaults' hashes, committed with them); created by the daemon on first start. config.json (optional, committed)
-~/.kanban95/      written only from Settings, the download dialog and, for projects.json, the daemon's start:
+~/.kanban95/      brain.db (the global brain, shared by every board; written by brain_add and the Brain window)
+                  everything else is written only from Settings, the download dialog and, for projects.json, the daemon's start:
                     models.json (model catalog, read at each launch)
                     models/ (the downloaded speech model)
                     preferences.md (operator's standing instructions for agents)

@@ -5,7 +5,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { dirname, extname, join, resolve } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { attachmentDir, attachments, MAX_ATTACHMENT, safeName, saveAttachment } from './attachments.js';
-import { BRAIN_BODY_MAX, BRAIN_RANK, isConstraintError } from './db.js';
+import { BRAIN_BODY_MAX, BRAIN_RANK, isConstraintError, SCOPES, type Brains, type Scope } from './db.js';
 import { ticketDiff } from './git.js';
 import { audit, revoke } from './grants.js';
 import { killGrantSession, sessions, sessionsOf, type Session } from './launcher.js';
@@ -134,25 +134,75 @@ export function transaction<T>(db: DatabaseSync, fn: () => T): T {
   }
 }
 
-/** Ranked FTS5 search over the brain; an empty query lists the newest rows. Shared by REST and MCP. */
-export function brainSearch(db: DatabaseSync, q: string, limit: number) {
-  return q.trim()
-    ? db.prepare(`SELECT b.* FROM brain_fts f JOIN brain b ON b.id = f.rowid WHERE brain_fts MATCH ? ORDER BY ${BRAIN_RANK}, b.id LIMIT ?`).all(ftsQuery(q), limit)
-    : db.prepare('SELECT * FROM brain ORDER BY id DESC LIMIT ?').all(limit);
+/**
+ * Ranked FTS5 search over both brains, merged by rank; an empty query lists the newest rows. Every row carries its `scope`.
+ * `raw`: `q` is already FTS5 syntax (context.ts's any-word query); otherwise each word is quoted and must match.
+ * Shared by REST and MCP, as is everything below that takes `Brains`.
+ */
+// ponytail: bm25 is computed per file, so a term rare in one brain and common in the other ranks unevenly across them; fine
+// while each brain is a few hundred rows. Upgrade: rank on one index (an FTS table rebuilt over both) if the merge misorders.
+export function brainSearch(b: Brains, q: string, limit: number, only?: Scope, raw = false) {
+  const rows = SCOPES.filter((s) => !only || s === only).flatMap((scope) =>
+    (q.trim()
+      ? b[scope].prepare(`SELECT b.*, ${BRAIN_RANK} AS rank FROM brain_fts f JOIN brain b ON b.id = f.rowid WHERE brain_fts MATCH ? ORDER BY rank, b.id LIMIT ?`).all(raw ? q : ftsQuery(q), limit)
+      : b[scope].prepare('SELECT *, 0 AS rank FROM brain ORDER BY id DESC LIMIT ?').all(limit)
+    ).map((r) => ({ scope, ...r }) as BrainRow & { rank: number }));
+  // Stable sort: on a tie the project row stays first.
+  rows.sort(q.trim() ? (x, y) => x.rank - y.rank : (x, y) => y.created_at.localeCompare(x.created_at));
+  return rows.slice(0, limit).map(({ rank: _, ...r }) => r);
 }
 
+export type BrainRow = { scope: Scope; id: number; title: string; body: string; tags: string; ticket_id: number | null; created_at: string };
 type BrainFields = { title?: string; body?: string; tags?: string };
-/** Rows are edited in place, no history: the audit log says who changed what. Unknown id is 404. Shared by REST and MCP. */
-export function brainUpdate(db: DatabaseSync, id: number, fields: BrainFields) {
-  const set = Object.entries(fields).filter(([, v]) => v !== undefined);
-  if (set.length === 0) throw new HttpError(400, 'give title, body and/or tags');
-  const r = db.prepare(`UPDATE brain SET ${set.map(([k]) => `${k} = ?`).join(', ')} WHERE id = ?`).run(...set.map(([, v]) => v!), id);
-  if (r.changes === 0) throw new HttpError(404, 'no such brain row');
-  return db.prepare('SELECT * FROM brain WHERE id = ?').get(id);
+
+export function brainGet(b: Brains, scope: Scope, id: number): BrainRow | undefined {
+  const r = b[scope].prepare('SELECT * FROM brain WHERE id = ?').get(id);
+  return r && ({ scope, ...r } as BrainRow);
 }
 
-export function brainDelete(db: DatabaseSync, id: number) {
-  if (db.prepare('DELETE FROM brain WHERE id = ?').run(id).changes === 0) throw new HttpError(404, 'no such brain row');
+/** A global row never has a ticket: tickets are per repo. */
+export function brainAdd(b: Brains, scope: Scope, f: Required<BrainFields>, ticketId: number | null): BrainRow {
+  const r = b[scope].prepare('INSERT INTO brain (title, body, tags, ticket_id) VALUES (?, ?, ?, ?)').run(f.title, f.body, f.tags, scope === 'global' ? null : ticketId);
+  return brainGet(b, scope, Number(r.lastInsertRowid))!;
+}
+
+/**
+ * Rows are edited in place, no history: the audit log says who changed what. An id is per file, so `scope` + `id` name a row;
+ * unknown in that scope is 404. `to` moves the row to the other brain (insert there, then delete here); it gets a new id.
+ */
+export function brainUpdate(b: Brains, scope: Scope, id: number, fields: BrainFields, to?: Scope): BrainRow {
+  const set = Object.entries(fields).filter(([, v]) => v !== undefined);
+  if (set.length === 0 && (!to || to === scope)) throw new HttpError(400, 'give title, body and/or tags, or a scope to move to');
+  const row = brainGet(b, scope, id);
+  if (!row) throw new HttpError(404, `no such ${scope} brain row`);
+  if (!to || to === scope) {
+    if (set.length) b[scope].prepare(`UPDATE brain SET ${set.map(([k]) => `${k} = ?`).join(', ')} WHERE id = ?`).run(...set.map(([, v]) => v!), id);
+    return brainGet(b, scope, id)!;
+  }
+  // Two files, so no one transaction: a failed delete takes the copy back out.
+  const f = { ...row, ...Object.fromEntries(set) };
+  const r = b[to].prepare('INSERT INTO brain (title, body, tags, ticket_id, created_at) VALUES (?, ?, ?, ?, ?)').run(f.title, f.body, f.tags, to === 'global' ? null : row.ticket_id, row.created_at);
+  try {
+    brainDelete(b, scope, id);
+  } catch (e) {
+    b[to].prepare('DELETE FROM brain WHERE id = ?').run(r.lastInsertRowid);
+    throw e;
+  }
+  return brainGet(b, to, Number(r.lastInsertRowid))!;
+}
+
+export function brainDelete(b: Brains, scope: Scope, id: number) {
+  if (b[scope].prepare('DELETE FROM brain WHERE id = ?').run(id).changes === 0) throw new HttpError(404, `no such ${scope} brain row`);
+}
+
+/** A board's two brains: its repo's board.db and the shared global one. */
+export const brains = (b: Board): Brains => ({ project: b.db, global: b.brain });
+
+/** `scope` from a REST query or body: project when absent. */
+function scopeOf(v: unknown, what = 'scope'): Scope {
+  if (v === undefined || v === null) return 'project';
+  if (!SCOPES.includes(v as Scope)) throw new HttpError(400, `${what} must be project or global`);
+  return v as Scope;
 }
 
 /** REST body check for POST (all of title and body) and PATCH (any subset). */
@@ -254,18 +304,27 @@ const routes: [method: string, path: RegExp, mutation: string | null, handler: (
     body.name = name;
     return { status: 204 };
   }],
-  ['GET', /^\/api\/brain$/, null, ({ db, url }) => {
+  // `scope` (project, global) narrows the list to one brain. A move is a PATCH with `move_to` (docs/AGENTS.md → The brain).
+  ['GET', /^\/api\/brain$/, null, ({ board, db, url }) => {
     const q = url.searchParams.get('q') ?? '';
     const limit = Math.min(Number(url.searchParams.get('limit') ?? 20) || 20, 100);
+    const only = url.searchParams.get('scope') || undefined; // absent or empty: both
     // The source ticket's status, so the Brain window shows rows written for work that never landed.
     const status = db.prepare('SELECT status FROM tickets WHERE id = ?');
-    const rows = (brainSearch(db, q, limit) as { ticket_id: number | null }[])
+    const rows = brainSearch(brains(board), q, limit, only ? scopeOf(only) : undefined)
       .map((r) => ({ ...r, ticket_status: r.ticket_id === null ? null : (status.get(r.ticket_id) as { status: string } | undefined)?.status ?? null }));
     return { status: 200, body: rows };
   }],
-  ['PATCH', /^\/api\/brain\/(\d+)$/, 'brain.update', ({ db, params, body }) => ({ status: 200, body: brainUpdate(db, Number(params[0]), brainFields(body, true)) })],
-  ['DELETE', /^\/api\/brain\/(\d+)$/, 'brain.delete', ({ db, params }) => {
-    brainDelete(db, Number(params[0]));
+  // `?scope=` names the row's brain (project when absent); it is copied into the body so the audit row records it.
+  ['PATCH', /^\/api\/brain\/(\d+)$/, 'brain.update', ({ board, params, body, url }) => {
+    const fields = brainFields(body, true);
+    body.scope = scopeOf(url.searchParams.get('scope') ?? undefined);
+    const to = body.move_to === undefined ? undefined : scopeOf(body.move_to, 'move_to');
+    return { status: 200, body: brainUpdate(brains(board), body.scope as Scope, Number(params[0]), fields, to) };
+  }],
+  ['DELETE', /^\/api\/brain\/(\d+)$/, 'brain.delete', ({ board, params, body, url }) => {
+    body.scope = scopeOf(url.searchParams.get('scope') ?? undefined);
+    brainDelete(brains(board), body.scope as Scope, Number(params[0]));
     return { status: 204 };
   }],
   ['GET', /^\/api\/grants$/, null, ({ db }) => ({
@@ -323,10 +382,9 @@ const routes: [method: string, path: RegExp, mutation: string | null, handler: (
         OR (n.kind = 'failure' AND n.id = (SELECT max(id) FROM notes m WHERE m.ticket_id = n.ticket_id AND m.kind IN ('failure', 'question'))))
       ORDER BY n.id`).all(),
   })],
-  ['POST', /^\/api\/brain$/, 'brain.add', ({ db, body }) => {
+  ['POST', /^\/api\/brain$/, 'brain.add', ({ board, body }) => {
     const { title, body: text, tags = '' } = brainFields(body, false);
-    const r = db.prepare('INSERT INTO brain (title, body, tags) VALUES (?, ?, ?)').run(title!, text!, tags);
-    return { status: 201, body: db.prepare('SELECT * FROM brain WHERE id = ?').get(Number(r.lastInsertRowid)) };
+    return { status: 201, body: brainAdd(brains(board), scopeOf(body.scope), { title: title!, body: text!, tags }, null) };
   }],
   // Live agent terminals, for the UI's terminal windows and the taskbar count. `id` is the /pty/<id> key.
   ['GET', /^\/api\/sessions$/, null, () => ({ status: 200, body: [...sessions.values()].map(sessionView) })],
