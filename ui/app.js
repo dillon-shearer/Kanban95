@@ -573,7 +573,8 @@ function openTerminal(s, auto = false) {
       say(e.message);
     }
   };
-  const w = open(wid, { title, w: 760, h: 440, background: auto, onX, extra: [micButton((text) => send({ data: text }))], onClose: () => { terms.delete(wid); ro.disconnect(); ws.close(); term.dispose(); } });
+  const w = open(wid, { title, w: 760, h: 440, background: auto, onX, extra: [micButton((text) => send({ data: text }))],
+    items: s.ticket_id === null ? [] : [{ label: 'Open ticket', run: () => openTicket(s.ticket_id) }], onClose: () => { terms.delete(wid); ro.disconnect(); ws.close(); term.dispose(); } });
   terms.set(wid, s.ticket_id);
   w.body.classList.add('k95-term');
   term.loadAddon(fit);
