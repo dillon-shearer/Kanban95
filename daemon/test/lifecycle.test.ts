@@ -188,8 +188,11 @@ const t = (id: number) => readTicket(db, id);
 const runs = (id: number) => db.prepare('SELECT phase, model, outcome, prompt_rendered, started_at FROM runs WHERE ticket_id = ? ORDER BY id').all(id) as
   { phase: string; model: string; outcome: string | null; prompt_rendered: string; started_at: string }[];
 const notes = (id: number, kind: string) => (db.prepare('SELECT body FROM notes WHERE ticket_id = ? AND kind = ? ORDER BY id').all(id, kind) as { body: string }[]).map((r) => r.body);
-const post = (path: string, body?: unknown) =>
-  fetch(`http://127.0.0.1:${srv.port}${path}`, { method: 'POST', headers: { 'content-type': 'application/json', cookie: `k95=${srv.secret}` }, body: body === undefined ? undefined : JSON.stringify(body) });
+const send = (method: string) => (path: string, body?: unknown) =>
+  fetch(`http://127.0.0.1:${srv.port}${path}`, { method, headers: { 'content-type': 'application/json', cookie: `k95=${srv.secret}` }, body: body === undefined ? undefined : JSON.stringify(body) });
+const post = send('POST');
+const patch = send('PATCH');
+const setRun = (on: boolean) => send('PUT')('/api/runner', { on });
 const until = async (f: () => unknown, what: string, ms = 30_000) => {
   const end = Date.now() + ms;
   while (!f()) {
@@ -268,16 +271,50 @@ describe('lifecycle', { timeout: 60_000 }, () => {
     ws.close();
   });
 
-  it('holds a dependent and launches it the moment its last dependency is merged', async () => {
+  it('holds a dependent and launches it the moment its last dependency is merged while the runner is on', async () => {
     const b = ticket('Second step');
     const a = ticket('First step');
     db.prepare('INSERT INTO ticket_deps VALUES (?, ?)').run(b, a);
     expect(await (await post(`/api/tickets/${b}/launch`)).json()).toMatchObject({ status: 'backlog', flags: { needs_human: false, blocked_on_deps: true } });
     await post(`/api/tickets/${a}/launch`);
+    await setRun(true);
     await landed(a);
     await landed(b);
     expect(runs(b)[0].started_at >= t(a).merged_at!).toBe(true);
     expect(t(b).flags.blocked_on_deps).toBe(false);
+  });
+
+  it('while the runner is off a merged dependency starts nothing: the dependent stays held until Run', async () => {
+    const b = ticket('Second step');
+    const a = ticket('First step');
+    db.prepare('INSERT INTO ticket_deps VALUES (?, ?)').run(b, a);
+    await post(`/api/tickets/${b}/launch`);
+    await post(`/api/tickets/${a}/launch`);
+    await landed(a);
+    await new Promise((r) => setTimeout(r, 300)); // room for a launch that should not happen
+    expect(t(b)).toMatchObject({ status: 'backlog', flags: { blocked_on_deps: true } });
+    expect(runs(b)).toEqual([]);
+    expect(sessionsOf(b)).toEqual([]);
+    await setRun(true);
+    expect(t(b).status).toBe('in_progress');
+    await landed(b);
+  });
+
+  it('Cancel wait clears the hold and keeps retry and notes; the later merge launches nothing', async () => {
+    const b = ticket('Second step', { retry: 2 });
+    const a = ticket('First step');
+    db.prepare('INSERT INTO ticket_deps VALUES (?, ?)').run(b, a);
+    db.prepare("INSERT INTO notes (ticket_id, role, kind, body) VALUES (?, 'operator', 'decision', 'keep me')").run(b);
+    await post(`/api/tickets/${b}/launch`);
+    const r = await patch(`/api/tickets/${b}`, { blocked_on_deps: false });
+    expect(r.status).toBe(200);
+    expect(t(b)).toMatchObject({ status: 'backlog', retry: 2, flags: { blocked_on_deps: false } });
+    expect(notes(b, 'decision')).toEqual(['keep me']);
+    await post(`/api/tickets/${a}/launch`);
+    await landed(a);
+    await new Promise((r) => setTimeout(r, 300));
+    expect(t(b).status).toBe('backlog');
+    expect(runs(b)).toEqual([]);
   });
 
   it('retry cap: the first attempt plus exactly three retries, then the operator, and nothing more runs', async () => {
@@ -441,8 +478,12 @@ ${TO_RESOLVE}`]);
       expect((await post(`/api/tickets/${id}/answer`, { answer: text })).status).toBe(200);
     };
     // B forks before A lands and submits after it: B's branch is stale when its worker submits.
+    // The runner is on, so a conflict goes straight back to the worker (off, it is held: see the last test here). A hanging
+    // ticket keeps it on while b waits on its question, which does not count as running.
     const aLandsWhileBWorks = async (a: number, b: number) => {
       for (const id of [b, a]) expect((await post(`/api/tickets/${id}/launch`)).status).toBe(200);
+      ticket('Keep the runner on', { model: 'hang' });
+      await setRun(true);
       await answer(a, '1 one');
       await landed(a);
     };
@@ -482,11 +523,24 @@ ${TO_RESOLVE}`]);
     it('uncommitted tracked changes: back to the worker with a note saying so, the changes untouched', async () => {
       const id = ticket('Leave it half done', { model: 'dirty' });
       expect((await post(`/api/tickets/${id}/launch`)).status).toBe(200);
+      await setRun(true);
       await sentBack(id);
       expect(t(id)).toMatchObject({ status: 'in_progress', retry: 1, flags: { needs_human: false } });
       expect(notes(id, 'failure')).toEqual(['worktree has uncommitted changes; commit or discard them, then submit again:\n M a.txt']);
       expect(readFileSync(join(repo, '.worktrees', `t-${id}`, 'a.txt'), 'utf8')).toBe('half done\n');
       expect(runs(id).map((x) => x.phase)).toEqual(['execute', 'execute']);
+    });
+
+    it('while the runner is off the conflict waits: in progress with no agent and no flag, and the worker starts on Run', async () => {
+      const id = ticket('Leave it half done', { model: 'dirty' });
+      expect((await post(`/api/tickets/${id}/launch`)).status).toBe(200);
+      await until(() => t(id).retry === 1, 'the conflict');
+      await until(() => !sessionsOf(id).length, 'the worker ended');
+      expect(t(id)).toMatchObject({ status: 'in_progress', flags: { needs_human: false } });
+      expect(runs(id).map((x) => x.outcome)).toEqual(['conflict']);
+      await setRun(true);
+      expect(runs(id).map((x) => x.phase)).toEqual(['execute', 'execute']);
+      expect(sessionsOf(id)).toHaveLength(1);
     });
   });
 
@@ -553,7 +607,7 @@ ${TO_RESOLVE}`]);
     expect(readdirSync(join(repo, '.worktrees'))).toEqual([]);
   });
 
-  it('the 10th merged ticket creates exactly one housekeeping ticket, left in Backlog for the runner; the 11th does not', async () => {
+  it('the 10th merged ticket creates exactly one housekeeping ticket, left in Backlog while the runner is off; the 11th does not', async () => {
     for (let i = 0; i < 9; i++) ticket(`Old ${i}`, { status: 'done', merged_at: '2026-01-01T00:00:00.000Z' });
     const tenth = ticket('Tenth');
     await post(`/api/tickets/${tenth}/launch`);
@@ -561,6 +615,7 @@ ${TO_RESOLVE}`]);
     const hk = () => db.prepare("SELECT id FROM tickets WHERE template = 'housekeeping'").all() as { id: number }[];
     expect(hk()).toHaveLength(1);
     expect(t(hk()[0].id).status).toBe('backlog');
+    expect(runs(hk()[0].id)).toEqual([]);
     await post(`/api/tickets/${hk()[0].id}/launch`);
     await landed(hk()[0].id);
     expect(runs(hk()[0].id)[0].prompt_rendered).toMatch(/^# Housekeeping/);

@@ -195,6 +195,17 @@ async function reset(ts) {
   }, (n) => `${n} reset to Backlog.`);
 }
 
+/** Clears blocked_on_deps only: retry, notes and status stay (docs/LIFECYCLE.md → Cancel wait). */
+const cancelWait = (ts) => each(ts, (t) => api('PATCH', `/tickets/${t.id}`, { blocked_on_deps: false }), (n) => `${n} no longer waiting.`);
+const heldTickets = () => [...tickets.values()].filter((t) => t.status === 'backlog' && t.flags.blocked_on_deps);
+async function cancelWaiting() {
+  const ts = heldTickets();
+  if (!ts.length) return say('Nothing is waiting to launch.');
+  const ask = h('div', {}, h('p', {}, `Stop ${ts.length === 1 ? 'this ticket' : `these ${ts.length} tickets`} from launching by themselves when ${ts.length === 1 ? 'its' : 'their'} dependencies merge?`),
+    h('ul', {}, ts.map((t) => h('li', {}, `#${t.id} ${t.title}`))));
+  if ((await dialog('Cancel waiting', ask, ['Clear holds', 'Cancel'])) === 'Clear holds') await cancelWait(ts);
+}
+
 const count = (ts) => (ts.length === 1 ? `#${ts[0].id}` : `${ts.length} tickets`);
 /** Runs fn on each ticket in turn; one that refuses is named and the rest still go. Says the outcome once. */
 async function each(ts, fn, ok) {
@@ -325,6 +336,7 @@ function cardMenu(ts, x, y) {
   const clis = new Set(ts.map((t) => t.cli ?? models?.cli));
   const known = [...new Set([...clis].flatMap((c) => PHASES.map((p) => models?.[c]?.[p]?.model)).filter(Boolean))];
   const resettable = ts.filter((t) => t.status !== 'backlog' || t.flags.blocked_on_deps);
+  const waiting = ts.filter((t) => t.status === 'backlog' && t.flags.blocked_on_deps);
   const unmerged = ts.filter((t) => t.status === 'done' && !t.merged_at);
   menu(x, y, [
     { label: 'Open', run: () => {
@@ -358,6 +370,7 @@ function cardMenu(ts, x, y) {
     ] },
     '-',
     { label: 'Retry merge', disabled: !unmerged.length, run: () => each(unmerged, (t) => api('POST', `/tickets/${t.id}/merge`), (n) => `Merge of ${n} queued.`) },
+    { label: 'Cancel wait', disabled: !waiting.length, run: () => cancelWait(waiting) },
     { label: 'Reset to Backlog', disabled: !resettable.length, run: () => reset(resettable) },
     { label: 'Delete', run: async () => {
       const ask = ts.length === 1 ? `Delete #${ts[0].id} ${ts[0].title}? Its notes and runs go with it.`
@@ -380,6 +393,7 @@ function openBoard() {
   const count = h('p', { class: 'status-bar-field k95-count' });
   const run = h('button', { onclick: toggleRunner, title: 'Ctrl+L' });
   const runField = h('p', { class: 'status-bar-field k95-runner' });
+  const heldField = h('p', { class: 'status-bar-field k95-held' });
   const cols = h('div', { class: 'k95-columns', onclick: (e) => { // a click on empty column space clears the selection
     if (!e.target.closest('.card')) selection.clear(), drawBoard();
   } });
@@ -390,9 +404,10 @@ function openBoard() {
       run,
       h('button', { onclick: newBrainstorm, title: 'Ctrl+N' }, 'New brainstorm'),
       h('button', { onclick: () => openTicket(null) }, 'New ticket'),
-      h('button', { onclick: housekeeping }, 'Housekeeping')),
+      h('button', { onclick: housekeeping }, 'Housekeeping'),
+      h('button', { onclick: cancelWaiting, title: 'Stop held tickets from launching when their dependencies merge' }, 'Cancel waiting')),
     cols,
-    h('div', { class: 'status-bar' }, status, runField, count));
+    h('div', { class: 'status-bar' }, status, runField, heldField, count));
   say = (msg) => { status.textContent = msg; status.title = msg; };
   views.set('board', () => {
     const all = [...tickets.values()];
@@ -414,6 +429,9 @@ function openBoard() {
     run.textContent = runner.on ? 'Stop' : 'Run';
     runField.textContent = runField.title = runner.stale ? STALE : runnerLine(runner);
     runField.hidden = !runField.textContent;
+    const held = heldTickets().length;
+    heldField.textContent = held ? `${held} waiting to launch by themselves` : '';
+    heldField.hidden = !held;
   });
   drawBoard();
 }

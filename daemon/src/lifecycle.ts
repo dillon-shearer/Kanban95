@@ -175,13 +175,19 @@ type Note = { role: Role | 'operator'; kind: 'question' | 'answer' | 'failure'; 
  * Applies `event` to the ticket: picks the row, writes status, flags and note in one transaction, then runs the effects.
  * Throws Refused when the table has no row. `pending` holds the effects that finish later (worktree removal).
  */
-export function apply(b: Board, id: number, event: Event, x: { note?: Note; answer?: string } = {}) {
+export function apply(b: Board, id: number, event: Event, x: { note?: Note; answer?: string; auto?: boolean } = {}) {
   const t = readTicket(b.db, id);
   const row = pick(facts(b, t), event);
+  // The one gate on the board starting an agent by itself (`auto`: a released dependent, a conflict sent back): while the
+  // runner is off it starts nothing. A backlog launch is not applied at all, so the ticket stays held; any other row is
+  // written without its spawn and kept in `held`, and tick() starts that agent when Run is turned on.
+  const hold = x.auto === true && !runner(b).on && row.effects.includes('spawn_execute');
+  if (hold && t.status === 'backlog') return { ticket: t, noteId: undefined, pending: [] as Promise<void>[] };
+  if (hold) held.add(id);
   if (event === 'submit') {
     // The tester tests the branch with the base merged in, so stale code never spends a tester round.
     const s = syncWorktree(b.repo, id);
-    if (!s.ok) return apply(b, id, 'conflict', { note: { role: 'worker', kind: 'failure', body: s.reason } });
+    if (!s.ok) return apply(b, id, 'conflict', { note: { role: 'worker', kind: 'failure', body: s.reason }, auto: true });
   }
   const { to = t.status as Status, set = {}, effects } = row;
   let note = x.note ?? (row.says ? ({ role: 'tester', kind: 'failure', body: row.says } as Note) : undefined);
@@ -203,7 +209,7 @@ export function apply(b: Board, id: number, event: Event, x: { note?: Note; answ
   const pending: Promise<void>[] = [];
   for (const e of effects) {
     switch (e) {
-      case 'spawn_execute': spawn(b, id, t.template as 'execute' | 'housekeeping'); break;
+      case 'spawn_execute': if (!hold) spawn(b, id, t.template as 'execute' | 'housekeeping'); break;
       case 'spawn_test': spawn(b, id, 'test'); break;
       case 'end_session':
         // The agent reported; its session is over. The grant expires now, the pty is killed, its exit is expected.
@@ -233,6 +239,12 @@ export function apply(b: Board, id: number, event: Event, x: { note?: Note; answ
   tick(b);
   return { ticket: readTicket(b.db, id), noteId, pending };
 }
+
+/**
+ * Running tickets whose agent apply() held back while the runner was off.
+ * ponytail: in memory, so a restart forgets them and recover resumes them whatever the runner says; upgrade is a column.
+ */
+const held = new Set<number>();
 
 /** An answer is typed into a terminal: a newline would submit half of it, so it becomes one line. */
 const oneLine = (s: string) => s.replace(/\s*[\r\n]+\s*/g, ' ').trim();
@@ -282,7 +294,7 @@ function queueMerge(b: Board, id: number, since = Date.now()) {
     // ponytail: lands even when the sync brought in new commits (the worker merged and the tester tested at submit); upgrade is
     // to send it back to testing when the sync touched files the ticket also touched.
     const s = syncWorktree(b.repo, id);
-    if (!s.ok) return void (await Promise.all(apply(b, id, 'conflict', { note: { role: 'tester', kind: 'failure', body: s.reason } }).pending));
+    if (!s.ok) return void (await Promise.all(apply(b, id, 'conflict', { note: { role: 'tester', kind: 'failure', body: s.reason }, auto: true }).pending));
     const r = await merge(b.repo, id, t.title, () => readTicket(b.db, id).status === 'done');
     if (!r) return;
     // Rejected while git merge ran: the work landed, but the ticket is a worker's again and its next pass merges again.
@@ -298,7 +310,7 @@ function queueMerge(b: Board, id: number, since = Date.now()) {
     } else if (r.dirty) {
       const body = `merge did not run: the main checkout (${r.base}) still has uncommitted changes after the wait:\n${r.reason}`;
       out = apply(b, id, 'dirty', { note: { role: 'tester', kind: 'failure', body } });
-    } else out = apply(b, id, 'conflict', { note: { role: 'tester', kind: 'failure', body: `merge conflict with ${r.base}: ${r.reason}` } });
+    } else out = apply(b, id, 'conflict', { note: { role: 'tester', kind: 'failure', body: `merge conflict with ${r.base}: ${r.reason}` }, auto: true });
     await Promise.all(out.pending);
   });
 }
@@ -321,7 +333,7 @@ function releaseDependents(b: Board, id: number) {
   const rows = b.db.prepare(`
     SELECT t.id FROM tickets t JOIN ticket_deps d ON d.ticket_id = t.id
     WHERE d.depends_on_id = ? AND t.status = 'backlog' AND t.blocked_on_deps = 1 ORDER BY t.id`).all(id) as { id: number }[];
-  for (const r of rows) apply(b, r.id, 'launch'); // one still waiting on another dependency stays held
+  for (const r of rows) apply(b, r.id, 'launch', { auto: true }); // one still waiting on another dependency stays held
 }
 
 /** `<repo>/.kanban95/config.json`, the repo's own board settings (docs/DATA.md); `{}` when absent. The daemon never writes it. */
@@ -468,6 +480,13 @@ export function tick(b: Board) {
   ticking = true; // its own launches call apply, which calls tick
   try {
     const max = limit(b);
+    // A conflict sent back to its worker while the runner was off (apply's hold): that worker starts first, unless the
+    // operator has moved the ticket on since.
+    for (const id of held) {
+      held.delete(id);
+      const t = b.db.prepare('SELECT status, needs_human FROM tickets WHERE id = ?').get(id) as { status: string; needs_human: number } | undefined;
+      if (t?.status === 'in_progress' && !t.needs_human && !sessionsOf(id).length) apply(b, id, 'launch');
+    }
     while (running(b).length < max) {
       const cs = candidates(b);
       if (!cs.length) break;
