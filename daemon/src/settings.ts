@@ -30,9 +30,9 @@ const FILES = {
     housekeeping: z.object({ auto: z.boolean().default(true), every: z.number().int().min(1).default(10) }).strict()
       .default({ auto: true, every: 10 }),
     // Phases whose sessions open a terminal on their own; the rest run unseen until the operator opens one (card → Terminal).
-    // Brainstorms and operator terminals always open: the operator started them.
-    terminals: z.object({ auto: z.array(z.enum(['plan', 'execute', 'test'])).default(['plan', 'execute', 'test']) }).strict()
-      .default({ auto: ['plan', 'execute', 'test'] }),
+    // Brainstorms and operator terminals always open: the operator started them. `tile` off: terminals take no slot (ui/wm.js).
+    terminals: z.object({ auto: z.array(z.enum(['plan', 'execute', 'test'])).default(['plan', 'execute', 'test']), tile: z.boolean().default(true) }).strict()
+      .default({ auto: ['plan', 'execute', 'test'], tile: true }),
     // A running agent whose transcript gains no line for this long is flagged (docs/LIFECYCLE.md → Silent agents). Above the
     // 10 min tool timeout, so a long test run is not flagged.
     idle_minutes: z.number().int().min(1).default(20),
@@ -257,13 +257,16 @@ function saveProjects(list: Project[]) {
   renameSync(`${file}.tmp`, file);
 }
 
-/** The whole list, checked before anything is written: every path an existing git repo, listed once, `keep` among them. */
+/**
+ * The whole list, checked before anything is written: every path an existing folder, listed once, `keep` among them. A plain
+ * folder becomes a git repo when a board first starts on it (git.ts `initRepo`).
+ */
 export function writeProjects(value: unknown, keep: string): Project[] {
   const r = projectList.safeParse(value);
   if (!r.success) throw new BadConfig(`projects.json: ${z.prettifyError(r.error).replaceAll('\n', '; ')}`);
   const list = r.data.map((p) => ({ ...p, path: normal(p.path) }));
   for (const [i, p] of list.entries()) {
-    if (!existsSync(join(p.path, '.git'))) throw new BadConfig(`projects.json: ${p.path} is not a git repo`);
+    if (!statSync(p.path, { throwIfNoEntry: false })?.isDirectory()) throw new BadConfig(`projects.json: ${p.path} is not a folder`);
     if (list.findIndex((q) => same(q.path, p.path)) !== i) throw new BadConfig(`projects.json: ${p.path} is listed twice`);
   }
   if (!list.some((p) => same(p.path, normal(keep)))) throw new BadConfig(`projects.json: this board's own project ${normal(keep)} cannot be removed`);

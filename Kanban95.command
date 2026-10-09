@@ -1,6 +1,6 @@
 #!/bin/bash
 # Kanban95 launcher for macOS. Double-click in Finder (a Terminal window opens), or run
-# `./Kanban95.command /path/to/project`. The project must be a git repository; default is this repo.
+# `./Kanban95.command /path/to/project`. Any folder (a plain one is made a local git repo); default is this repo.
 # Same steps as Kanban95.cmd: Node 24 first on PATH (through fnm when the Node on PATH is older), install, build, start.
 if [ -n "$KANBAN95_AGENT" ]; then
   echo "Kanban95 is already running; verify with npm test, not by starting the app."

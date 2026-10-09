@@ -1,7 +1,7 @@
 // ~/.kanban95/projects.json: the daemon lists its own repo on start, and /api/project(s) read and write the list.
 import './home.ts'; // also here, not only in vitest.config.ts: a run from the repo root skips that config and wrote the real home
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { afterAll, beforeAll, expect, it } from 'vitest';
@@ -19,7 +19,8 @@ let plain: string;
 let srv: Awaited<ReturnType<typeof start>>;
 beforeAll(() => {
   [own, other] = [repo(), repo()];
-  plain = mkdtempSync(join(tmpdir(), 'k95-plain-'));
+  plain = realpathSync.native(mkdtempSync(join(tmpdir(), 'k95-plain-')));
+  writeFileSync(join(plain, 'file.txt'), 'not a folder');
 });
 afterAll(async () => {
   await srv?.close();
@@ -59,12 +60,12 @@ it('PUT /api/projects writes a valid list whole, and /api/project follows the co
   expect((await (await call('GET', '/project')).json()).colour).toBe('#ff0000');
 });
 
-it('PUT /api/projects refuses a path that is not a git repo, a bad colour, a duplicate or dropping this board, and leaves the file alone', async () => {
+it('PUT /api/projects refuses a path that is not a folder, a bad colour, a duplicate or dropping this board, and leaves the file alone', async () => {
   const before = readFileSync(projectsPath(), 'utf8');
   const self = { path: other, colour: '#ff0000' };
   for (const [value, error] of [
-    [[self, { path: plain, colour: '#00ff00' }], /not a git repo/],
-    [[self, { path: join(plain, 'missing'), colour: '#00ff00' }], /not a git repo/],
+    [[self, { path: join(plain, 'missing'), colour: '#00ff00' }], /is not a folder/],
+    [[self, { path: join(plain, 'file.txt'), colour: '#00ff00' }], /is not a folder/],
     [[self, { path: 'relative/repo', colour: '#00ff00' }], /absolute/],
     [[{ ...self, colour: 'teal; background: url(x)' }], /colour/],
     [[{ ...self, colour: 361 }], /colour/],
@@ -77,4 +78,12 @@ it('PUT /api/projects refuses a path that is not a git repo, a bad colour, a dup
     expect((await r.json()).error).toMatch(error);
     expect(readFileSync(projectsPath(), 'utf8')).toBe(before);
   }
+});
+
+it('PUT /api/projects accepts a plain folder with no git; the board makes it a repo only when it starts there', async () => {
+  const value = [...file(), { path: plain, colour: '#00ff00' }];
+  const r = await call('PUT', '/projects', { value });
+  expect(r.status).toBe(200);
+  expect(file()).toEqual(value);
+  expect(existsSync(join(plain, '.git'))).toBe(false);
 });

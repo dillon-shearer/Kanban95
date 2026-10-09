@@ -1,6 +1,6 @@
 @echo off
 rem Kanban95 launcher. Double-click: the board opens on this repo. Drop a project folder onto this file (or run
-rem `Kanban95.cmd C:\path\to\project`): the board opens on that project. The project must be a git repository.
+rem `Kanban95.cmd C:\path\to\project`): the board opens on that project. Any folder: a plain one is made a local git repo.
 rem Puts Node 24 first on PATH (found through fnm when the Node on PATH is older), builds, then starts the shell.
 setlocal
 if defined KANBAN95_AGENT (

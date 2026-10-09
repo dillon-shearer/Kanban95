@@ -193,7 +193,7 @@ A job whose branch is already in the base (`git merge-base --is-ancestor ticket/
 
 With `push_after_merge` on (`~/.kanban95/settings.json`, default on, Settings → Board → Git), the queue runs `git push <remote> <base>:<branch>` in the main checkout, where `<remote>` and `<branch>` are the base's upstream (`branch.<base>.remote` and `branch.<base>.merge`). Only then is the ticket `merged` (`merged_at`, cleanup). The push sends the whole base, so any earlier commits the upstream lacks go with it. It runs inside the queue job, so pushes never run beside a merge. `push` in `daemon/src/merge.ts`.
 
-- **No upstream**: nothing is run and the ticket closes, so a local-only repo works as before.
+- **No upstream**: nothing is run and the ticket closes, so a local-only repo works as before. A plain folder the board made a repo (`docs/ARCHITECTURE.md` → Daemon lifetime) has no remote, so it stays this way, its unpushed count 0 and the Push button hidden, until the operator adds a remote and sets the base's upstream (`git push -u <remote> <base>` once); from the next merge on, pushes run.
 - **Setting off**: nothing is pushed and tickets close as before.
 - **Failure** (rejected because the remote has commits the base lacks, a hook refused it, offline, signed out): the merge stays in the base and `unpushed` flags the ticket with git's stderr. Git runs with `GIT_TERMINAL_PROMPT=0`, so a missing credential fails at once instead of waiting on a prompt nobody sees, and a push that hangs is killed after 2 minutes (`ponytail:` in `push`: the queue is held that long).
 - **Credentials** are git's own (credential helper, SSH agent); the board never reads them (`SECURITY.md`).
