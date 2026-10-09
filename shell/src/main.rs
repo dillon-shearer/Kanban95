@@ -188,6 +188,32 @@ fn window<R: Runtime, M: Manager<R>>(app: &M, url: Url, live: Arc<AtomicU16>) ->
         .build()
 }
 
+/// The page's fullscreen (Start -> Full screen, F11) only fills the webview; wry leaves WebView2's
+/// ContainsFullScreenElementChanged unhandled. Following it takes the whole monitor, over the Windows taskbar.
+#[cfg(windows)]
+fn follow_page_fullscreen<R: Runtime>(w: &WebviewWindow<R>) {
+    use webview2_com::ContainsFullScreenElementChangedEventHandler;
+    let win = w.clone();
+    let _ = w.with_webview(move |wv| {
+        // SAFETY: COM calls on the live controller, on the main thread where with_webview runs this.
+        unsafe {
+            let Ok(core) = wv.controller().CoreWebView2() else { return };
+            let handler = ContainsFullScreenElementChangedEventHandler::create(Box::new(move |core, _| {
+                let mut full = windows_core::BOOL::default();
+                if let Some(core) = core {
+                    core.ContainsFullScreenElement(&mut full)?;
+                }
+                let _ = win.set_fullscreen(full.as_bool());
+                Ok(())
+            }));
+            let mut token = 0;
+            let _ = core.add_ContainsFullScreenElementChanged(&handler, &mut token);
+        }
+    });
+}
+#[cfg(not(windows))]
+fn follow_page_fullscreen<R: Runtime>(_: &WebviewWindow<R>) {}
+
 /// A missing or old Node is the one first-run problem the operator fixes outside the board, so offer the page.
 #[cfg(windows)]
 fn node_dialog(text: &str) {
@@ -229,7 +255,7 @@ fn main() {
     tauri::Builder::default()
         .manage(Daemon(Mutex::new(Some(child))))
         .setup(move |app| {
-            window(app, url(port, &secret), live.clone())?;
+            follow_page_fullscreen(&window(app, url(port, &secret), live.clone())?);
             let app = app.handle().clone();
             std::thread::spawn(move || {
                 let restart = || {
