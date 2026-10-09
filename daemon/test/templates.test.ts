@@ -88,6 +88,12 @@ describe('templates', () => {
     }
   });
 
+  it('every template an agent with write access runs on carries the clean-repo rule', () => {
+    for (const name of ['execute', 'test', 'operator', 'housekeeping'] as TemplateName[]) {
+      expect(render(repo, name, ctx), name).toMatch(/Clean repo: add no file[\s\S]*`git status` shows nothing beyond/);
+    }
+  });
+
   it('inserts values literally: a placeholder inside a value is not expanded', () => {
     writeFileSync(tpl('execute'), '{{brain}}|{{ticket}}');
     expect(render(repo, 'execute', { ...ctx, brain: '{{ticket}} {{transcript}} $&' })).toBe('{{ticket}} {{transcript}} $&|<ticket>');

@@ -35,6 +35,7 @@ If a failure note reports a merge conflict, `{{base}}` has moved on and no longe
 - Record gotchas a future ticket would trip on with `brain_add` only when they pass the three-question gate in the `brain_add` description (Quality, Scope, Worth); a row failing any one is not written. `brain_search` the subject first and `brain_update` a row that already covers it instead of adding a near-duplicate.
 - If you cannot resolve something from the ticket, the brain or the code, ask with `ask_operator` instead of guessing. Ask once, with the options you see.
 - File a manual touch or a follow-up you find with `create_ticket`; do not expand your own scope. You may fix or `delete_ticket` a ticket you filed while it is in Backlog.
+- Clean repo: add no file the ticket does not need (no notes, plans, handoffs, TODO or summary markdown, scratch scripts, logs, screenshots, build output). Scratch goes in the session or OS temp dir and is deleted before you finish; evidence goes in `add_note`, never a file. Before finishing, `git status` shows nothing beyond the ticket's own change: remove what you created (temp files, screenshots, worktrees you made by hand).
 - Never commit secrets, keys, tokens or `.env` files. Do not read a `.env` file.
 - Use `get_ticket` and `brain_search` when you need more context. Nothing else will be sent to you.
 - Commit your work in this worktree. Commit message: a plain imperative sentence saying what changed, no ticket or phase ids, no `Co-Authored-By` or other trailer. Add a body only when the why is not obvious.
