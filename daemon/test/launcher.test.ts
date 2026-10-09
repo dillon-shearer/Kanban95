@@ -76,6 +76,12 @@ afterEach(async () => {
 });
 
 const launch = (cli: Cli, model = 'hang') => srv.launch({ ticketId: 7, template: 'execute', cli, model, effort: 'high' });
+// Killing a pty before its process is up crashed the vitest worker with heap corruption (0xC0000374) inside node-pty.
+const end = async (s: Session) => {
+  await waitFor(() => s.scrollback().includes('FAKE UP'));
+  s.pty.kill();
+  await s.done;
+};
 
 describe('buildArgv', () => {
   const base = { repo: 'C:\\r', promptPath: 'C:/r/.kanban95/sessions/3/prompt.md', mcpConfigPath: 'C:/r/.kanban95/sessions/3/mcp.json', settingsPath: 'C:/r/.kanban95/sessions/3/settings.json', mcpUrl: 'http://127.0.0.1:5/mcp', cwd: 'C:/r/.worktrees/t-7' };
@@ -122,23 +128,22 @@ describe('Claude Code pre-trust', () => {
     expect(after).toEqual({ ...before, projects: { ...before.projects, [key]: { hasTrustDialogAccepted: true } } });
     expect(JSON.parse(readFileSync(state() + '.kanban95.bak', 'utf8'))).toEqual(before);
     expect(trustRows()).toEqual([{ ticket_id: 7, args_summary: expect.stringContaining(`projects[\\"${key}\\"].hasTrustDialogAccepted`) }]);
-    s.pty.kill();
-    await s.done;
-    srv.launch({ ticketId: 7, template: 'test', cli: 'claude', model: 'hang', effort: 'low' }).pty.kill(); // second launch: no write
+    await end(s);
+    await end(srv.launch({ ticketId: 7, template: 'test', cli: 'claude', model: 'hang', effort: 'low' })); // second launch: no write
     expect(trustRows()).toHaveLength(1);
   });
 
-  it('writes nothing when an ancestor of the repo is already trusted', () => {
+  it('writes nothing when an ancestor of the repo is already trusted', async () => {
     const parent = join(repo, '..').replaceAll('\\', '/');
     writeFileSync(state(), JSON.stringify({ projects: { [parent]: { hasTrustDialogAccepted: true } } }));
-    launch('claude').pty.kill();
+    await end(launch('claude'));
     expect(trustRows()).toHaveLength(0);
     expect(JSON.parse(readFileSync(state(), 'utf8')).projects).toEqual({ [parent]: { hasTrustDialogAccepted: true } });
   });
 
-  it('Codex launches write no file at all', () => {
+  it('Codex launches write no file at all', async () => {
     rmSync(state(), { force: true });
-    launch('codex').pty.kill();
+    await end(launch('codex'));
     expect(existsSync(state())).toBe(false);
     expect(trustRows()).toHaveLength(0);
   });
