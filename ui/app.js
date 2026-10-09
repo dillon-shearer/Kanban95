@@ -1292,7 +1292,7 @@ async function boot() {
   paintProject().catch((e) => say(e.message));
   const [list, st, md] = await Promise.all([api('GET', '/tickets'), api('GET', '/config/settings'), api('GET', '/config/models').catch(() => ({ value: null }))]);
   for (const t of list) tickets.set(t.id, t);
-  settings = { ...settings, terminals: { auto: ['plan', 'execute'] }, ...st.value, voice: { ...settings.voice, ...st.value?.voice }, housekeeping: { ...settings.housekeeping, ...st.value?.housekeeping } };
+  settings = { ...settings, terminals: { auto: ['plan', 'execute', 'test'] }, ...st.value, voice: { ...settings.voice, ...st.value?.voice }, housekeeping: { ...settings.housekeeping, ...st.value?.housekeeping } };
   models = md.value;
   configure(settings.voice);
   applyZoom(settings.zoom);
