@@ -39,7 +39,7 @@ export function createWorktree(repo: string, ticketId: number): { path: string; 
   return { path, branch, base };
 }
 
-function isAncestor(repo: string, a: string, b: string): boolean {
+export function isAncestor(repo: string, a: string, b: string): boolean {
   try {
     git(repo, 'merge-base', '--is-ancestor', a, b);
     return true;

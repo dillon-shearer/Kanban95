@@ -116,9 +116,17 @@ Settings → Limits and the taskbar's limit (`daemon/src/limits.ts`, `GET /api/l
 - **When.** On board load and every 5 minutes while the board is open (the daemon caches the answer for 5 minutes), plus Refresh. One fetch at a time; a request during a fetch shares it.
 - **What is kept.** Only the parsed rows (window, percent used, reset time) in daemon memory. Codex's reply also carries the account id, plan and credit ids; they are dropped. Raw output is never logged or returned: a failure reports the exit code or a fixed message, never the CLI's text.
 
+## Git push
+
+With `push_after_merge` on (default, `~/.kanban95/settings.json`), the merge queue runs `git push <remote> <base>:<branch>` in the main checkout after each merge, to the base's configured upstream, and the status bar's Push button (`POST /api/push`, shell secret, audited `board.push`) runs the same. `push` in `daemon/src/merge.ts`.
+
+- **The operator's credentials, never the board's.** Git authenticates with whatever the operator's git uses (credential helper, SSH agent). The board does not read, store, pass or log them. It sets `GIT_TERMINAL_PROMPT=0` so a missing credential fails instead of prompting, and puts git's stderr in the ticket's failure note with any `user:token@` in a URL blanked to `***@`.
+- **Only the configured upstream.** The remote and branch come from `branch.<base>.remote` and `branch.<base>.merge`; a base with none is not pushed. Never a force push.
+- **Off switch.** Settings → General → Git; off, nothing is pushed.
+
 ## Voice model
 
-The mic button's speech model is the only thing the board ever downloads, and the download is the only network request the board makes. `daemon/src/voice.ts`, manifest `daemon/voice-model.json`.
+The mic button's speech model is the only thing the board ever downloads, and the download is the only network request the board makes itself (the push below is git's). `daemon/src/voice.ts`, manifest `daemon/voice-model.json`.
 
 - **Operator-initiated.** Nothing is fetched until the operator presses Download in a dialog that shows the model, the source URL with its pinned revision, the size, the license and every file's SHA-256 (tested: pressing a mic with no model shows the dialog, Cancel fetches nothing and audits nothing). `POST /api/voice/download` is audited (`voice.download`).
 - **Pinned and verified.** The URL names a fixed revision; every file has a pinned size and SHA-256. A response larger than pinned is cut off; a size or hash mismatch deletes the file (and its `.part`) and fails the download, naming the file and both hashes (tested). A file already on disk is used only if its hash still matches.
