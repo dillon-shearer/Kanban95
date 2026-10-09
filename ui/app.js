@@ -44,6 +44,8 @@ async function refreshTicket(id) {
     const t = await api('GET', `/tickets/${id}`);
     tickets.set(id, t);
     for (const term of terms.values()) if (term.s.ticket_id === id) term.paint();
+    // Reset to Backlog: the daemon stopped its agents, and their terminals, live or already "(ended)", close with it.
+    if (t.status === 'backlog') for (const [wid, term] of terms) if (term.s.ticket_id === id) close(wid);
     if (t.flags.needs_human && !was) say(await flagReason(id));
   } catch (e) {
     if (e.status !== 404) throw e;
@@ -181,18 +183,14 @@ async function drop(t, to) {
   await act(() => api('PATCH', `/tickets/${t.id}`, { status: to }), `#${t.id} moved to ${LABEL[to]} by hand; no agent was started.`);
 }
 
-/** Back to Backlog, flags and retries cleared. A running agent is stopped after the move, so its exit flags nothing. */
+/** Back to Backlog, flags and retries cleared. The daemon stops a running agent on the move, so its exit flags nothing. */
 async function reset(ts) {
   const running = ts.filter((t) => live(t.id).length);
   const ask = ts.length > 1
     ? `Reset ${count(ts)} to Backlog?${running.length ? ` ${count(running)} with a running agent will be stopped.` : ''}`
     : running.length && `#${ts[0].id} has a running agent. Stop it and move the ticket to Backlog?`;
   if (ask && (await dialog('Reset to Backlog', ask, ['Reset', 'Cancel'])) !== 'Reset') return;
-  await each(ts, async (t) => {
-    const stop = live(t.id);
-    await api('PATCH', `/tickets/${t.id}`, { status: 'backlog', needs_human: false, blocked_on_deps: false, retry: 0 });
-    for (const s of stop) await api('DELETE', `/grants/${s.grant_id}`).catch(() => {});
-  }, (n) => `${n} reset to Backlog.`);
+  await each(ts, (t) => api('PATCH', `/tickets/${t.id}`, { status: 'backlog', needs_human: false, blocked_on_deps: false, retry: 0 }), (n) => `${n} reset to Backlog.`);
 }
 
 /** Clears blocked_on_deps only: retry, notes and status stay (docs/LIFECYCLE.md → Cancel wait). */
