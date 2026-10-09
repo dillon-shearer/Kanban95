@@ -36,7 +36,7 @@ export function setZoom(f) {
 // whose count covers the highest held slot, slots in reading order, so it grows only when every slot is taken and shrinks when
 // the top slots free. Dragged or resized, a tiled window is free: it stays where it was left and its slot is empty; a
 // double-click on its title bar takes it back to the lowest empty slot. Past the last row's count a window is not tiled: it
-// stays where it opened (`place`) and takes a slot once one is empty. `setTiling(false)` (Settings → General,
+// stays where it opened (`place`) and takes a slot once one is empty. `setTiling(false)` (Settings → Board,
 // `terminals.tile`) stops tiling: terminals open at the least-covered spot and stay where they are dragged.
 // To change the arrangement, edit SLOTS: [up to n windows, columns, rows], ascending n.
 export const SLOTS = [[1, 1, 1], [2, 2, 1], [3, 3, 1], [4, 2, 2], [6, 3, 2], [9, 3, 3], [12, 4, 3]];

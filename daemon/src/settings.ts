@@ -36,7 +36,7 @@ const FILES = {
     // A running agent whose transcript gains no line for this long is flagged (docs/LIFECYCLE.md → Silent agents). Above the
     // 10 min tool timeout, so a long test run is not flagged.
     idle_minutes: z.number().int().min(1).default(20),
-    // CSS zoom of the whole UI (Ctrl+= / Ctrl+- / Ctrl+0, Settings → General), here so it follows the operator across repos.
+    // CSS zoom of the whole UI (Ctrl+= / Ctrl+- / Ctrl+0, Settings → Board), here so it follows the operator across repos.
     zoom: z.number().min(0.8).max(2).default(1),
     // On: the merge queue pushes the base to its upstream after each merge, before the ticket counts as merged.
     push_after_merge: z.boolean().default(true),

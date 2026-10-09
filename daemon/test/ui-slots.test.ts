@@ -117,11 +117,11 @@ describe('ui-slots', { timeout: 120_000 }, () => {
       await wm(`focus('${wids[1]}')`);
       await tiled(6);
 
-      // Settings → General → Tile terminals off: a dragged terminal stays where it was put, also after a re-tile would have
+      // Settings → Board → Terminal tiling → Tile terminals off: a dragged terminal stays where it was put, also after a re-tile would have
       // run; back on, every terminal, the dragged one too, takes its slot again. Saved in settings.json.
       await page.evaluate(`document.querySelector('[data-icon="Settings"]').dispatchEvent(new MouseEvent('dblclick'))`);
-      await page.evaluate(`[...document.querySelectorAll('[data-win="settings"] [role=tab] a')].find((t) => t.textContent === 'General').click()`);
-      await until(() => page.evaluate(`!!document.querySelector('#term-tile')`), 'the General tab');
+      await page.evaluate(`[...document.querySelectorAll('[data-win="settings"] [role=tab] a')].find((t) => t.textContent === 'Board').click()`);
+      await until(() => page.evaluate(`!!document.querySelector('#term-tile')`), 'the Board tab');
       expect(await page.evaluate(`document.querySelector('#term-tile').checked`)).toBe(true);
       await page.evaluate(`document.querySelector('#term-tile').click()`);
       await until(() => { try { return JSON.parse(readFileSync(settings, 'utf8')).terminals.tile === false; } catch { return false; } }, 'tile off saved');

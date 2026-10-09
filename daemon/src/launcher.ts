@@ -258,7 +258,7 @@ export function launchRoot(d: Daemon, o: RunSettings & { template: 'brainstorm' 
   const ctx = buildContext(d.db, d.repo, null, role);
   const text = loadTemplate(d.repo, o.template);
   // A repo copy older than the {{mission}} slot would drop the operator's text without a word.
-  if (o.mission && !/\{\{\s*mission\s*\}\}/.test(text)) throw new BadConfig(`${o.template}.md has no {{mission}}: reset it in Settings → Templates`);
+  if (o.mission && !/\{\{\s*mission\s*\}\}/.test(text)) throw new BadConfig(`${o.template}.md has no {{mission}}: reset it in Settings → Prompts`);
   if (o.mission) ctx.mission = o.mission;
   const prompt = fill(text, ctx);
   return spawnSession(d, o, { runId: null, ticketId: null, role, phase: o.template, cwd: d.repo, prompt });

@@ -100,7 +100,7 @@ In an agent CLI's config, one file, only for Claude Code launches: `~/.claude.js
 - written only when neither the repo root nor an ancestor is already trusted; one entry per repo, never per worktree (`docs/CLIS.md` → First-run prompts);
 - merged: every other key in the file is preserved; the first write copies the original to `~/.claude.json.kanban95.bak` (same mode); the new content is written to an owner-only (0600) temp file and renamed over the original;
 - audited: `trust.write` with the file and the key, attributed to the launching ticket;
-- removable from Settings → CLIs (`trust.clear`), which deletes only that key, by the same write path.
+- removable from Settings → Agents → Trusted folders (`trust.clear`), which deletes only that key, by the same write path.
 
 To resume a killed Claude Code session the board only checks that `<uuid>.jsonl` exists under `~/.claude/projects/*/` (or `$CLAUDE_CONFIG_DIR/projects/*/`): it lists those dirs and never opens a transcript (`docs/CLIS.md` → Resuming a killed session).
 
@@ -110,9 +110,9 @@ Tests run against a throwaway home directory (`daemon/test/home.ts`, loaded as a
 
 ## Usage limits
 
-Settings → Limits and the taskbar's limit (`daemon/src/limits.ts`, `GET /api/limits`) ask each CLI for its own account's limits; the board holds no token for this and reads no credential file (`~/.claude/.credentials.json`, `~/.codex/auth.json` are never opened).
+The Limits window and the taskbar's limit (`daemon/src/limits.ts`, `GET /api/limits`) ask each CLI for its own account's limits; the board holds no token for this and reads no credential file (`~/.claude/.credentials.json`, `~/.codex/auth.json` are never opened).
 
-- **What runs.** `claude -p --safe-mode --no-session-persistence "/usage"` (a local slash command: no model call; safe mode loads no hooks, plugins or MCP servers; no session file is written) and `codex app-server` over stdio, sent `initialize` and `account/rateLimits/read` only, then closed. Both run from the temp dir with the agent env allowlist (`pty.ts` → `childEnv`), using the executable from Settings → CLIs or PATH. Each CLI talks to its own provider with its own login, as it does for every agent session.
+- **What runs.** `claude -p --safe-mode --no-session-persistence "/usage"` (a local slash command: no model call; safe mode loads no hooks, plugins or MCP servers; no session file is written) and `codex app-server` over stdio, sent `initialize` and `account/rateLimits/read` only, then closed. Both run from the temp dir with the agent env allowlist (`pty.ts` → `childEnv`), using the executable from Settings → Agents → Executables or PATH. Each CLI talks to its own provider with its own login, as it does for every agent session.
 - **When.** On board load and every 5 minutes while the board is open (the daemon caches the answer for 5 minutes), plus Refresh. One fetch at a time; a request during a fetch shares it.
 - **What is kept.** Only the parsed rows (window, percent used, reset time) in daemon memory. Codex's reply also carries the account id, plan and credit ids; they are dropped. Raw output is never logged or returned: a failure reports the exit code or a fixed message, never the CLI's text.
 
@@ -122,7 +122,7 @@ With `push_after_merge` on (default, `~/.kanban95/settings.json`), the merge que
 
 - **The operator's credentials, never the board's.** Git authenticates with whatever the operator's git uses (credential helper, SSH agent). The board does not read, store, pass or log them. It sets `GIT_TERMINAL_PROMPT=0` so a missing credential fails instead of prompting, and puts git's stderr in the ticket's failure note with any `user:token@` in a URL blanked to `***@`.
 - **Only the configured upstream.** The remote and branch come from `branch.<base>.remote` and `branch.<base>.merge`; a base with none is not pushed. Never a force push.
-- **Off switch.** Settings → General → Git; off, nothing is pushed.
+- **Off switch.** Settings → Board → Git; off, nothing is pushed.
 
 ## Voice model
 

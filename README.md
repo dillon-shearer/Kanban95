@@ -30,7 +30,7 @@ The project must be a git repository. `Kanban95.cmd` finds Node 24 (through fnm 
 
 On macOS, double-click `Kanban95.command` in Finder (a Terminal window opens and stays for the session) or run `./Kanban95.command /path/to/project`: the same Node 24 lookup through fnm, install, build and start. Then, once:
 
-1. **Start → Settings → Models**: pick a CLI, model and effort per phase and press **Save** (writes `~/.kanban95/models.json`; nothing launches without it).
+1. **Start → Settings → Agents**: pick a CLI, model and effort per phase and press **Save** (writes `~/.kanban95/models.json`; nothing launches without it).
 2. For Claude Code, accept its one-time `--dangerously-skip-permissions` warning by hand ([docs/CLIS.md](docs/CLIS.md) → First-run prompts).
 
 [docs/OPERATOR.md](docs/OPERATOR.md) walks through a full cycle from brainstorm to merge.
