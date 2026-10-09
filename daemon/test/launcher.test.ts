@@ -1,6 +1,6 @@
 import './home.ts'; // also here, not only in vitest.config.ts: a run from the repo root skips that config and wrote the real home
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, join, resolve } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
@@ -8,7 +8,8 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import WebSocket from 'ws';
 import { createWorktree, removeWorktree } from '../src/git.ts';
 import type { Role } from '../src/grants.ts';
-import { buildArgv, RESUME_MESSAGE, sessions, type ArgvIn, type Cli, type Effort, type Session } from '../src/launcher.ts';
+import { buildArgv, RESUME_MESSAGE, sessions, transcriptSize, type ArgvIn, type Cli, type Effort, type Session } from '../src/launcher.ts';
+import { lastLines } from '../src/pty.ts';
 import { start } from '../src/server.ts';
 
 // Fake `claude` and `codex` first on PATH. Each records its argv, env and cwd in the worktree, echoes typed input,
@@ -314,5 +315,45 @@ describe('git worktrees', () => {
     expect(removeWorktree(repo, 8)).toEqual({ branchDeleted: false });
     expect(existsSync(wt)).toBe(false);
     expect(git('branch', '--list', 'ticket/8')).toContain('ticket/8');
+  });
+});
+
+describe('transcripts, for the silence watch', () => {
+  const day = (t: number) => { const d = new Date(t); return join(String(d.getFullYear()), String(d.getMonth() + 1).padStart(2, '0'), String(d.getDate()).padStart(2, '0')); };
+  const rollout = (name: string, cwd: string, extra = '') => {
+    const dir = join(process.env.USERPROFILE!, '.codex', 'sessions', day(Date.now()));
+    mkdirSync(dir, { recursive: true });
+    const f = join(dir, `rollout-${name}.jsonl`);
+    writeFileSync(f, JSON.stringify({ type: 'session_meta', payload: { id: name, cwd } }) + '\n' + extra);
+    return f;
+  };
+  afterEach(() => rmSync(join(process.env.USERPROFILE!, '.codex'), { recursive: true, force: true }));
+
+  it("Codex: the newest rollout written since the start whose cwd is the session's; another worktree's or an earlier run's is not", () => {
+    const cwd = join(tmpdir(), 'k95-wt', 't-9');
+    const started = Date.now();
+    const old = rollout('2026-01-01T00-00-00-a', cwd, 'x'.repeat(50));
+    utimesSync(old, new Date(started - 60_000), new Date(started - 60_000)); // the previous run in this worktree
+    rollout('2026-01-01T00-00-02-c', join(tmpdir(), 'k95-wt', 't-10'), 'x'.repeat(70));
+    const s = { cli: 'codex' as const, cwd, started };
+    expect(transcriptSize(s)).toBe(-1);
+    const mine = rollout('2026-01-01T00-00-01-b', process.platform === 'win32' ? cwd.toUpperCase() : cwd, 'line\n'); // Windows paths ignore case
+    expect(transcriptSize(s)).toBe(readFileSync(mine).length);
+  });
+
+  it('Claude: the --session-id transcript under any project dir, -1 until it exists', () => {
+    const s = { cli: 'claude' as const, cwd: tmpdir(), started: Date.now(), sessionId: '00000000-0000-4000-8000-000000000001' };
+    expect(transcriptSize(s)).toBe(-1);
+    const dir = join(process.env.USERPROFILE!, '.claude', 'projects', 'C--anything');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, `${s.sessionId}.jsonl`), '{}\n{}\n');
+    expect(transcriptSize(s)).toBe(6);
+    rmSync(join(process.env.USERPROFILE!, '.claude', 'projects'), { recursive: true, force: true });
+  });
+
+  it('lastLines: escape sequences gone, cursor moves and carriage returns as breaks, blanks and repeats dropped, only the last n', () => {
+    const raw = '\x1b]0;title\x07one\r\n\x1b[2K\x1b[1;1Htwo\x1b[32m green\x1b[0m\x1b[3;1H\x1b[?25l\r\n\r\nthree\rthree\nfour';
+    expect(lastLines(raw, 3)).toEqual(['two green', 'three', 'four']);
+    expect(lastLines('', 5)).toEqual([]);
   });
 });

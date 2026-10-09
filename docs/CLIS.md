@@ -147,7 +147,7 @@ Approvals are off for every role (the operator approved the bypass). What each r
 ## Gotchas
 
 - Both CLIs run interactive sessions and do not exit by themselves when the agent is done. The board ends the session once the agent's `move_ticket` is accepted (`docs/LIFECYCLE.md`).
-- A CLI started with a model id it does not know may print an error and sit at its prompt without exiting. The board does not flag that yet (`docs/OPERATOR.md` → Dogfood walkthrough, touch 3).
+- A CLI started with a model id it does not know may print an error and sit at its prompt without exiting, and an API call can hang with the spinner still animating. The board flags either once the session's transcript (Claude Code) or rollout (Codex) has gained no line for `idle_minutes` (`docs/LIFECYCLE.md` → Silent agents).
 - node-pty's `Error: AttachConsole failed` on kill is harmless (`docs/ARCHITECTURE.md` → Working on the board).
 
 ## Checked live
