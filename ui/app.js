@@ -282,8 +282,26 @@ async function reject(id) {
     await sayLaunched([id]);
   });
 }
-/** `mission`: the operator's draft for the planner to start from (Notepad's selection). */
-const newBrainstorm = (mission) => act(async () => openTerminal(await api('POST', '/brainstorm', typeof mission === 'string' ? { mission } : undefined)), 'Brainstorm started.');
+/**
+ * `mission`: the operator's draft for the planner to start from (Notepad's notes). A repo copy of brainstorm.md older than the
+ * {{mission}} slot is refused by the daemon; the operator may reset it to the shipped default here and the same text is sent again.
+ */
+const newBrainstorm = (mission) => act(async () => {
+  const body = typeof mission === 'string' ? { mission } : undefined;
+  const start = () => api('POST', '/brainstorm', body);
+  let s;
+  try {
+    s = await start();
+  } catch (e) {
+    if (e.status !== 400 || !e.message.includes('{{mission}}')) throw e;
+    const ask = 'brainstorm.md in this repo predates starting notes. Reset it to the shipped default and start the brainstorm?';
+    if ((await dialog('New brainstorm', ask, ['Reset and start', 'Cancel'])) !== 'Reset and start') return say('Brainstorm not started.');
+    await api('POST', '/templates/brainstorm/reset');
+    s = await start();
+  }
+  openTerminal(s);
+  say('Brainstorm started.');
+});
 /** An operator terminal: an agent with the operator's reach on the board, given the mission typed here. The daemon refuses an empty one. */
 async function newOperator() {
   const mission = h('textarea', { rows: 8, cols: 60, placeholder: 'What should the agent do?' });
@@ -1185,7 +1203,7 @@ function openNotepad() {
   const picked = () => text.value.slice(text.selectionStart, text.selectionEnd) || text.value;
   w.body.append(h('div', { class: 'k95-notepad' }, text),
     h('div', { class: 'field-row' },
-      h('button', { onclick: () => newBrainstorm(picked()) }, 'New brainstorm from selection'),
+      h('button', { onclick: () => newBrainstorm(picked()), title: 'The selection, or the whole page when nothing is selected' }, 'New brainstorm from notes'),
       h('button', { onclick: () => navigator.clipboard.writeText(picked()).then(() => { status.textContent = 'Copied.'; }, (e) => { status.textContent = e.message; }) }, 'Copy')),
     h('div', { class: 'status-bar' }, status));
   api('GET', '/notepad').then(({ value }) => {

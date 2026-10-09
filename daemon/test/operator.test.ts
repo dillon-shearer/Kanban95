@@ -237,7 +237,7 @@ describe('POST /api/brainstorm', () => {
       writeFileSync(file, '# Brainstorm\n\n{{tools}}\n');
       const r = await post('/brainstorm', { mission: 'go' });
       expect(r.status).toBe(400);
-      expect((await r.json()).error).toMatch(/brainstorm\.md has no \{\{mission\}\}/);
+      expect((await r.json()).error).toMatch(/brainstorm\.md has no \{\{mission\}\}: reset it in Settings → Prompts$/);
       expect(sessions.size).toBe(0);
       const view = await (await post('/brainstorm', {})).json();
       await end(sessions.get(view.id)!);
