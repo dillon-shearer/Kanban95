@@ -91,7 +91,9 @@ A place to draft before you hand words to an agent or a ticket. One plain text a
 
 ## Cards
 
-Click a card to select it, Ctrl+click to add or remove one, Shift+click to select the run of cards in the same column from the last one you clicked, Ctrl+A to select every card; click empty column space to clear the selection. Right-click a selected card and its menu acts on the whole selection: one confirmation for Reset to Backlog or Delete naming the count, Launch starts only the Backlog cards and says how many it skipped, Open opens at most 8 Ticket windows, and the status bar reports the outcome once ("Effort set to high on 4 tickets."), naming any ticket the daemon refused while the rest go ahead.
+Click a card to select it, Ctrl+click to add or remove one, Shift+click to select the run of cards in the same column from the last one you clicked, Ctrl+A to select every card the filter shows; click empty column space to clear the selection. Right-click a selected card and its menu acts on the whole selection: one confirmation for Reset to Backlog or Delete naming the count, Launch starts only the Backlog cards and says how many it skipped, Open opens at most 8 Ticket windows, and the status bar reports the outcome once ("Effort set to high on 4 tickets."), naming any ticket the daemon refused while the rest go ahead.
+
+The toolbar's **Filter** box narrows the Board as you type: a card stays when every word is in its id, title, a tag, its model, CLI or effort (case-insensitive; the model and effort are what the badges show, defaults included). `tag:ui` keeps only cards tagged exactly `ui`; `model:`, `cli:` and `effort:` limit a word to that field. A filtered column's legend reads "Backlog (3 of 12)". **Sort** orders every column by id (default), updated (newest first), effort (max to low; a card with no effort of its own counts as medium), model, tags (alphabetical, untagged last) or needs-human first; ties go by id. **Group** by tag draws a small heading per tag inside each column, untagged cards last; a card with two tags shows under both. All three are kept per repo across reloads, and the status bar shows any that is active ("Filter: ui · Sort: effort"). Cards the filter hides drop out of the selection, so a bulk action never reaches them.
 
 Right-click a card for its menu: Open, Launch, Resume (a red running card whose agent is gone), Restart (one In progress or Testing card: replaces its agent), **Model**, **Effort** and **CLI** (set or clear this ticket's override without opening it), Retry merge (after you fixed a conflict or cleaned the main checkout), Reject (one Done card: send it back to a worker with a reason, see Done above), Reset to Backlog (also on a card waiting on a dependency: it cancels the wait, so it will not launch by itself), Delete.
 
@@ -111,7 +113,8 @@ Any other drop snaps back, and the status bar names where that card may go.
 | Esc | closes the focused window (or an open menu) |
 | Ctrl+L | Run / Stop the runner |
 | Ctrl+R | Restart the agent of the focused ticket window (after a confirm) |
-| Ctrl+A | select every card (on the Board, outside a text field) |
+| Ctrl+A | select every card the filter shows (on the Board, outside a text field) |
+| Ctrl+F | focus the Board's Filter box (Esc in the box clears it) |
 | Ctrl+N | New brainstorm |
 | Ctrl+Shift+N | New operator terminal |
 

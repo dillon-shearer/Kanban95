@@ -91,11 +91,11 @@ let restarting = false;
 // The Board's selection. Every card action takes the selected tickets, so a new bulk action is one more menu item.
 const selection = new Set();
 let anchor = null; // the last clicked card, where a Shift+click range starts
-const picked = () => [...selection].map((id) => tickets.get(id)).filter(Boolean);
+const picked = () => [...selection].map((id) => tickets.get(id)).filter((t) => t && shown(t)); // a card the filter hides is never acted on
 
 function pick(t, e) {
   if (e.shiftKey && tickets.get(anchor)?.status === t.status) {
-    const ids = [...tickets.values()].filter((x) => x.status === t.status).map((x) => x.id); // the column, in board order
+    const ids = order.get(t.status) ?? []; // the column as drawn: filtered and sorted
     const [a, b] = [ids.indexOf(anchor), ids.indexOf(t.id)].sort((x, y) => x - y);
     selection.clear();
     for (const id of ids.slice(a, b + 1)) selection.add(id);
@@ -373,6 +373,48 @@ function cardMenu(ts, x, y) {
 const collapsed = new Set((() => { try { return JSON.parse(localStorage.getItem('k95.collapsed')) ?? []; } catch { return []; } })());
 const saveCollapsed = () => { try { localStorage.setItem('k95.collapsed', JSON.stringify([...collapsed])); } catch { /* storage off: columns reopen */ } };
 
+// The Board's filter, sort and group, kept per repo like the folded columns.
+const view = { filter: '', sort: 'id', group: 'none', ...(() => { try { return JSON.parse(localStorage.getItem('k95.view')) ?? {}; } catch { return {}; } })() };
+const saveView = () => { try { localStorage.setItem('k95.view', JSON.stringify(view)); } catch { /* storage off: the view resets on reload */ } };
+const order = new Map(); // status → card ids as drawn, for a Shift+click range
+const SORTS = { id: 'id', updated: 'updated', effort: 'effort', model: 'model', tags: 'tags', human: 'needs-human first' };
+const RANK = { max: 0, high: 1, medium: 2, low: 3 };
+/** What a card shows for each field the filter reads: the override, else the phase default its badge shows. */
+const fields = (t) => {
+  const d = defaults(t);
+  return { id: `#${t.id}`, title: t.title, tag: t.tags ? t.tags.split(' ') : [], model: t.model ?? d.model ?? '', cli: t.cli ?? models?.cli ?? '', effort: t.effort ?? d.effort ?? 'medium' };
+};
+/** Every word must match some field; `tag:x` needs a tag equal to x, `model:`/`cli:`/`effort:` a substring of that field. */
+function shown(t) {
+  const words = view.filter.toLowerCase().split(/\s+/).filter(Boolean);
+  if (!words.length) return true;
+  const f = fields(t);
+  const all = [f.id, f.title, ...f.tag, f.model, f.cli, f.effort].map((x) => x.toLowerCase());
+  return words.every((w) => {
+    const [, k, v] = /^(tag|model|effort|cli):(.*)$/.exec(w) ?? [];
+    if (!k) return all.some((x) => x.includes(w));
+    return k === 'tag' ? f.tag.some((g) => g.toLowerCase() === v) : f[k].toLowerCase().includes(v);
+  });
+}
+const byKey = {
+  updated: (a, b) => (b.updated_at ?? '').localeCompare(a.updated_at ?? ''),
+  effort: (a, b) => (RANK[a.effort] ?? RANK.medium) - (RANK[b.effort] ?? RANK.medium), // an unset effort ranks as medium, whatever the phase default
+  model: (a, b) => fields(a).model.localeCompare(fields(b).model),
+  tags: (a, b) => !a.tags - !b.tags || (a.tags ?? '').localeCompare(b.tags ?? ''), // untagged last
+  human: (a, b) => !b.flags.needs_human - !a.flags.needs_human,
+};
+const sorted = (list) => list.sort((a, b) => (byKey[view.sort]?.(a, b) || 0) || a.id - b.id);
+/** A column's cards, or with Group by tag one heading per tag (a card under each of its tags) and the untagged last. */
+function columnBody(list) {
+  if (view.group !== 'tag') return list.map(card);
+  const groups = [...new Set(list.flatMap((t) => (t.tags ? t.tags.split(' ') : [])))].sort();
+  const untagged = list.filter((t) => !t.tags);
+  return [
+    ...groups.flatMap((g) => [h('div', { class: 'k95-group' }, g), ...list.filter((t) => t.tags?.split(' ').includes(g)).map(card)]),
+    ...(untagged.length && groups.length ? [h('div', { class: 'k95-group' }, 'untagged')] : []), ...untagged.map(card),
+  ];
+}
+
 function openBoard() {
   const w = open('board', { title: 'Board', w: 1000, h: 560, persist: true, onClose: () => { views.delete('board'); say = console.log; } });
   if (w.body.firstChild) return;
@@ -380,6 +422,23 @@ function openBoard() {
   const count = h('p', { class: 'status-bar-field k95-count' });
   const run = h('button', { onclick: toggleRunner, title: 'Ctrl+L' });
   const runField = h('p', { class: 'status-bar-field k95-runner' });
+  const viewField = h('p', { class: 'status-bar-field k95-view' });
+  const filter = h('input', { type: 'text', class: 'k95-filter', 'data-mic': 'off', placeholder: 'Filter', value: view.filter,
+    title: 'Ctrl+F. Every word must match the id, title, a tag, the model, CLI or effort; tag: model: cli: effort: narrow a word to that field.',
+    oninput: () => {
+      view.filter = filter.value;
+      saveView();
+      for (const id of selection) if (!tickets.has(id) || !shown(tickets.get(id))) selection.delete(id);
+      drawBoard();
+    },
+    onkeydown: (e) => { // Esc clears the box instead of closing the Board
+      if (e.key !== 'Escape') return;
+      e.stopPropagation();
+      filter.value = '';
+      filter.dispatchEvent(new Event('input'));
+    } });
+  const choose = (k, opts) => h('select', { class: `k95-${k}`, onchange: (e) => { view[k] = e.target.value; saveView(); drawBoard(); } },
+    Object.entries(opts).map(([v, label]) => h('option', { value: v, selected: view[k] === v }, label)));
   const cols = h('div', { class: 'k95-columns', onclick: (e) => { // a click on empty column space clears the selection
     if (!e.target.closest('.card')) selection.clear(), drawBoard();
   } });
@@ -390,9 +449,12 @@ function openBoard() {
       run,
       h('button', { onclick: newBrainstorm, title: 'Ctrl+N' }, 'New brainstorm'),
       h('button', { onclick: () => openTicket(null) }, 'New ticket'),
-      h('button', { onclick: housekeeping }, 'Housekeeping')),
+      h('button', { onclick: housekeeping }, 'Housekeeping'),
+      filter,
+      h('label', {}, 'Sort ', choose('sort', SORTS)),
+      h('label', {}, 'Group ', choose('group', { none: 'none', tag: 'tag' }))),
     cols,
-    h('div', { class: 'status-bar' }, status, runField, count));
+    h('div', { class: 'status-bar' }, status, runField, viewField, count));
   say = (msg) => { status.textContent = msg; status.title = msg; };
   views.set('board', () => {
     const all = [...tickets.values()];
@@ -402,10 +464,13 @@ function openBoard() {
     const focus = focused && cols.contains(focused) ? [focused.closest('.col').dataset.status, focused.dataset.id] : null;
     cols.replaceChildren(...COLUMNS.map(([s, label]) => {
       const list = all.filter((t) => t.status === s);
+      const vis = sorted(list.filter(shown));
+      order.set(s, vis.map((t) => t.id));
       const shut = collapsed.has(s);
       const legend = h('legend', { class: list.some((t) => t.flags.needs_human) ? 'alert' : '', title: shut ? 'Expand' : 'Collapse',
-        onclick: (e) => { e.stopPropagation(); shut ? collapsed.delete(s) : collapsed.add(s); saveCollapsed(); drawBoard(); } }, `${label} (${list.length})`);
-      return h('fieldset', { class: `col${shut ? ' collapsed' : ''}`, 'data-status': s }, legend, h('div', { class: 'cards' }, shut ? [] : list.map(card)));
+        onclick: (e) => { e.stopPropagation(); shut ? collapsed.delete(s) : collapsed.add(s); saveCollapsed(); drawBoard(); } },
+      `${label} (${vis.length === list.length ? list.length : `${vis.length} of ${list.length}`})`);
+      return h('fieldset', { class: `col${shut ? ' collapsed' : ''}`, 'data-status': s }, legend, h('div', { class: 'cards' }, shut ? [] : columnBody(vis)));
     }));
     cols.style.gridTemplateColumns = COLUMNS.map(([s]) => (collapsed.has(s) ? '24px' : 'minmax(0, 1fr)')).join(' ');
     for (const c of cols.querySelectorAll('.col')) c.querySelector('.cards').scrollTop = scroll[c.dataset.status] ?? 0;
@@ -414,6 +479,9 @@ function openBoard() {
     run.textContent = runner.on ? 'Stop' : 'Run';
     runField.textContent = runField.title = runner.stale ? STALE : runnerLine(runner);
     runField.hidden = !runField.textContent;
+    viewField.textContent = viewField.title = [view.filter.trim() && `Filter: ${view.filter.trim()}`, view.sort !== 'id' && `Sort: ${SORTS[view.sort]}`,
+      view.group !== 'none' && `Group: ${view.group}`].filter(Boolean).join(' · ');
+    viewField.hidden = !viewField.textContent;
   });
   drawBoard();
 }
@@ -1014,7 +1082,8 @@ function taskbar() {
 
 const clock = () => { document.getElementById('clock').textContent = new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }); };
 
-// Esc closes the focused window, Ctrl+L turns the runner on or off, Ctrl+A selects every card on a focused Board, Ctrl+N starts a
+// Esc closes the focused window, Ctrl+L turns the runner on or off, Ctrl+A selects every card the filter shows on a focused Board,
+// Ctrl+F focuses the Board's filter, Ctrl+N starts a
 // brainstorm, Ctrl+Shift+N an operator terminal, Ctrl+R restarts the focused ticket's agent. Inside a terminal every key goes to the
 // agent instead (Esc interrupts Claude Code, Ctrl+L clears the screen).
 addEventListener('keydown', (e) => {
@@ -1030,8 +1099,11 @@ addEventListener('keydown', (e) => {
     toggleRunner();
   } else if (plainCtrl && e.key.toLowerCase() === 'a' && focused()?.el.dataset.win === 'board' && !e.target.closest?.('input, textarea, select, [contenteditable]')) {
     e.preventDefault();
-    for (const id of tickets.keys()) selection.add(id);
+    for (const t of tickets.values()) if (shown(t)) selection.add(t.id);
     drawBoard();
+  } else if (plainCtrl && e.key.toLowerCase() === 'f' && focused()?.el.dataset.win === 'board') {
+    e.preventDefault(); // not the page's find bar
+    focused().el.querySelector('.k95-filter').select();
   } else if (plainCtrl && e.key.toLowerCase() === 'n') {
     e.preventDefault();
     newBrainstorm();
