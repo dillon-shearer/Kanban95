@@ -2,7 +2,7 @@ import './home.ts'; // also here, not only in vitest.config.ts: a run from the r
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { delimiter, join, resolve } from 'node:path';
+import { delimiter, dirname, join, resolve } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import WebSocket from 'ws';
@@ -195,6 +195,8 @@ describe('launch', () => {
     const keys = Object.keys(env).map((k) => k.toUpperCase());
     expect(keys).not.toContain('KANBAN95_CANARY');
     expect(keys).toContain('PATH');
+    // The daemon's own Node first: PATH's `node` may be older than 24.
+    expect(env[Object.keys(env).find((k) => k.toUpperCase() === 'PATH')!].split(delimiter)[0]).toBe(dirname(process.execPath));
     expect(env.KANBAN95_TOKEN).toMatch(/^[\w-]{43}$/); // codex reads its bearer token from here
     expect(env.KANBAN95_AGENT).toBe('1'); // makes npm run dev and Kanban95.cmd refuse to start
     expect(existsSync(join(s.dir, 'mcp.json'))).toBe(false); // codex gets its MCP server through -c, not a file

@@ -33,5 +33,6 @@ Node 24+, TypeScript, vitest. `node:sqlite`. Vanilla UI + 98.css + xterm.js. Tau
 - Keep diffs small. No abstraction with one implementation. No scaffolding "for later."
 - Commits, by hand or by the board, are authored as the operator (their `git config user.name`/`user.email`), with no `Co-Authored-By` or other trailer. Subject: a plain imperative sentence saying what changed, no ticket or phase ids. Body only when the why is not obvious from the subject.
 - Never leave uncommitted changes in the main checkout while the board runs; the merge queue merges there. Work in a worktree.
+- In docs, a list of modules, keys, tools, routes or shortcuts has one item per line; insert a new item in order, never extend a long line.
 - Mark deliberate shortcuts with a `// ponytail:` comment naming the ceiling and the upgrade path.
 - Record a gotcha a future ticket would trip on with `brain_add`; when it is about working on the code, also add it to `docs/ARCHITECTURE.md` → Working on the board.
