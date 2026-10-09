@@ -2,7 +2,7 @@
 import './home.ts'; // also here, not only in vitest.config.ts: a run from the repo root skips that config and wrote the real home
 import { describe, expect, it } from 'vitest';
 import { until } from './cdp.ts';
-import { page, base, ticket, column, click } from './ui.ts';
+import { page, base, ticket, column, click, setUi } from './ui.ts';
 
 const key = (key: string, code: string, vk: number, modifiers = 0) =>
   page.send('Input.dispatchKeyEvent', { type: 'keyDown', key, code, windowsVirtualKeyCode: vk, modifiers });
@@ -63,6 +63,6 @@ describe('ui-view', { timeout: 90_000 }, () => {
     expect(await page.evaluate<string[]>(`[document.querySelector('.k95-filter').value, document.querySelector('.k95-sort').value, document.querySelector('.k95-group').value]`)).toEqual(['tag:docs', 'effort', 'tag']);
     expect(await cards()).toEqual([c]);
     expect(await page.evaluate<string>(`document.querySelector('.k95-view').textContent`)).toBe('Filter: tag:docs · Sort: effort · Group: tag');
-    await page.evaluate(`localStorage.removeItem('k95.view')`);
+    await setUi('k95.view', undefined);
   });
 });

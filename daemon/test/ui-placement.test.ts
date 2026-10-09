@@ -3,7 +3,7 @@ import './home.ts'; // also here, not only in vitest.config.ts: a run from the r
 import { describe, expect, it } from 'vitest';
 import { sessions } from '../src/launcher.ts';
 import { until } from './cdp.ts';
-import { srv, db, page, base, ticket, column } from './ui.ts';
+import { srv, db, page, base, ticket, column, setUi } from './ui.ts';
 
 type Box = [number, number, number, number]; // left, top, right, bottom
 const box = (wid: string) => page.evaluate<Box>(`(() => { const e = document.querySelector('[data-win="${wid}"]'); return [e.offsetLeft, e.offsetTop, e.offsetLeft + e.offsetWidth, e.offsetTop + e.offsetHeight]; })()`);
@@ -53,7 +53,7 @@ describe('ui-placement', { timeout: 60_000 }, () => {
     await viewport(1280, 720);
     const id = ticket('Crowded');
     // The Board alone at the top left, as the expectation below is worked out for.
-    await page.evaluate(`localStorage.setItem('k95.layout', JSON.stringify([{ id: 'board', x: 0, y: 0, w: 1000, h: 560 }]))`);
+    await setUi('k95.layout', [{ id: 'board', x: 0, y: 0, w: 1000, h: 560 }]);
     await page.goto(base + '?full');
     await until(() => page.evaluate(`!!document.querySelector('[data-win="board"]')`), 'the board');
     const wid = await launch(id);
@@ -75,7 +75,7 @@ describe('ui-placement', { timeout: 60_000 }, () => {
     const id = ticket('Saved');
     await page.goto(base + '?saved');
     await until(() => page.evaluate(`!!document.querySelector('[data-win="board"]')`), 'the board');
-    await page.evaluate(`localStorage.setItem('k95.win.term-ticket-${id}', JSON.stringify({ x: 30, y: 40, w: 500, h: 300 }))`);
+    await setUi(`k95.win.term-ticket-${id}`, { x: 30, y: 40, w: 500, h: 300 });
     const wid = await launch(id);
     expect(await box(wid)).toEqual([30, 40, 530, 340]);
     await endAll();
