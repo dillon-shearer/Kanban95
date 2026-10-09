@@ -1,6 +1,6 @@
 // The operator's own settings in ~/.kanban95/, edited in the Settings window. No secrets live here.
 // models.json: which CLI, and the model and effort per phase (docs/LIFECYCLE.md → Run settings). settings.json: CLI paths,
-// sounds, voice, housekeeping, auto-opened terminals, UI zoom, push after merge. projects.json: every repo with a board and its wallpaper colour. All are read on every use, so an edit applies to the next run without a restart.
+// sounds, voice, housekeeping, auto-opened terminals, idle minutes, UI zoom, push after merge. projects.json: every repo with a board and its wallpaper colour. All are read on every use, so an edit applies to the next run without a restart.
 import { execFile } from 'node:child_process';
 import { createReadStream, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -32,6 +32,9 @@ const FILES = {
     // Brainstorms and operator terminals always open: the operator started them.
     terminals: z.object({ auto: z.array(z.enum(['plan', 'execute', 'test'])).default(['plan', 'execute', 'test']) }).strict()
       .default({ auto: ['plan', 'execute', 'test'] }),
+    // A running agent whose transcript gains no line for this long is flagged (docs/LIFECYCLE.md → Silent agents). Above the
+    // 10 min tool timeout, so a long test run is not flagged.
+    idle_minutes: z.number().int().min(1).default(20),
     // CSS zoom of the whole UI (Ctrl+= / Ctrl+- / Ctrl+0, Settings → General), here so it follows the operator across repos.
     zoom: z.number().min(0.8).max(2).default(1),
     // On: the merge queue pushes the base to its upstream after each merge, before the ticket counts as merged.
@@ -160,8 +163,8 @@ export function runSettings(t: Ticket | null, phase: 'plan' | 'execute' | 'test'
   if (!model && phase !== 'operator') throw new Error(`no ${phase} model for ${cli} in ${file}`);
   const bad = model && uncatalogued(model, cli);
   if (bad) throw new Error(bad);
-  // ponytail: only a model id outside the list is caught before launch. An agent stuck at its prompt for another reason stays
-  // In Progress unflagged; the upgrade is an idle timer on pty output.
+  // Only a model id outside the list is caught before launch; an agent stuck at its prompt for another reason is flagged by the
+  // silence watch (lifecycle.ts) after idle_minutes.
   if (!EFFORT.includes(effort)) throw new Error(`bad effort ${effort} for ${cli} ${phase} in ${file}`);
   return { cli, model, effort, path: readConfig('settings').paths[cli as Cli] || undefined };
 }
@@ -220,7 +223,7 @@ export function writePreferences(value: unknown): string {
  * The display name is the folder's basename, never stored.
  */
 export const projectsPath = () => join(boardHome(), 'projects.json');
-export const DEFAULT_COLOUR = '#008080';
+const DEFAULT_COLOUR = '#008080';
 const projectList = z.array(z.object({
   path: z.string().refine(isAbsolute, 'must be an absolute path'),
   colour: z.union([z.string().regex(/^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i, 'must be #rgb or #rrggbb'), z.number().min(0).max(360)]),

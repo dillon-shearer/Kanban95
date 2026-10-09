@@ -50,6 +50,13 @@ it('housekeeping defaults to on every 10 merges and refuses an interval under 1 
   expect(() => writeConfig('settings', { housekeeping: { every: 2.5 } })).toThrow(/every/);
 });
 
+it('idle_minutes defaults to 20 and refuses under 1 or fractional', () => {
+  expect(writeConfig('settings', {}).idle_minutes).toBe(20);
+  expect(writeConfig('settings', { idle_minutes: 1 }).idle_minutes).toBe(1);
+  expect(() => writeConfig('settings', { idle_minutes: 0 })).toThrow(/idle_minutes/);
+  expect(() => writeConfig('settings', { idle_minutes: 1.5 })).toThrow(/idle_minutes/);
+});
+
 it('terminals open on their own for every phase by default; only plan, execute and test are accepted', () => {
   expect(writeConfig('settings', {}).terminals).toEqual({ auto: ['plan', 'execute', 'test'] });
   expect(writeConfig('settings', { terminals: { auto: [] } }).terminals.auto).toEqual([]);

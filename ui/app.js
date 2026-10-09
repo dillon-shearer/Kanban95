@@ -35,7 +35,7 @@ let runner = { on: false, concurrency: 3, running: [], left: 0, backlog: 0, wait
 let models = null; // ~/.kanban95/models.json as written, for the cards' default model and effort
 // Sounds stay off until /config/settings loads: listen() starts first, and a ding in that gap ignored the operator's choice.
 // `terminals` is absent until then too, so no session is opened or passed over before the operator's phases are known.
-let settings = { paths: {}, sounds: { merge: false, attention: false }, voice: { backend: 'local', mode: 'push' }, housekeeping: { auto: true, every: 10 }, zoom: 1, push_after_merge: true };
+let settings = { paths: {}, sounds: { merge: false, attention: false }, voice: { backend: 'local', mode: 'push' }, housekeeping: { auto: true, every: 10 }, idle_minutes: 20, zoom: 1, push_after_merge: true };
 let limits = null; // GET /api/limits: { rows, errors, fetched_at }, null until the first answer
 const views = new Map(); // open window id → redraw(ticketId | null)
 
@@ -1043,6 +1043,7 @@ function openSettings(tab) {
       const pushAuto = h('input', { type: 'checkbox', id: 'push-after-merge', checked: settings.push_after_merge,
         onchange: (e) => act(() => saveSettings({ push_after_merge: e.target.checked }), 'Saved.') });
       const hkEvery = h('input', { type: 'number', id: 'hk-every', min: 1, step: 1, value: settings.housekeeping.every });
+      const idle = h('input', { type: 'number', id: 'idle-minutes', min: 1, step: 1, value: settings.idle_minutes });
       const zoom = h('select', { id: 'zoom', onchange: (e) => zoomTo(Number(e.target.value)) },
         ZOOMS.map((f) => h('option', { value: f, selected: f === settings.zoom }, `${Math.round(f * 100)}%`)));
       p.replaceChildren(h('div', { class: 'field-row' }, h('label', { for: 'zoom' }, 'Zoom (Ctrl+= / Ctrl+- / Ctrl+0)'), zoom),
@@ -1059,6 +1060,10 @@ function openSettings(tab) {
           h('button', { onclick: saveRunner }, 'Save')),
         h('fieldset', {}, h('legend', {}, 'Git'),
           h('div', { class: 'field-row' }, pushAuto, h('label', { for: 'push-after-merge' }, 'Push the base branch to its upstream after each merge'))),
+        h('fieldset', {}, h('legend', {}, 'Silent agents'),
+          h('div', { class: 'field-row' }, h('label', { for: 'idle-minutes' }, 'Flag an agent whose transcript is quiet for (minutes)'), idle),
+          h('p', {}, 'Keep it above the 10 min tool timeout, so a long test run is not flagged.'),
+          h('button', { onclick: () => act(() => saveSettings({ idle_minutes: Number(idle.value) }), 'Saved.') }, 'Save')),
         h('fieldset', {}, h('legend', {}, 'Housekeeping'),
           h('div', { class: 'field-row' }, hkAuto, h('label', { for: 'hk-auto' }, 'File a housekeeping ticket after merges')),
           h('div', { class: 'field-row' }, h('label', { for: 'hk-every' }, 'Merged tickets between runs'), hkEvery),
