@@ -64,6 +64,13 @@ const click = async (selector: string, modifiers = 0) => {
   await page.send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, modifiers, button: 'left', buttons: 1, clickCount: 1 });
   await page.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, modifiers, button: 'left', buttons: 0, clickCount: 1 });
 };
+const rightClick = async (selector: string) => {
+  const { x, y } = await page.center(selector);
+  await page.send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'right', buttons: 2, clickCount: 1 });
+  await page.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'right', buttons: 0, clickCount: 1 });
+};
+const menuItems = () => page.evaluate<string[]>(`[...document.querySelectorAll('.k95-menu > li[role="menuitem"]')].map((li) => li.textContent)`);
+const menuPick = (label: string) => page.evaluate(`[...document.querySelectorAll('.k95-menu > li')].find((li) => li.textContent === ${JSON.stringify(label)}).click()`);
 
 beforeAll(async () => {
   repo = mkdtempSync(join(tmpdir(), 'k95-'));
@@ -285,7 +292,9 @@ describe('ui', { timeout: 60_000 }, () => {
 
     db.prepare("UPDATE tickets SET status = 'backlog' WHERE id = ?").run(id);
     const second = await launchAgent();
-    await page.evaluate(`document.querySelector('.card[data-id="${id}"]').dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))`);
+    await rightClick(`[data-task="${second}"]`);
+    expect(await menuItems()).toEqual(['Restore', 'Minimize', 'Maximize', 'Open ticket', 'Close']);
+    await menuPick('Open ticket');
     await until(() => win(`ticket-${id}`), 'the Ticket window');
     expect(await tasks()).toBe(3);
 
@@ -500,6 +509,52 @@ describe('ui', { timeout: 60_000 }, () => {
       await wm(`${JSON.stringify(ids)}.forEach((id) => wm.close(id));`);
     }
     expect(await arrowsShown()).toBe(false);
+  });
+
+  it('task buttons: Ctrl+click selects, the bulk menu closes the selection, a plain click clears it, Shift+F10 opens the menu, drag reorders', async () => {
+    await page.goto(base);
+    await until(() => page.evaluate(`!!document.querySelector('[data-win="board"]')`), 'the board');
+    const ids = ['sel-0', 'sel-1', 'sel-2', 'sel-3'];
+    await page.evaluate(`import('/wm.js').then((wm) => ${JSON.stringify(ids)}.forEach((id) => wm.open(id, { title: id })))`);
+    const btn = (id: string) => `[data-task="${id}"]`;
+    const selected = () => page.evaluate<string[]>(`[...document.querySelectorAll('#tasks .task.selected')].map((b) => b.dataset.task)`);
+    const order = () => page.evaluate<string[]>(`[...document.querySelectorAll('#tasks .task')].map((b) => b.dataset.task).filter((t) => t.startsWith('sel-'))`);
+    const isOpen = (id: string) => page.evaluate<boolean>(`!!document.querySelector('[data-win="${id}"]')`);
+
+    for (const id of ids.slice(0, 3)) await click(btn(id), 2);
+    expect(await selected()).toEqual(['sel-0', 'sel-1', 'sel-2']);
+    expect(await page.evaluate(`getComputedStyle(document.querySelector('${btn('sel-0')}')).outlineStyle`)).toBe('dotted');
+    await click(btn('sel-1'), 2); // Ctrl+click again deselects
+    expect(await selected()).toEqual(['sel-0', 'sel-2']);
+    await click(btn('sel-3'), 8); // Shift: the range from the last clicked button
+    expect(await selected()).toEqual(['sel-1', 'sel-2', 'sel-3']);
+
+    await click(btn('sel-3')); // plain click: clears, and minimizes the focused window as before
+    expect(await selected()).toEqual([]);
+    expect(await page.evaluate(`document.querySelector('[data-win="sel-3"]').hidden`)).toBe(true);
+    await click(btn('sel-3'));
+    expect(await page.evaluate(`document.querySelector('[data-win="sel-3"]').classList.contains('active')`)).toBe(true);
+
+    await page.evaluate(`document.querySelector('${btn('sel-2')}').focus()`);
+    await page.send('Input.dispatchKeyEvent', { type: 'rawKeyDown', key: 'F10', code: 'F10', windowsVirtualKeyCode: 121, modifiers: 8 });
+    await page.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'F10', code: 'F10', windowsVirtualKeyCode: 121, modifiers: 8 });
+    expect(await menuItems()).toEqual(['Restore', 'Minimize', 'Maximize', 'Close']);
+    await menuPick('Maximize');
+    expect(await page.evaluate(`document.querySelector('[data-win="sel-2"]').classList.contains('max')`)).toBe(true);
+
+    const a = await page.center(btn('sel-0'));
+    const b = await page.center(btn('sel-2'));
+    await page.drag(a, b);
+    expect(await order()).toEqual(['sel-1', 'sel-2', 'sel-0', 'sel-3']);
+    expect(await page.evaluate(`document.querySelector('[data-win="sel-2"]').classList.contains('active')`)).toBe(true); // the drag's click focused nothing
+
+    for (const id of ['sel-1', 'sel-0', 'sel-3']) await click(btn(id), 2);
+    await rightClick(btn('sel-0'));
+    expect(await menuItems()).toEqual(['Restore', 'Minimize', 'Close']);
+    await menuPick('Close');
+    for (const id of ['sel-1', 'sel-0', 'sel-3']) expect(await isOpen(id)).toBe(false);
+    expect(await order()).toEqual(['sel-2']);
+    await page.evaluate(`import('/wm.js').then((wm) => wm.close('sel-2'))`);
   });
 
   it('keeps window positions across a reload', async () => {
