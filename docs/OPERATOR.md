@@ -71,10 +71,11 @@ A merged ticket's worktree and branch are removed by the board. Every ten merged
 | Terminal | opens by itself; Ticket → Runs → Terminal | one agent session, keyboard and mic |
 | Inbox | taskbar "Inbox n", Start → Inbox | every ticket that needs you: questions to answer, and failures with what resolves them |
 | Brain | Start → Brain | search what agents learned (no query lists the newest), add a note yourself. Each row shows when it was written and from which ticket, with that ticket's status, so a row written for work that never landed stands out. **Edit** changes a row in place, **Delete** removes it after a confirm; merge rows by editing the survivor and deleting the rest. Agents name rows to delete in their summary notes, since only you and the planner can delete |
-| Settings | Start → Settings | Models, CLI paths and trusted folders (**Clear Claude trust**), Prompts (preferences), Grants, Voice, sounds |
+| Settings | Start → Settings | Models, CLI paths and trusted folders (**Clear Claude trust**), Prompts (preferences), Grants, Limits, Voice, sounds |
 | Notepad | Start → Notepad | your own scratch notes for this repo, saved as you type |
+| Limits | Start → Limits, taskbar limit | the same as Settings → Limits in a small window to keep open beside the board |
 
-The desktop has an icon for Board, Inbox, Brain, Settings, Notepad, New ticket and New brainstorm down its left edge: click selects, double-click or Enter does what the Start menu entry does. Icons sit under every window.
+The desktop has an icon for Board, Inbox, Brain, Settings, Notepad, Limits, New ticket and New brainstorm down its left edge: click selects, double-click or Enter does what the Start menu entry does. Icons sit under every window.
 
 Windows can be dragged by the title bar, resized from the corner, minimized to the taskbar and maximized to fill the desktop (Maximize button or double-click the title bar; Restore puts it back). Board, Brain, Inbox, Settings and Notepad remember where you left them, maximized or not. With more windows than fit, small arrows appear at the ends of the taskbar buttons; click them or turn the mouse wheel over the taskbar to scroll. Right-click a taskbar button (or focus it and press Shift+F10 or the Menu key) for Restore, Minimize, Maximize and Close, plus **Open ticket** on a ticket's terminal; Close there only closes the window, the agent keeps running. Ctrl+click buttons to select several, Shift+click to select a range; right-click a selected one to Restore, Minimize or Close them all. A plain click clears the selection. Drag a button sideways to reorder the taskbar (the order resets on reload).
 
@@ -113,6 +114,12 @@ Inside a terminal every key goes to the agent instead: Esc interrupts Claude Cod
 ## Preferences
 
 Standing instructions for every agent, for example "No em dashes or non-ASCII characters in output" or "Keep responses brief". Write them in **Settings → Prompts → Preferences** and press **Save**; that writes `~/.kanban95/preferences.md` (the path is shown on the tab), up to 16 KB. Every prompt rendered after that (brainstorm, operator, plan, execute, test, housekeeping) carries them under "Operator preferences"; sessions already running keep the prompt they started with. They are yours, not the repo's, so they apply to every project the board works on. Never put a key or token in them: they are copied into every session's prompt.
+
+## Limits
+
+How much of each account's usage limits is spent: the Claude Code account and the Codex account the CLIs are logged into. **Settings → Limits** (or the **Limits** desktop icon, a small window you can keep open) has one table per CLI: each window (Claude: current session, current week for all models and per model; Codex: the 5 hour and 7 day windows), the percent used with a bar, and when it resets. The taskbar tray, beside "Inbox n", shows the most constrained one, for example "Claude 62%" (bold red from 90%); hover it for every window, click it for Settings → Limits.
+
+The numbers come from the CLIs themselves, each with its own login: Claude Code's `/usage` command (`claude -p --safe-mode --no-session-persistence "/usage"`, no model call, no quota spent, about 10 s) and Codex's app server (`codex app-server`, request `account/rateLimits/read`, about 3 s). They are read when the board opens and every 5 minutes after, one CLI at a time; **Refresh** reads them now. A CLI that is not installed, not logged in, or whose output the board no longer understands shows "Not available:" and the reason instead of a table; the other CLI is unaffected. The executables are the ones in **Settings → CLIs**, or `claude` and `codex` on PATH.
 
 ## Grants
 
