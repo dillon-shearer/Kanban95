@@ -4,7 +4,7 @@ Living document. How a ticket moves itself from Launch to merged, and what the b
 
 ## Columns and flags
 
-Status is one of **backlog → in_progress → testing → done**. Two flags sit beside it: `needs_human` (the operator is needed: a question, a silent exit, an agent silent for `idle_minutes`, the retry cap, a merge conflict (on submit or in the merge queue) at the retry cap, a main checkout still dirty after the merge queue's wait) and `blocked_on_deps` (launched, but waiting for a dependency to merge). A ticket also records `retry` (failed tests and merge conflicts so far) and `merged_at` (when its branch landed).
+Status is one of **backlog → in_progress → testing → done**. Two flags sit beside it: `needs_human` (the operator is needed: a question, a silent exit, an agent silent for `idle_minutes`, the retry cap, a merge conflict (on submit or in the merge queue) at the retry cap, a main checkout still dirty after the merge queue's wait, a merge that landed but could not be pushed) and `blocked_on_deps` (launched, but waiting for a dependency to merge). A ticket also records `retry` (failed tests and merge conflicts so far) and `merged_at` (when its branch landed and, with `push_after_merge` on, was pushed).
 
 ## Events
 
@@ -22,6 +22,7 @@ Status is one of **backlog → in_progress → testing → done**. Two flags sit
 | `merged` | the merge queue |
 | `conflict` | the board, when the base will not merge into the ticket's worktree (on submit or in the merge queue) or the worktree has uncommitted changes |
 | `dirty` | the merge queue, once the main checkout has had uncommitted changes for the whole wait (10 min) |
+| `unpushed` | the merge queue, when the branch landed in the base but `git push` of the base to its upstream failed |
 | `merge` | the operator retrying a failed merge, `POST /api/tickets/:id/merge` |
 | `resume` | the operator, Resume in the card menu or the Inbox, `POST /api/tickets/:id/resume` |
 | `restart` | the operator, Restart in the card menu, the ticket window (Ctrl+R) or the Inbox, `POST /api/tickets/:id/restart` |
@@ -58,6 +59,7 @@ The tester's verdict is the move: `report_test` writes the PASS or FAIL note, th
 | done | conflict | `retry` < 3 | in_progress | `retry` + 1 | failure note as above, execute agent again in the kept worktree. It merges the base in, resolves, and submits; the tester runs and the merge is queued again |
 | done | conflict | `retry` = 3 | done | `needs_human` on | the same failure note, chord. Worktree kept |
 | done | dirty | | done | `needs_human` on | failure note naming the uncommitted files, chord |
+| done | unpushed | | done | `needs_human` on | failure note with git's message, chord. The merge stays in the base; worktree kept, `merged_at` unset |
 | done | merge | not merged yet | done | | merge queued again |
 | done | reject | no live agent session | in_progress | `needs_human` off, `retry` 0, `merged_at` kept | the operator's reason as an `operator` failure note, execute agent (see Reject below) |
 
@@ -100,6 +102,7 @@ Every row that turns `needs_human` on writes exactly one note in the same transa
 | conflict at the cap, on submit | `merge conflict with <base>: …` / `worktree has uncommitted changes; …` | in `.worktrees/t-<id>` commit or discard, merge the base, fix, test, commit, Resume |
 | conflict at the cap, in the queue | `merge conflict with <base>: …` | in `.worktrees/t-<id>` merge the base, fix, test, commit, Retry merge |
 | dirty | the `git status` lines | commit or stash in the main checkout, Retry merge |
+| unpushed | `merged into <base>, but git push to <remote> failed, so the ticket is not closed:` and git's message | in the main checkout pull and merge what the remote has, or reconnect or sign in to the remote, then Retry merge (it pushes again) |
 
 ### Retries
 
@@ -181,7 +184,21 @@ When the queue's sync brings in new commits the ticket lands anyway, without ano
 2. refuses if the main working tree has uncommitted changes to tracked files. That is not the ticket's fault, so nothing is flagged: the job is queued again every 30 s and raises `dirty` only if the tree is still dirty 10 min after the first try (`DIRTY_WAIT`). It never merges into a dirty tree and never runs `git merge --abort` over the operator's edits. A Retry merge restarts the wait; a ticket moved out of done or merged meanwhile is skipped;
 3. merges the base into the ticket's worktree (Sync, above). A conflict or uncommitted changes there raise `conflict` (back to the worker below the retry cap, flagged at it) and the main checkout is not touched;
 4. runs `git merge --no-ff --no-edit -m "<ticket title>" ticket/<id>` in the main working tree, into whatever branch it has checked out. The commit is authored by the repo's own git identity (the operator), with the title as its only line: no ticket id, no trailer. After the sync this cannot conflict; on any failure anyway it runs `git merge --abort` (a safety net), so the base is left exactly as it was, and raises `conflict`. A queue job never ends with the main checkout mid-merge;
-5. on success raises `merged`, whose effects remove the worktree and branch before the next job starts.
+5. pushes the base to its upstream (Push, below). A failed push raises `unpushed` and the job ends there;
+6. on success raises `merged`, whose effects remove the worktree and branch before the next job starts.
+
+A job whose branch is already in the base (`git merge-base --is-ancestor ticket/<id> HEAD`) skips steps 3 and 4 and only pushes. That is Retry merge after a failed push, and also a daemon that stopped between the merge and the push: `recover` queues the unflagged, unmerged done ticket again and it is pushed then.
+
+### Push
+
+With `push_after_merge` on (`~/.kanban95/settings.json`, default on, Settings → General → Git), the queue runs `git push <remote> <base>:<branch>` in the main checkout, where `<remote>` and `<branch>` are the base's upstream (`branch.<base>.remote` and `branch.<base>.merge`). Only then is the ticket `merged` (`merged_at`, cleanup). The push sends the whole base, so any earlier commits the upstream lacks go with it. It runs inside the queue job, so pushes never run beside a merge. `push` in `daemon/src/merge.ts`.
+
+- **No upstream**: nothing is run and the ticket closes, so a local-only repo works as before.
+- **Setting off**: nothing is pushed and tickets close as before.
+- **Failure** (rejected because the remote has commits the base lacks, a hook refused it, offline, signed out): the merge stays in the base and `unpushed` flags the ticket with git's stderr. Git runs with `GIT_TERMINAL_PROMPT=0`, so a missing credential fails at once instead of waiting on a prompt nobody sees, and a push that hangs is killed after 2 minutes (`ponytail:` in `push`: the queue is held that long).
+- **Credentials** are git's own (credential helper, SSH agent); the board never reads them (`SECURITY.md`).
+
+On daemon start, with the setting on, the board counts the commits on the base its upstream lacks (`git rev-list --count @{u}..HEAD`, against the remote-tracking ref as last fetched or pushed; `countUnpushed`). A non-zero count shows "N commits not pushed" in the Board's status bar with a **Push** button (`POST /api/push`, audited as `board.push`), which runs the same push in the queue and clears the count. A refused Push answers 502 with git's message and keeps the count. A successful push after a merge also clears it.
 
 ## Run settings
 
@@ -214,7 +231,7 @@ A repo's prompts come from its own `.kanban95/templates/`, copied from `template
 
 ## Sounds
 
-`ding.wav` when a ticket is merged, `chord.wav` whenever `needs_human` is raised by the table (question, silent exit, silent agent, retry cap, conflict at the cap, dirty base). The daemon sends `{"sound": "ding" | "chord", "ticket": <id>}` on the `/events` websocket; the UI plays `ui/sounds/<sound>.wav` unless that sound is off in Settings → General, and says the reason in the status bar ("#<id> merged.", or the needs-human reason). Every transition also sends `{"ticket": <id>}`, so the board redraws that card without a reload (`docs/ARCHITECTURE.md` → Events).
+`ding.wav` when a ticket is merged, `chord.wav` whenever `needs_human` is raised by the table (question, silent exit, silent agent, retry cap, conflict at the cap, dirty base, failed push). The daemon sends `{"sound": "ding" | "chord", "ticket": <id>}` on the `/events` websocket; the UI plays `ui/sounds/<sound>.wav` unless that sound is off in Settings → General, and says the reason in the status bar ("#<id> merged.", or the needs-human reason). Every transition also sends `{"ticket": <id>}`, so the board redraws that card without a reload (`docs/ARCHITECTURE.md` → Events).
 
 ## Janitor
 

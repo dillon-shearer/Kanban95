@@ -44,6 +44,7 @@ describe('transition table', () => {
     ['merge conflict goes back to the worker', { status: 'done', retry: MAX_RETRY - 1 }, 'conflict', { to: 'in_progress', set: { retry: '+1' }, effects: ['end_session', 'note', 'spawn_execute'] }],
     ['merge conflict at the retry cap stops', { status: 'done', retry: MAX_RETRY }, 'conflict', { to: 'done', set: { needs_human: 1 }, effects: ['note', 'chord'] }],
     ['base still dirty after the wait', { status: 'done' }, 'dirty', { to: 'done', set: { needs_human: 1 }, effects: ['note', 'chord'] }],
+    ['merged but the push failed', { status: 'done' }, 'unpushed', { to: 'done', set: { needs_human: 1 }, effects: ['note', 'chord'] }],
     ['operator rejects a merged ticket', { status: 'done', merged: true, retry: 2, live: false }, 'reject', { to: 'in_progress', set: { needs_human: 0, retry: 0 }, effects: ['note', 'spawn_execute'] }],
     ['operator rejects a flagged unmerged ticket', { status: 'done', needs_human: true, live: false }, 'reject', { to: 'in_progress', set: { needs_human: 0, retry: 0 }, effects: ['note', 'spawn_execute'] }],
     ['operator retries a failed merge', { status: 'done', needs_human: true }, 'merge', { to: 'done', set: {}, effects: ['enqueue_merge'] }],
@@ -56,9 +57,9 @@ describe('transition table', () => {
     backlog: ['launch'],
     in_progress: ['launch', 'resume', 'restart', 'submit', 'ask', 'answer', 'exit', 'silent', 'woke', 'conflict'],
     testing: ['launch', 'resume', 'restart', 'pass', 'fail', 'ask', 'answer', 'exit', 'silent', 'woke'],
-    done: ['merged', 'conflict', 'merge', 'dirty', 'reject'],
+    done: ['merged', 'conflict', 'merge', 'dirty', 'unpushed', 'reject'],
   };
-  const EVENTS: Event[] = ['launch', 'submit', 'pass', 'fail', 'ask', 'answer', 'exit', 'silent', 'woke', 'merged', 'conflict', 'merge', 'dirty', 'resume', 'restart', 'reject'];
+  const EVENTS: Event[] = ['launch', 'submit', 'pass', 'fail', 'ask', 'answer', 'exit', 'silent', 'woke', 'merged', 'conflict', 'merge', 'dirty', 'unpushed', 'resume', 'restart', 'reject'];
   it('refuses every other event in every status', () => {
     let n = 0;
     for (const status of Object.keys(allowed) as Status[]) {
@@ -67,7 +68,7 @@ describe('transition table', () => {
         n++;
       }
     }
-    expect(n).toBe(4 * EVENTS.length - 26);
+    expect(n).toBe(4 * EVENTS.length - 27);
   });
 
   it('refuses a guarded row whose guard fails, saying why', () => {
@@ -89,7 +90,7 @@ describe('transition table', () => {
 
   it('every row that raises needs_human writes one note, and all but a question end it with what resolves it', () => {
     const flagged = TABLE.filter((r) => r.set?.needs_human === 1);
-    expect(flagged.map((r) => r.event)).toEqual(['fail', 'ask', 'exit', 'silent', 'conflict', 'conflict', 'dirty']);
+    expect(flagged.map((r) => r.event)).toEqual(['fail', 'ask', 'exit', 'silent', 'conflict', 'conflict', 'dirty', 'unpushed']);
     for (const r of flagged) {
       expect(r.effects.filter((e) => e === 'note'), r.event).toHaveLength(1);
       expect(r.resolve === undefined, r.event).toBe(r.event === 'ask');
@@ -98,6 +99,7 @@ describe('transition table', () => {
     expect(fix('conflict')).toMatch(/\.worktrees\/t-7 .*Retry merge/);
     expect(fix('conflict', 'in_progress')).toMatch(/\.worktrees\/t-7 .*uncommitted .*git merge .*Resume/);
     expect(fix('dirty')).toMatch(/main checkout \(C:\/repo\).*Retry merge/);
+    expect(fix('unpushed')).toMatch(/main checkout \(C:\/repo\).*pull .*sign in .*Retry merge/);
     expect(`To resolve: ${fix('exit', 'in_progress')}`).toBe(TO_RESOLVE);
   });
 });
@@ -666,6 +668,115 @@ ${TO_RESOLVE}`]);
     } finally {
       rmSync(settings, { force: true });
     }
+  });
+});
+
+describe('push after merge', { timeout: 60_000 }, () => {
+  let bare: string;
+  const remote = (...a: string[]) => execFileSync('git', a, { cwd: bare, encoding: 'utf8' }).trim();
+  const settings = () => join(process.env.KANBAN95_HOME!, 'settings.json');
+  const runnerState = async () => (await send('GET')('/api/runner')).json();
+  const commitOnBase = (f: string) => {
+    writeFileSync(join(repo, `${f}.txt`), `${f}\n`);
+    git('add', `${f}.txt`);
+    git('commit', '-qm', `Add ${f} on the base`);
+  };
+  const refuse = () => writeFileSync(join(bare, 'hooks', 'pre-receive'), '#!/bin/sh\necho "denied by the remote" >&2\nexit 1\n');
+  const restart = async () => {
+    await srv.close();
+    srv = await start({ repo });
+    db = srv.db;
+  };
+  beforeEach(() => {
+    bare = mkdtempSync(join(tmpdir(), 'k95-remote-'));
+    execFileSync('git', ['init', '-q', '--bare', '-b', 'main'], { cwd: bare });
+    git('remote', 'add', 'origin', bare);
+    git('push', '-q', '-u', 'origin', 'main');
+  });
+  afterEach(() => {
+    rmSync(settings(), { force: true });
+    rmSync(bare, { recursive: true, force: true, maxRetries: 5 });
+  });
+
+  it('pushes the landed merge, and an unpushed commit made on the base before it, by the time the ticket is merged', async () => {
+    commitOnBase('b');
+    const backlog = git('rev-parse', 'HEAD');
+    const id = ticket('Add and push');
+    await post(`/api/tickets/${id}/launch`);
+    await until(() => t(id).merged_at, 'merged_at');
+    expect(remote('rev-parse', 'main')).toBe(git('rev-parse', 'HEAD')); // pushed before merged_at was written
+    expect(remote('log', '-1', '--format=%s', 'main')).toBe('Add and push');
+    expect(remote('merge-base', '--is-ancestor', backlog, 'main')).toBe('');
+    await landed(id);
+  });
+
+  it("a rejected push keeps the merge, leaves merged_at unset, flags with git's message and a chord; Retry merge pushes again", async () => {
+    refuse();
+    const before = remote('rev-parse', 'main');
+    const id = ticket('Add, push refused');
+    await post(`/api/tickets/${id}/launch`);
+    await until(() => t(id).flags.needs_human, 'the flag');
+    expect(t(id)).toMatchObject({ status: 'done', merged_at: null });
+    expect(git('log', '-1', '--format=%s', 'HEAD')).toBe('Add, push refused'); // the merge stays in the base
+    expect(remote('rev-parse', 'main')).toBe(before);
+    expect(existsSync(join(repo, '.worktrees', `t-${id}`))).toBe(true);
+    expect(notes(id, 'failure')).toEqual([expect.stringMatching(/^merged into main, but git push to origin failed, so the ticket is not closed:\n[^]*denied by the remote[^]*\nTo resolve: .*Retry merge; it pushes again\.$/)]);
+    expect(sounds).toEqual([{ sound: 'chord', ticket: id }]);
+
+    rmSync(join(bare, 'hooks', 'pre-receive'));
+    expect((await post(`/api/tickets/${id}/merge`)).status).toBe(200);
+    await landed(id);
+    expect(t(id).flags.needs_human).toBe(false);
+    expect(remote('rev-parse', 'main')).toBe(git('rev-parse', 'HEAD'));
+    expect(git('log', '--merges', '--format=%s').split('\n')).toEqual(['Add, push refused']); // merged once, not again on retry
+  });
+
+  it('a base with no upstream merges and closes the ticket without pushing', async () => {
+    git('branch', '--unset-upstream');
+    const before = remote('rev-parse', 'main');
+    const id = ticket('Add, no upstream');
+    await post(`/api/tickets/${id}/launch`);
+    await landed(id);
+    expect(t(id).flags.needs_human).toBe(false);
+    expect(remote('rev-parse', 'main')).toBe(before);
+  });
+
+  it('with push_after_merge off nothing is pushed and the ticket closes as before', async () => {
+    writeFileSync(settings(), JSON.stringify({ push_after_merge: false }));
+    const before = remote('rev-parse', 'main');
+    const id = ticket('Add, push off');
+    await post(`/api/tickets/${id}/launch`);
+    await landed(id);
+    expect(t(id).flags.needs_human).toBe(false);
+    expect(remote('rev-parse', 'main')).toBe(before);
+  });
+
+  it('a daemon started ahead of its upstream reports the unpushed count; POST /api/push pushes it and clears it', async () => {
+    commitOnBase('b');
+    commitOnBase('c');
+    await restart();
+    await until(async () => (await runnerState()).unpushed === 2, 'the unpushed count');
+    const r = await post('/api/push');
+    expect(r.status).toBe(200);
+    expect((await r.json()).unpushed).toBe(0);
+    expect(remote('rev-parse', 'main')).toBe(git('rev-parse', 'HEAD'));
+    expect(db.prepare("SELECT outcome FROM audit WHERE tool = 'board.push'").all()).toEqual([{ outcome: 'ok' }]);
+  });
+
+  it("a refused Push answers 502 with git's message and keeps the count; with push_after_merge off no count is shown", async () => {
+    commitOnBase('b');
+    refuse();
+    await restart();
+    await until(async () => (await runnerState()).unpushed === 1, 'the unpushed count');
+    const r = await post('/api/push');
+    expect(r.status).toBe(502);
+    expect(await r.text()).toContain('denied by the remote');
+    expect((await runnerState()).unpushed).toBe(1);
+
+    writeFileSync(settings(), JSON.stringify({ push_after_merge: false }));
+    await restart();
+    await new Promise((ok) => setTimeout(ok, 300));
+    expect((await runnerState()).unpushed).toBe(0);
   });
 });
 
