@@ -356,7 +356,7 @@ export function operator(b: Board, mission: string): Session {
 
 /** `.kanban95/runner.json`, git-ignored: whether the runner is on, why it last stopped itself, how many tickets it keeps running. Absent means off. */
 export type Runner = { on: boolean; why?: string; concurrency?: number };
-export const CONCURRENCY = 3;
+const CONCURRENCY = 3;
 const runnerFile = (b: Board) => join(b.repo, '.kanban95', 'runner.json');
 export function runner(b: Board): Runner {
   try {
