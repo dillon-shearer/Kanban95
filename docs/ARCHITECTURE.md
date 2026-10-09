@@ -123,6 +123,8 @@ ui/               index.html, app.js (data layer and windows), wm.js (window man
 templates/        default prompt templates (brainstorm, operator, plan, execute, test, housekeeping), copied into each repo once
 skills/           the Claude Code plugin `kanban95` (.claude-plugin/plugin.json and one folder per skill; docs/AGENTS.md)
 Kanban95.cmd      double-click launcher: finds Node 24, installs, builds, runs the shell on a repo
+Kanban95.vbs      runs Kanban95.cmd with no console window; a dialog shows its output if it fails
+Kanban95.command  macOS launcher: the same steps as Kanban95.cmd
 shell/            Cargo.toml, build.rs, tauri.conf.json, tauri.bundle.json (installer overlay), stage.mjs (stages the installed daemon), src/main.rs, icons/icon.ico
 docs/             this file, LEARNING.md (guided tour for newcomers), OPERATOR.md (driving the board), img/ (its screenshots), LIFECYCLE.md (state machine, merge queue, janitor), CLIS.md (how each CLI is launched), DATA.md (schema), AGENTS.md (what agents receive and how they behave), SECURITY.md (grants, audit, network), MCP.md (generated tool reference)
 <repo>/.kanban95/ board.db (gitignored), .gitignore, sessions/ (gitignored), attachments/ (gitignored), templates/*.md (committed, operator-editable); created by the daemon on first start. config.json (optional, committed)
