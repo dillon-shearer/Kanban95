@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { sessions } from '../src/launcher.ts';
 import { until } from './cdp.ts';
-import { srv, page, base, ticket, column, click } from './ui.ts';
+import { srv, page, base, ticket, column, click, setUi } from './ui.ts';
 
 const KEYS = { '=': ['Equal', 187], '-': ['Minus', 189], '0': ['Digit0', 48] } as const;
 /** A real Ctrl+key press, to whatever has focus. */
@@ -23,6 +23,10 @@ const dblclickIcon = (name: string) => page.evaluate(`document.querySelector('[d
 
 describe('ui-zoom', { timeout: 90_000 }, () => {
   it('zooms everything by 10% a key, keeps it in settings.json across a reload, and shows it in Settings > General', async () => {
+    await page.goto(base);
+    await board();
+    // A Board with room to grow: the default's spans the desktop, and zooming in shrinks it to fit.
+    await setUi('k95.win.board', { x: 100, y: 0, w: 800, h: 500 });
     await page.goto(base);
     await board();
     const win = await rect('[data-win="board"]');
@@ -65,6 +69,7 @@ describe('ui-zoom', { timeout: 90_000 }, () => {
     expect(await zoom()).toBe(0.8); // the floor
     await ctrl('0');
     await until(() => saved() === 1, 'zoom reset');
+    await setUi('k95.win.board', undefined);
   });
 
   it('at 200% keeps every window on the desktop and the taskbar in view at 1280x720', async () => {

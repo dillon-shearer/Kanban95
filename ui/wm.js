@@ -3,11 +3,12 @@
 // where it covers the least of the open windows (`place`).
 // `persist: true` saves under the window id; a string saves under that key, so windows with different ids can share one place.
 // Maximized is the `max` class: CSS fills #desktop over the inline geometry, which stays as the restore geometry.
+// A window opened with `zone` and nothing saved tiles into the terminal zone (`setZone`, `tile`) until the operator moves it.
 import * as ui from './state.js';
 
 const desktop = document.getElementById('desktop');
 const tasks = document.getElementById('tasks');
-const wins = new Map(); // id → { el, task, onClose, api, toggleMax, items }
+const wins = new Map(); // id → { el, task, onClose, api, toggleMax, items, zoned, settle }
 let z = 10;
 // The UI zoom: CSS `zoom` on body, so menus and dialogs appended to it scale too. Inside it, offsets and inline styles (and so
 // the saved geometry) are CSS px before zoom, while pointer coordinates and getBoundingClientRect are screen px: divide those by it.
@@ -19,15 +20,16 @@ export function setZoom(f) {
   zoom = f;
   document.body.style.zoom = f;
   for (const { el } of wins.values()) if (!el.hidden && !el.classList.contains('max')) clamp(el);
+  tile();
 }
 // Taskbar selection: Ctrl+click toggles a button, Shift+click takes the range from the last clicked one, in taskbar order.
 const sel = new Set();
 let anchor = null;
 const paint = () => { for (const [id, w] of wins) w.task.classList.toggle('selected', sel.has(id)); };
 
-// Taskbar overflow: once the buttons are at their 60px minimum, arrows at both ends scroll one button per click, as does the wheel.
+// Taskbar overflow: once the icon buttons fill #tasks, arrows at both ends scroll one button per click, as does the wheel.
 const arrows = [document.getElementById('tasks-left'), document.getElementById('tasks-right')];
-const step = () => (tasks.querySelector('.task')?.offsetWidth ?? 60) + 3; // + the 3px flex gap
+const step = () => (tasks.querySelector('.task')?.offsetWidth ?? 28) + 3; // + the 3px flex gap
 arrows.forEach((a, i) => a.addEventListener('click', () => { tasks.scrollLeft += (i ? 1 : -1) * step(); }));
 tasks.addEventListener('wheel', (e) => { e.preventDefault(); tasks.scrollLeft += e.deltaY || e.deltaX; }, { passive: false });
 const overflow = () => { for (const a of arrows) a.hidden = tasks.scrollWidth <= tasks.clientWidth; };
@@ -59,10 +61,7 @@ export function focus(id) {
     o.el.querySelector('.title-bar').classList.add('inactive');
     o.task.classList.remove('active');
   }
-  if (w.el.hidden) {
-    w.el.hidden = false;
-    if (!w.el.classList.contains('max')) clamp(w.el); // the zoom may have changed while it was minimized
-  }
+  unhide(w);
   w.el.style.zIndex = ++z;
   w.el.classList.add('active');
   w.el.querySelector('.title-bar').classList.remove('inactive');
@@ -70,13 +69,30 @@ export function focus(id) {
   w.task.scrollIntoView({ block: 'nearest', inline: 'nearest' });
 }
 
+function unhide(w) {
+  if (!w.el.hidden) return;
+  w.el.hidden = false;
+  if (!w.el.classList.contains('max')) clamp(w.el); // the zoom may have changed while it was minimized
+  if (w.zoned) tile();
+}
+
+/** Brings window `id` to the front, out of minimized, without taking focus from the focused window. */
+export function raise(id) {
+  const w = wins.get(id);
+  if (!w) return;
+  unhide(w);
+  w.el.style.zIndex = ++z;
+}
+
 /**
  * Opens window `id`, or focuses it when it is already open. Returns { el, body, title(text), close }.
  * `background`: opens behind the focused window without taking focus (terminals the board opens on its own).
  * `onX`: runs instead of closing when the operator clicks X; `close` and `api.close` still close at once.
  * `items`: extra entries for its taskbar button's menu, as `menu()` takes them.
+ * `icon`: its taskbar button's picture, `icons/<icon>.svg`; the title is the button's tooltip.
+ * `zone`: with nothing saved, it tiles into the terminal zone instead of opening at `place()`.
  */
-export function open(id, { title, w = 480, h: height = 320, persist = false, background = false, onClose, onX, extra = [], items = [] }) {
+export function open(id, { title, w = 480, h: height = 320, persist = false, background = false, onClose, onX, extra = [], items = [], icon = 'window', zone = false }) {
   if (wins.has(id)) {
     focus(id);
     return wins.get(id).api;
@@ -95,27 +111,37 @@ export function open(id, { title, w = 480, h: height = 320, persist = false, bac
     body);
   el.classList.toggle('max', !!saved?.max);
   Object.assign(el.style, { left: `${r.x}px`, top: `${r.y}px`, width: `${r.w}px`, height: `${r.h}px` });
-  const task = h('button', { class: 'task', 'data-task': id, onclick: (e) => clickTask(id, e),
+  const task = h('button', { class: 'task', 'data-task': id, title, 'aria-label': title, onclick: (e) => clickTask(id, e),
     oncontextmenu: (e) => { e.preventDefault(); taskMenu(id, e.clientX, e.clientY); },
     onkeydown: (e) => {
       if (e.key !== 'ContextMenu' && !(e.key === 'F10' && e.shiftKey)) return;
       e.preventDefault();
       const r = task.getBoundingClientRect();
       taskMenu(id, r.left, r.top);
-    } }, title);
+    } }, h('img', { src: `icons/${icon}.svg`, alt: '', width: 16, height: 16, draggable: 'false' }));
   dragTask(task);
-  const api = { el, body, title: (t) => { text.textContent = t; task.textContent = t; }, close: () => close(id) };
-  wins.set(id, { el, task, onClose, api, toggleMax, items });
+  const api = { el, body, title: (t) => { text.textContent = t; task.title = t; task.setAttribute('aria-label', t); }, close: () => close(id) };
+  let last; // the geometry last saved or tiled
+  const win = { el, task, onClose, api, toggleMax, items, zoned: zone && !saved, settle: () => { last = JSON.stringify(rect(el)); } };
+  wins.set(id, win);
   desktop.append(el);
   tasks.append(task);
   overflow(); // before focus() scrolls the button into view, so the arrows are already taking their room
-  if (!saved?.max) clamp(el); // clamp reads the maximized box and would overwrite the restore geometry
+  if (win.zoned) tile();
+  else if (!saved?.max) clamp(el); // clamp reads the maximized box and would overwrite the restore geometry
 
   // Saved only when the geometry changed: a click inside an unmoved window leaves it following its seed (the startup layout).
-  let last = JSON.stringify(rect(el));
+  // A tiled window that the operator moved, resized or maximized leaves the zone, and the rest re-tile.
+  win.settle();
   const save = () => {
     const now = JSON.stringify(rect(el));
-    if (key && now !== last) geo.set(key, JSON.parse((last = now)));
+    if (now === last) return;
+    last = now;
+    if (key) geo.set(key, JSON.parse(now));
+    if (win.zoned) {
+      win.zoned = false;
+      tile();
+    }
   };
   const maxBtn = el.querySelector('[aria-label="Maximize"], [aria-label="Restore"]');
   function toggleMax() {
@@ -162,6 +188,39 @@ function place(w, h) {
     }
   }
   return { x: best.x, y: best.y };
+}
+
+// The terminal zone: a function returning { x, y, w, h } in CSS px, read at every tile, so it follows the desktop's size.
+let zoneRect = null;
+/** Sets where `zone` windows tile. */
+export function setZone(f) {
+  zoneRect = f;
+  tile();
+}
+new ResizeObserver(() => tile()).observe(desktop);
+
+/**
+ * Tiles the zone's windows that are open and not minimized, in opening order: up to 4 side by side at equal width, a fifth
+ * starts a second row and the rows share the height. Runs whenever one opens, closes, minimizes or comes back.
+ */
+// ponytail: the zone is fixed (app.js's layout B), not derived from a saved startup layout that moved the Board; a layout that
+// puts the Board over the zone gets terminals over it. Derive the zone from the layout's Board if operators save such layouts.
+function tile() {
+  if (!zoneRect) return;
+  const list = [...wins.values()].filter((w) => w.zoned && !w.el.hidden && !w.el.classList.contains('max'));
+  if (!list.length) return;
+  const r = zoneRect();
+  const cols = Math.min(4, list.length);
+  const rows = Math.ceil(list.length / cols);
+  list.forEach((w, i) => {
+    const c = i % cols;
+    const row = Math.floor(i / cols);
+    const x = Math.round(r.x + (r.w * c) / cols);
+    const y = Math.round(r.y + (r.h * row) / rows);
+    Object.assign(w.el.style, { left: `${x}px`, top: `${y}px`,
+      width: `${Math.round(r.x + (r.w * (c + 1)) / cols) - x}px`, height: `${Math.round(r.y + (r.h * (row + 1)) / rows) - y}px` });
+    w.settle(); // the tile is not the operator's move
+  });
 }
 
 /** A window's geometry as `open` restores it: the inline restore geometry while maximized (or minimized), else the laid-out box. */
@@ -289,6 +348,7 @@ export function minimize(id) {
   w.el.hidden = true;
   w.el.classList.remove('active');
   w.task.classList.remove('active');
+  if (w.zoned) tile();
 }
 
 export function close(id) {
@@ -299,6 +359,7 @@ export function close(id) {
   w.el.remove();
   w.task.remove();
   overflow();
+  if (w.zoned) tile();
   w.onClose?.();
 }
 
