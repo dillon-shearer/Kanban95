@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, it } from 'vitest';
-import { configPath, readPreferences, writeConfig, writePreferences } from '../src/settings.js';
+import { configPath, readPreferences, runSettings, writeConfig, writePreferences } from '../src/settings.js';
 
 const set = process.env.KANBAN95_HOME!;
 afterEach(() => void (process.env.KANBAN95_HOME = set));
@@ -23,4 +23,15 @@ it('with KANBAN95_HOME set, config is read from and written to that directory', 
   writePreferences('be brief');
   expect(readFileSync(join(set, 'preferences.md'), 'utf8')).toBe('be brief');
   expect(readPreferences()).toBe('be brief');
+});
+
+it('runSettings refuses a model outside the cli models list, naming the model, the cli and the file; no list means no check', () => {
+  const t = (model: string | null) => ({ model, cli: null, effort: null }) as never;
+  writeConfig('models', { cli: 'claude', claude: { models: ['a'], execute: { model: 'a' }, test: { model: 'zz' } } });
+  const file = configPath('models');
+  expect(runSettings(t(null), 'execute').model).toBe('a');
+  expect(() => runSettings(t('b'), 'execute')).toThrow(`model b is not in the claude model list in ${file}`);
+  expect(() => runSettings(null, 'test')).toThrow(`model zz is not in the claude model list in ${file}`);
+  writeConfig('models', { cli: 'claude', claude: { execute: { model: 'a' } } });
+  expect(runSettings(t('b'), 'execute').model).toBe('b');
 });

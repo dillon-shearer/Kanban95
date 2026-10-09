@@ -8,6 +8,7 @@ import { mint, revoke } from '../src/grants.ts';
 import { MAX_RETRY } from '../src/lifecycle.ts';
 import { MCP_DOC, renderMcpDoc } from '../src/mcp-doc.ts';
 import { TOOLS } from '../src/mcp.ts';
+import { configPath, writeConfig } from '../src/settings.ts';
 import { start } from '../src/server.ts';
 
 let repo: string;
@@ -118,7 +119,7 @@ describe('ticket scope', () => {
       expect(r.text).toMatch(/scoped to ticket 3/);
       expect(lastAudit()).toMatchObject({ grant_id: grantIds.worker3, ticket_id: 4, tool, outcome: 'denied' });
     }
-    expect(srv.db.prepare('SELECT count(*) AS n FROM notes WHERE ticket_id = 4').get()).toEqual({ n: 0 });
+    expect(srv.db.prepare('SELECT count(*) AS n FROM notes WHERE ticket_id = 4').get()).toMatchObject({ n: 0 });
   });
 
   it('a worker reads its own ticket and its dependencies, nothing else', async () => {
@@ -190,6 +191,17 @@ describe('tools', () => {
     expect((await call(planner, 'set_model', { ticket_id: 5, model: 'm1' })).json).toMatchObject({ model: 'm1', effort: 'low' });
     expect((await call(planner, 'set_model', { ticket_id: 5 })).text).toBe('give model and/or effort');
     expect(lastAudit()).toMatchObject({ tool: 'set_model', outcome: 'error' });
+  });
+
+  it('create_ticket and set_model refuse a model outside the catalog list and store nothing', async () => {
+    writeConfig('models', { cli: 'claude', claude: { models: ['m1'], execute: { model: 'm1' } } });
+    try {
+      expect((await call(planner, 'set_model', { ticket_id: 1, model: 'nope' })).text).toMatch(/^model nope is not in the claude model list in .*models\.json$/);
+      expect((await call(planner, 'create_ticket', { title: 'bad', model: 'nope' })).text).toMatch(/^model nope is not in the claude model list/);
+      expect(srv.db.prepare("SELECT COUNT(*) n FROM tickets WHERE title = 'bad' OR model = 'nope'").get()).toMatchObject({ n: 0 });
+    } finally {
+      rmSync(configPath('models'), { force: true });
+    }
   });
 
   it('refuses a dependency cycle at update_ticket, direct or through other tickets, and leaves the deps as they were', async () => {

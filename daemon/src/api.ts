@@ -10,7 +10,7 @@ import { ticketDiff } from './git.js';
 import { audit, revoke } from './grants.js';
 import { killGrantSession, sessions, sessionsOf, type Session } from './launcher.js';
 import { apply, brainstorm, changed, housekeeping, operator, Refused, runner, runnerState, setRunner, type Board } from './lifecycle.js';
-import { BadConfig, CONFIGS, configPath, knownModels, preferencesPath, readPreferences, writeConfig, writePreferences, type ConfigName } from './settings.js';
+import { BadConfig, CONFIGS, configPath, knownModels, preferencesPath, readPreferences, uncatalogued, writeConfig, writePreferences, type ConfigName } from './settings.js';
 import { resetTemplate, templatePath, TEMPLATES, unknownVar, VARS, writeTemplate, type TemplateName } from './templates.js';
 import { trustStatus, untrustClaude } from './trust.js';
 import { download, status as voiceStatus } from './voice.js';
@@ -151,6 +151,8 @@ const routes: [method: string, path: RegExp, mutation: string | null, handler: (
   ['POST', /^\/api\/tickets$/, 'tickets.create', ({ db, body }) => {
     const { cols, vals, deps } = ticketColumns(body);
     if (!cols.includes('title')) throw new HttpError(400, 'title is required');
+    const bad = typeof body.model === 'string' && uncatalogued(body.model, typeof body.cli === 'string' ? body.cli : null);
+    if (bad) throw new HttpError(400, bad);
     const id = transaction(db, () => {
       const r = db.prepare(`INSERT INTO tickets (${cols.join(',')}) VALUES (${cols.map(() => '?').join(',')})`).run(...(vals as never[]));
       const id = Number(r.lastInsertRowid);
@@ -165,6 +167,10 @@ const routes: [method: string, path: RegExp, mutation: string | null, handler: (
     readTicket(db, id);
     const { cols, vals, deps } = ticketColumns(body);
     if (cols.length === 0 && !deps) throw new HttpError(400, 'nothing to update');
+    if (typeof body.model === 'string') {
+      const bad = uncatalogued(body.model, typeof body.cli === 'string' ? body.cli : readTicket(db, id).cli);
+      if (bad) throw new HttpError(400, bad);
+    }
     transaction(db, () => {
       if (cols.length) db.prepare(`UPDATE tickets SET ${cols.map((c) => `${c} = ?`).join(', ')} WHERE id = ?`).run(...(vals as never[]), id);
       if (deps) setDeps(db, id, deps);
