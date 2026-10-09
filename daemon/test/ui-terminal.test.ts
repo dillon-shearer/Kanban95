@@ -87,6 +87,48 @@ describe('ui-terminal', { timeout: 60_000 }, () => {
     db.prepare("UPDATE tickets SET status = 'done', merged_at = 'x' WHERE id = ?").run(id);
   });
 
+  it("colours a terminal's title bar by its state, focused or not, and recolours it in place when its ticket is flagged", async () => {
+    const id = ticket('Colour me');
+    await page.goto(base);
+    await until(() => column(id), 'the card');
+    const cookie = { cookie: `k95=${srv.secret}` };
+    expect((await fetch(`${base}api/tickets/${id}/launch`, { method: 'POST', headers: cookie })).status).toBe(200);
+    const key = await until(async () => (await (await fetch(`${base}api/sessions`, { headers: cookie })).json()).find((x: { ticket_id: number }) => x.ticket_id === id)?.id, 'the session');
+    const wid = `term-${key}`;
+    await until(() => page.evaluate(`!!document.querySelector('[data-win="${wid}"] .xterm')`), 'the terminal');
+    const state = () => page.evaluate<string | null>(`document.querySelector('[data-win="${wid}"]').dataset.state ?? null`);
+    const bar = (w: string) => page.evaluate<string>(`getComputedStyle(document.querySelector('[data-win="${w}"] .title-bar')).backgroundImage`);
+    const flag = (on: boolean) => fetch(`${base}api/tickets/${id}`, { method: 'PATCH', headers: { ...cookie, 'content-type': 'application/json' }, body: JSON.stringify({ needs_human: on }) });
+    const GREY = 'linear-gradient(90deg, rgb(128, 128, 128), rgb(181, 181, 181))'; // 98.css's inactive bar
+    const BLUE = 'linear-gradient(90deg, rgb(0, 0, 128), rgb(16, 132, 208))'; // and its active one
+
+    // Opened behind the Board: unfocused, yet a dimmed blue rather than 98.css's grey.
+    expect(await state()).toBe('execute');
+    const dimmed = await bar(wid);
+    expect(dimmed).not.toBe(GREY);
+    expect(dimmed).not.toBe(BLUE);
+    await click(`[data-task="${wid}"]`);
+    expect(await bar(wid)).toBe(BLUE);
+    expect(await bar('board')).toBe(GREY); // other windows keep the 98.css look
+
+    expect((await flag(true)).status).toBe(200);
+    await until(async () => (await state()) === 'human', 'the orange bar');
+    const orange = await bar(wid);
+    expect(orange).not.toBe(BLUE);
+    expect((await flag(false)).status).toBe(200);
+    await until(async () => (await state()) === 'execute', 'the blue bar again');
+
+    // Ended beats a flag.
+    await flag(true);
+    await until(async () => (await state()) === 'human', 'the orange bar');
+    const grant = (db.prepare('SELECT id FROM grants WHERE ticket_id = ? AND revoked_at IS NULL').get(id) as { id: number }).id;
+    await fetch(`${base}api/grants/${grant}`, { method: 'DELETE', headers: cookie });
+    await until(async () => (await state()) === 'ended', 'the grey bar');
+    expect(await bar(wid)).not.toBe(orange);
+    db.prepare("UPDATE tickets SET needs_human = 0, status = 'done', merged_at = 'x' WHERE id = ?").run(id);
+    await until(() => sessions.size === 0, 'the agent to exit');
+  });
+
   it("X on a running terminal asks first: Cancel keeps the agent, End stops it and flags the ticket", async () => {
     const id = ticket('Stop me');
     await page.goto(base);
