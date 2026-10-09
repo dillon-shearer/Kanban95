@@ -1,6 +1,6 @@
 # Kanban95
 
-A Windows 95-styled desktop kanban that runs AI coding agents for you. Write tickets (or talk them through with a planner agent), press **Run**, and walk away: the board takes the tickets one at a time, smallest first, starts Claude Code or Codex CLI for each in its own git worktree, has a second agent test the work against the acceptance criteria, retries failures, and merges what passes. It calls you only when it is stuck, with a ding, a red card and an Inbox entry saying what to do.
+A Windows 95-styled desktop kanban that runs AI coding agents for you. Write tickets (or talk them through with a planner agent), press **Run**, and walk away: the board takes the tickets a few at a time (three by default, set in Settings), smallest first, starts Claude Code or Codex CLI for each in its own git worktree, has a second agent test the work against the acceptance criteria, retries failures, and merges what passes. It calls you only when it is stuck, with a ding, a red card and an Inbox entry saying what to do.
 
 ![The board](docs/img/board.png)
 
@@ -26,7 +26,9 @@ cd Kanban95
 .\Kanban95.cmd C:\path\to\your\project
 ```
 
-The project must be a git repository. `Kanban95.cmd` finds Node 24 (through fnm if an older Node is first on PATH), installs, builds and opens the board; double-clicking it opens the board on Kanban95 itself, and dropping a project folder onto it opens that project. Then, once:
+The project must be a git repository. `Kanban95.cmd` finds Node 24 (through fnm if an older Node is first on PATH), installs, builds and opens the board, keeping its console open for the session. To start without a console window, double-click `Kanban95.vbs` instead: it runs `Kanban95.cmd` hidden and shows a dialog with the end of its output (full log in `%TEMP%\kanban95-start.log`) if Node 24 is missing or the install or build fails. Either one opens the board on Kanban95 itself when double-clicked, and on a project folder dropped onto it.
+
+On macOS, double-click `Kanban95.command` in Finder (a Terminal window opens and stays for the session) or run `./Kanban95.command /path/to/project`: the same Node 24 lookup through fnm, install, build and start. Then, once:
 
 1. **Start → Settings → Models**: pick a CLI, model and effort per phase and press **Save** (writes `~/.kanban95/models.json`; nothing launches without it).
 2. For Claude Code, accept its one-time `--dangerously-skip-permissions` warning by hand ([docs/CLIS.md](docs/CLIS.md) → First-run prompts).

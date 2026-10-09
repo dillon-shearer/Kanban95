@@ -101,6 +101,14 @@ Codex is trusted per process with `-c`, so `~/.codex/config.toml` is never writt
 
 Tests run against a throwaway home directory (`daemon/test/home.ts`, loaded as a `setupFiles` entry by `daemon/vitest.config.ts`, which the repo-root `vitest.config.mts` re-exports so a run from either directory is the same; it also sets `KANBAN95_HOME`, and the daemon throws on any `~/.kanban95` path under vitest without it; which refuses to run if `os.homedir()` did not follow it), so the suite cannot write the operator's files. `daemon/test/real-home-guard.ts` checks the real home after every run and fails `npm test` if a test left a trust entry for one of this run's temp repos (every temp dir of the run is under one fresh `k95-run-*` dir, so a concurrent run in another worktree does not count), a `~/.claude.json.kanban95.bak` or a `~/.kanban95` that was not there before (proven by running the launcher tests with the redirect switched off against a fake home: exit 1, every entry named).
 
+## Usage limits
+
+Settings → Limits and the taskbar's limit (`daemon/src/limits.ts`, `GET /api/limits`) ask each CLI for its own account's limits; the board holds no token for this and reads no credential file (`~/.claude/.credentials.json`, `~/.codex/auth.json` are never opened).
+
+- **What runs.** `claude -p --safe-mode --no-session-persistence "/usage"` (a local slash command: no model call; safe mode loads no hooks, plugins or MCP servers; no session file is written) and `codex app-server` over stdio, sent `initialize` and `account/rateLimits/read` only, then closed. Both run from the temp dir with the agent env allowlist (`pty.ts` → `childEnv`), using the executable from Settings → CLIs or PATH. Each CLI talks to its own provider with its own login, as it does for every agent session.
+- **When.** On board load and every 5 minutes while the board is open (the daemon caches the answer for 5 minutes), plus Refresh. One fetch at a time; a request during a fetch shares it.
+- **What is kept.** Only the parsed rows (window, percent used, reset time) in daemon memory. Codex's reply also carries the account id, plan and credit ids; they are dropped. Raw output is never logged or returned: a failure reports the exit code or a fixed message, never the CLI's text.
+
 ## Voice model
 
 The mic button's speech model is the only thing the board ever downloads, and the download is the only network request the board makes. `daemon/src/voice.ts`, manifest `daemon/voice-model.json`.

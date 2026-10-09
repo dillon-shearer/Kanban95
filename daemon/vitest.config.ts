@@ -5,7 +5,7 @@ import { defineConfig } from 'vitest/config';
 // home.ts gives every test file a throwaway home; real-home-guard.ts fails the run if the real one was touched anyway.
 // Absolute paths and `root`, so the repo-root vitest.config.mts, which re-exports this one, runs the same files the same way.
 const here = (f: string) => fileURLToPath(new URL(f, import.meta.url));
-// restart.test.ts runs alone, after the rest: next to the ConPTY tests in other workers it once crashed one of them with
+// restart.test.ts runs alone, last: next to the ConPTY tests in other workers it once crashed one of them with
 // native heap corruption (0xC0000374) inside node-pty.
 const isolated = ['restart.test.ts'];
 const files = readdirSync(here('test')).filter((f) => f.endsWith('.test.ts') && !isolated.includes(f));
@@ -29,12 +29,14 @@ export default defineConfig({
       onTestCaseResult: (t) => { const n = t.diagnostic()?.retryCount; if (n) console.log(`RETRIED x${n}: ${t.module.moduleId} > ${t.fullName}`); },
     }],
     projects: [
-      // The browser files set their own 60 s per test (the slowest measured 13 s alone).
-      project('browser', browser, { retry: 1 }),
       // A pty test measured up to 3 s alone against the 5 s default; launches and git under load need headroom.
       project('pty', pty, { testTimeout: 30_000, hookTimeout: 30_000 }),
       project('unit', unit),
-      project('restart', isolated, { sequence: { groupOrder: 1 } }),
+      // The ui-*.test.ts files each start a daemon and a browser; they run as a second group, after the rest, so their load
+      // does not time out the other files, and one at a time: parallel Chromes on Windows still lock their profile dirs at
+      // afterAll (rmSync EPERM). They set their own 60 s per test (the slowest measured 13 s alone).
+      project('browser', browser, { retry: 1, sequence: { groupOrder: 1 }, fileParallelism: false }),
+      project('restart', isolated, { sequence: { groupOrder: 2 } }),
     ],
   },
 });

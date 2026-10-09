@@ -149,6 +149,15 @@ export function runSettings(t: Ticket | null, phase: 'plan' | 'execute' | 'test'
   return { cli, model, effort, path: readConfig('settings').paths[cli as Cli] || undefined };
 }
 
+/** The operator's configured executable for a CLI, else its bare name for PATH. A broken settings.json reads as unset. */
+export function cliPath(cli: Cli): string {
+  try {
+    return readConfig('settings').paths[cli] || cli;
+  } catch {
+    return cli;
+  }
+}
+
 /** ~/.kanban95/preferences.md: the operator's standing instructions, injected into every prompt as {{preferences}}. */
 export const preferencesPath = () => join(boardHome(), 'preferences.md');
 const PREFERENCES_MAX = 16 * 1024;

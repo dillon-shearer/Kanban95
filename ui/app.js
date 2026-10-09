@@ -30,9 +30,10 @@ const MOVES = { backlog: ['in_progress'], in_progress: ['backlog'], testing: ['b
 const tickets = new Map();
 let sessions = [];
 let inbox = [];
-let runner = { on: false, running: [], left: 0, backlog: 0 }; // GET /api/runner: the Run button and its status-bar line
+let runner = { on: false, concurrency: 3, running: [], left: 0, backlog: 0, waits: [] }; // GET /api/runner: the Run button and its status-bar line
 let models = null; // ~/.kanban95/models.json as written, for the cards' default model and effort
 let settings = { paths: {}, sounds: true, voice: { backend: 'local', mode: 'push' } };
+let limits = null; // GET /api/limits: { rows, errors, fetched_at }, null until the first answer
 const views = new Map(); // open window id → redraw(ticketId | null)
 
 async function refreshTicket(id) {
@@ -239,9 +240,9 @@ const toggleRunner = () => act(async () => {
   runner = await api('PUT', '/runner', { on: !runner.on });
   drawBoard();
 });
-/** While on: what it waits on and what is left. Off by itself: why. Off by Stop: nothing. */
+/** While on: what it waits on against the limit, what is left, and who waits on shared files. Off by itself: why. Off by Stop: nothing. */
 const runnerLine = (r) => r.on
-  ? `Running: ${r.running.map((id) => `#${id}`).join(', ') || 'nothing yet'} (${r.left} of ${r.backlog} candidates left)`
+  ? `Running: ${r.running.map((id) => `#${id}`).join(', ') || 'nothing yet'} (${r.running.length} of ${r.concurrency}; ${r.left} of ${r.backlog} candidates left)${r.waits.map((w) => `; #${w.id} waits: shares files with #${w.on}`).join('')}`
   : r.why ? `Runner stopped: ${r.why}` : '';
 // Replaces a running ticket's agent, live or hung, with a fresh one in the same phase and worktree (docs/LIFECYCLE.md).
 const restartable = (t) => t?.status === 'in_progress' || t?.status === 'testing';
@@ -390,8 +391,7 @@ const table = (cols, rows) => h('div', { class: 'sunken-panel' }, h('table', { c
 const liveGrant = (g) => !g.revoked_at && g.expires_at > new Date().toISOString();
 
 /** 98.css tabs. `draw(name, panel, first)`: first is true when the tab is shown, false when an event asks for a refresh. */
-function tabs(names, draw) {
-  let current = names[0];
+function tabs(names, draw, current = names[0]) {
   const bar = h('menu', { role: 'tablist' });
   const panel = h('div', { class: 'window k95-panel', role: 'tabpanel' }, h('div', { class: 'window-body' }));
   const show = (n) => {
@@ -401,7 +401,7 @@ function tabs(names, draw) {
     draw(n, panel.firstChild, true);
   };
   show(current);
-  return { el: [bar, panel], show: () => show(current), redraw: () => draw(current, panel.firstChild, false) };
+  return { el: [bar, panel], show: (n = current) => show(n), redraw: () => draw(current, panel.firstChild, false) };
 }
 
 /** Run a rebuild of `p` without losing the scroll of `p` or the run table inside it. */
@@ -573,7 +573,8 @@ function openTerminal(s, auto = false) {
       say(e.message);
     }
   };
-  const w = open(wid, { title, w: 760, h: 440, background: auto, onX, extra: [micButton((text) => send({ data: text }))], onClose: () => { terms.delete(wid); ro.disconnect(); ws.close(); term.dispose(); } });
+  const w = open(wid, { title, w: 760, h: 440, background: auto, onX, extra: [micButton((text) => send({ data: text }))],
+    items: s.ticket_id === null ? [] : [{ label: 'Open ticket', run: () => openTicket(s.ticket_id) }], onClose: () => { terms.delete(wid); ro.disconnect(); ws.close(); term.dispose(); } });
   terms.set(wid, s.ticket_id);
   w.body.classList.add('k95-term');
   term.loadAddon(fit);
@@ -585,10 +586,12 @@ function openTerminal(s, auto = false) {
     w.title(`${title} (ended)`);
     w.el.classList.add('ended');
     if (!auto || s.run_id === null) return;
-    // The run's outcome is written as its terminal closes; its output stays in Ticket → Runs.
+    // The run's outcome is written as its terminal closes; its output stays in Ticket → Runs. Every outcome the board itself
+    // ends a run with closes it: after conflict and restart a new run is already open, and a stale "ended" window in front of
+    // it reads as a stuck ticket.
     setTimeout(async () => {
       const run = (await api('GET', `/tickets/${s.ticket_id}/runs`).catch(() => [])).find((r) => r.id === s.run_id);
-      if (['submit', 'pass', 'fail'].includes(run?.outcome)) setTimeout(w.close, 1500);
+      if (['submit', 'pass', 'fail', 'conflict', 'restart'].includes(run?.outcome)) setTimeout(w.close, 1500);
     }, 500);
   };
   term.onData((d) => send({ data: d }));
@@ -695,10 +698,13 @@ function grantTable(grants) {
   }));
 }
 
-function openSettings() {
+let settingsTabs = null;
+/** `tab`: the tab to show, also when the window is already open. */
+function openSettings(tab) {
   const w = open('settings', { title: 'Settings', w: 640, h: 440, persist: true, onClose: () => views.delete('settings') });
-  if (w.body.firstChild) return;
-  const tb = tabs(['Models', 'CLIs', 'Prompts', 'Grants', 'Voice', 'General'], async (tab, p, first) => {
+  if (w.body.firstChild) return tab && settingsTabs.show(tab);
+  const tb = settingsTabs = tabs(['Models', 'CLIs', 'Prompts', 'Grants', 'Limits', 'Voice', 'General'], async (tab, p, first) => {
+    if (tab === 'Limits') return limitsPanel(p);
     if (tab === 'Grants') {
       const grants = (await api('GET', '/grants')).filter(liveGrant);
       return p.replaceChildren(h('p', {}, 'Every live agent grant. Revoke invalidates its token and stops its terminal.'), grants.length ? grantTable(grants) : h('p', {}, 'No live grants.'));
@@ -767,12 +773,68 @@ function openSettings() {
           h('p', {}, 'Local: transcription runs inside this window. Audio is never sent anywhere.')),
         h('fieldset', {}, h('legend', {}, 'Mic button'), mode('push', 'Push to talk (hold the button)'), mode('toggle', 'Toggle (click to start, click to stop)')));
     } else if (tab === 'General') {
+      const at = h('input', { type: 'number', id: 'concurrency', min: 1, max: 10, step: 1, value: runner.concurrency });
+      const saveRunner = () => act(async () => {
+        runner = await api('PUT', '/runner', { concurrency: Number(at.value) });
+        drawBoard();
+      }, 'Saved.');
       p.replaceChildren(h('div', { class: 'field-row' }, h('input', { type: 'checkbox', id: 'sounds', checked: settings.sounds,
-        onchange: (e) => act(() => saveSettings({ sounds: e.target.checked }), 'Saved.') }), h('label', { for: 'sounds' }, 'Sounds: ding when a ticket merges, chord when the board needs you')));
+        onchange: (e) => act(() => saveSettings({ sounds: e.target.checked }), 'Saved.') }), h('label', { for: 'sounds' }, 'Sounds: ding when a ticket merges, chord when the board needs you')),
+        h('fieldset', {}, h('legend', {}, 'Runner'),
+          h('div', { class: 'field-row' }, h('label', { for: 'concurrency' }, 'Tickets running at once'), at),
+          h('button', { onclick: saveRunner }, 'Save')));
     }
-  });
+  }, tab);
   w.body.append(...tb.el);
   views.set('settings', () => tb.redraw());
+}
+
+// ---- limits ----
+
+const NAME = { claude: 'Claude', codex: 'Codex' };
+let refreshing = false;
+/** `force` asks the CLIs again; otherwise the daemon answers from its 5 min cache. */
+async function refreshLimits(force = false) {
+  refreshing = true;
+  views.get('settings')?.();
+  views.get('limits')?.();
+  try {
+    limits = await api('GET', `/limits${force ? '?refresh=1' : ''}`);
+  } catch (e) {
+    limits = { rows: [], errors: Object.fromEntries(CLIS.map((c) => [c, e.message])), fetched_at: null };
+  } finally {
+    refreshing = false;
+  }
+  taskbar();
+  views.get('settings')?.();
+  views.get('limits')?.();
+}
+const pct = (r) => Math.round(r.used / r.limit * 100);
+const worst = () => limits?.rows.reduce((a, r) => (!a || r.used / r.limit > a.used / a.limit ? r : a), null);
+const resets = (r) => (!r.resets_at ? '' : /^\d{4}-/.test(r.resets_at) ? fmt(r.resets_at) : r.resets_at); // Claude's is already text
+
+/** One table per CLI, or why it has none, and Refresh. Settings → Limits and the Limits window both draw this. */
+function limitsPanel(p) {
+  p.replaceChildren(
+    ...CLIS.map((c) => {
+      const rows = limits?.rows.filter((r) => r.cli === c) ?? [];
+      return h('fieldset', { 'data-cli': c }, h('legend', {}, NAME[c]),
+        rows.length ? table(['Window', 'Used', '', 'Resets'], rows.map((r) => h('tr', {}, h('td', {}, r.window), h('td', {}, `${pct(r)}%`),
+          h('td', {}, h('div', { class: 'progress-indicator k95-meter' }, h('span', { class: 'progress-indicator-bar', style: `width: ${Math.min(100, pct(r))}%` }))),
+          h('td', {}, resets(r)))))
+          : h('p', {}, limits?.errors[c] ? `Not available: ${limits.errors[c]}` : 'Not read yet.'));
+    }),
+    h('div', { class: 'field-row' }, h('button', { disabled: refreshing, onclick: () => refreshLimits(true) }, refreshing ? 'Refreshing…' : 'Refresh'),
+      h('span', {}, limits?.fetched_at ? `Read ${fmt(limits.fetched_at)}; every 5 minutes while the board is open.` : '')));
+}
+
+/** A small window to keep open beside the board. */
+function openLimits() {
+  const w = open('limits', { title: 'Limits', w: 420, h: 300, persist: true, onClose: () => views.delete('limits') });
+  if (w.body.firstChild) return;
+  views.set('limits', () => limitsPanel(w.body.firstChild));
+  w.body.append(h('div', { class: 'k95-limits' }));
+  limitsPanel(w.body.firstChild);
 }
 
 // ---- notepad ----
@@ -818,8 +880,9 @@ const START = [
   { label: 'Board', run: openBoard },
   { label: 'Inbox', run: openInbox },
   { label: 'Brain', run: openBrain },
-  { label: 'Settings', run: openSettings },
+  { label: 'Settings', run: () => openSettings() },
   { label: 'Notepad', run: openNotepad },
+  { label: 'Limits', run: openLimits },
   '-',
   { label: 'New ticket', run: () => openTicket(null) },
   { label: 'New brainstorm', run: newBrainstorm },
@@ -838,7 +901,7 @@ function desktopIcons() {
   h('img', { src: `icons/${label.toLowerCase().replace(' ', '-')}.svg`, alt: '', width: 32, height: 32, draggable: 'false' }),
   h('span', {}, label));
   document.getElementById('desktop').prepend(h('nav', { id: 'icons' },
-    ['Board', 'Inbox', 'Brain', 'Settings', 'Notepad', 'New ticket', 'New brainstorm'].map(icon)));
+    ['Board', 'Inbox', 'Brain', 'Settings', 'Notepad', 'Limits', 'New ticket', 'New brainstorm'].map(icon)));
 }
 
 function taskbar() {
@@ -846,6 +909,11 @@ function taskbar() {
   const q = document.getElementById('inbox-count');
   q.textContent = `Inbox ${inbox.length}`;
   q.classList.toggle('flag', inbox.length > 0);
+  // The most constrained window of any CLI, e.g. "Claude 62%"; the tooltip lists them all.
+  const l = document.getElementById('limits'), r = worst();
+  l.textContent = r ? `${NAME[r.cli]} ${pct(r)}%` : limits ? 'Limits ?' : 'Limits';
+  l.title = limits ? [...limits.rows.map((x) => `${NAME[x.cli]} ${x.window}: ${pct(x)}%`), ...Object.entries(limits.errors).map(([c, e]) => `${NAME[c]}: ${e}`)].join('\n') : 'Reading usage limits…';
+  l.classList.toggle('flag', !!r && pct(r) >= 90);
 }
 
 const clock = () => { document.getElementById('clock').textContent = new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }); };
@@ -898,9 +966,12 @@ async function boot() {
     Object.assign(m.style, { left: `${r.left}px`, top: `${r.top - m.offsetHeight}px` });
   });
   document.getElementById('inbox-count').addEventListener('click', openInbox);
+  document.getElementById('limits').addEventListener('click', () => openSettings('Limits'));
   desktopIcons();
   clock();
   setInterval(clock, 10_000);
+  refreshLimits(); // a CLI start each, ~10 s: not awaited
+  setInterval(refreshLimits, 5 * 60_000); // the daemon's cache lives as long, so this reads fresh numbers
   listen();
   const [list, st, md] = await Promise.all([api('GET', '/tickets'), api('GET', '/config/settings'), api('GET', '/config/models').catch(() => ({ value: null }))]);
   for (const t of list) tickets.set(t.id, t);

@@ -30,6 +30,7 @@ body { background: linear-gradient(transparent 55%, rgb(0 0 0 / 0.22)),
 /* Buttons shrink to 60px, then #tasks scrolls (arrows, wheel); its scrollbar stays hidden. */
 #tasks { flex: 1; min-width: 0; display: flex; gap: 3px; overflow-x: auto; scrollbar-width: none; }
 #tasks .task { min-width: 60px; max-width: 160px; flex: 0 1 160px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; text-align: left; }
+#tasks .task.selected { outline: 1px dotted #000; outline-offset: -4px; background: #e8e8ff; }
 #tasks .task.active { box-shadow: inset -1px -1px #fff, inset 1px 1px #0a0a0a, inset -2px -2px #dfdfdf, inset 2px 2px grey; font-weight: bold; }
 .task-scroll { flex: none; min-width: 0; width: 16px; padding: 0; font-size: 7px; }
 #tray { flex: none; display: flex; align-items: center; gap: 8px; height: 23px; box-sizing: border-box; padding: 0 4px; margin: 0; font-size: 11px; white-space: nowrap; }
@@ -142,3 +143,5 @@ fieldset { margin: 0; }
 .field-row-stacked > .k95-mic::before { top: 2px; }
 .field-row-stacked > .k95-mic::after { top: 7px; }
 .k95-panel .window-body > button, .k95-form button, fieldset > button { align-self: flex-start; }
+.k95-meter { width: 80px; height: 12px; padding: 2px; }
+.k95-limits { display: flex; flex-direction: column; gap: 6px; }

@@ -6,7 +6,7 @@ Living document. How a person drives Kanban95, from an idea to merged work. Upda
 
 1. Log in to Claude Code and/or Codex CLI with their own commands. The board never asks for a key.
 2. For Claude Code, accept its one-time `--dangerously-skip-permissions` warning by hand once (`docs/CLIS.md`).
-3. Start the board: double-click `Kanban95.cmd`, or drop the project folder you want it to work on onto it (`README.md` → Run). Open **Start → Settings → Models**, pick the default CLI and a model and effort for each phase (type a model id, or press ▾ beside the box for every model that CLI knows) (plan is the brainstorm, execute does the work, test checks it), and press **Save**. That writes `~/.kanban95/models.json`; until it exists nothing can launch, and the Board's status bar says so.
+3. Start the board: on Windows double-click `Kanban95.vbs` (no console window; a dialog says why if it cannot start) or `Kanban95.cmd` (keeps a console), on macOS `Kanban95.command`; drop the project folder you want it to work on onto it, or pass it as the argument (`README.md` → Quickstart). Open **Start → Settings → Models**, pick the default CLI and a model and effort for each phase (type a model id, or press ▾ beside the box for every model that CLI knows) (plan is the brainstorm, execute does the work, test checks it), and press **Save**. That writes `~/.kanban95/models.json`; until it exists nothing can launch, and the Board's status bar says so.
 
 ![Settings, Models tab](img/settings-models.png)
 
@@ -26,9 +26,9 @@ It runs with the **operator** row of Settings → Models (blank: the CLI's own d
 
 ### 2. Run
 
-**Run** (or Ctrl+L, or Start → Run) works the backlog for you, one ticket at a time, smallest first: it launches a ticket, waits for it to execute, pass its test and merge, then launches the next, until nothing launchable is left. The button then reads **Stop**, and the status bar shows `Running: #id (n of m candidates left)`: the ticket it is on, how many backlog tickets it can launch now, out of everything in Backlog. Smallest means lowest effort first (low, medium, high, max; no effort counts as medium), then fewest acceptance-criteria lines, then lowest id.
+**Run** (or Ctrl+L, or Start → Run) works the backlog for you, up to three tickets at a time, smallest first: it launches tickets, and as each one executes, passes its test and merges, launches the next, until nothing launchable is left. Change how many run at once in Settings → General → Runner, "Tickets running at once" (1 to 10), and Save; it applies at once. The button then reads **Stop**, and the status bar shows `Running: #a, #b (2 of 3; n of m candidates left)`: the tickets it is on against the limit, how many backlog tickets it can launch now, out of everything in Backlog. It keeps tickets that name the same code files apart: one that shares a file with a running ticket waits, and the status bar adds `#id waits: shares files with #n`; when every ticket left shares a file, it starts the first anyway. Smallest means lowest effort first (low, medium, high, max; no effort counts as medium), then fewest acceptance-criteria lines, then lowest id.
 
-It skips what needs you: a red (needs human) ticket waits in the Inbox, and so does anything depending on it, while the runner moves on. When nothing is running and nothing is left it turns itself off with a ding and the status bar says "Runner stopped: nothing left to launch". **Stop** (or Ctrl+L again) starts nothing new; agents already running finish their step and merge. It stays on across a restart. To run two at once, put `{ "runner_concurrency": 2 }` in `.kanban95/config.json`.
+It skips what needs you: a red (needs human) ticket waits in the Inbox, and so does anything depending on it, while the runner moves on. When nothing is running and nothing is left it turns itself off with a ding and the status bar says "Runner stopped: nothing left to launch". **Stop** (or Ctrl+L again) starts nothing new; agents already running finish their step and merge. It stays on across a restart.
 
 To start tickets yourself, select them and press **Launch**, runner on or off. A ticket whose dependencies have not merged waits with a yellow "waits on #n" badge and starts by itself when they land.
 
@@ -38,7 +38,7 @@ Each card shows its id, title, model, effort and CLI (grey italic means "the pha
 
 ### 3. Watch, or don't
 
-Every agent gets its own terminal window titled `#id — phase — model`. The board opens them by itself, behind whatever you are working in; a terminal whose agent finished its step closes itself a moment later (its output stays in the ticket's Runs tab). You can type into any terminal; it is the agent's real session. **Minimize** hides a terminal and keeps its agent running (reopen it from the taskbar or Ticket → Runs). **X** stops the agent for good: it asks first ("End the agent for #id? The ticket is flagged so you can resume it. Minimize to keep it running."; for a brainstorm, "End this brainstorm?"), and Cancel or Esc keeps everything running. An ended ticket agent turns the card red with the note "ended by the operator from the terminal window" and offers **Resume** in the Inbox and the card menu. A terminal titled "(ended)" has no agent left, so its X just closes the window.
+Every agent gets its own terminal window titled `#id — phase — model`. The board opens them by itself, behind whatever you are working in; a terminal whose agent finished its step, or that the board ended to start a new one (a merge conflict on submit, a Restart), closes itself a moment later (its output stays in the ticket's Runs tab). If a card says *running* but the terminal in front says "(ended)", the ended one is an older run: the live one is behind it, in the taskbar, or under Ticket → Runs. You can type into any terminal; it is the agent's real session. **Minimize** hides a terminal and keeps its agent running (reopen it from the taskbar or Ticket → Runs). **X** stops the agent for good: it asks first ("End the agent for #id? The ticket is flagged so you can resume it. Minimize to keep it running."; for a brainstorm, "End this brainstorm?"), and Cancel or Esc keeps everything running. An ended ticket agent turns the card red with the note "ended by the operator from the terminal window" and offers **Resume** in the Inbox and the card menu. A terminal titled "(ended)" has no agent left, so its X just closes the window.
 
 The ticket moves on its own: In Progress → Testing → Done. A failed test sends it back to In Progress with the tester's notes, up to three retries. When it merges you hear the **ding**.
 
@@ -71,12 +71,13 @@ A merged ticket's worktree and branch are removed by the board. Every ten merged
 | Terminal | opens by itself; Ticket → Runs → Terminal | one agent session, keyboard and mic |
 | Inbox | taskbar "Inbox n", Start → Inbox | every ticket that needs you: questions to answer, and failures with what resolves them |
 | Brain | Start → Brain | search what agents learned (no query lists the newest), add a note yourself. Each row shows when it was written and from which ticket, with that ticket's status, so a row written for work that never landed stands out. **Edit** changes a row in place, **Delete** removes it after a confirm; merge rows by editing the survivor and deleting the rest. Agents name rows to delete in their summary notes, since only you and the planner can delete |
-| Settings | Start → Settings | Models, CLI paths and trusted folders (**Clear Claude trust**), Prompts (preferences), Grants, Voice, sounds |
+| Settings | Start → Settings | Models, CLI paths and trusted folders (**Clear Claude trust**), Prompts (preferences), Grants, Limits, Voice, sounds |
 | Notepad | Start → Notepad | your own scratch notes for this repo, saved as you type |
+| Limits | Start → Limits, taskbar limit | the same as Settings → Limits in a small window to keep open beside the board |
 
-The desktop has an icon for Board, Inbox, Brain, Settings, Notepad, New ticket and New brainstorm down its left edge: click selects, double-click or Enter does what the Start menu entry does. Icons sit under every window.
+The desktop has an icon for Board, Inbox, Brain, Settings, Notepad, Limits, New ticket and New brainstorm down its left edge: click selects, double-click or Enter does what the Start menu entry does. Icons sit under every window.
 
-Windows can be dragged by the title bar, resized from the corner, minimized to the taskbar and maximized to fill the desktop (Maximize button or double-click the title bar; Restore puts it back). Board, Brain, Inbox, Settings and Notepad remember where you left them, maximized or not. With more windows than fit, small arrows appear at the ends of the taskbar buttons; click them or turn the mouse wheel over the taskbar to scroll.
+Windows can be dragged by the title bar, resized from the corner, minimized to the taskbar and maximized to fill the desktop (Maximize button or double-click the title bar; Restore puts it back). Board, Brain, Inbox, Settings and Notepad remember where you left them, maximized or not. With more windows than fit, small arrows appear at the ends of the taskbar buttons; click them or turn the mouse wheel over the taskbar to scroll. Right-click a taskbar button (or focus it and press Shift+F10 or the Menu key) for Restore, Minimize, Maximize and Close, plus **Open ticket** on a ticket's terminal; Close there only closes the window, the agent keeps running. Ctrl+click buttons to select several, Shift+click to select a range; right-click a selected one to Restore, Minimize or Close them all. A plain click clears the selection. Drag a button sideways to reorder the taskbar (the order resets on reload).
 
 ## Notepad
 
@@ -113,6 +114,12 @@ Inside a terminal every key goes to the agent instead: Esc interrupts Claude Cod
 ## Preferences
 
 Standing instructions for every agent, for example "No em dashes or non-ASCII characters in output" or "Keep responses brief". Write them in **Settings → Prompts → Preferences** and press **Save**; that writes `~/.kanban95/preferences.md` (the path is shown on the tab), up to 16 KB. Every prompt rendered after that (brainstorm, operator, plan, execute, test, housekeeping) carries them under "Operator preferences"; sessions already running keep the prompt they started with. They are yours, not the repo's, so they apply to every project the board works on. Never put a key or token in them: they are copied into every session's prompt.
+
+## Limits
+
+How much of each account's usage limits is spent: the Claude Code account and the Codex account the CLIs are logged into. **Settings → Limits** (or the **Limits** desktop icon, a small window you can keep open) has one table per CLI: each window (Claude: current session, current week for all models and per model; Codex: the 5 hour and 7 day windows), the percent used with a bar, and when it resets. The taskbar tray, beside "Inbox n", shows the most constrained one, for example "Claude 62%" (bold red from 90%); hover it for every window, click it for Settings → Limits.
+
+The numbers come from the CLIs themselves, each with its own login: Claude Code's `/usage` command (`claude -p --safe-mode --no-session-persistence "/usage"`, no model call, no quota spent, about 10 s) and Codex's app server (`codex app-server`, request `account/rateLimits/read`, about 3 s). They are read when the board opens and every 5 minutes after, one CLI at a time; **Refresh** reads them now. A CLI that is not installed, not logged in, or whose output the board no longer understands shows "Not available:" and the reason instead of a table; the other CLI is unaffected. The executables are the ones in **Settings → CLIs**, or `claude` and `codex` on PATH.
 
 ## Grants
 

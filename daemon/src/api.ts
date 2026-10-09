@@ -9,10 +9,11 @@ import { BRAIN_BODY_MAX, BRAIN_RANK, isConstraintError } from './db.js';
 import { ticketDiff } from './git.js';
 import { audit, revoke } from './grants.js';
 import { killGrantSession, sessions, sessionsOf, type Session } from './launcher.js';
-import { apply, brainstorm, changed, housekeeping, operator, Refused, runnerState, setRunner, type Board } from './lifecycle.js';
+import { apply, brainstorm, changed, housekeeping, operator, Refused, runner, runnerState, setRunner, type Board } from './lifecycle.js';
 import { BadConfig, CONFIGS, configPath, knownModels, preferencesPath, readPreferences, writeConfig, writePreferences, type ConfigName } from './settings.js';
 import { trustStatus, untrustClaude } from './trust.js';
 import { download, status as voiceStatus } from './voice.js';
+import { limits } from './limits.js';
 
 type Json = Record<string, unknown>;
 type Reply = { status: number; body?: unknown; headers?: Record<string, string> };
@@ -248,11 +249,16 @@ const routes: [method: string, path: RegExp, mutation: string | null, handler: (
     readTicket(board.db, id);
     return { status: 200, body: apply(board, id, 'answer', { note: { role: 'operator', kind: 'answer', body: body.answer }, answer: body.answer }).ticket };
   }],
-  // The runner (docs/LIFECYCLE.md → The runner): `{on}` turns it on or off; both return what the status bar shows.
+  // The runner (docs/LIFECYCLE.md → The runner): `{on?, concurrency?}` turns it on or off and sets how many tickets it keeps
+  // running; both return what the status bar shows. A new concurrency while on launches at once if there is room.
   ['GET', /^\/api\/runner$/, null, ({ board }) => ({ status: 200, body: runnerState(board) })],
   ['PUT', /^\/api\/runner$/, 'runner.set', ({ board, body }) => {
-    if (typeof body.on !== 'boolean') throw new HttpError(400, 'on must be a boolean');
-    setRunner(board, body.on);
+    const { on, concurrency: c } = body;
+    if (on !== undefined && typeof on !== 'boolean') throw new HttpError(400, 'on must be a boolean');
+    if (c !== undefined && !(typeof c === 'number' && Number.isInteger(c) && c >= 1 && c <= 10)) throw new HttpError(400, 'concurrency must be an integer from 1 to 10');
+    if (on === undefined && c === undefined) throw new HttpError(400, 'send on, concurrency or both');
+    const cur = runner(board);
+    setRunner(board, on ?? cur.on, on === undefined ? cur.why : undefined, (c as number | undefined) ?? cur.concurrency);
     return { status: 200, body: runnerState(board) };
   }],
   ['POST', /^\/api\/tickets\/(\d+)\/merge$/, 'tickets.merge', ({ board, params }) => ({ status: 200, body: apply(board, Number(params[0]), 'merge').ticket })],
@@ -365,6 +371,8 @@ const routes: [method: string, path: RegExp, mutation: string | null, handler: (
     untrustClaude(board.db, board.repo);
     return { status: 200, body: trustStatus(board.db, board.repo) };
   }],
+  // The CLIs' account limits, cached 5 min; ?refresh=1 asks again (docs/OPERATOR.md → Limits). Per-CLI failures are in `errors`.
+  ['GET', /^\/api\/limits$/, null, async ({ url }) => ({ status: 200, body: await limits(url.searchParams.has('refresh')) })],
   ['GET', /^\/api\/voice$/, null, () => ({ status: 200, body: voiceStatus() })],
   // The board's only network call, started by the operator's OK in the download dialog (docs/SECURITY.md → Voice model).
   ['POST', /^\/api\/voice\/download$/, 'voice.download', async () => {

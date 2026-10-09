@@ -36,7 +36,7 @@ export async function browser(args: string[] = []) {
   if (!argv.some((a) => a.startsWith('--headless'))) throw new Error('cdp.ts must start the browser with --headless');
   const proc = spawn(exe, argv, { stdio: 'ignore' });
   const portFile = join(profile, 'DevToolsActivePort');
-  const port = await until(() => existsSync(portFile) && readFileSync(portFile, 'utf8').split('\n')[0], 'the DevTools port', 30_000);
+  const port = await until(() => existsSync(portFile) && readFileSync(portFile, 'utf8').split('\n')[0], 'the DevTools port', 60_000); // slow when several ui-*.test.ts files start browsers at once
   const targets = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json() as { type: string; webSocketDebuggerUrl: string }[];
   const ws = new WebSocket(targets.find((t) => t.type === 'page')!.webSocketDebuggerUrl);
   await new Promise((ok, fail) => { ws.onopen = ok; ws.onerror = fail; });
