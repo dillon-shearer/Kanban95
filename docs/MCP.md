@@ -24,7 +24,7 @@ A refused call returns a tool error whose text says why and, for `move_ticket`, 
 | get_ticket | yes | own + its deps | own + its deps | yes |
 | list_tickets | yes | own + its deps | own + its deps | yes |
 | brain_add | yes | yes | yes | yes |
-| brain_update | yes | yes | yes | yes |
+| brain_update | yes, and move_to | yes, not move_to | yes, not move_to | yes, and move_to |
 | brain_delete | yes | no | no | yes |
 | brain_search | yes | yes | yes | yes |
 | ask_operator | no | own | own | no |
@@ -118,41 +118,46 @@ List tickets with id, title, status, tags, flags and dependencies, optionally fi
 
 ### brain_add
 
-Save one fact a future agent would trip on to the project brain: a gotcha, a non-obvious decision, or how an external tool behaves (with version and date). brain_search the subject first; if a row already covers it, correct that row with brain_update instead of adding a near-duplicate. Title: a sentence naming the trap ("X does Y; do Z"). Body: what happens, why, what to do instead, and the file or function, for a reader with no context. Tags: words the title of a future ticket would contain. Never write ticket status or plans ("pending", "until #N merges"): they go stale; unbuilt work belongs in a ticket. Skip what the code, docs or templates already say. Returns the brain row id.
+Save one fact a future agent would trip on to the brain: a gotcha, a non-obvious decision, or how an external tool behaves (with version and date). scope global when it holds in any repo (a CLI, git, Windows, a library); project, the default, when it is about this codebase. brain_search the subject first; if a row already covers it, correct that row with brain_update instead of adding a near-duplicate. Title: a sentence naming the trap ("X does Y; do Z"). Body: what happens, why, what to do instead, and the file or function, for a reader with no context. Tags: words the title of a future ticket would contain. Never write ticket status or plans ("pending", "until #N merges"): they go stale; unbuilt work belongs in a ticket. Skip what the code, docs or templates already say. Returns the brain row id and scope.
 
 | argument | type | required | description |
 |---|---|---|---|
 | title | string | yes |  |
 | body | string | yes | Markdown, at most 1500 characters. |
 | tags | string | default `""` | Space-separated keywords used for matching. |
+| scope | project \| global | default `"project"` | project (default): this repo's brain, facts about this codebase. global: the brain every board shares, facts that hold in any repo (a tool, the OS, a CLI). |
 
 ### brain_update
 
-Correct a brain row in place: when your change made it false, when it duplicates what you were about to add, or to merge rows (edit the survivor; ask for the rest to be deleted in your summary). Omitted fields are left unchanged. Returns the row.
+Correct a brain row in place: when your change made it false, when it duplicates what you were about to add, or to merge rows (edit the survivor; ask for the rest to be deleted in your summary). Name the row by scope and id, as brain_search returned them. Omitted fields are left unchanged. move_to moves the row to the other brain under a new id. Returns the row.
 
 | argument | type | required | description |
 |---|---|---|---|
 | id | integer | yes |  |
+| scope | project \| global | default `"project"` | project (default): this repo's brain, facts about this codebase. global: the brain every board shares, facts that hold in any repo (a tool, the OS, a CLI). |
 | title | string | no |  |
 | body | string | no | Markdown, at most 1500 characters. |
 | tags | string | no |  |
+| move_to | project \| global | no | Move the row to this brain (insert there, delete here). |
 
 ### brain_delete
 
-Delete a brain row that is stale or duplicates another row or the docs. Workers and testers update rows instead and name the ones to delete in their summary note. Returns the deleted id.
+Delete a brain row (scope and id) that is stale or duplicates another row or the docs. Workers and testers update rows instead and name the ones to delete in their summary note. Returns the deleted id and scope.
 
 | argument | type | required | description |
 |---|---|---|---|
 | id | integer | yes |  |
+| scope | project \| global | default `"project"` | project (default): this repo's brain, facts about this codebase. global: the brain every board shares, facts that hold in any repo (a tool, the OS, a CLI). |
 
 ### brain_search
 
-Full-text search the project brain, best match first (title and tags weigh more than the body). Search before making a decision another ticket may already have made, before brain_add, and when you meet an unfamiliar subsystem. Give `id` instead to fetch one row, such as one your prompt listed by title only; give neither to list the newest rows. Returns up to limit rows (default 5, max 50) with title, body and tags.
+Full-text search the project brain and the global brain together, best match first (title and tags weigh more than the body); every row carries its scope. Search before making a decision another ticket may already have made, before brain_add, and when you meet an unfamiliar subsystem. Give `id` (with its scope) instead to fetch one row, such as one your prompt listed by title only; give neither to list the newest rows. Returns up to limit rows (default 5, max 50) with scope, title, body and tags.
 
 | argument | type | required | description |
 |---|---|---|---|
 | query | string | no | Keywords; each word must match. |
 | id | integer | no | Fetch this one row instead of searching. |
+| scope | project \| global | default `"project"` | With id: which brain the row is in. Ignored by a search, which covers both. |
 | limit | integer | default `5` |  |
 
 ### ask_operator

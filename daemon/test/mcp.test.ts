@@ -310,9 +310,38 @@ describe('brain', () => {
     expect((await call(worker3, 'brain_add', { title: 't', body: 'x'.repeat(1501) })).denied).toBe(true);
     expect((await call(worker3, 'brain_update', { id, body: 'x'.repeat(1501) })).denied).toBe(true);
 
-    expect((await call(planner, 'brain_delete', { id })).json).toEqual({ id });
+    expect((await call(planner, 'brain_delete', { id })).json).toEqual({ id, scope: 'project' });
     expect((await call(worker3, 'brain_search', { id })).json).toEqual([]);
     expect((await call(planner, 'brain_delete', { id })).denied).toBe(true);
+  });
+
+  it('scope picks the brain on add, update, delete and fetch by id; only planner and operator move a row', async () => {
+    const g = (await call(worker3, 'brain_add', { title: 'fnm shim', body: 'fnm exec cannot start npm', tags: 'fnm', scope: 'global' })).json;
+    expect(g.scope).toBe('global');
+    expect(srv.board.brain.prepare('SELECT ticket_id FROM brain WHERE id = ?').get(g.id)).toEqual({ ticket_id: null }); // tickets are per repo
+    expect((await call(worker3, 'brain_add', { title: 't', body: 'b', scope: 'team' })).denied).toBe(true);
+    const hits = (await call(worker3, 'brain_search', { query: 'fnm' })).json;
+    expect(hits).toMatchObject([{ scope: 'global', id: g.id, title: 'fnm shim' }]);
+    expect((await call(worker3, 'brain_search', { id: g.id, scope: 'global' })).json).toMatchObject([{ scope: 'global', title: 'fnm shim' }]);
+
+    // An id is per file: the same number in the project brain is another row, or none.
+    const p = (await call(planner, 'brain_add', { title: 'only here', body: 'project fact' })).json;
+    expect(p.scope).toBe('project');
+    expect(srv.board.brain.prepare('SELECT 1 FROM brain WHERE id = ?').get(p.id)).toBeUndefined();
+    expect((await call(worker3, 'brain_update', { id: p.id, scope: 'global', body: 'x' })).denied).toBe(true);
+    expect((await call(planner, 'brain_delete', { id: p.id, scope: 'global' })).denied).toBe(true);
+    expect(srv.db.prepare('SELECT body FROM brain WHERE id = ?').get(p.id)).toEqual({ body: 'project fact' });
+    expect((await call(worker3, 'brain_update', { id: g.id, scope: 'global', body: 'fnm exec cannot start a .cmd shim' })).json)
+      .toMatchObject({ scope: 'global', id: g.id, body: 'fnm exec cannot start a .cmd shim' });
+
+    expect((await call(worker3, 'brain_update', { id: p.id, move_to: 'global' })).denied).toBe(true);
+    expect(lastAudit()).toMatchObject({ tool: 'brain_update', outcome: 'denied' });
+    const moved = (await call(planner, 'brain_update', { id: p.id, move_to: 'global' })).json;
+    expect(moved).toMatchObject({ scope: 'global', title: 'only here', ticket_id: null });
+    expect((await call(worker3, 'brain_search', { id: p.id })).json).toEqual([]);
+
+    expect((await call(planner, 'brain_delete', { id: g.id, scope: 'global' })).json).toEqual({ id: g.id, scope: 'global' });
+    expect((await call(worker3, 'brain_search', { id: g.id, scope: 'global' })).json).toEqual([]);
   });
 });
 
