@@ -346,6 +346,10 @@ function cardMenu(ts, x, y) {
   ]);
 }
 
+// Folded columns, by status. localStorage is per origin and one daemon serves one repo, so the key is per repo as wm.js's geometry is.
+const collapsed = new Set((() => { try { return JSON.parse(localStorage.getItem('k95.collapsed')) ?? []; } catch { return []; } })());
+const saveCollapsed = () => { try { localStorage.setItem('k95.collapsed', JSON.stringify([...collapsed])); } catch { /* storage off: columns reopen */ } };
+
 function openBoard() {
   const w = open('board', { title: 'Board', w: 1000, h: 560, persist: true, onClose: () => { views.delete('board'); say = console.log; } });
   if (w.body.firstChild) return;
@@ -375,8 +379,12 @@ function openBoard() {
     const focus = focused && cols.contains(focused) ? [focused.closest('.col').dataset.status, focused.dataset.id] : null;
     cols.replaceChildren(...COLUMNS.map(([s, label]) => {
       const list = all.filter((t) => t.status === s);
-      return h('fieldset', { class: 'col', 'data-status': s }, h('legend', {}, `${label} (${list.length})`), h('div', { class: 'cards' }, list.map(card)));
+      const shut = collapsed.has(s);
+      const legend = h('legend', { class: list.some((t) => t.flags.needs_human) ? 'alert' : '', title: shut ? 'Expand' : 'Collapse',
+        onclick: (e) => { e.stopPropagation(); shut ? collapsed.delete(s) : collapsed.add(s); saveCollapsed(); drawBoard(); } }, `${label} (${list.length})`);
+      return h('fieldset', { class: `col${shut ? ' collapsed' : ''}`, 'data-status': s }, legend, h('div', { class: 'cards' }, shut ? [] : list.map(card)));
     }));
+    cols.style.gridTemplateColumns = COLUMNS.map(([s]) => (collapsed.has(s) ? '24px' : 'minmax(0, 1fr)')).join(' ');
     for (const c of cols.querySelectorAll('.col')) c.querySelector('.cards').scrollTop = scroll[c.dataset.status] ?? 0;
     if (focus) cols.querySelector(`.col[data-status="${focus[0]}"] .card[data-id="${focus[1]}"]`)?.focus();
     count.textContent = `${all.length} tickets · ${sessions.length} agents`;
