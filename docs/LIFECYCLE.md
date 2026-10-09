@@ -113,7 +113,7 @@ There is no Pause yet; when it exists, a paused board flags these tickets (`exit
 - **It stops itself** when nothing is running and no candidate is left: the flag goes off with `why: "nothing left to launch"`, a `ding` (`ticket: null`) plays and the status bar says "Runner stopped: nothing left to launch". A backlog ticket held only on a running ticket's merge is not "nothing left": the runner waits for that merge. Tickets that stay behind (flagged, or held on a flagged ticket) wait for the operator.
 - **Stop** turns the flag off. Running agents finish their current phase and their merges land, but nothing new starts. The operator's own Launch on a card works either way. A ticket that hits the retry cap and flags never stops the runner.
 - **A restart** keeps the flag (`<repo>/.kanban95/runner.json`, git-ignored); `recover` resumes the running tickets and the runner carries on from there.
-- **Housekeeping** tickets created after every `housekeeping_every` merges are candidates like any other and sort by their effort.
+- **Housekeeping** tickets created after every `housekeeping.every` merges are candidates like any other and sort by their effort.
 
 Tickets held with `blocked_on_deps` by a manual Launch keep their own path: the board launches them when their last dependency merges, runner or not. Dependency cycles cannot exist: `create_ticket`, `update_ticket` and `PATCH /api/tickets/:id` refuse a dependency list that would make a ticket depend on itself through any chain.
 
@@ -180,10 +180,10 @@ A repo's prompts come from its own `.kanban95/templates/`, copied from `template
 
 ## Housekeeping
 
-Every time the number of merged tickets (housekeeping tickets not counted) reaches a multiple of `housekeeping_every`, the board creates a ticket that runs the `housekeeping.md` template and leaves it in Backlog, where the runner picks it up like any other (or the operator launches it): same worktree, test, retry and merge path. The **Housekeeping** button creates one and launches it at once. The interval lives in `<repo>/.kanban95/config.json` and defaults to 10:
+Every time the number of merged tickets (housekeeping tickets not counted) reaches a multiple of `housekeeping.every`, the board creates a ticket that runs the `housekeeping.md` template and leaves it in Backlog, where the runner picks it up like any other (or the operator launches it): same worktree, test, retry and merge path. The **Housekeeping** button creates one and launches it at once. Settings → General → Housekeeping switches the automatic ticket off and sets the interval; both live in `~/.kanban95/settings.json` and default to on, every 10:
 
 ```json
-{ "housekeeping_every": 10 }
+{ "housekeeping": { "auto": true, "every": 10 } }
 ```
 
 The count is derived from the database (`template = 'execute' AND merged_at IS NOT NULL`), not stored: a counter in the committed `config.json` would leave the base branch dirty after every merge, and a dirty base refuses launches and merges.
