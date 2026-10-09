@@ -175,6 +175,8 @@ function ftsQuery(q: string): string {
 const NOTEPAD_MAX = 256 * 1024;
 const BUILD_TIMEOUT = 120_000;
 const notepadPath = (board: Board) => join(board.repo, '.kanban95', 'notepad.md');
+const UI_MAX = 64 * 1024;
+const uiPath = (board: Board) => join(board.repo, '.kanban95', 'ui.json');
 
 const UPLOAD = /^\/api\/tickets\/(\d+)\/attachments$/;
 const ATTACHMENT = /^\/api\/tickets\/(\d+)\/attachments\/([^/]+)$/;
@@ -392,6 +394,24 @@ const routes: [method: string, path: RegExp, mutation: string | null, handler: (
     writeFileSync(`${file}.tmp`, body.value);
     renameSync(`${file}.tmp`, file);
     return { status: 200, body: { value: body.value } };
+  }],
+  // <repo>/.kanban95/ui.json, the UI's window places, startup layout and folded columns (ui/state.js): one object, {} when absent.
+  // Not audited, as the notepad: it is written after every drag.
+  ['GET', /^\/api\/ui$/, null, ({ board }) => {
+    try {
+      return { status: 200, body: JSON.parse(readFileSync(uiPath(board), 'utf8')) };
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code === 'ENOENT' || e instanceof SyntaxError) return { status: 200, body: {} };
+      throw e;
+    }
+  }],
+  ['PUT', /^\/api\/ui$/, null, ({ board, body }) => {
+    const text = JSON.stringify(body);
+    if (Buffer.byteLength(text) > UI_MAX) throw new HttpError(400, `UI state over ${UI_MAX / 1024} KB`);
+    const file = uiPath(board);
+    writeFileSync(`${file}.tmp`, text);
+    renameSync(`${file}.tmp`, file);
+    return { status: 200, body };
   }],
   // ~/.kanban95/preferences.md, plain text in `value` both ways ('' when absent). Matched before the JSON config routes.
   ['GET', /^\/api\/config\/preferences$/, null, () => ({ status: 200, body: { path: preferencesPath(), value: readPreferences() } })],

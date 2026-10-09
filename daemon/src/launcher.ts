@@ -1,5 +1,5 @@
 // Launches an agent CLI on a ticket: worktree, run row, grant, session dir, argv, pty. Tears it all down on exit or revoke.
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir, userInfo } from 'node:os';
@@ -7,7 +7,7 @@ import { join, relative, resolve } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import type { IPty } from 'node-pty';
 import { buildContext, startRun } from './context.js';
-import { createWorktree } from './git.js';
+import { createWorktree, git } from './git.js';
 import { mint, revoke, type Role } from './grants.js';
 import { childEnv, cmdSafe, spawnPty } from './pty.js';
 import { fill, loadTemplate, TEMPLATES, type TicketTemplate } from './templates.js';
@@ -133,6 +133,40 @@ function privateDir(dir: string) {
 type Daemon = { db: DatabaseSync; repo: string; port: number; onExit?: (s: Session) => void };
 /** `path`: the operator's configured executable for the CLI (Settings); the bare name, resolved through PATH, when unset. */
 type RunSettings = { cli: Cli; model: string; effort: Effort; path?: string };
+
+/** How many of the setup command's last output lines a failure note quotes. */
+const SETUP_TAIL = 20;
+// ponytail: on Windows the timeout kills cmd.exe, not what it started (npm keeps running); upgrade is `taskkill /T`.
+const SETUP_TIMEOUT_MS = 15 * 60 * 1000;
+
+/**
+ * Creates the ticket's worktree and runs the repo's `worktree_setup` command in it once (`npm ci` for this repo), in the same
+ * environment an agent gets. Null when there is nothing to run: no command, or it already succeeded in this worktree (a
+ * marker in the worktree's git dir, gone with the worktree). Asynchronous so a minute of `npm ci` does not stall the daemon.
+ * Rejects with the command and its last output lines.
+ */
+export function prepareWorktree(repo: string, ticketId: number, command?: string): Promise<void> | null {
+  const wt = createWorktree(repo, ticketId);
+  if (!command) return null;
+  const marker = resolve(wt.path, git(wt.path, 'rev-parse', '--git-path', 'kanban95-setup-done'));
+  if (existsSync(marker)) return null;
+  return new Promise((ok, fail) => {
+    const child = spawn(command, { cwd: wt.path, env: childEnv({ KANBAN95_AGENT: '1' }), shell: true, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, timeout: SETUP_TIMEOUT_MS });
+    let out = '';
+    const take = (d: Buffer) => (out = (out + d).slice(-65536));
+    child.stdout.on('data', take);
+    child.stderr.on('data', take);
+    child.on('error', (e) => fail(new Error(`worktree_setup "${command}" did not start: ${e.message}`)));
+    child.on('close', (code, signal) => {
+      if (code === 0) {
+        writeFileSync(marker, command);
+        return ok();
+      }
+      const tail = out.split(/\r?\n/).filter((l) => l.trim()).slice(-SETUP_TAIL).join('\n');
+      fail(new Error(`worktree_setup "${command}" failed (${code ?? signal}) in ${wt.path}; last output:\n${tail || '(none)'}`));
+    });
+  });
+}
 
 /**
  * Claude Code keeps each conversation in `<config>/projects/<cwd, mangled>/<id>.jsonl`. Every project dir is searched rather than

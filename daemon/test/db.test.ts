@@ -27,6 +27,7 @@ describe('openDb', () => {
     expect(ignore).toMatch(/^attachments\/$/m);
     expect(ignore).toMatch(/^notepad\.md$/m);
     expect(ignore).toMatch(/^runner\.json$/m);
+    expect(ignore).toMatch(/^ui\.json$/m);
   });
 
   it('adds attachments/ and notepad.md to the inner .gitignore of an older board, once', () => {

@@ -1,4 +1,5 @@
 // Agent terminals: a pseudo-terminal per run with a minimal environment and a capped scrollback.
+import { delimiter, dirname } from 'node:path';
 import { spawn, type IPty } from 'node-pty';
 
 const SCROLLBACK_LINES = 2000;
@@ -19,6 +20,8 @@ export function childEnv(extra: Record<string, string> = {}): Record<string, str
   // NoDefaultCurrentDirectoryInExePath: cmd.exe would otherwise run a `claude.cmd` sitting in the worktree before the real one.
   const env: Record<string, string> = { TERM: 'xterm-256color', NoDefaultCurrentDirectoryInExePath: '1' };
   for (const k of ENV_ALLOW) if (process.env[k] !== undefined) env[k] = process.env[k]; // process.env is case-insensitive on Windows
+  // The daemon's own Node (24) first: the operator's PATH `node` may be older, and the tests need 24 (node:sqlite with fts5).
+  env.PATH = [dirname(process.execPath), env.PATH].filter(Boolean).join(delimiter);
   return { ...env, ...extra };
 }
 
