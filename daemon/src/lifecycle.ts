@@ -37,7 +37,7 @@ export type Event =
   | 'reject'; // the operator sends a done ticket, merged or not, back to a worker with a reason
 type Effect =
   | 'spawn_execute' | 'spawn_test' | 'end_session' | 'enqueue_merge' | 'note' | 'answer_pty'
-  | 'chord' | 'ding' | 'remove_worktree' | 'release_dependents' | 'housekeeping';
+  | 'chord' | 'ding' | 'done' | 'remove_worktree' | 'release_dependents' | 'housekeeping';
 
 /** Everything a guard may look at. */
 export interface Facts {
@@ -88,7 +88,7 @@ export const TABLE: Row[] = [
   { from: ['testing'], event: 'restart', set: { needs_human: 0 }, effects: ['end_session', 'note', 'spawn_test'] },
   { from: ['in_progress'], event: 'submit', to: 'testing', effects: ['end_session', 'spawn_test'] },
   // merged: false clears the merged_at an earlier cycle left (a rejected ticket), so the queue merges this pass again.
-  { from: ['testing'], event: 'pass', when: (f) => f.passReported, why: 'call report_test with passed: true first', to: 'done', set: { merged: false }, effects: ['end_session', 'enqueue_merge'] },
+  { from: ['testing'], event: 'pass', when: (f) => f.passReported, why: 'call report_test with passed: true first', to: 'done', set: { merged: false }, effects: ['end_session', 'done', 'enqueue_merge'] },
   { from: ['testing'], event: 'fail', when: (f) => f.retry < MAX_RETRY, to: 'in_progress', set: { retry: '+1' }, effects: ['end_session', 'spawn_execute'] },
   { from: ['testing'], event: 'fail', when: (f) => f.retry >= MAX_RETRY, to: 'in_progress', set: { retry: '+1', needs_human: 1 }, effects: ['end_session', 'note', 'chord'],
     says: `stopped after ${MAX_RETRY + 1} failed tests`,
@@ -163,7 +163,7 @@ export interface Board {
 }
 
 /**
- * Board events for the UI's /events websocket. `event`: a sound, `{ sound: 'ding' | 'chord', ticket }`. `change`: something about
+ * Board events for the UI's /events websocket. `event`: a sound, `{ sound: 'ding' | 'chord' | 'done', ticket }`. `change`: something about
  * a ticket (`ticket` = its id) or the set of live sessions (`ticket` = null) changed; the UI refetches just that.
  */
 export const events = new EventEmitter().setMaxListeners(0);
@@ -249,7 +249,7 @@ export function apply(b: Board, id: number, event: Event, x: { note?: Note; answ
           setTimeout(() => s.pty.write('\r'), 300);
         }
         break;
-      case 'chord': case 'ding': events.emit('event', { sound: e, ticket: id }); break;
+      case 'chord': case 'ding': case 'done': events.emit('event', { sound: e, ticket: id }); break;
       case 'remove_worktree': pending.push(cleanTicket(b, id)); break;
       case 'release_dependents': releaseDependents(b, id); break;
       case 'housekeeping': maybeHousekeeping(b, t); break;

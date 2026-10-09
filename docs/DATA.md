@@ -33,7 +33,7 @@ Living document. Update it in the same change that alters the schema.
   - `idle_minutes` (a positive integer, default 20: how long a running agent's transcript may gain no line before its ticket is flagged, `docs/LIFECYCLE.md` → Silent agents)
   - `paths` (`claude`, `codex`: an absolute path to the executable, empty for PATH)
   - `push_after_merge` (boolean, default true: the merge queue pushes the base to its upstream before a ticket counts as merged, `docs/LIFECYCLE.md` → Push)
-  - `sounds` (`merge`, `attention`: booleans, default true; an old single boolean applies to both)
+  - `sounds` (`merge`, `attention`, `done`: booleans, default true; an old single boolean applies to all three)
   - `terminals` (`auto`: the phases among `plan`, `execute`, `test` whose sessions open a terminal on their own, default `["plan", "execute", "test"]`; `tile`: terminals take slots left of the action column, default `true`)
   - `voice` (`backend`: `local`; `mode`: `push` or `toggle`)
   - `zoom` (the UI zoom, a number from 0.8 to 2, default 1)

@@ -45,7 +45,7 @@ The tester's verdict is the move: `report_test` writes the PASS or FAIL note, th
 | in_progress | restart | | in_progress | `needs_human` off | end every live session (outcome `restart`, grant revoked, pty killed), operator failure note, execute agent again |
 | testing | restart | | testing | `needs_human` off | as above, then test agent again (the diff is re-rendered from the worktree) |
 | in_progress | submit | | testing | | the base merged into the worktree first (see Sync below); clean or already up to date: worker session ended (grant revoked, pty killed), tester grant, test agent. Otherwise `conflict` instead |
-| testing | pass | the tester called `report_test(passed: true)` during this test run | done | `merged_at` cleared (set again when it lands; only a rejected ticket had one) | tester session ended, merge queued |
+| testing | pass | the tester called `report_test(passed: true)` during this test run | done | `merged_at` cleared (set again when it lands; only a rejected ticket had one) | tester session ended, done sound, merge queued |
 | testing | fail | `retry` < 3 | in_progress | `retry` + 1 | tester session ended, execute agent again, with the failure notes and the ticket's (possibly escalated) model |
 | testing | fail | `retry` = 3 | in_progress | `retry` + 1, `needs_human` on | tester session ended, failure note "stopped after 4 failed tests", chord. Stops |
 | running | ask | | same | `needs_human` on | question note, chord. The agent's terminal stays open |
@@ -231,7 +231,7 @@ A repo's prompts come from its own `.kanban95/templates/`, copied from `template
 
 ## Sounds
 
-`ding.wav` when a ticket is merged, `chord.wav` whenever `needs_human` is raised by the table (question, silent exit, silent agent, retry cap, conflict at the cap, dirty base, failed push). The daemon sends `{"sound": "ding" | "chord", "ticket": <id>}` on the `/events` websocket; the UI plays `ui/sounds/<sound>.wav` unless that sound is off in Settings → General, and says the reason in the status bar ("#<id> merged.", or the needs-human reason). Every transition also sends `{"ticket": <id>}`, so the board redraws that card without a reload (`docs/ARCHITECTURE.md` → Events).
+`done.wav` when a tester's pass moves a ticket to Done, `ding.wav` when a ticket is merged, `chord.wav` whenever `needs_human` is raised by the table (question, silent exit, silent agent, retry cap, conflict at the cap, dirty base, failed push). The daemon sends `{"sound": "done" | "ding" | "chord", "ticket": <id>}` on the `/events` websocket; the UI plays `ui/sounds/<sound>.wav` unless that sound is off in Settings → General, and says the reason in the status bar ("#<id> passed, in Done.", "#<id> merged.", or the needs-human reason). Every transition also sends `{"ticket": <id>}`, so the board redraws that card without a reload (`docs/ARCHITECTURE.md` → Events).
 
 ## Janitor
 

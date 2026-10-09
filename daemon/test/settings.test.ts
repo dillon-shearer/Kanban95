@@ -36,11 +36,15 @@ it('runSettings refuses a model outside the cli models list, naming the model, t
   expect(runSettings(t('b'), 'execute').model).toBe('b');
 });
 
-it('the old single sounds boolean carries over to both sounds; a missing one keeps both on', () => {
-  expect(writeConfig('settings', { sounds: false }).sounds).toEqual({ merge: false, attention: false });
-  expect(writeConfig('settings', { sounds: true }).sounds).toEqual({ merge: true, attention: true });
-  expect(writeConfig('settings', {}).sounds).toEqual({ merge: true, attention: true });
-  expect(writeConfig('settings', { sounds: { merge: false } }).sounds).toEqual({ merge: false, attention: true });
+it('the old single sounds boolean carries over to every sound; a missing one stays on', () => {
+  expect(writeConfig('settings', { sounds: false }).sounds).toEqual({ merge: false, attention: false, done: false });
+  expect(writeConfig('settings', { sounds: true }).sounds).toEqual({ merge: true, attention: true, done: true });
+  expect(writeConfig('settings', {}).sounds).toEqual({ merge: true, attention: true, done: true });
+  expect(writeConfig('settings', { sounds: { merge: false } }).sounds).toEqual({ merge: false, attention: true, done: true });
+  // A file from before the done sound, split per sound: done defaults on; switched off it is kept.
+  expect(writeConfig('settings', { sounds: { merge: true, attention: false } }).sounds).toEqual({ merge: true, attention: false, done: true });
+  expect(writeConfig('settings', { sounds: { merge: true, attention: true, done: false } }).sounds).toEqual({ merge: true, attention: true, done: false });
+  expect(() => writeConfig('settings', { sounds: { done: 'no' } })).toThrow();
   expect(() => writeConfig('settings', { sounds: 'off' })).toThrow();
 });
 
