@@ -62,6 +62,8 @@ For anything else, open the ticket (double-click the card): the Notes tab has th
 
 A merged ticket's worktree and branch are removed by the board. Every ten merged tickets the board files a housekeeping ticket in Backlog; the **Housekeeping** button files and launches one on demand. Settings → General → Housekeeping switches the automatic ticket off or changes the interval.
 
+If you review a Done ticket and it is not right, **Reject** it (card menu, or the button in its ticket window; only on Done tickets). The dialog has one box, "What is wrong and what done looks like", and will not submit empty. The ticket goes back to In Progress with its retry count at 0 and a worker starts at once, with your text in its brief under "What failed on the last attempt". If the ticket had not merged yet, its merge is cancelled and the worker continues in the same worktree; if it had, the worker gets a fresh worktree from the base branch, which already holds the merged work, and the next pass merges again. Reset to Backlog, by contrast, starts over and loses your reason.
+
 ## The windows
 
 | Window | Open from | What it is for |
@@ -89,7 +91,7 @@ A place to draft before you hand words to an agent or a ticket. One plain text a
 
 Click a card to select it, Ctrl+click to add or remove one, Shift+click to select the run of cards in the same column from the last one you clicked, Ctrl+A to select every card; click empty column space to clear the selection. Right-click a selected card and its menu acts on the whole selection: one confirmation for Reset to Backlog or Delete naming the count, Launch starts only the Backlog cards and says how many it skipped, Open opens at most 8 Ticket windows, and the status bar reports the outcome once ("Effort set to high on 4 tickets."), naming any ticket the daemon refused while the rest go ahead.
 
-Right-click a card for its menu: Open, Launch, Resume (a red running card whose agent is gone), Restart (one In progress or Testing card: replaces its agent), **Model**, **Effort** and **CLI** (set or clear this ticket's override without opening it), Retry merge (after you fixed a conflict or cleaned the main checkout), Reset to Backlog (also on a card waiting on a dependency: it cancels the wait, so it will not launch by itself), Delete.
+Right-click a card for its menu: Open, Launch, Resume (a red running card whose agent is gone), Restart (one In progress or Testing card: replaces its agent), **Model**, **Effort** and **CLI** (set or clear this ticket's override without opening it), Retry merge (after you fixed a conflict or cleaned the main checkout), Reject (one Done card: send it back to a worker with a reason, see Done above), Reset to Backlog (also on a card waiting on a dependency: it cancels the wait, so it will not launch by itself), Delete.
 
 ![Card menu](img/card-menu.png)
 

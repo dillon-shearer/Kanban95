@@ -24,11 +24,14 @@ type MergeResult = { ok: true } | { ok: false; dirty: boolean; base: string; rea
  * `git merge --no-ff ticket/<id>` into whatever branch the main working tree has checked out, authored by the repo's own
  * git identity. The message is the ticket title, one line, nothing appended. Any failure is aborted, leaving the base as it was.
  * A base with uncommitted changes is never merged into, so `merge --abort` never runs over the operator's edits.
+ * `wanted` is asked last, with no await between it and the merge starting; `null` when it says no (the ticket was rejected
+ * or moved while the checks above ran).
  */
-export async function merge(repo: string, ticketId: number, title: string): Promise<MergeResult> {
+export async function merge(repo: string, ticketId: number, title: string, wanted = () => true): Promise<MergeResult | null> {
   const base = (await git(repo, 'rev-parse', '--abbrev-ref', 'HEAD')).stdout.trim();
   const { stdout: dirty } = await git(repo, 'status', '--porcelain', '--untracked-files=no');
   if (dirty.trim()) return { ok: false, dirty: true, base, reason: dirty.trimEnd() };
+  if (!wanted()) return null;
   try {
     await git(repo, 'merge', '--no-ff', '--no-edit', '-m', title.split(/\r?\n/)[0].trim(), branchName(ticketId));
     return { ok: true };

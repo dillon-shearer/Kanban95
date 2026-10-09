@@ -250,6 +250,11 @@ const routes: [method: string, path: RegExp, mutation: string | null, handler: (
     readTicket(board.db, id);
     return { status: 200, body: apply(board, id, 'answer', { note: { role: 'operator', kind: 'answer', body: body.answer }, answer: body.answer }).ticket };
   }],
+  // The operator's reason goes to the next worker as a failure note (docs/LIFECYCLE.md → Reject).
+  ['POST', /^\/api\/tickets\/(\d+)\/reject$/, 'tickets.reject', ({ board, params, body }) => {
+    if (typeof body.reason !== 'string' || !body.reason.trim()) throw new HttpError(400, 'reason must be a non-empty string');
+    return { status: 200, body: apply(board, Number(params[0]), 'reject', { note: { role: 'operator', kind: 'failure', body: body.reason.trim() } }).ticket };
+  }],
   // The runner (docs/LIFECYCLE.md → The runner): `{on?, concurrency?}` turns it on or off and sets how many tickets it keeps
   // running; both return what the status bar shows. A new concurrency while on launches at once if there is room.
   ['GET', /^\/api\/runner$/, null, ({ board }) => ({ status: 200, body: runnerState(board) })],
