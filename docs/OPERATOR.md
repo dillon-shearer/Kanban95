@@ -77,9 +77,20 @@ If you review a Done ticket and it is not right, **Reject** it (card menu, or th
 | Terminal | opens by itself; Ticket → Runs → Terminal | one agent session, keyboard and mic |
 | Inbox | taskbar "Inbox n", Start → Inbox | every ticket that needs you: questions to answer, and failures with what resolves them |
 | Brain | Start → Brain | search what agents learned (no query lists the newest), add a note yourself. Each row shows when it was written and from which ticket, with that ticket's status, so a row written for work that never landed stands out. **Edit** changes a row in place, **Delete** removes it after a confirm; merge rows by editing the survivor and deleting the rest. Agents name rows to delete in their summary notes, since only you and the planner can delete |
-| Settings | Start → Settings | Models, CLI paths and trusted folders (**Clear Claude trust**), Prompts (preferences, templates), Grants, Limits, Voice, Projects, sounds |
+| Settings | Start → Settings | what it holds, listed under the table |
 | Notepad | Start → Notepad | your own scratch notes for this repo, saved as you type |
 | Limits | Start → Limits, taskbar limit | the same as Settings → Limits in a small window to keep open beside the board |
+
+What the Settings window holds:
+
+- CLI paths and trusted folders (**Clear Claude trust**)
+- Grants
+- Limits
+- Models
+- Projects
+- Prompts (preferences, templates)
+- sounds
+- Voice
 
 The desktop has an icon for Board, Inbox, Brain, Settings, Notepad, Limits, New ticket and New brainstorm down its left edge: click selects, double-click or Enter does what the Start menu entry does. Icons sit under every window.
 
