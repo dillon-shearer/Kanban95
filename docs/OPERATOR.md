@@ -148,7 +148,7 @@ Any other drop snaps back, and the status bar names where that card may go.
 | Esc | closes the focused window (or an open menu) |
 | Ctrl+L | Run / Stop the runner |
 | Ctrl+R | Restart the agent of the focused ticket window (after a confirm) |
-| Ctrl+A | select every card the filter shows (on the Board, outside a text field) |
+| Ctrl+A | select every card the filter shows in an open column (on the Board, outside a text field) |
 | Ctrl+F | focus the Board's Filter box (Esc in the box clears it) |
 | Ctrl+N | New brainstorm |
 | Ctrl+Shift+N | New operator terminal |

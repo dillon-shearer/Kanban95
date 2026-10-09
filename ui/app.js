@@ -94,7 +94,7 @@ let restarting = false;
 // The Board's selection. Every card action takes the selected tickets, so a new bulk action is one more menu item.
 const selection = new Set();
 let anchor = null; // the last clicked card, where a Shift+click range starts
-const picked = () => [...selection].map((id) => tickets.get(id)).filter((t) => t && shown(t)); // a card the filter hides is never acted on
+const picked = () => [...selection].map((id) => tickets.get(id)).filter((t) => t && shown(t) && !collapsed.has(t.status)); // a card the filter or a folded column hides is never acted on
 
 function pick(t, e) {
   if (e.shiftKey && tickets.get(anchor)?.status === t.status) {
@@ -1300,7 +1300,7 @@ function taskbar() {
 
 const clock = () => { document.getElementById('clock').textContent = new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }); };
 
-// Esc closes the focused window, Ctrl+L turns the runner on or off, Ctrl+A selects every card the filter shows on a focused Board,
+// Esc closes the focused window, Ctrl+L turns the runner on or off, Ctrl+A selects every card the filter shows in an open column on a focused Board,
 // Ctrl+F focuses the Board's filter, Ctrl+N starts a brainstorm, Ctrl+Shift+N an operator terminal, Ctrl+R restarts the focused
 // ticket's agent, Ctrl+= (or Ctrl++) and Ctrl+- zoom the UI and Ctrl+0 resets it. Inside a terminal every key goes to the agent
 // instead (Esc interrupts Claude Code, Ctrl+L clears the screen, Ctrl+- and Ctrl+= are the agent's).
@@ -1326,7 +1326,7 @@ addEventListener('keydown', (e) => {
     toggleRunner();
   } else if (plainCtrl && e.key.toLowerCase() === 'a' && focused()?.el.dataset.win === 'board' && !e.target.closest?.('input, textarea, select, [contenteditable]')) {
     e.preventDefault();
-    for (const t of tickets.values()) if (shown(t)) selection.add(t.id);
+    for (const t of tickets.values()) if (shown(t) && !collapsed.has(t.status)) selection.add(t.id);
     drawBoard();
   } else if (plainCtrl && e.key.toLowerCase() === 'f' && focused()?.el.dataset.win === 'board') {
     e.preventDefault(); // not the page's find bar

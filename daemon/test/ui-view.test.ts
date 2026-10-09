@@ -40,6 +40,17 @@ describe('ui-view', { timeout: 90_000 }, () => {
     await key('a', 'KeyA', 65, 2);
     expect(await page.evaluate<number[]>(`[...document.querySelectorAll('.card.selected')].map((el) => Number(el.dataset.id))`)).toEqual([b]);
 
+    // Nor a card in a folded column: Done starts folded, and unfolding it shows its card unselected.
+    const e = ticket('Shipped ui', { status: 'done', tags: 'ui' });
+    await page.goto(base);
+    await until(() => column(b), 'the cards after the reload');
+    await click(`.card[data-id="${b}"]`);
+    await key('a', 'KeyA', 65, 2);
+    await page.evaluate(`document.querySelector('[data-status="done"] legend').click()`);
+    await until(() => column(e), 'the unfolded Done column');
+    expect(await page.evaluate<number[]>(`[...document.querySelectorAll('.card.selected')].map((el) => Number(el.dataset.id))`)).toEqual([b]);
+    await page.evaluate(`document.querySelector('[data-status="done"] legend').click()`);
+
     // Ctrl+F on the focused Board focuses the box; Esc there clears it and leaves the Board open.
     await click(`.card[data-id="${b}"]`);
     await key('f', 'KeyF', 70, 2);
