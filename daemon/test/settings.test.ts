@@ -57,8 +57,10 @@ it('idle_minutes defaults to 20 and refuses under 1 or fractional', () => {
   expect(() => writeConfig('settings', { idle_minutes: 1.5 })).toThrow(/idle_minutes/);
 });
 
-it('terminals open on their own for every phase by default; only plan, execute and test are accepted', () => {
-  expect(writeConfig('settings', {}).terminals).toEqual({ auto: ['plan', 'execute', 'test'] });
+it('terminals open on their own for every phase and tile by default; only plan, execute and test are accepted', () => {
+  expect(writeConfig('settings', {}).terminals).toEqual({ auto: ['plan', 'execute', 'test'], tile: true });
+  expect(writeConfig('settings', { terminals: { tile: false } }).terminals).toEqual({ auto: ['plan', 'execute', 'test'], tile: false });
+  expect(() => writeConfig('settings', { terminals: { tile: 'no' } })).toThrow(/terminals/);
   expect(writeConfig('settings', { terminals: { auto: [] } }).terminals.auto).toEqual([]);
   expect(writeConfig('settings', { terminals: { auto: ['test'] } }).terminals.auto).toEqual(['test']);
   expect(() => writeConfig('settings', { terminals: { auto: ['operator'] } })).toThrow(/terminals/);

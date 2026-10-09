@@ -93,9 +93,11 @@ describe('ui-layout', { timeout: 60_000 }, () => {
     }
     await boot('terms-reload');
     for (const id of [kept, fresh]) await until(() => page.evaluate(`!!document.querySelector('[data-win="term-${keys[id]}"] .xterm')`), 'the terminal');
-    // Two terminals: the two halves of the left half of the desktop.
+    // Two terminals: the two halves of the left half of the desktop, right of the desktop icons.
     const [W, H] = await desk();
-    const slots = JSON.stringify([[0, 0, W / 4, H], [W / 4, 0, W / 2, H]]);
+    const L = await page.evaluate<number>(`(() => { const e = document.getElementById('icons'); return e.offsetLeft + e.offsetWidth + 4; })()`);
+    const mid = L + Math.round((W / 2 - L) / 2);
+    const slots = JSON.stringify([[L, 0, mid, H], [mid, 0, W / 2, H]]);
     await until(async () => JSON.stringify([await box(`term-${keys[kept]}`), await box(`term-${keys[fresh]}`)].sort((a, b) => a![0] - b![0])) === slots, 'the terminals in their slots');
 
     for (const { id } of db.prepare('SELECT id FROM grants WHERE revoked_at IS NULL AND ticket_id IS NOT NULL').all() as { id: number }[]) await api(`/grants/${id}`, 'DELETE');

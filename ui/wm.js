@@ -27,9 +27,10 @@ export function setZoom(f) {
 }
 
 // ---- terminal slots ----
-// The terminal region is the desktop left of the action column: from its left edge to the left edge of the leftmost open,
-// non-minimized, non-maximized window in ACTION (the whole desktop when none is open, or when that leaves less than
-// MIN_REGION px), full height. Tiled windows (opened with `tile`) that are open, not minimized and not maximized fill it in
+// The terminal region is the desktop between the desktop icons and the action column: from just right of the icon column, so
+// the icons always show, to the left edge of the leftmost open, non-minimized, non-maximized window in ACTION (the desktop's
+// right edge when none is open, or when that leaves less than MIN_REGION px), full height. `setTiling(false)` (Settings →
+// General, `terminals.tile`) stops tiling: terminals open at the least-covered spot and stay where they are dragged. Tiled windows (opened with `tile`) that are open, not minimized and not maximized fill it in
 // reading order, in the order they opened, on the grid of the first SLOTS row whose count covers them. Past the last row's
 // count the rest are not tiled: they stay where they opened (`place`) and take a slot once one frees.
 // To change the arrangement, edit SLOTS: [up to n windows, columns, rows], ascending n.
@@ -38,22 +39,31 @@ const ACTION = ['board', 'inbox', 'notepad'];
 const MIN_REGION = 240;
 
 let tiling = null;
+let tileOn = true;
+/** Turns terminal slots on (every tiled window goes to its slot now) or off (they stay where they are). */
+export function setTiling(on) {
+  tileOn = on;
+  retile();
+}
 /** Puts every tiled window in its slot of the current region. */
 export function retile() {
   clearTimeout(tiling);
+  if (!tileOn) return;
   const W = desktop.clientWidth;
   const H = desktop.clientHeight;
+  const icons = document.getElementById('icons');
+  const L = icons ? icons.offsetLeft + icons.offsetWidth + 4 : 0;
   const shown = (el) => !el.hidden && !el.classList.contains('max');
   const edge = Math.min(W, ...ACTION.map((id) => wins.get(id)?.el).filter((el) => el && shown(el)).map((el) => el.offsetLeft));
-  const R = edge < MIN_REGION ? W : edge;
+  const R = edge - L < MIN_REGION ? W : edge;
   const list = [...wins.values()].filter((w) => w.tile && shown(w.el)).slice(0, SLOTS.at(-1)[0]);
   if (!list.length) return;
   const [, cols, rows] = SLOTS.find(([n]) => list.length <= n);
   list.forEach(({ el }, i) => {
     const [c, r] = [i % cols, Math.floor(i / cols)];
-    const x = Math.round((c * R) / cols);
+    const x = L + Math.round((c * (R - L)) / cols);
     const y = Math.round((r * H) / rows);
-    Object.assign(el.style, { left: `${x}px`, top: `${y}px`, width: `${Math.round(((c + 1) * R) / cols) - x}px`, height: `${Math.round(((r + 1) * H) / rows) - y}px` });
+    Object.assign(el.style, { left: `${x}px`, top: `${y}px`, width: `${L + Math.round(((c + 1) * (R - L)) / cols) - x}px`, height: `${Math.round(((r + 1) * H) / rows) - y}px` });
   });
 }
 /** retile() once things settle: a drag of the Board moves the region many times a second. */

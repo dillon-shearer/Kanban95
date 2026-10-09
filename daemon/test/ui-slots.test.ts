@@ -1,7 +1,7 @@
 // In headless Edge or Chrome against a running daemon (setup in ui.ts): live terminals tile into the slots left of the
 // action column (`SLOTS` in ui/wm.js), and every window scales with the desktop.
 import './home.ts'; // also here, not only in vitest.config.ts: a run from the repo root skips that config and wrote the real home
-import { rmSync, writeFileSync } from 'node:fs';
+import { readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { sessions } from '../src/launcher.ts';
@@ -21,15 +21,18 @@ const api = (path: string, method = 'GET') => fetch(`${base}api${path}`, { metho
 // The table as the ticket gives it: terminals → [columns, rows].
 const GRID: Record<number, [number, number]> = { 1: [1, 1], 2: [2, 1], 3: [3, 1], 4: [2, 2], 5: [3, 2], 6: [3, 2], 12: [4, 3] };
 
-/** The first `n` slots of the grid for `n` terminals in a region `R` wide and `H` high, in reading order. */
-function slots(n: number, R: number, H: number): Box[] {
+/** The first `n` slots of the grid for `n` terminals in a region from `L` to `R` and `H` high, in reading order. */
+function slots(n: number, L: number, R: number, H: number): Box[] {
   const [cols, rows] = GRID[n];
   return Array.from({ length: n }, (_, i) => {
     const [c, r] = [i % cols, Math.floor(i / cols)];
-    return [Math.round((c * R) / cols), Math.round((r * H) / rows), Math.round(((c + 1) * R) / cols), Math.round(((r + 1) * H) / rows)];
+    return [L + Math.round((c * (R - L)) / cols), Math.round((r * H) / rows), L + Math.round(((c + 1) * (R - L)) / cols), Math.round(((r + 1) * H) / rows)];
   });
 }
 const sorted = (bs: Box[]) => [...bs].sort((a, b) => a[1] - b[1] || a[0] - b[0]);
+/** The desktop icons' column and the region's left edge, 4 px right of it: terminals never cover an icon. */
+const icons = async () => (await boxes('#icons'))[0];
+const left = async () => (await icons())[2] + 4;
 /** The region's right edge: the left edge of the leftmost action-column window. */
 const edge = async () => Math.min(...(await Promise.all(['board', 'inbox', 'notepad'].map(box))).map((b) => b[0]));
 
@@ -37,9 +40,11 @@ const edge = async () => Math.min(...(await Promise.all(['board', 'inbox', 'note
 async function tiled(n: number) {
   const [, H] = await desk();
   const R = await edge();
-  await until(async () => JSON.stringify(sorted(await terms())) === JSON.stringify(sorted(slots(n, R, H))), `${n} terminals in their slots`, 1000);
+  const L = await left();
+  await until(async () => JSON.stringify(sorted(await terms())) === JSON.stringify(sorted(slots(n, L, R, H))), `${n} terminals in their slots`, 1000);
   const ts = await terms();
   for (let i = 0; i < ts.length; i++) {
+    expect(overlap(ts[i], await icons()), `terminal ${i} over the desktop icons`).toBe(0);
     for (const w of ['board', 'inbox', 'notepad']) expect(overlap(ts[i], await box(w)), `terminal ${i} over ${w}`).toBe(0);
     for (let j = i + 1; j < ts.length; j++) expect(overlap(ts[i], ts[j]), `terminal ${i} over ${j}`).toBe(0);
   }
@@ -55,7 +60,7 @@ async function launch(id: number) {
 }
 
 describe('ui-slots', { timeout: 120_000 }, () => {
-  it('tiles 1 to 6 terminals left of the action column, re-tiles on close, minimize, a moved Board and a resized desktop', async () => {
+  it('tiles 1 to 6 terminals between the desktop icons and the action column, re-tiles on close, minimize, a moved Board and a resized desktop, and stops while Tile terminals is off', async () => {
     const settings = join(process.env.USERPROFILE!, '.kanban95', 'settings.json');
     writeFileSync(settings, JSON.stringify({ terminals: { auto: ['execute'] } }));
     try {
@@ -95,6 +100,27 @@ describe('ui-slots', { timeout: 120_000 }, () => {
       // A dragged terminal goes back to its slot at the next re-tile.
       const t = await page.center(`[data-win="${wids[0]}"] .title-bar-text`);
       await page.drag(t, { x: t.x + 300, y: t.y + 300 });
+      await tiled(6);
+
+      // Settings → General → Tile terminals off: a dragged terminal stays where it was put, also after a re-tile would have
+      // run; back on, every terminal takes its slot again. Saved in settings.json.
+      await page.evaluate(`document.querySelector('[data-icon="Settings"]').dispatchEvent(new MouseEvent('dblclick'))`);
+      await page.evaluate(`[...document.querySelectorAll('[data-win="settings"] [role=tab] a')].find((t) => t.textContent === 'General').click()`);
+      await until(() => page.evaluate(`!!document.querySelector('#term-tile')`), 'the General tab');
+      expect(await page.evaluate(`document.querySelector('#term-tile').checked`)).toBe(true);
+      await page.evaluate(`document.querySelector('#term-tile').click()`);
+      await until(() => { try { return JSON.parse(readFileSync(settings, 'utf8')).terminals.tile === false; } catch { return false; } }, 'tile off saved');
+      await wm(`minimize('settings')`); // out of the way of the drag; its checkbox still clicks
+      const before = await box(wids[0]);
+      const t2 = await page.center(`[data-win="${wids[0]}"] .title-bar-text`);
+      await page.drag(t2, { x: t2.x + 200, y: t2.y + 150 });
+      await wm(`minimize('${wids[3]}')`); // would re-tile the rest
+      await new Promise((r) => setTimeout(r, 300));
+      expect(await box(wids[0])).toEqual([before[0] + 200, before[1] + 150, before[2] + 200, before[3] + 150]);
+      await wm(`focus('${wids[3]}')`);
+      await page.evaluate(`document.querySelector('#term-tile').click()`);
+      await until(() => { try { return JSON.parse(readFileSync(settings, 'utf8')).terminals.tile === true; } catch { return false; } }, 'tile on saved');
+      await wm(`close('settings')`);
       await tiled(6);
 
       // Twelve tiled (six more windows opened with `tile`), then a 13th opens at the least-covered spot and the twelve stay put.

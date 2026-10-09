@@ -5,7 +5,7 @@ import { FitAddon } from './vendor/xterm/addon-fit.mjs';
 import { Terminal } from './vendor/xterm/xterm.mjs';
 import { configure, ensureModel, micButton, micEverywhere } from './voice.js';
 import * as ui from './state.js';
-import { close, dialog, focus, focused, forget, h, isOpen, menu, open, raise, scale, seed, setZoom, snapshot } from './wm.js';
+import { close, dialog, focus, focused, forget, h, isOpen, menu, open, raise, scale, seed, setTiling, setZoom, snapshot } from './wm.js';
 
 // ---- data ----
 
@@ -1098,9 +1098,12 @@ function openSettings(tab) {
           onchange: (e) => act(() => saveSettings({ sounds: { ...settings.sounds, [k]: e.target.checked } }), 'Saved.') }), h('label', { for: `sound-${k}` }, label))),
         h('fieldset', {}, h('legend', {}, 'Open a terminal automatically for'),
           ...['plan', 'execute', 'test'].map((ph) => h('div', { class: 'field-row' }, h('input', { type: 'checkbox', id: `term-auto-${ph}`, checked: settings.terminals.auto.includes(ph),
-            onchange: (e) => act(() => saveSettings({ terminals: { auto: [...settings.terminals.auto.filter((x) => x !== ph), ...(e.target.checked ? [ph] : [])] } }), 'Saved.') }),
+            onchange: (e) => act(() => saveSettings({ terminals: { ...settings.terminals, auto: [...settings.terminals.auto.filter((x) => x !== ph), ...(e.target.checked ? [ph] : [])] } }), 'Saved.') }),
           h('label', { for: `term-auto-${ph}` }, ph))),
           h('p', {}, 'Brainstorms always open. A hidden session still runs: right-click its card → Terminal.')),
+        h('div', { class: 'field-row' }, h('input', { type: 'checkbox', id: 'term-tile', checked: settings.terminals.tile,
+          onchange: (e) => act(async () => { await saveSettings({ terminals: { ...settings.terminals, tile: e.target.checked } }); setTiling(settings.terminals.tile); }, 'Saved.') }),
+        h('label', { for: 'term-tile' }, 'Tile terminals into slots left of the Board')),
         h('fieldset', {}, h('legend', {}, 'Runner'),
           h('div', { class: 'field-row' }, h('label', { for: 'concurrency' }, 'Tickets running at once'), at),
           h('button', { onclick: saveRunner }, 'Save')),
@@ -1381,10 +1384,12 @@ async function boot() {
   for (const s of ui.get('k95.collapsed') ?? ['done']) collapsed.add(s); // nothing saved: Done starts folded
   Object.assign(view, ui.get('k95.view'));
   for (const t of list) tickets.set(t.id, t);
-  settings = { ...settings, terminals: { auto: ['plan', 'execute', 'test'] }, ...st.value, voice: { ...settings.voice, ...st.value?.voice }, housekeeping: { ...settings.housekeeping, ...st.value?.housekeeping } };
+  settings = { ...settings, ...st.value, voice: { ...settings.voice, ...st.value?.voice }, housekeeping: { ...settings.housekeeping, ...st.value?.housekeeping },
+    terminals: { auto: ['plan', 'execute', 'test'], tile: true, ...st.value?.terminals } };
   models = md.value;
   configure(settings.voice);
   applyZoom(settings.zoom);
+  setTiling(settings.terminals.tile);
   micEverywhere();
   for (const { id, ...r } of startupLayout()) {
     seed(id, r);

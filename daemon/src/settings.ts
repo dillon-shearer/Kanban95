@@ -29,9 +29,9 @@ const FILES = {
     housekeeping: z.object({ auto: z.boolean().default(true), every: z.number().int().min(1).default(10) }).strict()
       .default({ auto: true, every: 10 }),
     // Phases whose sessions open a terminal on their own; the rest run unseen until the operator opens one (card → Terminal).
-    // Brainstorms and operator terminals always open: the operator started them.
-    terminals: z.object({ auto: z.array(z.enum(['plan', 'execute', 'test'])).default(['plan', 'execute', 'test']) }).strict()
-      .default({ auto: ['plan', 'execute', 'test'] }),
+    // Brainstorms and operator terminals always open: the operator started them. `tile` off: terminals take no slot (ui/wm.js).
+    terminals: z.object({ auto: z.array(z.enum(['plan', 'execute', 'test'])).default(['plan', 'execute', 'test']), tile: z.boolean().default(true) }).strict()
+      .default({ auto: ['plan', 'execute', 'test'], tile: true }),
     // A running agent whose transcript gains no line for this long is flagged (docs/LIFECYCLE.md → Silent agents). Above the
     // 10 min tool timeout, so a long test run is not flagged.
     idle_minutes: z.number().int().min(1).default(20),
