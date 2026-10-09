@@ -4,7 +4,7 @@
 import { FitAddon } from './vendor/xterm/addon-fit.mjs';
 import { Terminal } from './vendor/xterm/xterm.mjs';
 import { configure, ensureModel, micButton, micEverywhere } from './voice.js';
-import { close, dialog, focus, focused, h, isOpen, menu, open } from './wm.js';
+import { close, dialog, focus, focused, h, isOpen, menu, open, remember, snapshot } from './wm.js';
 
 // ---- data ----
 
@@ -969,6 +969,43 @@ function openNotepad() {
   }, (e) => { status.textContent = e.message; });
 }
 
+// ---- startup layout ----
+
+// Which of these windows `boot` opens and where: [{ id, x, y, w, h, max? }], bottom-most first, under one localStorage key.
+// Boot writes each entry over the window's own remembered place, so a window opened later in the session still opens
+// where the operator last left it.
+const LAYOUT = { board: openBoard, inbox: openInbox, brain: openBrain, settings: () => openSettings() };
+const NAMES = { board: 'Board', inbox: 'Inbox', brain: 'Brain', settings: 'Settings' };
+/** Board in the top right, Inbox under it in the bottom right, sized so 1920×1080 leaves the left side to terminals. */
+function defaultLayout() {
+  const d = document.getElementById('desktop');
+  const W = d.clientWidth;
+  const H = d.clientHeight;
+  const bw = Math.min(1100, W), bh = Math.min(620, Math.round(H * 0.6));
+  const iw = Math.min(760, W), ih = Math.min(420, H - bh);
+  return [{ id: 'inbox', x: W - iw, y: H - ih, w: iw, h: ih }, { id: 'board', x: W - bw, y: 0, w: bw, h: bh }];
+}
+function startupLayout() {
+  try {
+    const l = JSON.parse(localStorage.getItem('k95.layout'));
+    if (Array.isArray(l)) return l.filter((x) => LAYOUT[x?.id] && [x.x, x.y, x.w, x.h].every(Number.isFinite));
+  } catch { /* unreadable: the default */ }
+  return defaultLayout();
+}
+function saveLayout() {
+  const l = snapshot(Object.keys(LAYOUT));
+  try {
+    localStorage.setItem('k95.layout', JSON.stringify(l));
+    say(l.length ? `Startup layout saved: ${l.map((x) => NAMES[x.id]).join(', ')}.` : 'Startup layout saved: no windows open at startup.');
+  } catch {
+    say('Could not save the startup layout: browser storage is off.');
+  }
+}
+function resetLayout() {
+  try { localStorage.removeItem('k95.layout'); } catch { /* storage off: nothing was saved */ }
+  say('Startup layout reset: Board top right, Inbox bottom right from the next start.');
+}
+
 // ---- taskbar, keyboard, start ----
 
 const START = [
@@ -985,6 +1022,8 @@ const START = [
   { get label() { return runner.on ? 'Stop' : 'Run'; }, run: toggleRunner },
   { label: 'Housekeeping', run: housekeeping },
   '-',
+  { label: 'Save startup layout', run: saveLayout },
+  { label: 'Reset startup layout', run: resetLayout },
   { label: 'Restart board', run: restartBoard },
 ];
 
@@ -1076,7 +1115,10 @@ async function boot() {
   models = md.value;
   configure(settings.voice);
   micEverywhere();
-  openBoard();
+  for (const { id, ...r } of startupLayout()) {
+    remember(id, r);
+    LAYOUT[id]();
+  }
   await refreshShared();
   redraw(null);
   if (!models) say('No model catalog yet: Start → Settings → Models, then Save, before launching.');

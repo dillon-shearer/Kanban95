@@ -52,6 +52,8 @@ describe('ui-placement', { timeout: 60_000 }, () => {
   it('opens a new terminal inside the desktop at its least covered spot when none is free', async () => {
     await viewport(1280, 720);
     const id = ticket('Crowded');
+    // The Board alone at the top left, as the expectation below is worked out for.
+    await page.evaluate(`localStorage.setItem('k95.layout', JSON.stringify([{ id: 'board', x: 0, y: 0, w: 1000, h: 560 }]))`);
     await page.goto(base + '?full');
     await until(() => page.evaluate(`!!document.querySelector('[data-win="board"]')`), 'the board');
     const wid = await launch(id);
