@@ -10,11 +10,10 @@ import { revoke, type Role } from './grants.js';
 import { cleanTicket } from './janitor.js';
 import { launch, launchRoot, sessionsOf, type Session } from './launcher.js';
 import { enqueue, merge } from './merge.js';
-import { BadConfig, EFFORT, runSettings, type Effort } from './settings.js';
+import { BadConfig, EFFORT, readConfig, runSettings, type Effort } from './settings.js';
 import { TEMPLATES } from './templates.js';
 
 export const MAX_RETRY = 3;
-const HOUSEKEEPING_EVERY = 10;
 
 export type Status = 'backlog' | 'in_progress' | 'testing' | 'done';
 export type Event =
@@ -296,17 +295,11 @@ function releaseDependents(b: Board, id: number) {
 const repoConfigPath = (repo: string) => join(repo, '.kanban95', 'config.json');
 const repoConfig = (repo: string) => (existsSync(repoConfigPath(repo)) ? JSON.parse(readFileSync(repoConfigPath(repo), 'utf8')) : {});
 
-/** A positive-integer setting from config.json. */
-function config(b: Board, key: string, fallback: number): number {
-  const n = Number(repoConfig(b.repo)[key] ?? fallback);
-  if (!Number.isInteger(n) || n < 1) throw new Error(`${key} in ${repoConfigPath(b.repo)} must be a positive integer`);
-  return n;
-}
-
-/** `housekeeping_every` (default 10). Merged execute tickets are counted; housekeeping ones are not. The ticket waits in Backlog for the runner. */
+/** settings.json `housekeeping: { auto, every }` (on, 10). Merged execute tickets are counted; housekeeping ones are not. The ticket waits in Backlog for the runner. */
 function maybeHousekeeping(b: Board, t: Ticket) {
   if (t.template !== 'execute') return;
-  const every = config(b, 'housekeeping_every', HOUSEKEEPING_EVERY);
+  const { auto, every } = readConfig('settings').housekeeping;
+  if (!auto) return;
   const { n } = b.db.prepare("SELECT count(*) AS n FROM tickets WHERE template = 'execute' AND merged_at IS NOT NULL").get() as { n: number };
   if (n % every !== 0) return;
   housekeeping(b, `Scheduled after ${n} tickets reached Done. Follow the housekeeping brief.`, false);

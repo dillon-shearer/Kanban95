@@ -293,7 +293,7 @@ export const TOOLS: Record<string, Tool<z.ZodRawShape>> = {
     description:
       'Ask the human operator a question you cannot resolve from the ticket, the brain or the code. The ticket is flagged needs_human and the operator is alerted; ' +
       'the answer is typed into your session as one line and kept as a note on the ticket. Ask once with full context and the options you see, rather than many small questions. Returns the question id.',
-    access: { planner: 'yes', worker: 'own', tester: 'own', operator: 'yes' },
+    access: { worker: 'own', tester: 'own' },
     input: { ticket_id: ticketId, question: z.string().min(1) },
     run(c, a) {
       const id = (c.ticket = own(c, a.ticket_id));

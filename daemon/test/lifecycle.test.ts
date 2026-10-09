@@ -564,6 +564,25 @@ ${TO_RESOLVE}`]);
     await landed(eleventh);
     expect(hk()).toHaveLength(1);
   });
+
+  it('settings.json housekeeping: switched off files none; `every` sets the interval', async () => {
+    const settings = join(process.env.KANBAN95_HOME!, 'settings.json');
+    const hk = () => db.prepare("SELECT count(*) AS n FROM tickets WHERE template = 'housekeeping'").get() as { n: number };
+    try {
+      writeFileSync(settings, JSON.stringify({ housekeeping: { auto: false, every: 1 } }));
+      const off = ticket('Off');
+      await post(`/api/tickets/${off}/launch`);
+      await landed(off);
+      expect(hk().n).toBe(0);
+      writeFileSync(settings, JSON.stringify({ housekeeping: { every: 2 } }));
+      const second = ticket('Second');
+      await post(`/api/tickets/${second}/launch`);
+      await landed(second);
+      expect(hk().n).toBe(1);
+    } finally {
+      rmSync(settings, { force: true });
+    }
+  });
 });
 
 describe('janitor on daemon start', () => {

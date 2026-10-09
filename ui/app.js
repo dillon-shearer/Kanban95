@@ -32,7 +32,7 @@ let sessions = [];
 let inbox = [];
 let runner = { on: false, concurrency: 3, running: [], left: 0, backlog: 0, waits: [] }; // GET /api/runner: the Run button and its status-bar line
 let models = null; // ~/.kanban95/models.json as written, for the cards' default model and effort
-let settings = { paths: {}, sounds: true, voice: { backend: 'local', mode: 'push' } };
+let settings = { paths: {}, sounds: true, voice: { backend: 'local', mode: 'push' }, housekeeping: { auto: true, every: 10 } };
 let limits = null; // GET /api/limits: { rows, errors, fetched_at }, null until the first answer
 const views = new Map(); // open window id → redraw(ticketId | null)
 
@@ -576,7 +576,8 @@ function openTerminal(s, auto = false) {
       say(e.message);
     }
   };
-  const w = open(wid, { title, w: 760, h: 440, background: auto, onX, extra: [micButton((text) => send({ data: text }))],
+  // Placed per ticket, not per session: every later phase, retry and relaunch opens where the operator left the last one.
+  const w = open(wid, { title, w: 760, h: 440, persist: s.ticket_id !== null && `term-ticket-${s.ticket_id}`, background: auto, onX, extra: [micButton((text) => send({ data: text }))],
     items: s.ticket_id === null ? [] : [{ label: 'Open ticket', run: () => openTicket(s.ticket_id) }], onClose: () => { terms.delete(wid); ro.disconnect(); ws.close(); term.dispose(); } });
   terms.set(wid, s.ticket_id);
   w.body.classList.add('k95-term');
@@ -798,11 +799,17 @@ function openSettings(tab) {
         runner = await api('PUT', '/runner', { concurrency: Number(at.value) });
         drawBoard();
       }, 'Saved.');
+      const hkAuto = h('input', { type: 'checkbox', id: 'hk-auto', checked: settings.housekeeping.auto });
+      const hkEvery = h('input', { type: 'number', id: 'hk-every', min: 1, step: 1, value: settings.housekeeping.every });
       p.replaceChildren(h('div', { class: 'field-row' }, h('input', { type: 'checkbox', id: 'sounds', checked: settings.sounds,
         onchange: (e) => act(() => saveSettings({ sounds: e.target.checked }), 'Saved.') }), h('label', { for: 'sounds' }, 'Sounds: ding when a ticket merges, chord when the board needs you')),
         h('fieldset', {}, h('legend', {}, 'Runner'),
           h('div', { class: 'field-row' }, h('label', { for: 'concurrency' }, 'Tickets running at once'), at),
-          h('button', { onclick: saveRunner }, 'Save')));
+          h('button', { onclick: saveRunner }, 'Save')),
+        h('fieldset', {}, h('legend', {}, 'Housekeeping'),
+          h('div', { class: 'field-row' }, hkAuto, h('label', { for: 'hk-auto' }, 'File a housekeeping ticket after merges')),
+          h('div', { class: 'field-row' }, h('label', { for: 'hk-every' }, 'Merged tickets between runs'), hkEvery),
+          h('button', { onclick: () => act(() => saveSettings({ housekeeping: { auto: hkAuto.checked, every: Number(hkEvery.value) } }), 'Saved.') }, 'Save')));
     }
   }, tab);
   w.body.append(...tb.el);
@@ -995,7 +1002,7 @@ async function boot() {
   listen();
   const [list, st, md] = await Promise.all([api('GET', '/tickets'), api('GET', '/config/settings'), api('GET', '/config/models').catch(() => ({ value: null }))]);
   for (const t of list) tickets.set(t.id, t);
-  settings = { ...settings, ...st.value, voice: { ...settings.voice, ...st.value?.voice } };
+  settings = { ...settings, ...st.value, voice: { ...settings.voice, ...st.value?.voice }, housekeeping: { ...settings.housekeeping, ...st.value?.housekeeping } };
   models = md.value;
   configure(settings.voice);
   micEverywhere();

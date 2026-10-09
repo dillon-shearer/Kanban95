@@ -35,3 +35,9 @@ it('runSettings refuses a model outside the cli models list, naming the model, t
   writeConfig('models', { cli: 'claude', claude: { execute: { model: 'a' } } });
   expect(runSettings(t('b'), 'execute').model).toBe('b');
 });
+
+it('housekeeping defaults to on every 10 merges and refuses an interval under 1 or fractional', () => {
+  expect(writeConfig('settings', {}).housekeeping).toEqual({ auto: true, every: 10 });
+  expect(() => writeConfig('settings', { housekeeping: { every: 0 } })).toThrow(/every/);
+  expect(() => writeConfig('settings', { housekeeping: { every: 2.5 } })).toThrow(/every/);
+});
