@@ -163,6 +163,8 @@ Inside a terminal every key goes to the agent instead: Esc interrupts Claude Cod
 
 The zoom scales everything together: windows, cards, menus, dialogs, the taskbar and the terminals' text, so the Win95 layout keeps its proportions. **Settings → General → Zoom** shows the current level and sets it, 80% to 200% in steps of 10%. It is `zoom` in `~/.kanban95/settings.json` (1 is 100%), so it survives a reload and a restart and applies in every repo. Remembered window places are kept in unzoomed units; at any zoom a window is kept on the desktop, and one larger than the zoomed-in desktop is shrunk to fit it. A terminal refits to its window, so a larger zoom gives it fewer columns and rows of larger text.
 
+At 100% and 200% the UI text is 98.css's pixel font. That font is drawn for whole pixels, so at any other zoom its strokes were resampled unevenly and showed stray horizontal lines through the text (status bar, buttons, cards). At those zooms the board now draws all UI text in Tahoma: `setZoom` in `ui/wm.js` sets the `k95-vector` class on body, and `ui/app.css` switches the `--k95-font` variable that body and every 98.css control take their font from. Terminals draw their own text and are unaffected.
+
 ## Projects
 
 Each board works on one repo, so with several boards open they are told apart by name and colour. The window title and its taskbar entry read `<repo folder> — Kanban95`, and each project has its own wallpaper colour under the same blueprint grid.
