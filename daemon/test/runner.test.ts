@@ -138,7 +138,7 @@ describe('runner', { timeout: 60_000 }, () => {
     await landed(b);
     expect(runs(b)[0].started_at >= t(a).merged_at!).toBe(true);
     expect(runner(srv.board)).toEqual({ ...STOPPED, concurrency: 1 });
-    expect(sounds).toEqual([{ sound: 'ding', ticket: a }, { sound: 'ding', ticket: b }, { sound: 'ding', ticket: null }]);
+    expect(sounds.filter((s) => s.sound === 'ding')).toEqual([{ sound: 'ding', ticket: a }, { sound: 'ding', ticket: b }, { sound: 'ding', ticket: null }]);
     expect((await request('GET', '/api/runner')).status).toBe(200);
     expect((await request('POST', '/api/tickets/launch-all')).status).toBe(404);
   });
@@ -256,7 +256,7 @@ describe('runner', { timeout: 60_000 }, () => {
     await landed(a);
     expect(t(b).status).toBe('backlog');
     expect(runs(b)).toEqual([]);
-    expect(sounds).toEqual([{ sound: 'ding', ticket: a }]); // no "nothing left" ding: the operator stopped it
+    expect(sounds.filter((s) => s.sound === 'ding')).toEqual([{ sound: 'ding', ticket: a }]); // no "nothing left" ding: the operator stopped it
     expect((await request('POST', `/api/tickets/${b}/launch`)).status).toBe(200);
     expect(sessionsOf(b)).toHaveLength(1);
     expect(runner(srv.board)).toEqual({ on: false, concurrency: 1 });

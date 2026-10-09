@@ -4,6 +4,7 @@ import { existsSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { until } from './cdp.ts';
+import { events } from '../src/lifecycle.ts';
 import { srv, db, page, base, repo, ticket, statusBar } from './ui.ts';
 
 describe('ui-settings', { timeout: 60_000 }, () => {
@@ -113,6 +114,35 @@ describe('ui-settings', { timeout: 60_000 }, () => {
     expect(await page.evaluate(`document.querySelector('#idle-minutes').value`)).toBe('20');
     await page.evaluate(`(() => { const f = document.querySelector('#idle-minutes'); f.value = '35'; f.closest('fieldset').querySelector('button').click(); })()`);
     await until(() => existsSync(file) && JSON.parse(readFileSync(file, 'utf8')).idle_minutes === 35, 'the saved idle_minutes');
+    rmSync(file, { force: true });
+  });
+
+  it('a done event plays done.wav and says the ticket passed; the third sounds checkbox saves sounds.done and silences it', async () => {
+    const file = join(process.env.USERPROFILE!, '.kanban95', 'settings.json');
+    rmSync(file, { force: true });
+    await page.goto(base);
+    await until(() => page.evaluate(`!!document.querySelector('[data-win="board"]')`), 'the board');
+    // Record what would play instead of playing it (the browser is muted as well).
+    await page.evaluate(`window.played = []; window.Audio = class { constructor(src) { window.played.push(src); } play() { return Promise.resolve(); } }`);
+    await page.evaluate(`document.querySelector('[data-icon="Settings"]').dispatchEvent(new MouseEvent('dblclick'))`);
+    await page.evaluate(`[...document.querySelectorAll('[data-win="settings"] [role=tab] a')].find((t) => t.textContent === 'General').click()`);
+    await until(() => page.evaluate(`!!document.querySelector('#sound-done')`), 'the General tab');
+    expect(await page.evaluate(`[...document.querySelectorAll('[id^="sound-"]')].map((c) => [c.id, c.checked, document.querySelector('label[for="' + c.id + '"]').textContent])`)).toEqual([
+      ['sound-merge', true, 'Ding when a ticket merges'],
+      ['sound-attention', true, 'Chord when the board needs you'],
+      ['sound-done', true, 'Sound when a ticket lands in Done'],
+    ]);
+
+    events.emit('event', { sound: 'done', ticket: 7 });
+    await until(async () => (await statusBar()) === '#7 passed, in Done.', 'the status-bar message');
+    expect(await page.evaluate(`window.played`)).toEqual(['sounds/done.wav']);
+
+    await page.evaluate(`document.querySelector('#sound-done').click()`);
+    await until(() => existsSync(file) && JSON.parse(readFileSync(file, 'utf8')).sounds?.done === false, 'the saved sounds.done');
+    expect(JSON.parse(readFileSync(file, 'utf8')).sounds).toEqual({ merge: true, attention: true, done: false });
+    events.emit('event', { sound: 'done', ticket: 8 });
+    await until(async () => (await statusBar()) === '#8 passed, in Done.', 'the second status-bar message');
+    expect(await page.evaluate(`window.played`)).toEqual(['sounds/done.wav']);
     rmSync(file, { force: true });
   });
 });

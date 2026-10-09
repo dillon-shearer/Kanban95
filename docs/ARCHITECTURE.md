@@ -178,7 +178,7 @@ daemon/           src/ (see Daemon above):
                   migrations/global/*.sql (the global brain, ~/.kanban95/brain.db)
                   test/ (test/cdp.ts drives headless Edge/Chrome, test/ui.ts is the shared daemon-plus-browser setup of the ui-<area>.test.ts files, which vitest.config.ts runs as a second group after the rest; test/changed.ts is `npm run test:changed`; test/.cache/ is gitignored)
                   tsconfig.json, vitest.config.ts; compiled to dist/ (gitignored)
-ui/               index.html, app.js (data layer and windows), wm.js (window manager), voice.js (mic and transcription), app.css, icons/*.svg (desktop icons), sounds/{ding,chord}.wav, vendor/{98.css and fonts, xterm/, transformers/}
+ui/               index.html, app.js (data layer and windows), wm.js (window manager), voice.js (mic and transcription), app.css, icons/*.svg (desktop icons), sounds/{ding,chord,done}.wav, vendor/{98.css and fonts, xterm/, transformers/}
 templates/        default prompt templates (brainstorm, operator, plan, execute, test, housekeeping), copied into each repo and kept in step while unedited
 skills/           the Claude Code plugin `kanban95` (.claude-plugin/plugin.json and one folder per skill; docs/AGENTS.md)
 Kanban95.cmd      double-click launcher: finds Node 24, installs, builds, runs the shell on a repo
@@ -220,7 +220,7 @@ Any failure after the run row is written revokes the grant and removes the sessi
 
 ## Events
 
-`/events` is a same-origin websocket that only sends. `{"sound": "ding" | "chord", "ticket": n}` when a ticket merges or needs the operator (a `ding` with `ticket: null` when the runner stops itself); `{"ticket": n}` whenever something about ticket `n` changed (any lifecycle transition, an operator REST mutation, an agent's successful MCP call, a session of that ticket ending); `{"ticket": null}` when the set of live sessions changed without a ticket (a brainstorm or operator terminal started or ended) or the runner changed. The UI never polls the board: it refetches what an event names.
+`/events` is a same-origin websocket that only sends. `{"sound": "ding" | "chord" | "done", "ticket": n}` when a ticket merges, needs the operator, or passes its test and lands in Done (`done`, sent by the `pass` transition before the merge queue takes the ticket; a `ding` with `ticket: null` when the runner stops itself); `{"ticket": n}` whenever something about ticket `n` changed (any lifecycle transition, an operator REST mutation, an agent's successful MCP call, a session of that ticket ending); `{"ticket": null}` when the set of live sessions changed without a ticket (a brainstorm or operator terminal started or ended) or the runner changed. The UI never polls the board: it refetches what an event names.
 
 ## UI
 
