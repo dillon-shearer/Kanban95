@@ -393,12 +393,15 @@ const liveGrant = (g) => !g.revoked_at && g.expires_at > new Date().toISOString(
 /** 98.css tabs. `draw(name, panel, first)`: first is true when the tab is shown, false when an event asks for a refresh. */
 function tabs(names, draw, current = names[0]) {
   const bar = h('menu', { role: 'tablist' });
-  const panel = h('div', { class: 'window k95-panel', role: 'tabpanel' }, h('div', { class: 'window-body' }));
+  const panel = h('div', { class: 'window k95-panel', role: 'tabpanel' });
   const show = (n) => {
     current = n;
     bar.replaceChildren(...names.map((x) => h('li', { role: 'tab', 'aria-selected': x === n ? 'true' : 'false' },
       h('a', { href: '#', onclick: (e) => { e.preventDefault(); show(x); } }, x))));
-    draw(n, panel.firstChild, true);
+    // A fresh body per switch: a draw still awaiting the daemon for the tab left behind fills a detached node, not this one.
+    const body = h('div', { class: 'window-body' });
+    panel.replaceChildren(body);
+    draw(n, body, true);
   };
   show(current);
   return { el: [bar, panel], show: (n = current) => show(n), redraw: () => draw(current, panel.firstChild, false) };
@@ -754,13 +757,29 @@ function openSettings(tab) {
           h('p', {}, 'Codex is told per launch that this repo is trusted; nothing is written to its config.'),
           h('button', { disabled: !trust.trusted, onclick: () => act(async () => { await api('DELETE', '/trust'); tb.show(); }, 'Claude trust entry cleared.') }, 'Clear Claude trust')));
     } else if (tab === 'Prompts') {
-      const { path, value } = await api('GET', '/config/preferences');
+      const [{ path, value }, tpls] = await Promise.all([api('GET', '/config/preferences'), api('GET', '/templates')]);
       const text = h('textarea', { id: 'preferences', rows: 10, placeholder: 'e.g. No em dashes or non-ASCII characters in output.' });
       text.value = value;
+      // One template at a time: the select picks it, Save and Reset replace its entry with what the daemon wrote.
+      const byName = Object.fromEntries(tpls.templates.map((t) => [t.name, t]));
+      const pick = h('select', { id: 'template' }, tpls.templates.map((t) => h('option', {}, t.name)));
+      const body = h('textarea', { id: 'template-text', rows: 14, spellcheck: 'false', 'data-mic': 'off' });
+      const where = h('p', {});
+      const show = (t) => { byName[t.name] = t; body.value = t.text; where.textContent = t.path; };
+      pick.onchange = () => show(byName[pick.value]);
+      show(tpls.templates[0]);
       p.replaceChildren(h('fieldset', {}, h('legend', {}, 'Preferences'),
         h('p', {}, `Standing instructions every agent prompt gets under "Operator preferences". Up to 16 KB. ${path}`),
         h('div', { class: 'field-row' }, text),
-        h('button', { onclick: () => act(() => api('PUT', '/config/preferences', { value: text.value }), `Saved ${path}.`) }, 'Save')));
+        h('button', { onclick: () => act(() => api('PUT', '/config/preferences', { value: text.value }), `Saved ${path}.`) }, 'Save')),
+        h('fieldset', {}, h('legend', {}, 'Templates'),
+          h('p', {}, 'The prompt each phase starts from; the next run uses what you save.'),
+          h('div', { class: 'field-row' }, h('label', { for: 'template' }, 'Template'), pick),
+          h('div', { class: 'field-row' }, body),
+          h('p', { id: 'template-vars' }, `Variables: ${tpls.vars.map((v) => `{{${v}}}`).join(' ')}`),
+          where,
+          h('button', { onclick: () => act(async () => show(await api('PUT', `/templates/${pick.value}`, { text: body.value })), `Saved ${pick.value}.md.`) }, 'Save'),
+          h('button', { onclick: () => act(async () => show(await api('POST', `/templates/${pick.value}/reset`)), `${pick.value}.md reset to default.`) }, 'Reset to default')));
     } else if (tab === 'Voice') {
       const s = await api('GET', '/voice');
       const mode = (v, label) => h('div', { class: 'field-row' }, h('input', { type: 'radio', id: `mode-${v}`, name: 'mode', checked: settings.voice.mode === v,

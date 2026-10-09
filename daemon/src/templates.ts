@@ -1,5 +1,5 @@
 // Prompt templates: markdown with {{var}} placeholders, read from <repo>/.kanban95/templates/ on every render.
-import { constants, copyFileSync, mkdirSync, readFileSync } from 'node:fs';
+import { constants, copyFileSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import type { Role } from './grants.js';
 
@@ -24,6 +24,13 @@ export type Ctx = Record<(typeof VARS)[number], string>;
 
 const PLACEHOLDER = /\{\{\s*([A-Za-z0-9_]+)\s*\}\}/g;
 const templatesDir = (repo: string) => join(repo, '.kanban95', 'templates');
+export const templatePath = (repo: string, name: TemplateName) => join(templatesDir(repo), `${name}.md`);
+
+/** The first variable in `text` outside VARS, or null when every placeholder is allowed. */
+export function unknownVar(text: string): string | null {
+  for (const [, v] of text.matchAll(PLACEHOLDER)) if (!(VARS as readonly string[]).includes(v)) return v;
+  return null;
+}
 
 /** Copies each default template into the repo once. An existing file, edited or not, is never overwritten. */
 export function initTemplates(repo: string) {
@@ -40,11 +47,23 @@ export function initTemplates(repo: string) {
 /** Reads the template and refuses it if it names a variable outside VARS. No ctx is involved, so a bad template fails the same way every time. */
 export function loadTemplate(repo: string, name: TemplateName): string {
   if (!Object.hasOwn(TEMPLATES, name)) throw new Error(`unknown template ${name}`);
-  const text = readFileSync(join(templatesDir(repo), `${name}.md`), 'utf8');
-  for (const [, v] of text.matchAll(PLACEHOLDER)) {
-    if (!(VARS as readonly string[]).includes(v)) throw new Error(`template ${name}.md uses unknown variable {{${v}}}`);
-  }
+  const text = readFileSync(templatePath(repo, name), 'utf8');
+  const v = unknownVar(text);
+  if (v !== null) throw new Error(`template ${name}.md uses unknown variable {{${v}}}`);
   return text;
+}
+
+/** Replaces the repo's copy whole. The caller has checked `text` with unknownVar, so the next render cannot fail on it. */
+export function writeTemplate(repo: string, name: TemplateName, text: string) {
+  const file = templatePath(repo, name);
+  mkdirSync(templatesDir(repo), { recursive: true });
+  writeFileSync(`${file}.tmp`, text);
+  renameSync(`${file}.tmp`, file);
+}
+
+/** Overwrites the repo's copy with the shipped default in templates/. */
+export function resetTemplate(repo: string, name: TemplateName) {
+  writeTemplate(repo, name, readFileSync(join(DEFAULTS_DIR, `${name}.md`), 'utf8'));
 }
 
 /** Single pass: a value that itself contains {{...}} (a brain note, a diff) is inserted literally, never expanded. A missing value is refused, never rendered as "undefined". */

@@ -94,6 +94,9 @@ Every `/api/*` request needs the `k95` cookie holding the shell secret, or gets 
 | GET, PUT | `/api/notepad` | `<repo>/.kanban95/notepad.md` as plain text: `{value}`, `''` when absent; PUT refuses a non-string with `400` and more than 256 KB with `413`. Not audited |
 | GET, PUT | `/api/runner` | the Run toggle: `{on, why?, concurrency, running, left, backlog, waits: [{id, on}]}`; PUT takes `{"on"?: boolean, "concurrency"?: 1-10}`, either or both, audited `runner.set` (`docs/LIFECYCLE.md` → The runner) |
 | GET, PUT | `/api/config/preferences` | `~/.kanban95/preferences.md` as plain text: `{path, value}`, `value` is `''` when absent; PUT refuses a non-string or more than 16 KB with `400` |
+| GET | `/api/templates` | `{vars, templates: [{name, path, text}]}`: every prompt template's current text in `<repo>/.kanban95/templates/` and the allowed `{{variables}}` (`VARS`), for Settings → Prompts |
+| PUT | `/api/templates/:name` | `{text}` replaces that template whole; a `{{var}}` outside `VARS` is refused with `400` naming it, an unknown name with `404`. Returns `{name, path, text}` |
+| POST | `/api/templates/:name/reset` | Overwrites the repo's copy with the shipped `templates/<name>.md`. Returns `{name, path, text}` |
 | GET | `/api/models` | `{claude: string[], codex: string[]}`: the model names each installed CLI knows (Codex's `~/.codex/models_cache.json`, Claude's `--help` and executable), for the Settings → Models dropdowns |
 | GET, DELETE | `/api/trust` | Claude Code's trust entry for this repo root: status, or clear it (`docs/CLIS.md` → First-run prompts) |
 | GET | `/api/limits?refresh=` | `{rows: [{cli, window, used, limit, resets_at}], errors: {claude?, codex?}, fetched_at}`. `used` of `limit` (percent of 100); `resets_at` is ISO for Codex, Claude's own text (`Oct 8, 7:59pm (America/New_York)`) for Claude. Cached 5 min; `refresh` asks the CLIs now. A CLI that fails is in `errors` with why, never its output |
@@ -112,7 +115,7 @@ Errors are `{ "error": "..." }`: 400 for bad input, a constraint violation or a 
 2. `buildContext` reads the ticket, the brain (FTS5 `OR` of the ticket's title and body words, top 8, bodies for the top 2 and an index line for the rest, 2500-char budget cut between rows), the failure notes of the last cycle, the retry count, the base branch, the operator's `preferences.md`, the absolute paths of the ticket's attachments (appended to `{{ticket}}`), the role's tool list from the MCP table, and for a tester `git diff --stat` of the change plus its code diff without markdown, `docs/` and lockfiles, capped at 32 000 characters (`docs/AGENTS.md` → `{{diff}}`).
 3. The template is filled in a single pass and the result inserted into `runs.prompt_rendered`. Same ticket and same database give byte-identical output: every query has a total order and nothing reads the clock.
 
-The template is read from disk on every render, so operator edits apply without a restart. Template-to-role and template-to-phase mapping is the `TEMPLATES` table in `templates.ts`; agent-facing behaviour is in `docs/AGENTS.md`.
+The template is read from disk on every render, so operator edits (by hand or in Settings → Prompts → Templates) apply without a restart. Template-to-role and template-to-phase mapping is the `TEMPLATES` table in `templates.ts`; agent-facing behaviour is in `docs/AGENTS.md`.
 
 ## Repo map
 
