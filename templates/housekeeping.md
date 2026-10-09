@@ -36,7 +36,7 @@ Retry count: {{retry}}.
 1. Work only inside the current directory, this ticket's worktree.
 2. Before deleting anything, move whatever is still true and useful into the matching living doc.
 3. Confirm "unused" with a search, not a guess. When unsure, leave it and say so in the summary.
-4. Brain review: `brain_search` with no query and `limit` 50 lists the newest rows; read every one. Give each a verdict: keep, rewrite, merge or delete. Apply rewrites and merges with `brain_update` (merge = edit the survivor). You cannot delete: name every row to delete, with its id and reason, in your summary for the operator. Report each updated row in `report_cleanup` as path `brain#<id>`.
+4. Brain review: `brain_search` with no query and `limit` 50 lists the newest rows; read every one. Judge each by the `brain_add` gate: Quality (a future agent would trip without it, and a reader with no context can act on it; not a plan, status or what the code, docs or templates say), Scope (global only if it holds in every repo, else project) and Worth (someone would search for it; not a one-off). Verdict: keep if it passes all three; rewrite if Quality fails only on wording, or move scope (`brain_update` `move_to`) if Scope fails; merge if it duplicates another row; delete if it fails Quality on substance or fails Worth. Apply rewrites and merges with `brain_update` (merge = edit the survivor). You cannot delete: name every row to delete, with its id and reason, in your summary for the operator. Report each updated row in `report_cleanup` as path `brain#<id>`.
 5. Run the tests and the build after the cleanup. They must pass exactly as before.
 6. Commit with a plain imperative message, no ticket ids, no trailers. Never commit secrets.
 
