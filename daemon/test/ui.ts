@@ -72,6 +72,10 @@ export const rightClick = async (selector: string) => {
   await page.send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'right', buttons: 2, clickCount: 1 });
   await page.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'right', buttons: 0, clickCount: 1 });
 };
+/** Sets one key of the open page's UI state (ui/state.js, so the page sees it at once; undefined removes it). It reaches
+ *  ui.json on the page's debounced write or its pagehide flush, so a reload right after keeps it. */
+export const setUi = (key: string, value: unknown) =>
+  page.evaluate(`import('/state.js').then((s) => s.set(${JSON.stringify(key)}, ${value === undefined ? 'undefined' : JSON.stringify(value)}))`);
 export const menuItems = () => page.evaluate<string[]>(`[...document.querySelectorAll('.k95-menu > li[role="menuitem"]')].map((li) => li.textContent)`);
 export const menuPick = (label: string) => page.evaluate(`[...document.querySelectorAll('.k95-menu > li')].find((li) => li.textContent === ${JSON.stringify(label)}).click()`);
 

@@ -10,7 +10,7 @@ export const BRAIN_RANK = 'bm25(brain_fts, 10.0, 1.0, 5.0)';
 export const BRAIN_BODY_MAX = 1500;
 
 export const MIGRATIONS_DIR = resolve(import.meta.dirname, '../migrations');
-const INNER_GITIGNORE = 'board.db\nboard.db-*\nsessions/\nattachments/\nnotepad.md\nrunner.json\n';
+const INNER_GITIGNORE = 'board.db\nboard.db-*\nsessions/\nattachments/\nnotepad.md\nrunner.json\nui.json\n';
 
 export function openDb(repo: string, opts: { migrationsDir?: string } = {}): DatabaseSync {
   const dir = join(repo, '.kanban95');

@@ -77,7 +77,7 @@ describe('ui-terminal', { timeout: 60_000 }, () => {
     expect(placed).toEqual([cascaded[0] + 137, cascaded[1] + 71, 612, 345]);
     await end(first);
 
-    // Board closed and reopened: only localStorage carries the place over.
+    // Board closed and reopened: only ui.json carries the place over.
     await page.goto(base);
     await until(() => column(id), 'the card after the reload');
     const second = await launchAgent();

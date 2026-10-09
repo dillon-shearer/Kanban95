@@ -30,6 +30,7 @@ Every REST mutation and every MCP tool call writes one `audit` row: grant id (nu
 - Ticket attachments (`.kanban95/attachments/`, `docs/DATA.md`) are operator uploads behind the same cookie. A name with a path separator or `..` is refused, never cleaned into another path, and the stored name is a sanitised basename. Only raster images (PNG, JPEG, GIF, WebP, BMP) are served inline; everything else, SVG and HTML included, is served as an `application/octet-stream` download, so an attached file cannot run script on the board's origin.
 - REST (`/api/*`) and the `/events` and `/pty/<key>` websockets need the shell secret (below). MCP (`/mcp`) requires a bearer grant: see MCP. Static UI files, `/health` and `/voice-model/*` (only the files the pinned speech-model manifest lists) are open: they are public code and say nothing about the board.
 - Request bodies over 1 MiB are refused.
+- The UI stores nothing in the browser (no `localStorage`, `sessionStorage` or IndexedDB): its state (window places, startup layout, folded columns) is `<repo>/.kanban95/ui.json` behind the same cookie (`docs/DATA.md`). A new start is a new origin, and the WebView2 profile is not a place for board data.
 
 ### Shell secret
 

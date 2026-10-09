@@ -354,3 +354,21 @@ describe('notepad', () => {
     expect((await call('PUT', '/api/notepad', { value: null })).status).toBe(400);
   });
 });
+
+describe('ui state', () => {
+  it('reads {} when absent, replaces the whole object, refuses a non-object or over 64 KB with 400 without touching the file', async () => {
+    const file = join(repo, '.kanban95', 'ui.json');
+    expect(await (await call('GET', '/api/ui')).json()).toEqual({});
+    const state = { 'k95.win.board': { x: 1, y: 2, w: 300, h: 200 }, 'k95.collapsed': ['done'] };
+    expect((await call('PUT', '/api/ui', state)).status).toBe(200);
+    expect((await call('PUT', '/api/ui', { 'k95.layout': [] })).status).toBe(200);
+    expect(await (await call('GET', '/api/ui')).json()).toEqual({ 'k95.layout': [] });
+    // `{"k":"…"}` is 8 bytes around the value: this one is exactly 64 KB, one more byte is over.
+    expect((await call('PUT', '/api/ui', { k: 'x'.repeat(64 * 1024 - 8) })).status).toBe(200);
+    for (const bad of [{ k: 'x'.repeat(64 * 1024 - 7) }, [1, 2], 'text', null]) {
+      const r = await call('PUT', '/api/ui', bad);
+      expect(r.status, JSON.stringify(bad).slice(0, 20)).toBe(400);
+    }
+    expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({ k: 'x'.repeat(64 * 1024 - 8) });
+  });
+});

@@ -1,8 +1,10 @@
 // Window manager: Win95 MDI windows on #desktop, one taskbar button each, modal dialogs and pop-up menus.
-// A window opened with `persist` keeps its position, size and maximized state in localStorage; one with nothing saved opens
+// A window opened with `persist` keeps its position, size and maximized state in ui.json (state.js); one with nothing saved opens
 // where it covers the least of the open windows (`place`).
 // `persist: true` saves under the window id; a string saves under that key, so windows with different ids can share one place.
 // Maximized is the `max` class: CSS fills #desktop over the inline geometry, which stays as the restore geometry.
+import * as ui from './state.js';
+
 const desktop = document.getElementById('desktop');
 const tasks = document.getElementById('tasks');
 const wins = new Map(); // id → { el, task, onClose, api, toggleMax, items }
@@ -32,8 +34,8 @@ const overflow = () => { for (const a of arrows) a.hidden = tasks.scrollWidth <=
 new ResizeObserver(overflow).observe(tasks);
 
 const geo = {
-  get: (id) => { try { return JSON.parse(localStorage.getItem(`k95.win.${id}`)); } catch { return null; } },
-  set: (id, r) => { try { localStorage.setItem(`k95.win.${id}`, JSON.stringify(r)); } catch { /* storage off: positions reset */ } },
+  get: (id) => ui.get(`k95.win.${id}`),
+  set: (id, r) => ui.set(`k95.win.${id}`, r),
 };
 
 const h = (tag, attrs = {}, ...kids) => {
@@ -80,7 +82,8 @@ export function open(id, { title, w = 480, h: height = 320, persist = false, bac
     return wins.get(id).api;
   }
   const key = persist === true ? id : persist;
-  const saved = key ? geo.get(key) : null;
+  const saved = key ? geo.get(key) ?? seeds.get(key) ?? null : null;
+  seeds.delete(key);
   const r = saved ?? { ...place(w, height), w, h: height };
   const text = h('div', { class: 'title-bar-text' }, title);
   const body = h('div', { class: 'window-body' });
@@ -108,7 +111,12 @@ export function open(id, { title, w = 480, h: height = 320, persist = false, bac
   overflow(); // before focus() scrolls the button into view, so the arrows are already taking their room
   if (!saved?.max) clamp(el); // clamp reads the maximized box and would overwrite the restore geometry
 
-  const save = () => key && geo.set(key, rect(el));
+  // Saved only when the geometry changed: a click inside an unmoved window leaves it following its seed (the startup layout).
+  let last = JSON.stringify(rect(el));
+  const save = () => {
+    const now = JSON.stringify(rect(el));
+    if (key && now !== last) geo.set(key, JSON.parse((last = now)));
+  };
   const maxBtn = el.querySelector('[aria-label="Maximize"], [aria-label="Restore"]');
   function toggleMax() {
     maxBtn.setAttribute('aria-label', el.classList.toggle('max') ? 'Restore' : 'Maximize');
@@ -169,8 +177,13 @@ export const snapshot = (ids) => [...wins].filter(([id]) => ids.includes(id))
   .sort(([, a], [, b]) => Number(a.el.style.zIndex) - Number(b.el.style.zIndex))
   .map(([id, { el }]) => ({ id, ...rect(el) }));
 
-/** Remembers `r` as window `key`'s place, so its next `open` with `persist` opens there. */
-export const remember = (key, r) => geo.set(key, r);
+// Places for the next `open` of a window with nothing remembered, not saved: the startup layout's, so an unmoved window
+// follows the layout (and a default layout the desktop's size) at every start, and its own place once the operator moves it.
+const seeds = new Map();
+/** Opens window `key` at `r` next time if it has no remembered place. */
+export const seed = (key, r) => seeds.set(key, r);
+/** Forgets window `key`'s remembered place. */
+export const forget = (key) => geo.set(key, undefined);
 
 /** Keeps at least the title bar on the desktop. */
 function clamp(el) {
