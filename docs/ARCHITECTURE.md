@@ -188,7 +188,8 @@ Checked on Windows 11, WebView2 154 inside the Tauri window: `navigator.gpu` giv
 Gotchas collected while the board was built. Each one cost a phase some time.
 
 **Node and the daemon**
-- `node` on PATH may still be an older Node. On Node 22 `import.meta.main` is `undefined`, so the daemon prints nothing and the shell fails with `bad daemon handshake ""`. `Kanban95.cmd` finds Node 24 through fnm; in a bare shell run `fnm env --use-on-cd | Out-String | Invoke-Expression` first, or put the Node 24 install dir first on PATH. `fnm exec` cannot start `npm` (a `.cmd` shim), and Node 24 throws on `process.exit(true)`.
+- Agents need no Node setup: their pty `PATH` starts with the daemon's Node 24, and a new worktree has already run `npm ci` (`worktree_setup`, `docs/LIFECYCLE.md` → Worktree setup). Run `npm test` in the worktree as it is. Never junction main's `node_modules` into a worktree.
+- Outside the board, `node` on PATH may still be an older Node. On Node 22 `import.meta.main` is `undefined`, so the daemon prints nothing and the shell fails with `bad daemon handshake ""`, and tests fail with `no such module: fts5`. `Kanban95.cmd` finds Node 24 through fnm; in a bare shell run `fnm env --use-on-cd | Out-String | Invoke-Expression` first, or put the Node 24 install dir first on PATH. `fnm exec` cannot start `npm` (a `.cmd` shim), and Node 24 throws on `process.exit(true)`.
 - The daemon's first stdout line is the handshake. Anything printed before it breaks the shell; log to stderr.
 - A daemon started with stdin closed exits right after printing its port (Daemon lifetime). Spawn it with a held-open stdin pipe.
 - `DatabaseSync.exec` with several statements leaves a transaction open if a middle one throws. `migrate` and `api.ts`'s `transaction()` use explicit `BEGIN` / `COMMIT` / `ROLLBACK`; do the same anywhere else.

@@ -2,7 +2,7 @@ import './home.ts'; // also here, not only in vitest.config.ts: a run from the r
 import { execFileSync, spawn } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { delimiter, join } from 'node:path';
+import { delimiter, dirname, join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import WebSocket from 'ws';
@@ -810,6 +810,66 @@ describe('resume', { timeout: 60_000 }, () => {
     expect(notes(id, 'failure')).toEqual([RESTARTED, `agent exited without reporting\n${TO_RESOLVE}`]);
     expect(runs(id)).toHaveLength(1); // not resumed again
     expect(t(id).retry).toBe(1);
+  });
+});
+
+describe('worktree_setup', { timeout: 60_000 }, () => {
+  // setup.mjs logs the first PATH entry and waits for a `go` file in the worktree; fail.mjs prints 30 lines and exits 2.
+  beforeEach(() => {
+    writeFileSync(join(repo, 'setup.mjs'), `import { appendFileSync, existsSync } from 'node:fs';
+appendFileSync('setup.log', process.env.PATH.split(${JSON.stringify(delimiter)})[0] + '\\n');
+while (!existsSync('go')) await new Promise((r) => setTimeout(r, 25));
+`);
+    writeFileSync(join(repo, 'fail.mjs'), "for (let i = 0; i < 30; i++) console.log('line ' + i);\nprocess.exit(2);\n");
+    git('add', 'setup.mjs', 'fail.mjs');
+    git('commit', '-qm', 'Add setup scripts');
+  });
+  const setup = (command: string) => writeFileSync(join(repo, '.kanban95', 'config.json'), JSON.stringify({ worktree_setup: command }));
+  const wt = (id: number, file: string) => join(repo, '.worktrees', `t-${id}`, file);
+
+  it('runs once in a new worktree before the first agent, with the agent PATH; a resumed run in that worktree does not rerun it', async () => {
+    models({ execute: 'silent' });
+    setup('node setup.mjs');
+    const id = ticket('Needs deps');
+    expect((await post(`/api/tickets/${id}/launch`)).status).toBe(200);
+    await until(() => existsSync(wt(id, 'setup.log')), 'the setup command');
+    expect(readFileSync(wt(id, 'setup.log'), 'utf8')).toBe(`${dirname(process.execPath)}\n`);
+    expect(runs(id)).toEqual([]); // no agent while setup runs, and a second launch is refused
+    expect((await post(`/api/tickets/${id}/launch`)).status).toBe(409);
+    writeFileSync(wt(id, 'go'), '');
+    await until(() => t(id).flags.needs_human, 'the silent agent to exit');
+    expect(runs(id)).toHaveLength(1);
+
+    expect((await post(`/api/tickets/${id}/resume`)).status).toBe(200);
+    await until(() => runs(id).length === 2 && t(id).flags.needs_human, 'the resumed agent to exit');
+    expect(readFileSync(wt(id, 'setup.log'), 'utf8').split('\n').filter(Boolean)).toHaveLength(1);
+  });
+
+  it('a failing command stops the launch with a note naming it and its last output lines; a retry runs it again', async () => {
+    models({ execute: 'silent' });
+    setup('node fail.mjs');
+    const id = ticket('Broken deps');
+    expect((await post(`/api/tickets/${id}/launch`)).status).toBe(200);
+    await until(() => t(id).flags.needs_human, 'the setup failure');
+    const [note] = notes(id, 'failure');
+    expect(note).toMatch(/^launch failed: worktree_setup "node fail\.mjs" failed \(2\) in .*t-1; last output:\nline 10\n/);
+    expect(note).toContain('line 29');
+    expect(note).not.toContain('line 9\n');
+    expect(runs(id)).toEqual([]);
+    expect(sessionsOf(id)).toEqual([]);
+
+    setup('node setup.mjs'); // fixed: no marker was left, so the resume runs setup
+    expect((await post(`/api/tickets/${id}/resume`)).status).toBe(200);
+    await until(() => existsSync(wt(id, 'setup.log')), 'the setup command on resume');
+    writeFileSync(wt(id, 'go'), '');
+    await until(() => runs(id).length === 1, 'the agent after setup');
+  });
+
+  it('a malformed worktree_setup is a launch failure naming the key', async () => {
+    setup('');
+    const id = ticket('Bad config');
+    await post(`/api/tickets/${id}/launch`);
+    expect(notes(id, 'failure')[0]).toMatch(/^launch failed: .*config\.json worktree_setup must be a non-empty string/);
   });
 });
 
