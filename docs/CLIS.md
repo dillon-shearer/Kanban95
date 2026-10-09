@@ -21,6 +21,8 @@ The board makes no model calls of its own: being provider-agnostic means it only
 
 On Windows the pty runs `cmd.exe /d /s /c "<cli> <args>"` so that `PATHEXT` resolves `claude.exe` and the `codex.cmd` npm shim. Arguments containing `"`, `%`, a newline, or ending in `\` are refused rather than escaped. `NoDefaultCurrentDirectoryInExePath=1` stops `cmd.exe` from running a `claude.cmd` that happens to sit in the worktree.
 
+The pty's `PATH` starts with the daemon's own Node directory (`dirname(process.execPath)`, Node 24): the operator's `node` on PATH may be older, and this repo's tests need 24. A CLI installed into that Node's global directory (an npm `codex`) therefore wins over another one on PATH; Settings → CLIs takes an explicit path. Before the first agent in a new worktree, the repo's `worktree_setup` runs with the same environment (`docs/LIFECYCLE.md` → Worktree setup).
+
 A Claude Code worker or tester also gets `CLAUDE_CODE_PROMPT_CACHE_TTL=5m` in its pty environment. On a subscription the main conversation otherwise caches for 1 h, written at 2× the input price; 5 min writes at 1.25×. Only 8 of 2,161 measured call gaps exceeded 5 min, so an unattended session almost never pays the extra prefix rewrite (ticket #43). Planner and operator sessions keep the 1 h TTL, since they wait on the operator.
 
 ## Claude Code
