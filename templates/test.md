@@ -33,6 +33,7 @@ Retry count: {{retry}} (after 3 failed retries the ticket stops and goes to the 
 ## How to work
 
 - Verify with `npm test` or a script built on `daemon/test/cdp.ts`, never by starting the app (`npm run dev`, `Kanban95.cmd`, `cargo run`) or a visible browser.
+- Put new tests in a new file named for the feature (`daemon/test/<feature>.test.ts`) unless you are extending an existing test's scenario. Several tickets run at once and appending to a shared test file is the most common merge conflict.
 
 1. Run the full test suite and the build. A failure is a failed ticket.
 2. Review the diff against each acceptance criterion, one by one. Note which pass and which fail, and why.
