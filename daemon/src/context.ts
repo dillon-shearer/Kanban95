@@ -117,13 +117,13 @@ export function buildContext(db: DatabaseSync, repo: string, ticketId: number | 
 export function startRun(
   db: DatabaseSync,
   repo: string,
-  r: { ticketId: number; template: TicketTemplate; cli: string; model: string; effort: string } & ContextOpts,
+  r: { ticketId: number; template: TicketTemplate; cli: string; model: string; effort: string; sessionId?: string | null } & ContextOpts,
 ): { id: number; prompt: string } {
   const { role, phase } = TEMPLATES[r.template];
   const text = loadTemplate(repo, r.template); // a bad template fails here, before git runs or a row is written
   const prompt = fill(text, buildContext(db, repo, r.ticketId, role, r));
   const { lastInsertRowid } = db
-    .prepare('INSERT INTO runs (ticket_id, phase, cli, model, effort, prompt_rendered) VALUES (?, ?, ?, ?, ?, ?)')
-    .run(r.ticketId, phase, r.cli, r.model, r.effort, prompt);
+    .prepare('INSERT INTO runs (ticket_id, phase, cli, model, effort, prompt_rendered, session_id) VALUES (?, ?, ?, ?, ?, ?, ?)')
+    .run(r.ticketId, phase, r.cli, r.model, r.effort, prompt, r.sessionId ?? null);
   return { id: Number(lastInsertRowid), prompt };
 }
