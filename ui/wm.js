@@ -7,6 +7,17 @@ const desktop = document.getElementById('desktop');
 const tasks = document.getElementById('tasks');
 const wins = new Map(); // id → { el, task, onClose, api, toggleMax, items }
 let z = 10;
+// The UI zoom: CSS `zoom` on body, so menus and dialogs appended to it scale too. Inside it, offsets and inline styles (and so
+// the saved geometry) are CSS px before zoom, while pointer coordinates and getBoundingClientRect are screen px: divide those by it.
+let zoom = 1;
+export const scale = () => zoom;
+
+/** Sets the UI zoom and puts every window back on the desktop, which is smaller in CSS px when zoomed in. */
+export function setZoom(f) {
+  zoom = f;
+  document.body.style.zoom = f;
+  for (const { el } of wins.values()) if (!el.hidden && !el.classList.contains('max')) clamp(el);
+}
 // Taskbar selection: Ctrl+click toggles a button, Shift+click takes the range from the last clicked one, in taskbar order.
 const sel = new Set();
 let anchor = null;
@@ -46,7 +57,10 @@ export function focus(id) {
     o.el.querySelector('.title-bar').classList.add('inactive');
     o.task.classList.remove('active');
   }
-  w.el.hidden = false;
+  if (w.el.hidden) {
+    w.el.hidden = false;
+    if (!w.el.classList.contains('max')) clamp(w.el); // the zoom may have changed while it was minimized
+  }
   w.el.style.zIndex = ++z;
   w.el.classList.add('active');
   w.el.querySelector('.title-bar').classList.remove('inactive');
@@ -151,7 +165,7 @@ function place(w, h) {
 
 /** Keeps at least the title bar on the desktop. */
 function clamp(el) {
-  const d = desktop.getBoundingClientRect();
+  const d = { width: desktop.clientWidth, height: desktop.clientHeight }; // CSS px, like the window's own offsets
   // Write size only when it overflows: offsetWidth includes padding, so writing it back grows a content-box window.
   if (el.offsetWidth > d.width) el.style.width = `${d.width}px`;
   if (el.offsetHeight > d.height) el.style.height = `${d.height}px`;
@@ -162,12 +176,12 @@ function clamp(el) {
 function drag(el, bar, done) {
   bar.addEventListener('pointerdown', (e) => {
     if (e.button !== 0 || e.target.closest('button') || el.classList.contains('max')) return;
-    const dx = e.clientX - el.offsetLeft;
-    const dy = e.clientY - el.offsetTop;
+    const dx = e.clientX / zoom - el.offsetLeft;
+    const dy = e.clientY / zoom - el.offsetTop;
     bar.setPointerCapture(e.pointerId);
     const move = (m) => {
-      el.style.left = `${m.clientX - dx}px`;
-      el.style.top = `${m.clientY - dy}px`;
+      el.style.left = `${m.clientX / zoom - dx}px`;
+      el.style.top = `${m.clientY / zoom - dy}px`;
       clamp(el);
     };
     bar.addEventListener('pointermove', move);
@@ -282,7 +296,7 @@ export function dialog(title, body, buttons = ['OK']) {
   });
 }
 
-/** A pop-up menu at (x, y). Items: { label, run } | { label, items } (submenu) | '-' (separator). */
+/** A pop-up menu at screen point (x, y), as clientX/clientY and getBoundingClientRect give it. Items: { label, run } | { label, items } (submenu) | '-' (separator). */
 export function menu(x, y, items) {
   document.querySelector('.k95-menu')?.remove();
   const build = (list) => h('ul', { class: 'k95-menu', role: 'menu' }, list.map((it) => it === '-'
@@ -293,7 +307,7 @@ export function menu(x, y, items) {
   const m = build(items);
   document.body.append(m);
   const r = m.getBoundingClientRect();
-  Object.assign(m.style, { left: `${Math.min(x, innerWidth - r.width)}px`, top: `${Math.min(y, innerHeight - r.height)}px` });
+  Object.assign(m.style, { left: `${Math.min(x, innerWidth - r.width) / zoom}px`, top: `${Math.min(y, innerHeight - r.height) / zoom}px` });
   const off = (e) => {
     if (m.contains(e.target)) return;
     m.remove();
