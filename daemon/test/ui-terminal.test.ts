@@ -41,6 +41,52 @@ describe('ui-terminal', { timeout: 60_000 }, () => {
     await until(() => sessions.size === 0, 'the agents to exit');
   });
 
+  it("opens a ticket's next session's terminal where the operator left the last one, after a reload too", async () => {
+    const id = ticket('Stay put');
+    await page.goto(base);
+    await until(() => column(id), 'the card');
+    const cookie = { cookie: `k95=${srv.secret}` };
+    const launchAgent = async () => {
+      // A session id never repeats, so each launch is a new terminal window with a new id.
+      await until(() => sessions.size === 0, 'the earlier agents to exit');
+      db.prepare("UPDATE tickets SET status = 'backlog' WHERE id = ?").run(id);
+      expect((await fetch(`${base}api/tickets/${id}/launch`, { method: 'POST', headers: cookie })).status).toBe(200);
+      const key = await until(async () => (await (await fetch(`${base}api/sessions`, { headers: cookie })).json()).find((x: { ticket_id: number }) => x.ticket_id === id)?.id, 'the session');
+      await until(() => page.evaluate(`!!document.querySelector('[data-win="term-${key}"] .xterm')`), 'the terminal');
+      return `term-${key}`;
+    };
+    const box = (wid: string) => page.evaluate<number[]>(`(() => { const e = document.querySelector('[data-win="${wid}"]'); return [e.offsetLeft, e.offsetTop, e.offsetWidth, e.offsetHeight]; })()`);
+    const end = async (wid: string) => {
+      const grant = (db.prepare('SELECT id FROM grants WHERE ticket_id = ? AND revoked_at IS NULL').get(id) as { id: number }).id;
+      await fetch(`${base}api/grants/${grant}`, { method: 'DELETE', headers: cookie });
+      await until(() => page.evaluate(`document.querySelector('[data-win="${wid}"]').classList.contains('ended')`), 'the ended terminal');
+      await page.evaluate(`document.querySelector('[data-win="${wid}"] [aria-label="Close"]').click()`);
+      await until(() => page.evaluate(`!document.querySelector('[data-win="${wid}"]')`), 'the window to close');
+    };
+
+    const first = await launchAgent();
+    const cascaded = await box(first);
+    // Resize as the CSS corner does (it only sets the inline size), then drag the title bar: letting go saves both.
+    await page.evaluate(`Object.assign(document.querySelector('[data-win="${first}"]').style, { width: '612px', height: '345px' })`);
+    await click(`[data-task="${first}"]`); // the board opens it behind the Board window
+    const { x, y } = await page.center(`[data-win="${first}"] .title-bar-text`);
+    await page.send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', buttons: 1, clickCount: 1 });
+    await page.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: x + 137, y: y + 71, button: 'left', buttons: 1 });
+    await page.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: x + 137, y: y + 71, button: 'left', buttons: 0, clickCount: 1 });
+    const placed = await box(first);
+    expect(placed).toEqual([cascaded[0] + 137, cascaded[1] + 71, 612, 345]);
+    await end(first);
+
+    // Board closed and reopened: only localStorage carries the place over.
+    await page.goto(base);
+    await until(() => column(id), 'the card after the reload');
+    const second = await launchAgent();
+    expect(second).not.toBe(first);
+    expect(await box(second)).toEqual(placed);
+    await end(second);
+    db.prepare("UPDATE tickets SET status = 'done', merged_at = 'x' WHERE id = ?").run(id);
+  });
+
   it("X on a running terminal asks first: Cancel keeps the agent, End stops it and flags the ticket", async () => {
     const id = ticket('Stop me');
     await page.goto(base);

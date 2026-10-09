@@ -1,5 +1,6 @@
 // Window manager: Win95 MDI windows on #desktop, one taskbar button each, modal dialogs and pop-up menus.
 // A window opened with `persist` keeps its position, size and maximized state in localStorage; the others cascade.
+// `persist: true` saves under the window id; a string saves under that key, so windows with different ids can share one place.
 // Maximized is the `max` class: CSS fills #desktop over the inline geometry, which stays as the restore geometry.
 const desktop = document.getElementById('desktop');
 const tasks = document.getElementById('tasks');
@@ -64,7 +65,8 @@ export function open(id, { title, w = 480, h: height = 320, persist = false, bac
     focus(id);
     return wins.get(id).api;
   }
-  const saved = persist ? geo.get(id) : null;
+  const key = persist === true ? id : persist;
+  const saved = key ? geo.get(key) : null;
   const off = (cascade++ % 8) * 24;
   const r = saved ?? { x: 40 + off, y: 20 + off, w, h: height };
   const text = h('div', { class: 'title-bar-text' }, title);
@@ -94,10 +96,10 @@ export function open(id, { title, w = 480, h: height = 320, persist = false, bac
   if (!saved?.max) clamp(el); // clamp reads the maximized box and would overwrite the restore geometry
 
   const save = () => {
-    if (!persist) return;
+    if (!key) return;
     const max = el.classList.contains('max');
     const s = el.style;
-    geo.set(id, max
+    geo.set(key, max
       ? { x: parseFloat(s.left), y: parseFloat(s.top), w: parseFloat(s.width), h: parseFloat(s.height), max }
       : { x: el.offsetLeft, y: el.offsetTop, w: el.offsetWidth, h: el.offsetHeight });
   };

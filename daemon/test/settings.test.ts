@@ -32,3 +32,9 @@ it('the old single sounds boolean carries over to both sounds; a missing one kee
   expect(writeConfig('settings', { sounds: { merge: false } }).sounds).toEqual({ merge: false, attention: true });
   expect(() => writeConfig('settings', { sounds: 'off' })).toThrow();
 });
+
+it('housekeeping defaults to on every 10 merges and refuses an interval under 1 or fractional', () => {
+  expect(writeConfig('settings', {}).housekeeping).toEqual({ auto: true, every: 10 });
+  expect(() => writeConfig('settings', { housekeeping: { every: 0 } })).toThrow(/every/);
+  expect(() => writeConfig('settings', { housekeeping: { every: 2.5 } })).toThrow(/every/);
+});
