@@ -243,7 +243,7 @@ export function apply(b: Board, id: number, event: Event, x: { note?: Note; answ
         // Text, then Enter as its own write: Claude Code reads one burst as a paste, where \r is a newline, not Enter.
         // ponytail: fixed 300 ms gap, a very slow pty may still merge the two; upgrade is to wait for the echo before Enter.
         for (const s of sessionsOf(id)) {
-          s.pty.write(oneLine(x.answer ?? ''));
+          s.pty.write(menuChoice(b, id, oneLine(x.answer ?? '')));
           setTimeout(() => s.pty.write('\r'), 300);
         }
         break;
@@ -320,8 +320,57 @@ function exited(b: Board, s: Session) {
 
 /** How often running agents' transcripts are looked at, and how long one of settings.json's idle_minutes is. Tests shorten both. */
 export const SILENCE = { every: 60_000, minute: 60_000 };
-/** Per session key: the transcript size last seen, when the silence began, and the note that flagged it, if it did. */
-const heard = new Map<number, { size: number; at: number; note?: number }>();
+/** Per session key: the transcript size last seen, when the silence began, and the note that flagged it, if it did (`prompt`: a CLAUDE_PROMPT question). */
+const heard = new Map<number, { size: number; at: number; note?: number; prompt?: boolean }>();
+
+/**
+ * Claude Code's own yes/no menu. A few of its safety checks still raise it under --dangerously-skip-permissions, and no
+ * permission rule turns them off ("Dangerous rm operation on possibly-empty variable path"); unattended, it denies by itself after
+ * two minutes. Taken from Claude Code 2.1.296 on 2026-10-09, as `lastLines` reads its terminal:
+ *
+ *   │ Dangerous rm operation on possibly-empty variable path: "$SHOTS"/* in `rm -f "$SHOTS"/*`
+ *   │ (rewrite it as "${SHOTS:?}"/* or use a literal path)
+ *   ⚠ Claude Code will automatically deny this request in 1:59, to avoid blocking progress on an
+ *   unattended session
+ *   Do you want to proceed?
+ *   ❯ 1. Yes
+ *   2. No
+ *   Esc to cancel · Tab to amend
+ *   8
+ *   ●
+ *
+ * Matched on the text only. The countdown redraws just its changed digits and a dot blinks, so the menu is still up while no line
+ * after "Esc to cancel" holds a letter. Group 1 is the menu, from "Do you want to proceed?" through "Esc to cancel".
+ */
+export const CLAUDE_PROMPT = /(?:^|\n)(Do you want to proceed\?(?:(?!Do you want to proceed\?)[\s\S])*?Esc to cancel[^\n]*)(?:\n[^A-Za-z\n]*)*$/;
+/** Heads the Inbox question raised for a CLAUDE_PROMPT; `menuChoice` knows such a question by it. */
+export const PROMPT_ASK = "Claude Code is waiting on its own prompt in the agent's terminal and denies it by itself in about two minutes. Answer with the option's number or its label; it is chosen in the terminal.";
+
+/** The note that closes a PROMPT_ASK question nobody answered from the Inbox. */
+export const PROMPT_GONE = 'the prompt closed in the terminal (Claude Code denied it by itself, or it was answered there)';
+
+/** The CLAUDE_PROMPT block at the end of `raw`, with the lines above the menu that say what it asks, up to a rule line. */
+export function claudePrompt(raw: string): string | undefined {
+  const tail = lastLines(raw, 40);
+  const m = CLAUDE_PROMPT.exec(tail.join('\n'));
+  if (!m) return undefined;
+  const menu = m[1].split('\n');
+  const at = tail.lastIndexOf(menu[0]);
+  let from = at;
+  while (from > 0 && at - from < 8 && /[A-Za-z0-9]/.test(tail[from - 1])) from--;
+  return [...tail.slice(from, at), ...menu].join('\n');
+}
+
+/** An Inbox answer to a PROMPT_ASK question becomes the option's number ("Yes" → "1"), which Claude Code's menu takes; any other answer is left as typed. */
+function menuChoice(b: Board, id: number, answer: string) {
+  const q = b.db.prepare("SELECT body FROM notes WHERE ticket_id = ? AND kind = 'question' ORDER BY id DESC LIMIT 1").get(id) as { body: string } | undefined;
+  if (!q?.body.startsWith(PROMPT_ASK)) return answer;
+  const digit = /^(\d)\b/.exec(answer);
+  if (digit) return digit[1];
+  const a = answer.toLowerCase();
+  for (const [, n, label] of q.body.matchAll(/^\W*(\d)\. (.+)$/gm)) if (label.trim().toLowerCase().startsWith(a)) return n;
+  return answer;
+}
 
 /** Starts the watch; the returned function stops it. */
 export function watchSilence(b: Board): () => void {
@@ -341,7 +390,8 @@ export function watchSilence(b: Board): () => void {
  * The pty is no signal (Claude Code's spinner animates while it waits on the API), so a ticket's agent is judged by its transcript
  * (`transcriptSize`): no new line for idle_minutes while the ticket is unflagged applies `silent`. Time spent flagged (a question
  * waiting on the operator) does not count. A transcript that grows again while the silence note is still the ticket's latest
- * applies `woke`, so a long step that was healthy after all does not hold the card red.
+ * applies `woke`, so a long step that was healthy after all does not hold the card red. A Claude Code terminal ending in its own
+ * menu (CLAUDE_PROMPT) applies `ask` at once, and `woke` the same way once the menu is gone and the transcript grows.
  */
 function listen(b: Board) {
   if (b.closing) return;
@@ -358,10 +408,22 @@ function listen(b: Board) {
       const h = heard.get(s.key) ?? { size, at: s.started };
       heard.set(s.key, h);
       const flagged = readTicket(b.db, s.ticketId).flags.needs_human;
-      if (size !== h.size) {
+      const prompt = s.cli === 'claude' ? claudePrompt(s.scrollback()) : undefined;
+      if (prompt !== undefined) {
+        // Asked like ask_operator, so the Inbox answer reaches the menu; `woke` clears it once the menu is gone and the transcript grows.
+        Object.assign(h, { size, at: now });
+        if (!flagged) {
+          h.note = apply(b, s.ticketId, 'ask', { note: { role: s.role, kind: 'question', body: `${PROMPT_ASK}\n\`\`\`\n${prompt}\n\`\`\`` } }).noteId;
+          h.prompt = true;
+        }
+      } else if (size !== h.size) {
         const latest = (b.db.prepare('SELECT max(id) AS id FROM notes WHERE ticket_id = ?').get(s.ticketId) as { id: number | null }).id;
-        if (h.note !== undefined && flagged && latest === h.note) apply(b, s.ticketId, 'woke');
-        Object.assign(h, { size, at: now, note: undefined });
+        if (h.note !== undefined && flagged && latest === h.note) {
+          apply(b, s.ticketId, 'woke');
+          // Closes the menu's question, which a later flag would otherwise bring back to the Inbox.
+          if (h.prompt) b.db.prepare("INSERT INTO notes (ticket_id, role, kind, body) VALUES (?, ?, 'answer', ?)").run(s.ticketId, s.role, PROMPT_GONE);
+        }
+        Object.assign(h, { size, at: now, note: undefined, prompt: false });
       } else if (flagged) h.at = now;
       else if (now - h.at >= limit * SILENCE.minute) {
         const mins = Math.round((now - h.at) / SILENCE.minute);

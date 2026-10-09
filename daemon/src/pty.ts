@@ -70,12 +70,14 @@ export function spawnPty(cmd: string, args: string[], o: { cwd: string; env: Rec
 
 /**
  * The last `n` lines of text in raw terminal output, for a note: escape sequences dropped, a cursor move taken as a line break
- * (a TUI such as Claude Code's positions text rather than printing newlines), blank and repeated lines skipped, each cut at 200 characters.
+ * (a TUI such as Claude Code's positions text rather than printing newlines) and a cursor-forward as a space (Claude Code draws
+ * the spaces between words that way), blank and repeated lines skipped, each cut at 200 characters.
  */
 export function lastLines(raw: string, n: number): string[] {
   const text = raw
     .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '') // OSC (window title, hyperlinks)
     .replace(/\x1b\[[0-?]*[ -/]*[HfABEFGd]/g, '\n') // CSI cursor moves
+    .replace(/\x1b\[\d*C/g, ' ') // CSI cursor forward
     .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '') // every other CSI
     .replace(/\x1b[@-_]/g, '')
     .replace(/[\x00-\x08\x0b-\x1f\x7f]/g, (c) => (c === '\r' ? '\n' : ''));

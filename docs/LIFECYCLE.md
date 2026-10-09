@@ -14,11 +14,11 @@ Status is one of **backlog → in_progress → testing → done**. Two flags sit
 | `submit` | the worker's `move_ticket(testing)` |
 | `pass` | the tester's `report_test(passed: true)` (an operator's `move_ticket(done)` after it) |
 | `fail` | the tester's `report_test(passed: false)`, or an operator's `move_ticket(in_progress)` on a ticket in testing |
-| `ask` | `ask_operator` from any agent |
+| `ask` | `ask_operator` from any agent, or the silence watch when a Claude Code agent sits on its own prompt (Claude Code prompts below) |
 | `answer` | the operator, `POST /api/tickets/:id/answer` |
 | `exit` | the agent's terminal closed without a `move_ticket` or `report_test`, or its launch failed |
 | `silent` | the silence watch, when a live agent's transcript has gained no line for `idle_minutes` (Silent agents below) |
-| `woke` | the silence watch, when a flagged silent agent's transcript grows again |
+| `woke` | the silence watch, when a flagged silent agent's transcript grows again, or a Claude Code prompt it raised is gone and the transcript grows |
 | `merged` | the merge queue |
 | `conflict` | the board, when the base will not merge into the ticket's worktree (on submit or in the merge queue) or the worktree has uncommitted changes |
 | `dirty` | the merge queue, once the main checkout has had uncommitted changes for the whole wait (10 min) |
@@ -121,6 +121,10 @@ Both CLIs run interactive sessions that never exit by themselves. When an agent'
 An agent can stop without exiting: an API call that never returns, or a CLI sitting at its prompt after an error it cannot get past ("There's an issue with the selected model"). The pty is no signal, because Claude Code's spinner animates while it waits. The board watches the transcript instead (`watchSilence` in `daemon/src/lifecycle.ts`): every minute it looks at each live ticket session's transcript, Claude Code's `<config>/projects/<cwd>/<runs.session_id>.jsonl` or, for Codex, the newest `<CODEX_HOME>/sessions/YYYY/MM/DD/rollout-*.jsonl` written since the session started whose `session_meta` cwd is the worktree (`transcriptSize` in `daemon/src/launcher.ts`). A session whose transcript has not grown for `idle_minutes` (`~/.kanban95/settings.json`, Settings → General → Silent agents, default 20) gets the `silent` row: `needs_human`, a note naming the minutes and the last 10 lines of its terminal (escape codes stripped), and the chord. A session with no transcript yet counts from its start. Time the ticket spends flagged (a question waiting for the operator) does not count as silence.
 
 The default is above the 10 min tool timeout, so a long test run is not flagged. The agent is left running: the operator opens its terminal, fixes what it waits on there or presses Restart. If its transcript grows again while the silence note is still the ticket's latest note (no question since), the watch applies `woke` and the flag clears by itself, so a long step that was healthy after all does not hold the card red or keep the runner waiting.
+
+### Claude Code prompts
+
+A few of Claude Code's own safety checks ask "Do you want to proceed? 1. Yes 2. No" even under `--dangerously-skip-permissions`, and no permission rule turns them off (Claude Code 2.1.296: "Dangerous rm operation on possibly-empty variable path … cannot be auto-allowed by permission rules"). Unattended, Claude Code denies by itself after about two minutes, long before `idle_minutes`. So on every tick the silence watch also reads the end of each live Claude Code ticket session's terminal (`claudePrompt` in `daemon/src/lifecycle.ts`, pattern `CLAUDE_PROMPT`): a terminal ending in that menu, from "Do you want to proceed?" through "Esc to cancel" with only the countdown's digits after it, applies `ask` on an unflagged ticket. The question is `PROMPT_ASK` followed by the menu and the lines above it that say what it asks, so it shows in the Inbox with the chord like an `ask_operator` question. The operator's answer goes through the ordinary `answer` row, except that an answer to such a question is typed as the option's number: "1", "yes" or "Y" types `1` (the first option whose label starts with the answer), then Enter. When the menu goes away without an Inbox answer (Claude Code denied it, or the operator answered in the terminal) and the transcript grows again while that question is still the ticket's latest note, the watch applies `woke` and writes an `answer` note saying the prompt closed, so the question does not come back in the Inbox. Codex sessions are not read for it. The agent templates also tell agents not to write the `rm` that raises the commonest one.
 
 ### Restart
 
