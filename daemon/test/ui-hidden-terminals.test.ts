@@ -17,7 +17,9 @@ const watch = () => page.evaluate(`(() => { window.opened = [];
 const opened = () => page.evaluate<string[]>('window.opened');
 
 describe('ui-hidden-terminals', { timeout: 60_000 }, () => {
-  it('by default opens the execute terminal but not the tester\'s; card > Terminal opens the live test session', async () => {
+  it('with test unchecked, opens the execute terminal but not the tester\'s; card > Terminal opens the live test session', async () => {
+    const settings = join(process.env.USERPROFILE!, '.kanban95', 'settings.json');
+    writeFileSync(settings, JSON.stringify({ terminals: { auto: ['plan', 'execute'] } }));
     const models = join(process.env.USERPROFILE!, '.kanban95', 'models.json');
     const was = readFileSync(models, 'utf8');
     const cfg = JSON.parse(was);
@@ -49,10 +51,11 @@ describe('ui-hidden-terminals', { timeout: 60_000 }, () => {
       db.prepare("UPDATE tickets SET status = 'done', merged_at = 'x', needs_human = 0 WHERE id = ?").run(id);
     } finally {
       writeFileSync(models, was);
+      rmSync(settings, { force: true });
     }
   });
 
-  it('with execute unchecked in Settings > General, a launch opens no terminal and the tester still takes the ticket to Done', async () => {
+  it('with execute and test unchecked in Settings > General, a launch opens no terminal and the tester still takes the ticket to Done', async () => {
     const settings = join(process.env.USERPROFILE!, '.kanban95', 'settings.json');
     rmSync(settings, { force: true }); // all defaults, also on a retry
     const id = ticket('No windows', { model: 'submit' });
@@ -61,8 +64,10 @@ describe('ui-hidden-terminals', { timeout: 60_000 }, () => {
     await page.evaluate(`document.querySelector('[data-icon="Settings"]').dispatchEvent(new MouseEvent('dblclick'))`);
     await page.evaluate(`[...document.querySelectorAll('[data-win="settings"] [role=tab] a')].find((t) => t.textContent === 'General').click()`);
     await until(() => page.evaluate(`!!document.querySelector('#term-auto-execute')`), 'the General tab');
-    expect(await page.evaluate(`['plan', 'execute', 'test'].map((p) => document.querySelector('#term-auto-' + p).checked)`)).toEqual([true, true, false]);
+    expect(await page.evaluate(`['plan', 'execute', 'test'].map((p) => document.querySelector('#term-auto-' + p).checked)`)).toEqual([true, true, true]);
     await page.evaluate(`document.querySelector('#term-auto-execute').click()`);
+    await until(() => { try { return JSON.parse(readFileSync(settings, 'utf8')).terminals.auto.join() === 'plan,test'; } catch { return false; } }, 'settings.json');
+    await page.evaluate(`document.querySelector('#term-auto-test').click()`);
     await until(() => { try { return JSON.parse(readFileSync(settings, 'utf8')).terminals.auto.join() === 'plan'; } catch { return false; } }, 'settings.json');
 
     await watch();
