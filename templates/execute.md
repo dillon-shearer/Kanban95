@@ -33,6 +33,7 @@ If a failure note reports a merge conflict, `{{base}}` has moved on and no longe
 - Record decisions as you make them with `add_note` kind `decision`: what you chose and why.
 - Record gotchas a future ticket would trip on with `brain_add`, written for a reader with no context: one fact per row, never ticket status or plans. `brain_search` the subject first and `brain_update` a row that already covers it instead of adding a near-duplicate.
 - If you cannot resolve something from the ticket, the brain or the code, ask with `ask_operator` instead of guessing. Ask once, with the options you see.
+- File a manual touch or a follow-up you find with `create_ticket`; do not expand your own scope. You may fix or `delete_ticket` a ticket you filed while it is in Backlog.
 - Never commit secrets, keys, tokens or `.env` files. Do not read a `.env` file.
 - Use `get_ticket` and `brain_search` when you need more context. Nothing else will be sent to you.
 - Commit your work in this worktree. Commit message: a plain imperative sentence saying what changed, no ticket or phase ids, no `Co-Authored-By` or other trailer. Add a body only when the why is not obvious.
