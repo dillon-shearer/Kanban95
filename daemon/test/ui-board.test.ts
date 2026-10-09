@@ -165,6 +165,9 @@ describe('ui-board', { timeout: 60_000 }, () => {
     try {
       await page.goto(base);
       await until(() => column(id), 'the card');
+      await setUi('k95.collapsed', []); // Done starts folded when nothing is saved
+      await page.goto(base);
+      await until(() => column(id), 'the card');
       const before = await width('testing');
       await click('[data-status="done"] > legend');
       await until(async () => (await width('done')) <= 24, 'the Done strip');
