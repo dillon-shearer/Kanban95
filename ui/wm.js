@@ -1,26 +1,86 @@
 // Window manager: Win95 MDI windows on #desktop, one taskbar button each, modal dialogs and pop-up menus.
 // A window opened with `persist` keeps its position, size and maximized state in ui.json (state.js); one with nothing saved opens
-// where it covers the least of the open windows (`place`).
-// `persist: true` saves under the window id; a string saves under that key, so windows with different ids can share one place.
+// where it covers the least of the open windows (`place`). A window opened with `tile` (a terminal) takes a slot instead (`SLOTS`).
+// When the desktop resizes (the board's window, full screen) every window scales with it, and a saved place is scaled from the
+// desktop it was saved on, so the layout keeps its proportions at any screen size.
+// `persist` saves under the window id.
 // Maximized is the `max` class: CSS fills #desktop over the inline geometry, which stays as the restore geometry.
-// A window opened with `zone` and nothing saved tiles into the terminal zone (`setZone`, `tile`) until the operator moves it.
 import * as ui from './state.js';
 
 const desktop = document.getElementById('desktop');
 const tasks = document.getElementById('tasks');
-const wins = new Map(); // id → { el, task, onClose, api, toggleMax, items, zoned, settle }
+const wins = new Map(); // id → { el, task, onClose, api, toggleMax, items, tile, rebase }
 let z = 10;
 // The UI zoom: CSS `zoom` on body, so menus and dialogs appended to it scale too. Inside it, offsets and inline styles (and so
 // the saved geometry) are CSS px before zoom, while pointer coordinates and getBoundingClientRect are screen px: divide those by it.
 let zoom = 1;
 export const scale = () => zoom;
+// The desktop in screen px, which the zoom does not change: what a saved place and a resize scale by.
+const screen = () => [desktop.clientWidth * zoom, desktop.clientHeight * zoom];
 
 /** Sets the UI zoom and puts every window back on the desktop, which is smaller in CSS px when zoomed in. */
 export function setZoom(f) {
   zoom = f;
   document.body.style.zoom = f;
   for (const { el } of wins.values()) if (!el.hidden && !el.classList.contains('max')) clamp(el);
-  tile();
+  retile();
+}
+
+// ---- terminal slots ----
+// The terminal region is the desktop left of the action column: from its left edge to the left edge of the leftmost open,
+// non-minimized, non-maximized window in ACTION (the whole desktop when none is open, or when that leaves less than
+// MIN_REGION px), full height. Tiled windows (opened with `tile`) that are open, not minimized and not maximized fill it in
+// reading order, in the order they opened, on the grid of the first SLOTS row whose count covers them. Past the last row's
+// count the rest are not tiled: they stay where they opened (`place`) and take a slot once one frees.
+// To change the arrangement, edit SLOTS: [up to n windows, columns, rows], ascending n.
+export const SLOTS = [[1, 1, 1], [2, 2, 1], [3, 3, 1], [4, 2, 2], [6, 3, 2], [9, 3, 3], [12, 4, 3]];
+const ACTION = ['board', 'inbox', 'notepad'];
+const MIN_REGION = 240;
+
+let tiling = null;
+/** Puts every tiled window in its slot of the current region. */
+export function retile() {
+  clearTimeout(tiling);
+  const W = desktop.clientWidth;
+  const H = desktop.clientHeight;
+  const shown = (el) => !el.hidden && !el.classList.contains('max');
+  const edge = Math.min(W, ...ACTION.map((id) => wins.get(id)?.el).filter((el) => el && shown(el)).map((el) => el.offsetLeft));
+  const R = edge < MIN_REGION ? W : edge;
+  const list = [...wins.values()].filter((w) => w.tile && shown(w.el)).slice(0, SLOTS.at(-1)[0]);
+  if (!list.length) return;
+  const [, cols, rows] = SLOTS.find(([n]) => list.length <= n);
+  list.forEach(({ el }, i) => {
+    const [c, r] = [i % cols, Math.floor(i / cols)];
+    const x = Math.round((c * R) / cols);
+    const y = Math.round((r * H) / rows);
+    Object.assign(el.style, { left: `${x}px`, top: `${y}px`, width: `${Math.round(((c + 1) * R) / cols) - x}px`, height: `${Math.round(((r + 1) * H) / rows) - y}px` });
+  });
+}
+/** retile() once things settle: a drag of the Board moves the region many times a second. */
+const retileSoon = () => { clearTimeout(tiling); tiling = setTimeout(retile, 50); };
+const shapes = (id) => wins.get(id)?.tile || ACTION.includes(id);
+
+// Every window keeps its proportions of the desktop when it resizes; tiled ones then take their slots of the new region.
+let size = screen();
+addEventListener('resize', () => {
+  const [w0, h0] = size;
+  size = screen();
+  if (!w0 || !h0 || (size[0] === w0 && size[1] === h0)) return;
+  const [fx, fy] = [size[0] / w0, size[1] / h0];
+  for (const w of wins.values()) {
+    const s = w.el.style;
+    Object.assign(s, { left: `${Math.round(parseFloat(s.left) * fx)}px`, top: `${Math.round(parseFloat(s.top) * fy)}px`,
+      width: `${Math.round(parseFloat(s.width) * fx)}px`, height: `${Math.round(parseFloat(s.height) * fy)}px` });
+    if (!w.el.hidden && !w.el.classList.contains('max')) clamp(w.el);
+    w.rebase(); // scaled, not moved: a saved place is scaled from its own desktop size when it next opens
+  }
+  retile();
+});
+/** A saved place `r`, scaled from the desktop it was saved on (`dw`×`dh` screen px) to this one. */
+function scaled(r) {
+  if (!r?.dw || !r?.dh) return r; // saved before desktop sizes were kept
+  const [fx, fy] = [size[0] / r.dw, size[1] / r.dh];
+  return { ...r, x: Math.round(r.x * fx), y: Math.round(r.y * fy), w: Math.round(r.w * fx), h: Math.round(r.h * fy) };
 }
 // Taskbar selection: Ctrl+click toggles a button, Shift+click takes the range from the last clicked one, in taskbar order.
 const sel = new Set();
@@ -61,7 +121,7 @@ export function focus(id) {
     o.el.querySelector('.title-bar').classList.add('inactive');
     o.task.classList.remove('active');
   }
-  unhide(w);
+  unhide(id);
   w.el.style.zIndex = ++z;
   w.el.classList.add('active');
   w.el.querySelector('.title-bar').classList.remove('inactive');
@@ -69,18 +129,19 @@ export function focus(id) {
   w.task.scrollIntoView({ block: 'nearest', inline: 'nearest' });
 }
 
-function unhide(w) {
+function unhide(id) {
+  const w = wins.get(id);
   if (!w.el.hidden) return;
   w.el.hidden = false;
   if (!w.el.classList.contains('max')) clamp(w.el); // the zoom may have changed while it was minimized
-  if (w.zoned) tile();
+  if (shapes(id)) retileSoon();
 }
 
 /** Brings window `id` to the front, out of minimized, without taking focus from the focused window. */
 export function raise(id) {
   const w = wins.get(id);
   if (!w) return;
-  unhide(w);
+  unhide(id);
   w.el.style.zIndex = ++z;
 }
 
@@ -90,15 +151,15 @@ export function raise(id) {
  * `onX`: runs instead of closing when the operator clicks X; `close` and `api.close` still close at once.
  * `items`: extra entries for its taskbar button's menu, as `menu()` takes them.
  * `icon`: its taskbar button's picture, `icons/<icon>.svg`; the title is the button's tooltip.
- * `zone`: with nothing saved, it tiles into the terminal zone instead of opening at `place()`.
+ * `tile`: takes a terminal slot (`SLOTS`) instead of a place of its own.
  */
-export function open(id, { title, w = 480, h: height = 320, persist = false, background = false, onClose, onX, extra = [], items = [], icon = 'window', zone = false }) {
+export function open(id, { title, w = 480, h: height = 320, persist = false, tile = false, background = false, onClose, onX, extra = [], items = [], icon = 'window' }) {
   if (wins.has(id)) {
     focus(id);
     return wins.get(id).api;
   }
-  const key = persist === true ? id : persist;
-  const saved = key ? geo.get(key) ?? seeds.get(key) ?? null : null;
+  const key = persist ? id : null;
+  const saved = key ? scaled(geo.get(key) ?? seeds.get(key)) ?? null : null;
   seeds.delete(key);
   const r = saved ?? { ...place(w, height), w, h: height };
   const text = h('div', { class: 'title-bar-text' }, title);
@@ -121,43 +182,40 @@ export function open(id, { title, w = 480, h: height = 320, persist = false, bac
     } }, h('img', { src: `icons/${icon}.svg`, alt: '', width: 16, height: 16, draggable: 'false' }));
   dragTask(task);
   const api = { el, body, title: (t) => { text.textContent = t; task.title = t; task.setAttribute('aria-label', t); }, close: () => close(id) };
-  let last; // the geometry last saved or tiled
-  const win = { el, task, onClose, api, toggleMax, items, zoned: zone && !saved, settle: () => { last = JSON.stringify(rect(el)); } };
+  let last; // the geometry last saved
+  const win = { el, task, onClose, api, toggleMax, items, tile, rebase: () => { last = JSON.stringify(rect(el)); } };
   wins.set(id, win);
   desktop.append(el);
   tasks.append(task);
   overflow(); // before focus() scrolls the button into view, so the arrows are already taking their room
-  if (win.zoned) tile();
-  else if (!saved?.max) clamp(el); // clamp reads the maximized box and would overwrite the restore geometry
+  if (!saved?.max) clamp(el); // clamp reads the maximized box and would overwrite the restore geometry
 
   // Saved only when the geometry changed: a click inside an unmoved window leaves it following its seed (the startup layout).
-  // A tiled window that the operator moved, resized or maximized leaves the zone, and the rest re-tile.
-  win.settle();
+  win.rebase();
   const save = () => {
     const now = JSON.stringify(rect(el));
     if (now === last) return;
     last = now;
-    if (key) geo.set(key, JSON.parse(now));
-    if (win.zoned) {
-      win.zoned = false;
-      tile();
-    }
+    if (key) geo.set(key, { ...JSON.parse(now), dw: size[0], dh: size[1] });
   };
   const maxBtn = el.querySelector('[aria-label="Maximize"], [aria-label="Restore"]');
   function toggleMax() {
     maxBtn.setAttribute('aria-label', el.classList.toggle('max') ? 'Restore' : 'Maximize');
     save();
+    if (shapes(id)) retileSoon();
   }
   el.querySelector('.title-bar').addEventListener('dblclick', (e) => { if (!e.target.closest('button')) toggleMax(); });
   el.addEventListener('pointerdown', () => focus(id), true);
   // The window is CSS-resizable (resize: both); its size is saved when the operator lets go.
-  el.addEventListener('pointerup', save);
-  drag(el, el.querySelector('.title-bar'), save);
+  // Moving or resizing the action column moves the region; a terminal dragged out of its slot goes back to it.
+  el.addEventListener('pointerup', () => { save(); if (shapes(id)) retileSoon(); });
+  drag(el, el.querySelector('.title-bar'), save, () => ACTION.includes(id) && retileSoon());
   if (!background || !focused()) focus(id);
   else {
     el.style.zIndex = Math.max(1, Number(focused().el.style.zIndex) - 1);
     el.querySelector('.title-bar').classList.add('inactive');
   }
+  if (shapes(id)) retileSoon();
   return api;
 }
 
@@ -190,39 +248,6 @@ function place(w, h) {
   return { x: best.x, y: best.y };
 }
 
-// The terminal zone: a function returning { x, y, w, h } in CSS px, read at every tile, so it follows the desktop's size.
-let zoneRect = null;
-/** Sets where `zone` windows tile. */
-export function setZone(f) {
-  zoneRect = f;
-  tile();
-}
-new ResizeObserver(() => tile()).observe(desktop);
-
-/**
- * Tiles the zone's windows that are open and not minimized, in opening order: up to 4 side by side at equal width, a fifth
- * starts a second row and the rows share the height. Runs whenever one opens, closes, minimizes or comes back.
- */
-// ponytail: the zone is fixed (app.js's layout B), not derived from a saved startup layout that moved the Board; a layout that
-// puts the Board over the zone gets terminals over it. Derive the zone from the layout's Board if operators save such layouts.
-function tile() {
-  if (!zoneRect) return;
-  const list = [...wins.values()].filter((w) => w.zoned && !w.el.hidden && !w.el.classList.contains('max'));
-  if (!list.length) return;
-  const r = zoneRect();
-  const cols = Math.min(4, list.length);
-  const rows = Math.ceil(list.length / cols);
-  list.forEach((w, i) => {
-    const c = i % cols;
-    const row = Math.floor(i / cols);
-    const x = Math.round(r.x + (r.w * c) / cols);
-    const y = Math.round(r.y + (r.h * row) / rows);
-    Object.assign(w.el.style, { left: `${x}px`, top: `${y}px`,
-      width: `${Math.round(r.x + (r.w * (c + 1)) / cols) - x}px`, height: `${Math.round(r.y + (r.h * (row + 1)) / rows) - y}px` });
-    w.settle(); // the tile is not the operator's move
-  });
-}
-
 /** A window's geometry as `open` restores it: the inline restore geometry while maximized (or minimized), else the laid-out box. */
 function rect(el) {
   const s = el.style;
@@ -234,7 +259,7 @@ function rect(el) {
 /** The open windows among `ids` with their geometry ({ id, x, y, w, h, max? }), bottom-most first: a startup layout. */
 export const snapshot = (ids) => [...wins].filter(([id]) => ids.includes(id))
   .sort(([, a], [, b]) => Number(a.el.style.zIndex) - Number(b.el.style.zIndex))
-  .map(([id, { el }]) => ({ id, ...rect(el) }));
+  .map(([id, { el }]) => ({ id, ...rect(el), dw: size[0], dh: size[1] }));
 
 // Places for the next `open` of a window with nothing remembered, not saved: the startup layout's, so an unmoved window
 // follows the layout (and a default layout the desktop's size) at every start, and its own place once the operator moves it.
@@ -254,7 +279,7 @@ function clamp(el) {
   el.style.top = `${Math.max(0, Math.min(el.offsetTop, d.height - 24))}px`;
 }
 
-function drag(el, bar, done) {
+function drag(el, bar, done, moved) {
   bar.addEventListener('pointerdown', (e) => {
     if (e.button !== 0 || e.target.closest('button') || el.classList.contains('max')) return;
     const dx = e.clientX / zoom - el.offsetLeft;
@@ -264,6 +289,7 @@ function drag(el, bar, done) {
       el.style.left = `${m.clientX / zoom - dx}px`;
       el.style.top = `${m.clientY / zoom - dy}px`;
       clamp(el);
+      moved();
     };
     bar.addEventListener('pointermove', move);
     bar.addEventListener('pointerup', () => { bar.removeEventListener('pointermove', move); done(); }, { once: true });
@@ -348,7 +374,7 @@ export function minimize(id) {
   w.el.hidden = true;
   w.el.classList.remove('active');
   w.task.classList.remove('active');
-  if (w.zoned) tile();
+  if (shapes(id)) retileSoon();
 }
 
 export function close(id) {
@@ -359,7 +385,7 @@ export function close(id) {
   w.el.remove();
   w.task.remove();
   overflow();
-  if (w.zoned) tile();
+  if (w.tile || ACTION.includes(id)) retileSoon();
   w.onClose?.();
 }
 

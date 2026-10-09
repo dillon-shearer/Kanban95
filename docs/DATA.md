@@ -11,9 +11,9 @@ Living document. Update it in the same change that alters the schema.
 - `<repo>/.kanban95/notepad.md`: the operator's Notepad window, free text, at most 256 KB, read and written whole by `GET`/`PUT /api/notepad`. Git-ignored (the inner `.gitignore` lists it) and never given to an agent. Absent means empty.
 - `<repo>/.kanban95/ui.json`: the UI's state, one JSON object of at most 64 KB, read and written whole by `GET`/`PUT /api/ui` through `ui/state.js`. Git-ignored and never given to an agent. Absent or unreadable means defaults. The UI keeps nothing in browser storage (`localStorage` and the like are per origin, and the daemon's port, so its origin, changes every start). Keys:
   - `k95.collapsed` (the folded Board columns' statuses)
-  - `k95.layout` (the startup layout, `[{id, x, y, w, h, max?}]` bottom-most first)
+  - `k95.layout` (the startup layout, `[{id, x, y, w, h, max?, dw, dh}]` bottom-most first)
   - `k95.view` (the Board's `{filter, sort, group}`)
-  - `k95.win.<key>` (a window's `{x, y, w, h, max?}`, under its id or its `persist` key such as `term-ticket-<id>`)
+  - `k95.win.<key>` (a window's `{x, y, w, h, max?, dw, dh}` under its window id, `dw`×`dh` being the desktop in screen px it was saved on, so it scales to another screen; terminals take slots and save nothing)
 - `<repo>/.kanban95/templates/`: the repo's prompt templates (`<name>.md`, committed, operator-editable) and `.shipped.json`, `{"<name>": "<sha256 hex>"}`, the hash of the shipped default each copy was last copied or reset from. The daemon writes both: a missing copy on start, an unedited copy (its hash equals the record) when the default changed, and on Reset. A copy with no entry is never overwritten. Absent or unreadable `.shipped.json` means no entries.
 - `<repo>/.kanban95/config.json`: optional, committed, no secrets. The daemon never writes it: a write would dirty a repo that commits it, and a dirty base refuses launches and merges. Read by the lifecycle. Keys:
   - `operator: { model, effort }` (either or both; the operator terminal's model and effort, default the plan phase's).

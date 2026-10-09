@@ -5,7 +5,7 @@ import { FitAddon } from './vendor/xterm/addon-fit.mjs';
 import { Terminal } from './vendor/xterm/xterm.mjs';
 import { configure, ensureModel, micButton, micEverywhere } from './voice.js';
 import * as ui from './state.js';
-import { close, dialog, focus, focused, forget, h, isOpen, menu, open, raise, scale, seed, setZone, setZoom, snapshot } from './wm.js';
+import { close, dialog, focus, focused, forget, h, isOpen, menu, open, raise, scale, seed, setZoom, snapshot } from './wm.js';
 
 // ---- data ----
 
@@ -731,10 +731,8 @@ function openTerminal(s, auto = false) {
       say(e.message);
     }
   };
-  // Placed per ticket, not per session: every later phase, retry and relaunch opens where the operator left the last one.
-  // Until the operator moves it, it tiles into the terminal zone under the Board.
-  const w = open(wid, { title, w: 760, h: 440, persist: s.ticket_id !== null && `term-ticket-${s.ticket_id}`, background: auto, onX, extra: [micButton((text) => send({ data: text }))],
-    icon: termIcon(s), zone: true,
+  const w = open(wid, { title, w: 760, h: 440, tile: true, background: auto, onX, extra: [micButton((text) => send({ data: text }))],
+    icon: termIcon(s),
     items: s.ticket_id === null ? [] : [{ label: 'Open ticket', run: () => openTicket(s.ticket_id) }], onClose: () => { terms.delete(wid); ro.disconnect(); ws.close(); term.dispose(); } });
   let was = null;
   const paint = () => {
@@ -1213,20 +1211,21 @@ function openNotepad() {
 // The layout says which windows open at start; where is each window's own remembered place, or the layout's for a window
 // the operator has not moved (`seed`: not saved, so the default follows the desktop's size at every start).
 // Reset forgets the layout windows' places, so the default applies in full from the next start.
-const LAYOUT = { board: openBoard, inbox: openInbox, brain: openBrain, settings: () => openSettings() };
-const NAMES = { board: 'Board', inbox: 'Inbox', brain: 'Brain', settings: 'Settings' };
-/** Layout B: the Board across the top of the desktop right of the icons, the terminal zone under it, both proportional to
- *  the desktop, so a smaller screen shrinks them alike and nothing is off it. */
-function frame() {
+const LAYOUT = { board: openBoard, inbox: openInbox, notepad: openNotepad, brain: openBrain, settings: () => openSettings() };
+const NAMES = { board: 'Board', inbox: 'Inbox', notepad: 'Notepad', brain: 'Brain', settings: 'Settings' };
+/** The action column: Board in the top right, Inbox under it in the bottom right, Notepad left of the Inbox at its height,
+ *  together half the desktop's width (the other half is the terminals' region, wm.js → SLOTS), and clear of the desktop
+ *  icons on a small desktop. */
+function defaultLayout() {
   const d = document.getElementById('desktop');
+  const W = d.clientWidth;
+  const H = d.clientHeight;
   const icons = document.getElementById('icons');
-  const x = icons ? icons.offsetLeft + icons.offsetWidth + 4 : 0;
-  const w = d.clientWidth - x;
-  const bh = Math.round(d.clientHeight * 0.55);
-  return { board: { x, y: 0, w, h: bh }, zone: { x, y: bh, w, h: d.clientHeight - bh } };
+  const free = W - (icons ? icons.offsetLeft + icons.offsetWidth + 4 : 0);
+  const bw = Math.min(Math.round(W / 2), free), bh = Math.round(H * 0.6);
+  const iw = Math.round(bw / 2), nw = bw - iw, ih = H - bh;
+  return [{ id: 'inbox', x: W - iw, y: bh, w: iw, h: ih }, { id: 'notepad', x: W - bw, y: bh, w: nw, h: ih }, { id: 'board', x: W - bw, y: 0, w: bw, h: bh }];
 }
-/** The Board alone: live sessions' terminals open under it on their own. */
-const defaultLayout = () => [{ id: 'board', ...frame().board }];
 function startupLayout() {
   const l = ui.get('k95.layout');
   if (Array.isArray(l)) return l.filter((x) => LAYOUT[x?.id] && [x.x, x.y, x.w, x.h].every(Number.isFinite));
@@ -1240,7 +1239,12 @@ function saveLayout() {
 function resetLayout() {
   ui.set('k95.layout', undefined);
   for (const id of Object.keys(LAYOUT)) forget(id);
-  say('Startup layout reset: Board across the top, terminals under it from the next start.');
+  say('Startup layout reset: Board top right, Inbox bottom right, Notepad beside it from the next start.');
+}
+
+/** Start → Close ended terminals: the windows of sessions that ended; the live ones take the freed slots. */
+function closeEnded() {
+  for (const wid of [...terms.keys()]) if (document.querySelector(`[data-win="${wid}"]`)?.classList.contains('ended')) close(wid);
 }
 
 // ---- taskbar, keyboard, start ----
@@ -1257,6 +1261,7 @@ const START = [
   { label: 'New ticket', run: () => openTicket(null) },
   { label: 'New brainstorm', run: newBrainstorm },
   { label: 'New operator terminal', run: newOperator },
+  { label: 'Close ended terminals', run: closeEnded },
   { get label() { return runner.on ? 'Stop' : 'Run'; }, run: toggleRunner },
   { label: 'Housekeeping', run: housekeeping },
   '-',
@@ -1381,7 +1386,6 @@ async function boot() {
   configure(settings.voice);
   applyZoom(settings.zoom);
   micEverywhere();
-  setZone(() => frame().zone);
   for (const { id, ...r } of startupLayout()) {
     seed(id, r);
     LAYOUT[id]();
