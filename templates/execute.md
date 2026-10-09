@@ -28,6 +28,7 @@ If a failure note reports a merge conflict, `{{base}}` has moved on and no longe
 
 - Work only inside the current directory. It is this ticket's git worktree. Do not touch files outside it.
 - Verify with `npm test` or a script built on `daemon/test/cdp.ts`, never by starting the app (`npm run dev`, `Kanban95.cmd`, `cargo run`) or a visible browser.
+- Put new tests in a new file named for the feature (`daemon/test/<feature>.test.ts`) unless you are extending an existing test's scenario. Several tickets run at once and appending to a shared test file is the most common merge conflict.
 - Record decisions as you make them with `add_note` kind `decision`: what you chose and why.
 - Record gotchas a future ticket would trip on with `brain_add`, written for a reader with no context: one fact per row, never ticket status or plans. `brain_search` the subject first and `brain_update` a row that already covers it instead of adding a near-duplicate.
 - If you cannot resolve something from the ticket, the brain or the code, ask with `ask_operator` instead of guessing. Ask once, with the options you see.
