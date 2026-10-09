@@ -137,28 +137,26 @@ describe('ui-board', { timeout: 60_000 }, () => {
     expect(await label()).toBe('Run');
     expect(await page.evaluate('window.__noReload')).toBe(true);
   });
-  it('names the held tickets in the status bar; Cancel waiting lists them, and its confirm clears every hold and nothing else', async () => {
+  it('names the held tickets in the status bar; Stop clears every hold and nothing else, and says how many', async () => {
     db.prepare("UPDATE tickets SET status = 'done', merged_at = coalesce(merged_at, 'x'), needs_human = 0").run(); // earlier tests' leftovers
-    const dep = ticket('Not merged yet');
+    const dep = ticket('Not merged yet', { status: 'in_progress' }); // running for the runner: it waits instead of stopping itself
     const held = [ticket('Held one'), ticket('Held two')];
-    const free = ticket('Not held');
     for (const id of held) db.prepare('INSERT INTO ticket_deps VALUES (?, ?)').run(id, dep);
     db.prepare(`UPDATE tickets SET blocked_on_deps = 1, retry = 2 WHERE id IN (${held.join(',')})`).run();
+    await fetch(`${base}api/runner`, { method: 'PUT', headers: { 'content-type': 'application/json', cookie: `k95=${srv.secret}` }, body: '{"on":true}' });
     const field = () => page.evaluate<string | null>(`(() => { const f = document.querySelector('.k95-held'); return f.hidden ? null : f.textContent; })()`);
-    const dialog = () => page.evaluate<string | null>(`[...document.querySelectorAll('dialog[open]')].find((d) => d.querySelector('.title-bar-text').textContent === 'Cancel waiting')?.querySelector('.window-body').textContent ?? null`);
     await page.goto(base);
-    await until(() => column(free), 'the cards');
+    await until(() => column(held[1]), 'the cards');
     expect(await field()).toBe('2 waiting to launch by themselves');
+    expect(await page.evaluate<string[]>(`[...document.querySelectorAll('.k95-toolbar button')].map((b) => b.textContent)`))
+      .toEqual(['Launch', 'Stop', 'New brainstorm', 'Housekeeping']);
 
-    await page.evaluate(`[...document.querySelectorAll('.k95-toolbar button')].find((b) => b.textContent === 'Cancel waiting').click()`);
-    await until(dialog, 'the confirm');
-    const text = (await dialog())!;
-    for (const id of held) expect(text).toContain(`#${id} Held`);
-    expect(text).not.toContain('Not held');
-    await page.evaluate(`[...document.querySelectorAll('dialog[open] button')].find((b) => b.textContent === 'Clear holds').click()`);
+    await page.evaluate(`[...document.querySelectorAll('.k95-toolbar button')].find((b) => b.textContent === 'Stop').click()`);
+    await until(async () => (await statusBar()) === 'Runner stopped, 2 holds cleared.', 'the cleared count');
     await until(async () => (await field()) === null, 'the held line gone');
     for (const id of held) expect(db.prepare('SELECT status, blocked_on_deps, retry FROM tickets WHERE id = ?').get(id)).toEqual({ status: 'backlog', blocked_on_deps: 0, retry: 2 });
-    db.prepare(`UPDATE tickets SET status = 'done', merged_at = 'x' WHERE id IN (${[dep, free, ...held].join(',')})`).run();
+    expect(db.prepare('SELECT status FROM tickets WHERE id = ?').get(dep)).toEqual({ status: 'in_progress' });
+    db.prepare(`UPDATE tickets SET status = 'done', merged_at = 'x' WHERE id IN (${[dep, ...held].join(',')})`).run();
   });
 
   it('collapses a column to a strip that survives a reload, takes drops, and shows a flag in its count', async () => {
