@@ -4,7 +4,7 @@ Living document. How a ticket moves itself from Launch to merged, and what the b
 
 ## Columns and flags
 
-Status is one of **backlog → in_progress → testing → done**. Two flags sit beside it: `needs_human` (the operator is needed: a question, a silent exit, the retry cap, a merge conflict (on submit or in the merge queue) at the retry cap, a main checkout still dirty after the merge queue's wait) and `blocked_on_deps` (launched, but waiting for a dependency to merge). A ticket also records `retry` (failed tests and merge conflicts so far) and `merged_at` (when its branch landed).
+Status is one of **backlog → in_progress → testing → done**. Two flags sit beside it: `needs_human` (the operator is needed: a question, a silent exit, an agent silent for `idle_minutes`, the retry cap, a merge conflict (on submit or in the merge queue) at the retry cap, a main checkout still dirty after the merge queue's wait) and `blocked_on_deps` (launched, but waiting for a dependency to merge). A ticket also records `retry` (failed tests and merge conflicts so far) and `merged_at` (when its branch landed).
 
 ## Events
 
@@ -17,6 +17,8 @@ Status is one of **backlog → in_progress → testing → done**. Two flags sit
 | `ask` | `ask_operator` from any agent |
 | `answer` | the operator, `POST /api/tickets/:id/answer` |
 | `exit` | the agent's terminal closed without a `move_ticket` or `report_test`, or its launch failed |
+| `silent` | the silence watch, when a live agent's transcript has gained no line for `idle_minutes` (Silent agents below) |
+| `woke` | the silence watch, when a flagged silent agent's transcript grows again |
 | `merged` | the merge queue |
 | `conflict` | the board, when the base will not merge into the ticket's worktree (on submit or in the merge queue) or the worktree has uncommitted changes |
 | `dirty` | the merge queue, once the main checkout has had uncommitted changes for the whole wait (10 min) |
@@ -48,6 +50,8 @@ The tester's verdict is the move: `report_test` writes the PASS or FAIL note, th
 | running | ask | | same | `needs_human` on | question note, chord. The agent's terminal stays open |
 | running | answer | `needs_human` on and an agent session is live | same | `needs_human` off | answer note; the answer typed into the agent's terminal as one line, then Enter as a separate keystroke 300 ms later (one burst would read as a paste, leaving the answer unsubmitted) |
 | running | exit | | same | `needs_human` on | failure note ("agent exited without reporting" or "launch failed: …", e.g. a model outside the CLI's `models` list (Run settings), then a "To resolve:" line naming Resume and Reset to Backlog), chord |
+| running | silent | an agent session is live and `needs_human` off | same | `needs_human` on | failure note ("agent silent for N min: …" with the last lines of its terminal, then a "To resolve:" line), chord. The agent keeps running |
+| running | woke | an agent session is live and `needs_human` on | same | `needs_human` off | none (the silence watch applies it only while its own note is the ticket's latest) |
 | done | merged | | done | `merged_at` set, `needs_human` off | ding, worktree and branch removed, held dependents launched, housekeeping check |
 | in_progress | conflict | `retry` < 3 | in_progress | `retry` + 1 | worker session ended, failure note ("merge conflict with <base>: <git output>" or "worktree has uncommitted changes; …"), execute agent again in the kept worktree. No tester round is spent on stale code |
 | in_progress | conflict | `retry` = 3 | in_progress | `needs_human` on | worker session ended, the same failure note, chord. Worktree kept |
@@ -92,6 +96,7 @@ Every row that turns `needs_human` on writes exactly one note in the same transa
 | fail at the cap | `stopped after 4 failed tests` | read the tester's notes, fix the ticket if it asks for the wrong thing, Reset to Backlog and Launch |
 | ask | the question | (the Answer box) |
 | exit | `agent exited without reporting` / `launch failed: …` / `ended by the operator from the terminal window` | Resume (the agent starts again in the same worktree), or Reset to Backlog to start over |
+| silent | `agent silent for N min: its transcript has had no new line since <time>. Last lines of its terminal:` and up to 10 lines | open its terminal; fix what it waits on there, or Restart if it is hung. The flag clears by itself if the agent writes again |
 | conflict at the cap, on submit | `merge conflict with <base>: …` / `worktree has uncommitted changes; …` | in `.worktrees/t-<id>` commit or discard, merge the base, fix, test, commit, Resume |
 | conflict at the cap, in the queue | `merge conflict with <base>: …` | in `.worktrees/t-<id>` merge the base, fix, test, commit, Retry merge |
 | dirty | the `git status` lines | commit or stash in the main checkout, Retry merge |
@@ -107,6 +112,12 @@ The ticket's `model` and `effort` override the execute phase only, so a retry ru
 ### Ending a session
 
 Both CLIs run interactive sessions that never exit by themselves. When an agent's `move_ticket` or the tester's `report_test` is accepted, the board revokes its grant and kills its terminal; that exit is expected (`runs.outcome` = the event: `submit`, `pass`, `fail`). The operator's X on a terminal (`DELETE /api/sessions/:id`) sets `runs.outcome` = `closed`, revokes the grant and kills the pty, then applies `exit` itself with the failure note "ended by the operator from the terminal window" (role `operator`), so the ticket is flagged with the usual "To resolve:" line and offers Resume; the exit handler sees `closed` and writes no second note. A brainstorm has no ticket, so ending one only stops it. A reset to Backlog ends the ticket's sessions with `runs.outcome` = `reset` and flags nothing (Resume, Restart and Reset). Any other exit, including the operator revoking a grant and the daemon shutting down, is the `exit` event (`runs.outcome` = `exit`), so a ticket can never sit in a running column with no agent and no flag.
+
+### Silent agents
+
+An agent can stop without exiting: an API call that never returns, or a CLI sitting at its prompt after an error it cannot get past ("There's an issue with the selected model"). The pty is no signal, because Claude Code's spinner animates while it waits. The board watches the transcript instead (`watchSilence` in `daemon/src/lifecycle.ts`): every minute it looks at each live ticket session's transcript, Claude Code's `<config>/projects/<cwd>/<runs.session_id>.jsonl` or, for Codex, the newest `<CODEX_HOME>/sessions/YYYY/MM/DD/rollout-*.jsonl` written since the session started whose `session_meta` cwd is the worktree (`transcriptSize` in `daemon/src/launcher.ts`). A session whose transcript has not grown for `idle_minutes` (`~/.kanban95/settings.json`, Settings → General → Silent agents, default 20) gets the `silent` row: `needs_human`, a note naming the minutes and the last 10 lines of its terminal (escape codes stripped), and the chord. A session with no transcript yet counts from its start. Time the ticket spends flagged (a question waiting for the operator) does not count as silence.
+
+The default is above the 10 min tool timeout, so a long test run is not flagged. The agent is left running: the operator opens its terminal, fixes what it waits on there or presses Restart. If its transcript grows again while the silence note is still the ticket's latest note (no question since), the watch applies `woke` and the flag clears by itself, so a long step that was healthy after all does not hold the card red or keep the runner waiting.
 
 ### Restart
 
@@ -203,7 +214,7 @@ A repo's prompts come from its own `.kanban95/templates/`, copied from `template
 
 ## Sounds
 
-`ding.wav` when a ticket is merged, `chord.wav` whenever `needs_human` is raised by the table (question, silent exit, retry cap, conflict at the cap, dirty base). The daemon sends `{"sound": "ding" | "chord", "ticket": <id>}` on the `/events` websocket; the UI plays `ui/sounds/<sound>.wav` unless that sound is off in Settings → General, and says the reason in the status bar ("#<id> merged.", or the needs-human reason). Every transition also sends `{"ticket": <id>}`, so the board redraws that card without a reload (`docs/ARCHITECTURE.md` → Events).
+`ding.wav` when a ticket is merged, `chord.wav` whenever `needs_human` is raised by the table (question, silent exit, silent agent, retry cap, conflict at the cap, dirty base). The daemon sends `{"sound": "ding" | "chord", "ticket": <id>}` on the `/events` websocket; the UI plays `ui/sounds/<sound>.wav` unless that sound is off in Settings → General, and says the reason in the status bar ("#<id> merged.", or the needs-human reason). Every transition also sends `{"ticket": <id>}`, so the board redraws that card without a reload (`docs/ARCHITECTURE.md` → Events).
 
 ## Janitor
 

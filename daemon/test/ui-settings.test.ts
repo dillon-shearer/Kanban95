@@ -84,4 +84,18 @@ describe('ui-settings', { timeout: 60_000 }, () => {
       db.prepare("UPDATE tickets SET status = 'done', merged_at = 'x' WHERE id IN (?, ?)").run(a, b);
     }
   });
+
+  it('Settings > General shows idle_minutes at its default of 20 and saves a new value to settings.json', async () => {
+    const file = join(process.env.USERPROFILE!, '.kanban95', 'settings.json');
+    rmSync(file, { force: true });
+    await page.goto(base);
+    await until(() => page.evaluate(`!!document.querySelector('[data-win="board"]')`), 'the board');
+    await page.evaluate(`document.querySelector('[data-icon="Settings"]').dispatchEvent(new MouseEvent('dblclick'))`);
+    await page.evaluate(`[...document.querySelectorAll('[data-win="settings"] [role=tab] a')].find((t) => t.textContent === 'General').click()`);
+    await until(() => page.evaluate(`!!document.querySelector('#idle-minutes')`), 'the General tab');
+    expect(await page.evaluate(`document.querySelector('#idle-minutes').value`)).toBe('20');
+    await page.evaluate(`(() => { const f = document.querySelector('#idle-minutes'); f.value = '35'; f.closest('fieldset').querySelector('button').click(); })()`);
+    await until(() => existsSync(file) && JSON.parse(readFileSync(file, 'utf8')).idle_minutes === 35, 'the saved idle_minutes');
+    rmSync(file, { force: true });
+  });
 });
