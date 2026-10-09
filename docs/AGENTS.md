@@ -45,6 +45,7 @@ A repo renders its own copies in `.kanban95/templates/`, copied once from `templ
 **Worker (execute).**
 - Works only inside the current directory, the ticket's worktree.
 - Reads only what the change needs: `CLAUDE.md` (loaded by the CLI) points it at `docs/ARCHITECTURE.md` → Working on the board, the ARCHITECTURE section for the part it touches and that part's living doc, not the whole of README and ARCHITECTURE up front. Each file read early is paid again on every later call of the session (ticket #43).
+- Installs dependencies in the worktree itself (`npm install`, or the repo's equivalent), never junctions or symlinks the main checkout's `node_modules` or anything else of the main checkout's into it: removing the worktree, or a tool deleting through the link, reaches the main checkout's files. The tester's template says the same.
 - Verify with `npm test` or a script built on `daemon/test/cdp.ts`, never by starting the app (`npm run dev`, `Kanban95.cmd`, `cargo run`) or a visible browser.
 - Puts new tests in a new file named for the feature (`daemon/test/<feature>.test.ts`) unless it is extending an existing test's scenario: several tickets run at once and appending to a shared test file is the most common merge conflict.
 - Records decisions with `add_note` kind `decision`, gotchas for future tickets with `brain_add` (rules below in The brain).
