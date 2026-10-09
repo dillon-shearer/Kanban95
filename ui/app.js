@@ -32,7 +32,7 @@ let sessions = [];
 let inbox = [];
 let runner = { on: false, concurrency: 3, running: [], left: 0, backlog: 0, waits: [] }; // GET /api/runner: the Run button and its status-bar line
 let models = null; // ~/.kanban95/models.json as written, for the cards' default model and effort
-let settings = { paths: {}, sounds: true, voice: { backend: 'local', mode: 'push' }, housekeeping: { auto: true, every: 10 } };
+let settings = { paths: {}, sounds: { merge: true, attention: true }, voice: { backend: 'local', mode: 'push' }, housekeeping: { auto: true, every: 10 } };
 let limits = null; // GET /api/limits: { rows, errors, fetched_at }, null until the first answer
 const views = new Map(); // open window id → redraw(ticketId | null)
 
@@ -57,12 +57,17 @@ async function refreshShared() {
 }
 const redraw = (ticket) => views.forEach((f) => f(ticket));
 
+const SOUND_SETTING = { ding: 'merge', chord: 'attention' };
+
 function listen() {
   const ws = new WebSocket(`ws://${location.host}/events`);
   ws.onmessage = async (m) => {
     const e = JSON.parse(m.data);
     if (e.sound) {
-      if (settings.sounds) new Audio(`sounds/${e.sound}.wav`).play().catch(() => {});
+      if (settings.sounds[SOUND_SETTING[e.sound]]) new Audio(`sounds/${e.sound}.wav`).play().catch(() => {});
+      // The chord's reason is said by refreshTicket when it first sees the flag, so the later change event does not repeat it.
+      if (e.sound === 'chord' && e.ticket != null) await refreshTicket(e.ticket);
+      else if (e.sound === 'ding' && e.ticket != null) say(`#${e.ticket} merged.`);
       return;
     }
     if (e.ticket != null) await refreshTicket(e.ticket);
@@ -254,6 +259,19 @@ async function restart(id) {
     await sayLaunched([id]);
   });
 }
+// Sends a Done ticket, merged or not, back to a worker with the operator's reason as its failure note (docs/LIFECYCLE.md → Reject).
+async function reject(id) {
+  const reason = h('textarea', { rows: 6, cols: 60 });
+  const asked = dialog(`Reject #${id}`, h('div', { class: 'field-row-stacked' }, h('label', {}, 'What is wrong and what done looks like'), reason), ['Reject', 'Cancel']);
+  const ok = reason.closest('dialog').querySelector('.k95-buttons button');
+  ok.disabled = true; // an empty reason would tell the worker nothing; the daemon refuses it too
+  reason.addEventListener('input', () => { ok.disabled = !reason.value.trim(); });
+  if ((await asked) !== 'Reject') return;
+  await act(async () => {
+    await api('POST', `/tickets/${id}/reject`, { reason: reason.value });
+    await sayLaunched([id]);
+  });
+}
 const newBrainstorm = () => act(async () => openTerminal(await api('POST', '/brainstorm')), 'Brainstorm started.');
 /** An operator terminal: an agent with the operator's reach on the board, given the mission typed here. The daemon refuses an empty one. */
 async function newOperator() {
@@ -309,6 +327,7 @@ function cardMenu(ts, x, y) {
     { label: 'Launch', disabled: !ts.some(launchable), run: () => launch(ts) },
     { label: 'Resume', disabled: !ts.some(resumable), run: () => launch(ts, 'resume') },
     ...(ts.length === 1 && restartable(ts[0]) ? [{ label: 'Restart', run: () => restart(ts[0].id) }] : []),
+    ...(ts.length === 1 && ts[0].status === 'done' ? [{ label: 'Reject', run: () => reject(ts[0].id) }] : []),
     '-',
     { label: 'Model', items: [
       { label: `Phase default${tick('model', null)}`, run: () => set('model', null) },
@@ -538,7 +557,8 @@ function ticketForm(w, t) {
     h('div', { class: 'field-row-stacked' }, h('label', {}, 'Depends on'), deps),
     h('div', { class: 'field-row' }, h('button', { onclick: save }, t ? 'Save' : 'Create'),
       t && h('button', { disabled: t.status !== 'backlog', onclick: () => launch([t]) }, 'Launch'),
-      t && h('button', { onclick: () => restart(t.id) }, 'Restart')));
+      t && h('button', { onclick: () => restart(t.id) }, 'Restart'),
+      t?.status === 'done' && h('button', { onclick: () => reject(t.id) }, 'Reject')));
 }
 
 // ---- terminals ----
@@ -567,7 +587,7 @@ function openTerminal(s, auto = false) {
   // X ends the agent for good, after a confirm; the board's own closes (after a report, a deleted ticket) never do.
   const onX = async () => {
     if (w.el.classList.contains('ended')) return w.close();
-    const ask = s.ticket_id === null ? 'End this brainstorm?' : `End the agent for #${s.ticket_id}? The ticket is flagged so you can resume it.`;
+    const ask = s.ticket_id === null ? `End this ${s.role === 'operator' ? 'operator terminal' : 'brainstorm'}?` : `End the agent for #${s.ticket_id}? The ticket is flagged so you can resume it.`;
     if ((await dialog('End agent', `${ask} Minimize to keep it running.`, ['End', 'Cancel'])) !== 'End') return;
     try {
       await api('DELETE', `/sessions/${s.id}`);
@@ -801,8 +821,9 @@ function openSettings(tab) {
       }, 'Saved.');
       const hkAuto = h('input', { type: 'checkbox', id: 'hk-auto', checked: settings.housekeeping.auto });
       const hkEvery = h('input', { type: 'number', id: 'hk-every', min: 1, step: 1, value: settings.housekeeping.every });
-      p.replaceChildren(h('div', { class: 'field-row' }, h('input', { type: 'checkbox', id: 'sounds', checked: settings.sounds,
-        onchange: (e) => act(() => saveSettings({ sounds: e.target.checked }), 'Saved.') }), h('label', { for: 'sounds' }, 'Sounds: ding when a ticket merges, chord when the board needs you')),
+      p.replaceChildren(...[['merge', 'Ding when a ticket merges'], ['attention', 'Chord when the board needs you']].map(([k, label]) =>
+        h('div', { class: 'field-row' }, h('input', { type: 'checkbox', id: `sound-${k}`, checked: settings.sounds[k],
+          onchange: (e) => act(() => saveSettings({ sounds: { ...settings.sounds, [k]: e.target.checked } }), 'Saved.') }), h('label', { for: `sound-${k}` }, label))),
         h('fieldset', {}, h('legend', {}, 'Runner'),
           h('div', { class: 'field-row' }, h('label', { for: 'concurrency' }, 'Tickets running at once'), at),
           h('button', { onclick: saveRunner }, 'Save')),
