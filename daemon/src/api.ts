@@ -103,15 +103,20 @@ export function setDeps(db: DatabaseSync, id: number, deps: number[]) {
   if (cycle) throw new HttpError(400, `dependency cycle: ticket ${id} would end up depending on itself`);
 }
 
+/** Ends every live session of a ticket. The outcome is set before the kill, so exited() records it and flags nothing. */
+function endSessions(db: DatabaseSync, id: number, outcome: string) {
+  for (const s of sessionsOf(id)) {
+    s.outcome = outcome;
+    revoke(db, s.grantId);
+    s.pty.kill();
+  }
+}
+
 /** Deletes a ticket with its sessions and attachments. The UI's DELETE route and the delete_ticket tool both come here. */
 export function deleteTicket(board: Board, id: number) {
   const { db } = board;
   // Its agents stop with it. The outcome makes their exit expected, so it flags nothing on a ticket that is gone.
-  for (const s of sessionsOf(id)) {
-    s.outcome = 'deleted';
-    revoke(db, s.grantId);
-    s.pty.kill();
-  }
+  endSessions(db, id, 'deleted');
   const r = db.prepare('DELETE FROM tickets WHERE id = ?').run(id);
   if (r.changes === 0) throw new HttpError(404, 'no such ticket');
   rmSync(attachmentDir(board.repo, id), { recursive: true, force: true });
@@ -204,6 +209,8 @@ const routes: [method: string, path: RegExp, mutation: string | null, handler: (
       const bad = uncatalogued(body.model, typeof body.cli === 'string' ? body.cli : readTicket(db, id).cli);
       if (bad) throw new HttpError(400, bad);
     }
+    // A reset to Backlog stops the ticket's agents, whoever sent it; the UI closes their terminals when it sees the ticket in backlog.
+    if (body.status === 'backlog' && readTicket(db, id).status !== 'backlog') endSessions(db, id, 'reset');
     transaction(db, () => {
       if (cols.length) db.prepare(`UPDATE tickets SET ${cols.map((c) => `${c} = ?`).join(', ')} WHERE id = ?`).run(...(vals as never[]), id);
       if (deps) setDeps(db, id, deps);

@@ -129,6 +129,39 @@ describe('ui-terminal', { timeout: 60_000 }, () => {
     await until(() => sessions.size === 0, 'the agent to exit');
   });
 
+  it("dragging a running card to Backlog stops its agent and closes its terminals, the live one and an already ended one", async () => {
+    const id = ticket('Reset me');
+    await page.goto(base);
+    await until(() => column(id), 'the card');
+    const sessionsOf = async () => ((await (await fetch(`${base}api/sessions`, { headers: { cookie: `k95=${srv.secret}` } })).json()) as { id: number; ticket_id: number; grant_id: number }[]).filter((x) => x.ticket_id === id);
+    const launchAgent = async () => {
+      expect((await fetch(`${base}api/tickets/${id}/launch`, { method: 'POST', headers: { cookie: `k95=${srv.secret}` } })).status).toBe(200);
+      const s = await until(async () => (await sessionsOf())[0], 'the session');
+      await until(() => page.evaluate(`!!document.querySelector('[data-win="term-${s.id}"] .xterm')`), 'the terminal');
+      await until(() => [...sessions.values()].find((x) => x.key === s.id)?.scrollback().includes('FAKE'), 'the fake agent');
+      return s;
+    };
+    const win = (wid: string) => page.evaluate<boolean>(`!!document.querySelector('[data-win="${wid}"]')`);
+    const tasks = () => page.evaluate<number>(`document.querySelectorAll('#tasks [data-task^="term-"]').length`);
+
+    // The first agent dies with the ticket still In Progress: its terminal stays, "(ended)".
+    const first = await launchAgent();
+    await fetch(`${base}api/grants/${first.grant_id}`, { method: 'DELETE', headers: { cookie: `k95=${srv.secret}` } });
+    await until(() => page.evaluate(`document.querySelector('[data-win="term-${first.id}"]').classList.contains('ended')`), 'the ended terminal');
+    const second = await launchAgent();
+    expect(await tasks()).toBe(2);
+
+    await page.drag(await page.center(`.card[data-id="${id}"]`), await page.center('[data-status="backlog"] .cards'));
+    await until(() => page.evaluate('!!document.querySelector("dialog[open]")'), 'the confirm');
+    await page.evaluate(`[...document.querySelectorAll('dialog[open] button')].find((b) => b.textContent === 'Reset').click()`);
+    const t0 = Date.now();
+    await until(async () => !(await win(`term-${first.id}`)) && !(await win(`term-${second.id}`)) && (await tasks()) === 0, 'the terminals to close', 5000);
+    expect(Date.now() - t0).toBeLessThan(2000);
+    await until(async () => (await sessionsOf()).length === 0, 'the agent to exit', 2000);
+    expect(db.prepare('SELECT status, needs_human FROM tickets WHERE id = ?').get(id)).toEqual({ status: 'backlog', needs_human: 0 });
+    db.prepare("UPDATE tickets SET status = 'done', merged_at = 'x' WHERE id = ?").run(id);
+  });
+
   it("X on a running terminal asks first: Cancel keeps the agent, End stops it and flags the ticket", async () => {
     const id = ticket('Stop me');
     await page.goto(base);
