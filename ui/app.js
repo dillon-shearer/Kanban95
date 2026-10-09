@@ -285,13 +285,15 @@ async function newOperator() {
   await act(async () => openTerminal(await api('POST', '/operator', { mission: mission.value })), 'Operator terminal started.');
 }
 /** Start → Restart board: the daemon rebuilds, exits 75, and the shell starts it again (docs/OPERATOR.md → Restart board). */
+const STALE = 'Restart the board to use the merged changes.'; // runner.stale: a merge changed daemon/, shell/ or package.json since start
 async function restartBoard() {
   const agents = sessions.filter((s) => s.ticket_id !== null).length;
   const terminals = sessions.length - agents;
   const body = h('div', {},
     h('p', {}, agents ? `${agents} agent${agents === 1 ? ' is' : 's are'} running; they are resumed after the restart.` : 'No agents are running.'),
     terminals > 0 && h('p', {}, `${terminals} brainstorm or operator terminal${terminals === 1 ? '' : 's'} will close.`),
-    h('p', {}, 'The daemon is rebuilt and the UI reloads. Shell changes need a full relaunch (close Kanban95 and start it again).'));
+    h('p', {}, 'The daemon is rebuilt and the UI reloads. Shell changes need a full relaunch (close Kanban95 and start it again).'),
+    runner.stale === 'shell' && h('p', { class: 'k95-shell-stale' }, 'A merge changed the shell itself: after this restart, close Kanban95 and start it again to pick up its change.'));
   if ((await dialog('Restart board', body, ['Restart', 'Cancel'])) !== 'Restart') return;
   say('Building…');
   try {
@@ -407,7 +409,7 @@ function openBoard() {
     if (focus) cols.querySelector(`.col[data-status="${focus[0]}"] .card[data-id="${focus[1]}"]`)?.focus();
     count.textContent = `${all.length} tickets · ${sessions.length} agents`;
     run.textContent = runner.on ? 'Stop' : 'Run';
-    runField.textContent = runField.title = runnerLine(runner);
+    runField.textContent = runField.title = runner.stale ? STALE : runnerLine(runner);
     runField.hidden = !runField.textContent;
   });
   drawBoard();
@@ -985,6 +987,7 @@ function taskbar() {
   const q = document.getElementById('inbox-count');
   q.textContent = `Inbox ${inbox.length}`;
   q.classList.toggle('flag', inbox.length > 0);
+  document.getElementById('restart-badge').hidden = !runner.stale;
   // The most constrained window of any CLI, e.g. "Claude 62%"; the tooltip lists them all.
   const l = document.getElementById('limits'), r = worst();
   l.textContent = r ? `${NAME[r.cli]} ${pct(r)}%` : limits ? 'Limits ?' : 'Limits';
@@ -1042,6 +1045,7 @@ async function boot() {
     Object.assign(m.style, { left: `${r.left}px`, top: `${r.top - m.offsetHeight}px` });
   });
   document.getElementById('inbox-count').addEventListener('click', openInbox);
+  document.getElementById('restart-badge').addEventListener('click', restartBoard);
   document.getElementById('limits').addEventListener('click', () => openSettings('Limits'));
   desktopIcons();
   clock();

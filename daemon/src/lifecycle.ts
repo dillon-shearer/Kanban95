@@ -139,6 +139,10 @@ export interface Board {
   shutdown?: (code: number) => void;
   /** The Tauri shell started this daemon and restarts it on exit code 75. */
   shell?: boolean;
+  /** `git rev-parse HEAD` in the repo when the daemon started; unset in a repo with no commits. */
+  startCommit?: string;
+  /** A merge since start changed what the running daemon was built from: 'shell' when shell/ changed too (docs/OPERATOR.md → Restart board). */
+  stale?: false | 'daemon' | 'shell';
 }
 
 /**
@@ -284,7 +288,10 @@ function queueMerge(b: Board, id: number, since = Date.now()) {
     // Rejected while git merge ran: the work landed, but the ticket is a worker's again and its next pass merges again.
     if (r.ok && readTicket(b.db, id).status !== 'done') return;
     let out;
-    if (r.ok) out = apply(b, id, 'merged');
+    if (r.ok) {
+      out = apply(b, id, 'merged');
+      markStale(b);
+    }
     else if (r.dirty && Date.now() - since < DIRTY_WAIT.max) {
       waiting.set(id, setTimeout(() => b.closing || queueMerge(b, id, since), DIRTY_WAIT.every).unref());
       return;
@@ -294,6 +301,20 @@ function queueMerge(b: Board, id: number, since = Date.now()) {
     } else out = apply(b, id, 'conflict', { note: { role: 'tester', kind: 'failure', body: `merge conflict with ${r.base}: ${r.reason}` } });
     await Promise.all(out.pending);
   });
+}
+
+/** After a merge: did it change the daemon's own code since start? The UI reads `stale` from GET /api/runner. */
+function markStale(b: Board) {
+  if (!b.startCommit || b.stale === 'shell') return;
+  let files: string[];
+  try {
+    files = git(b.repo, 'diff', '--name-only', b.startCommit, 'HEAD', '--', 'daemon/', 'shell/', 'package.json', 'package-lock.json').split('\n').filter(Boolean);
+  } catch {
+    return; // start commit gone (history rewritten): nothing to compare against
+  }
+  if (!files.length) return;
+  b.stale = files.some((f) => f.startsWith('shell/')) ? 'shell' : 'daemon';
+  changed(null);
 }
 
 function releaseDependents(b: Board, id: number) {
@@ -431,7 +452,7 @@ export function runnerState(b: Board) {
   const { n } = b.db.prepare("SELECT count(*) AS n FROM tickets WHERE status = 'backlog'").get() as { n: number };
   const cs = candidates(b);
   const waits = [...overlaps(b, cs)].map(([id, on]) => ({ id, on }));
-  return { ...runner(b), concurrency: limit(b), running: running(b), left: cs.length, backlog: n, waits };
+  return { ...runner(b), concurrency: limit(b), running: running(b), left: cs.length, backlog: n, waits, stale: b.stale ?? false };
 }
 
 let ticking = false;
