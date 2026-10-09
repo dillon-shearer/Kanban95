@@ -6,7 +6,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
 
-// Docs a test reads or is written from, so editing the doc can fail it.
+// Docs a test reads or is written from, so editing the doc can fail it. A new doc drift test adds its row here.
 const DOC_TESTS: Record<string, string> = {
   'docs/MCP.md': 'mcp.test.ts',
   'docs/LIFECYCLE.md': 'lifecycle.test.ts',
