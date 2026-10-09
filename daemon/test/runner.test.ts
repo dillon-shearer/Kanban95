@@ -246,12 +246,16 @@ describe('runner', { timeout: 60_000 }, () => {
     expect(runner(srv.board)).toEqual({ ...STOPPED, concurrency: 1 });
   });
 
-  it('Stop starts nothing new while the running ticket finishes; a card\'s own Launch still works', async () => {
+  it('Stop starts nothing new and clears every hold while the running ticket finishes; a card\'s own Launch still works', async () => {
     const a = ticket('Running');
     const b = ticket('Waiting', { model: 'hang' });
+    const gate = ticket('Gate', { needs_human: 1 });
+    const held = [ticket('Held one', { blocked_on_deps: 1 }), ticket('Held two', { blocked_on_deps: 1 })];
+    for (const id of held) dep(id, gate);
     await setMax(1);
     await setRun(true);
-    expect(await setRun(false)).toEqual({ on: false, concurrency: 1, running: [a], left: 1, backlog: 1, waits: [], stale: false, unpushed: 0 });
+    expect(await setRun(false)).toEqual({ on: false, concurrency: 1, running: [a], left: 1, backlog: 4, waits: [], stale: false, unpushed: 0, cleared: 2 });
+    expect(held.map((id) => t(id).flags.blocked_on_deps)).toEqual([false, false]);
     expect((await request('PUT', '/api/runner', { on: 'yes' })).status).toBe(400);
     await landed(a);
     expect(t(b).status).toBe('backlog');
