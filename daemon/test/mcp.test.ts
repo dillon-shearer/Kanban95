@@ -251,6 +251,12 @@ describe('tools', () => {
     expect(notes()).toBe(before);
   });
 
+  it('report_test takes a string evidence as one item', async () => {
+    srv.db.prepare("UPDATE tickets SET status = 'testing', retry = 0, needs_human = 0 WHERE id = 3").run();
+    const r = (await call(tester3, 'report_test', { passed: false, summary: 'criterion 1 fails', evidence: 'npm test: 2 failed, see a, b' })).json;
+    expect((srv.db.prepare('SELECT body FROM notes WHERE id = ?').get(r.note_id) as { body: string }).body).toBe('FAIL: criterion 1 fails\n- npm test: 2 failed, see a, b');
+  });
+
   it('report_test(false) at the retry cap flags needs_human and keeps the FAIL note before the stop note', async () => {
     srv.db.prepare(`UPDATE tickets SET status = 'testing', retry = ${MAX_RETRY}, needs_human = 0 WHERE id = 3`).run();
     const r = (await call(tester3, 'report_test', { passed: false, summary: 'still broken' })).json;
