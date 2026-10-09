@@ -8,7 +8,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import WebSocket from 'ws';
 import { createWorktree, removeWorktree } from '../src/git.ts';
 import type { Role } from '../src/grants.ts';
-import { buildArgv, sessions, type ArgvIn, type Cli, type Effort, type Session } from '../src/launcher.ts';
+import { buildArgv, RESUME_MESSAGE, sessions, type ArgvIn, type Cli, type Effort, type Session } from '../src/launcher.ts';
 import { start } from '../src/server.ts';
 
 // Fake `claude` and `codex` first on PATH. Each records its argv, env and cwd in the worktree, echoes typed input,
@@ -46,7 +46,7 @@ const waitFor = async (f: () => boolean, ms = 5000) => {
   }
 };
 const grantRow = (id: number) => db.prepare('SELECT * FROM grants WHERE id = ?').get(id) as { revoked_at: string | null; role: string; ticket_id: number };
-const runRow = (id: number) => db.prepare('SELECT * FROM runs WHERE id = ?').get(id) as { ended_at: string | null; scrollback: string | null; prompt_rendered: string };
+const runRow = (id: number) => db.prepare('SELECT * FROM runs WHERE id = ?').get(id) as { ended_at: string | null; scrollback: string | null; prompt_rendered: string; session_id: string | null };
 
 beforeAll(() => {
   writeFileSync(join(bin, 'fake.mjs'), FAKE);
@@ -111,6 +111,19 @@ describe('buildArgv', () => {
     expect(buildArgv({ ...base, cli, role, model, effort } as ArgvIn)).toEqual(want);
   });
 
+  // A ticket's Claude session is named at launch and continued by that name; Codex has no such flag in use (ponytail in launcher.ts).
+  const id = '0f8fad5b-d9cb-469f-a165-70867728950e';
+  it('names a fresh Claude session with --session-id and continues a killed one with --resume and the one-line restart message', () => {
+    const fresh = buildArgv({ ...base, cli: 'claude', role: 'worker', model: 'm', effort: 'low', sessionId: id });
+    expect(fresh.slice(0, 6)).toEqual(['claude', '--mcp-config', base.mcpConfigPath, '--strict-mcp-config', '--session-id', id]);
+    expect(fresh.at(-1)).toBe(msg);
+    const resumed = buildArgv({ ...base, cli: 'claude', role: 'tester', model: 'm', effort: 'low', sessionId: id, resume: true });
+    expect(resumed).toEqual(['claude', '--mcp-config', base.mcpConfigPath, '--strict-mcp-config', '--resume', id, '--model', 'm', '--effort', 'low', ...lean,
+      '--dangerously-skip-permissions', RESUME_MESSAGE]);
+    expect(RESUME_MESSAGE).not.toMatch(/["%\n]/); // it must cross cmd.exe
+    expect(buildArgv({ ...base, cli: 'codex', role: 'worker', model: 'm', effort: 'low', sessionId: id, resume: true })).toEqual(codex('m', 'low', '--dangerously-bypass-approvals-and-sandbox'));
+  });
+
   it('keeps the relative prompt path when the absolute one holds a character cmd.exe refuses', () => {
     const p = (s: string) => s.replace('C:/r/', 'C:/100%/');
     const argv = buildArgv({ ...base, promptPath: p(base.promptPath), cwd: p(base.cwd), cli: 'claude', role: 'worker', model: 'm', effort: 'low' });
@@ -168,6 +181,9 @@ describe('launch', () => {
     expect(cfg.headers.Authorization).toMatch(/^Bearer [\w-]{43}$/);
     expect(sessions.get(s.runId)?.pty.pid).toBeGreaterThan(0);
     expect(fakeOut(s).argv.at(-1)).toBe(`Read ${join(s.dir, 'prompt.md').replaceAll('\\', '/')} in full and follow it. It is your brief for this session.`);
+    const argv = fakeOut(s).argv as string[];
+    expect(runRow(s.runId).session_id).toMatch(/^[0-9a-f-]{36}$/);
+    expect(argv[argv.indexOf('--session-id') + 1]).toBe(runRow(s.runId).session_id);
     // nothing in git status of the base branch: .worktrees/ is excluded locally
     expect(git('status', '--porcelain')).not.toContain('.worktrees');
   });
@@ -184,6 +200,7 @@ describe('launch', () => {
     expect(env.KANBAN95_TOKEN).toMatch(/^[\w-]{43}$/); // codex reads its bearer token from here
     expect(env.KANBAN95_AGENT).toBe('1'); // makes npm run dev and Kanban95.cmd refuse to start
     expect(existsSync(join(s.dir, 'mcp.json'))).toBe(false); // codex gets its MCP server through -c, not a file
+    expect(runRow(s.runId!).session_id).toBeNull();
   });
 
   it('revoking the grant over REST kills the pty, removes the session dir and stores the scrollback within a second', async () => {
