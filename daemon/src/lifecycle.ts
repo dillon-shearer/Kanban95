@@ -129,6 +129,8 @@ export function transition(f: Facts, event: Event): { to: Status; set: NonNullab
 
 export interface Board {
   db: DatabaseSync;
+  /** The global brain, ~/.kanban95/brain.db, shared by every board (docs/DATA.md → The global brain). */
+  brain: DatabaseSync;
   repo: string;
   port: number;
   /** Set by close(): nothing new is spawned, and agents killed by the shutdown are not flagged, so `recover` resumes them. */

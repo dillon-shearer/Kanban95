@@ -124,7 +124,7 @@ function privateDir(dir: string) {
   }
 }
 
-type Daemon = { db: DatabaseSync; repo: string; port: number; onExit?: (s: Session) => void };
+type Daemon = { db: DatabaseSync; brain: DatabaseSync; repo: string; port: number; onExit?: (s: Session) => void };
 /** `path`: the operator's configured executable for the CLI (Settings); the bare name, resolved through PATH, when unset. */
 type RunSettings = { cli: Cli; model: string; effort: Effort; path?: string };
 
@@ -194,7 +194,7 @@ export function launch(d: Daemon, o: { ticketId: number; template: TicketTemplat
   // and launch `codex resume <id>` (docs/CLIS.md → Resuming a killed session).
   const prior = o.resume && o.cli === 'claude' ? resumable(d.db, o.ticketId, phase) : undefined;
   const sessionId = o.cli === 'claude' ? prior ?? randomUUID() : undefined;
-  const run = startRun(d.db, d.repo, { ...o, worktree: wt.path, base: wt.base, sessionId });
+  const run = startRun(d.db, d.repo, { ...o, worktree: wt.path, base: wt.base, sessionId, global: d.brain });
   return spawnSession(d, { ...o, sessionId, resume: prior !== undefined }, { runId: run.id, ticketId: o.ticketId, role, phase, cwd: wt.path, prompt: run.prompt });
 }
 
