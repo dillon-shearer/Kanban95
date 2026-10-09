@@ -587,7 +587,7 @@ function openTerminal(s, auto = false) {
   // X ends the agent for good, after a confirm; the board's own closes (after a report, a deleted ticket) never do.
   const onX = async () => {
     if (w.el.classList.contains('ended')) return w.close();
-    const ask = s.ticket_id === null ? 'End this brainstorm?' : `End the agent for #${s.ticket_id}? The ticket is flagged so you can resume it.`;
+    const ask = s.ticket_id === null ? `End this ${s.role === 'operator' ? 'operator terminal' : 'brainstorm'}?` : `End the agent for #${s.ticket_id}? The ticket is flagged so you can resume it.`;
     if ((await dialog('End agent', `${ask} Minimize to keep it running.`, ['End', 'Cancel'])) !== 'End') return;
     try {
       await api('DELETE', `/sessions/${s.id}`);
