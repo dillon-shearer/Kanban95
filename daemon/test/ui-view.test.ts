@@ -1,4 +1,4 @@
-// In headless Edge or Chrome against a running daemon (setup in ui.ts): the Board's Filter, Sort and Group.
+// In headless Edge or Chrome against a running daemon (setup in ui.ts): the Board's Filter.
 import './home.ts'; // also here, not only in vitest.config.ts: a run from the repo root skips that config and wrote the real home
 import { describe, expect, it } from 'vitest';
 import { until } from './cdp.ts';
@@ -7,14 +7,14 @@ import { page, base, ticket, column, click, setUi } from './ui.ts';
 const key = (key: string, code: string, vk: number, modifiers = 0) =>
   page.send('Input.dispatchKeyEvent', { type: 'keyDown', key, code, windowsVirtualKeyCode: vk, modifiers });
 const cards = () => page.evaluate<number[]>(`[...document.querySelectorAll('[data-status="backlog"] .card')].map((el) => Number(el.dataset.id))`);
-const legend = () => page.evaluate<string>(`document.querySelector('[data-status="backlog"] legend').textContent`);
+const legend = () => page.evaluate<string>(`document.querySelector('[data-status="backlog"] legend').firstChild.textContent`); // without the sort ▾
 const typeFilter = async (text: string) => {
   await page.evaluate(`(() => { const f = document.querySelector('.k95-filter'); f.focus(); f.select(); })()`);
   await page.send('Input.insertText', { text });
 };
 
 describe('ui-view', { timeout: 90_000 }, () => {
-  it('filters by any field or one field, sorts and groups every column, keeps all three across a reload', async () => {
+  it('filters by any field or one field from the status bar and keeps the filter across a reload', async () => {
     // The test home's default execute effort is low and model "work", so "ui" can only come from a title or a tag.
     const a = ticket('Build the UI', { effort: 'high' });
     const b = ticket('Daemon thing', { effort: 'max', tags: 'ui' });
@@ -60,20 +60,14 @@ describe('ui-view', { timeout: 90_000 }, () => {
     expect(await page.evaluate<boolean>(`!!document.querySelector('[data-win="board"]')`)).toBe(true);
     await until(async () => (await cards()).length === 4, 'every card back');
 
-    // Effort: max, high, medium (c has none of its own, so it counts as medium, not the default low), low.
-    await page.evaluate(`(() => { const s = document.querySelector('.k95-sort'); s.value = 'effort'; s.dispatchEvent(new Event('change')); })()`);
-    expect(await cards()).toEqual([b, a, c, d]);
-
-    await page.evaluate(`(() => { const s = document.querySelector('.k95-group'); s.value = 'tag'; s.dispatchEvent(new Event('change')); })()`);
-    const groups = `[...document.querySelectorAll('[data-status="backlog"] .cards > *')].map((el) => el.classList.contains('card') ? el.dataset.id : el.textContent)`;
-    expect(await page.evaluate<string[]>(groups)).toEqual(['build', String(d), 'docs', String(c), 'ui', String(b), 'untagged', String(a)]);
-
+    // The box is in the status bar, not the toolbar, and it alone shows the filter: no "Filter: …" status text.
+    expect(await page.evaluate<boolean>(`!!document.querySelector('.k95-board .status-bar .k95-filter') && !document.querySelector('.k95-toolbar input, .k95-toolbar select')`)).toBe(true);
     await typeFilter('tag:docs');
     await page.goto(base);
     await until(() => column(c), 'the cards after the reload');
-    expect(await page.evaluate<string[]>(`[document.querySelector('.k95-filter').value, document.querySelector('.k95-sort').value, document.querySelector('.k95-group').value]`)).toEqual(['tag:docs', 'effort', 'tag']);
+    expect(await page.evaluate<string>(`document.querySelector('.k95-filter').value`)).toBe('tag:docs');
     expect(await cards()).toEqual([c]);
-    expect(await page.evaluate<string>(`document.querySelector('.k95-view').textContent`)).toBe('Filter: tag:docs · Sort: effort · Group: tag');
+    expect(await page.evaluate<string>(`document.querySelector('.k95-board .status-bar').textContent`)).not.toContain('Filter:');
     await setUi('k95.view', undefined);
   });
 });
