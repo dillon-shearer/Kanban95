@@ -160,11 +160,21 @@ fn on_daemon(to: &Url, port: u16) -> bool {
     to.scheme() == "http" && to.host_str() == Some("127.0.0.1") && to.port() == Some(port)
 }
 
+/// "<repo folder> — Kanban95", as the UI titles itself, so the taskbar tells boards apart before the page loads.
+/// Tauri 2 does not copy `document.title` to the window. The repo is the shell's first argument, else the cwd, as for the daemon.
+fn title(repo: Option<String>) -> String {
+    let dir = std::fs::canonicalize(repo.unwrap_or_else(|| ".".into())).ok();
+    match dir.as_deref().and_then(std::path::Path::file_name) {
+        Some(name) => format!("{} — Kanban95", name.to_string_lossy()),
+        None => "Kanban95".into(),
+    }
+}
+
 /// The board's only window, locked to the daemon's origin. It holds no Tauri capability (there is no `capabilities/`
 /// dir), so every IPC command is refused for it: the UI talks to the daemon over HTTP and never calls Tauri.
 fn window<R: Runtime, M: Manager<R>>(app: &M, url: Url, live: Arc<AtomicU16>) -> tauri::Result<WebviewWindow<R>> {
     WebviewWindowBuilder::new(app, "main", WebviewUrl::External(url))
-        .title("Kanban95")
+        .title(title(std::env::args().nth(1)))
         .inner_size(1280.0, 720.0)
         // Any top-level navigation off the live daemon's origin (`http://127.0.0.1:<live port>`) is cancelled. New
         // windows are already refused by wry when no handler is set, and the CSP keeps frames and fetches on the origin.
@@ -330,6 +340,17 @@ mod tests {
         live.store(41235, Ordering::SeqCst); // what the restart does before it navigates
         assert!(at("http://127.0.0.1:41235/?k95=y"));
         assert!(!at("http://127.0.0.1:41234/"));
+    }
+
+    #[test]
+    fn the_window_is_titled_after_the_repo_folder() {
+        let dir = std::env::temp_dir().join("k95-title-repo");
+        std::fs::create_dir_all(&dir).unwrap();
+        assert_eq!(title(Some(format!("{}/", dir.display()))), "k95-title-repo — Kanban95"); // a trailing slash too
+        std::fs::remove_dir(&dir).unwrap();
+        assert_eq!(title(Some(dir.display().to_string())), "Kanban95"); // gone: no name to show
+        let cwd = std::env::current_dir().unwrap();
+        assert_eq!(title(None), format!("{} — Kanban95", cwd.file_name().unwrap().to_string_lossy()));
     }
 
     /// The UI calls no Tauri command, so none may answer it: core plugin commands and unknown names alike.

@@ -10,7 +10,7 @@ import { ticketDiff } from './git.js';
 import { audit, revoke } from './grants.js';
 import { killGrantSession, sessions, sessionsOf, type Session } from './launcher.js';
 import { apply, brainstorm, changed, housekeeping, operator, Refused, runner, runnerState, setRunner, type Board } from './lifecycle.js';
-import { BadConfig, CONFIGS, configPath, knownModels, preferencesPath, readPreferences, uncatalogued, writeConfig, writePreferences, type ConfigName } from './settings.js';
+import { BadConfig, CONFIGS, configPath, knownModels, preferencesPath, project, projectsPath, readPreferences, readProjects, uncatalogued, writeConfig, writePreferences, writeProjects, type ConfigName } from './settings.js';
 import { resetTemplate, templatePath, TEMPLATES, unknownVar, VARS, writeTemplate, type TemplateName } from './templates.js';
 import { trustStatus, untrustClaude } from './trust.js';
 import { download, status as voiceStatus } from './voice.js';
@@ -404,6 +404,11 @@ const routes: [method: string, path: RegExp, mutation: string | null, handler: (
     const name = configName(params[0]);
     return { status: 200, body: { path: configPath(name), value: writeConfig(name, body) } };
   }],
+  // ~/.kanban95/projects.json (Settings → Projects): the whole list in `value` both ways. /api/project is this board's entry,
+  // with its folder name, for the wallpaper and the window title. A PUT that drops this board's own project is refused.
+  ['GET', /^\/api\/project$/, null, ({ board }) => ({ status: 200, body: project(board.repo) })],
+  ['GET', /^\/api\/projects$/, null, () => ({ status: 200, body: { path: projectsPath(), value: readProjects() } })],
+  ['PUT', /^\/api\/projects$/, 'config.write', ({ board, body }) => ({ status: 200, body: { path: projectsPath(), value: writeProjects(body.value, board.repo) } })],
   // <repo>/.kanban95/templates/*.md, the prompt sources. `vars` is the only list of allowed {{variables}}; the UI shows it.
   ['GET', /^\/api\/templates$/, null, ({ board }) => ({ status: 200, body: { vars: VARS, templates: Object.keys(TEMPLATES).map((n) => templateView(board, n as TemplateName)) } })],
   ['PUT', /^\/api\/templates\/(\w+)$/, 'template.write', ({ board, params, body }) => {
