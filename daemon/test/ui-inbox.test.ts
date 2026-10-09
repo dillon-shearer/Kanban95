@@ -33,7 +33,8 @@ describe('ui-inbox', { timeout: 60_000 }, () => {
       await page.goto(base);
       await until(() => column(id), 'the card');
       const n = (await (await fetch(`${base}api/inbox`, { headers: { cookie: `k95=${srv.secret}` } })).json()).length;
-      expect(await page.evaluate(`document.getElementById('inbox-count').textContent`)).toBe(`Inbox ${n}`);
+      // The count arrives on its own fetch after the board; under full-suite load it can trail the card.
+      await until(async () => (await page.evaluate(`document.getElementById('inbox-count').textContent`)) === `Inbox ${n}`, `the taskbar to say Inbox ${n}`);
       await click('#inbox-count');
       const box = `.k95-flag[data-ticket="${id}"]`;
       await until(() => page.evaluate(`!!document.querySelector('${box}')`), 'the failure in the Inbox');
