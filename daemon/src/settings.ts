@@ -226,14 +226,14 @@ const projectList = z.array(z.object({
 export type Project = z.output<typeof projectList>[number];
 
 /** Absolute, resolved and in the file system's own spelling (case, 8.3 names), so one repo is one entry. */
-const normal = (p: string) => {
+export const normal = (p: string) => {
   try {
     return realpathSync.native(resolve(p));
   } catch {
     return resolve(p);
   }
 };
-const same = (a: string, b: string) => (process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b);
+export const same = (a: string, b: string) => (process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b);
 
 /** A missing file is an empty list. Only the shape is checked on read: a repo deleted since does not break every board. */
 export function readProjects(): Project[] {

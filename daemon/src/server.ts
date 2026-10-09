@@ -1,12 +1,13 @@
 // Kanban95 daemon: static UI, /health, /api (operator), /mcp (agents), /pty and /events websockets on 127.0.0.1:<random port>, backed by <repo>/.kanban95/board.db.
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
-import { createReadStream } from 'node:fs';
+import { createReadStream, rmSync } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import { extname, resolve, sep } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { WebSocketServer } from 'ws';
 import { handleApi } from './api.js';
+import { entryPath, register } from './boards.js';
 import { openDb } from './db.js';
 import { git } from './git.js';
 import { sweep, SWEEP_MS } from './janitor.js';
@@ -70,8 +71,12 @@ const COOKIE = 'k95';
 const digest = (s: string) => createHash('sha256').update(s).digest();
 /** Constant-time compare; hashing first evens out the lengths. */
 const matches = (given: string | null | undefined, secret: string) => given != null && timingSafeEqual(digest(given), digest(secret));
+/**
+ * Any `k95` or `k95-<port>` cookie. Every board's webview shares one WebView2 profile and cookies ignore the port, so each
+ * board sets its own name (`k95-<port>`) and the browser sends all of them to every board; one must hold this secret.
+ */
 const authed = (req: IncomingMessage, secret: string) =>
-  matches(/(?:^|;\s*)k95=([^;]*)/.exec(req.headers.cookie ?? '')?.[1], secret);
+  [...(req.headers.cookie ?? '').matchAll(/(?:^|;\s*)k95(?:-\d+)?=([^;]*)/g)].some((m) => matches(m[1], secret));
 
 async function handle(board: Board, self: string, secret: string, req: IncomingMessage, res: ServerResponse) {
   // The shell loads the UI from this origin, so the CSP must come from here:
@@ -87,7 +92,7 @@ async function handle(board: Board, self: string, secret: string, req: IncomingM
   // of the page's history and page scripts never see it (docs/SECURITY.md).
   if (url.searchParams.has(COOKIE)) {
     if (!matches(url.searchParams.get(COOKIE), secret)) return send(res, 401, 'unauthorized');
-    res.writeHead(302, { 'Set-Cookie': `${COOKIE}=${secret}; HttpOnly; SameSite=Strict; Path=/`, Location: '/', 'Content-Length': 0 });
+    res.writeHead(302, { 'Set-Cookie': `${COOKIE}-${self.split(':')[1]}=${secret}; HttpOnly; SameSite=Strict; Path=/`, Location: '/', 'Content-Length': 0 });
     return res.end();
   }
   if (url.pathname.startsWith('/api/')) {
@@ -205,6 +210,7 @@ export function start(config: Config = {}): Promise<{
       if (!addr || typeof addr === 'string') return fail(new Error('no address'));
       self = `${LOOPBACK}:${addr.port}`;
       board.port = addr.port;
+      const unregister = register(repo, addr.port); // Start → Projects on the other boards sees this one running
       // Janitor and recovery on start, the janitor again once a day (docs/LIFECYCLE.md).
       sweep(board);
       recover(board);
@@ -224,6 +230,7 @@ export function start(config: Config = {}): Promise<{
           for (const c of wss.clients) c.terminate();
           await new Promise<void>((r) => server.close(() => r()));
           db.close();
+          unregister();
         },
       });
     });
@@ -258,5 +265,6 @@ if (import.meta.main) {
   };
   // The parent (Tauri shell) holds our stdin. When it dies the pipe closes and we leave with it.
   process.stdin.on('end', () => process.exit(0));
+  process.on('exit', () => rmSync(entryPath(process.pid), { force: true })); // the running entry, also without close()
   process.stdin.resume();
 }
