@@ -259,6 +259,19 @@ async function restart(id) {
     await sayLaunched([id]);
   });
 }
+// Sends a Done ticket, merged or not, back to a worker with the operator's reason as its failure note (docs/LIFECYCLE.md → Reject).
+async function reject(id) {
+  const reason = h('textarea', { rows: 6, cols: 60 });
+  const asked = dialog(`Reject #${id}`, h('div', { class: 'field-row-stacked' }, h('label', {}, 'What is wrong and what done looks like'), reason), ['Reject', 'Cancel']);
+  const ok = reason.closest('dialog').querySelector('.k95-buttons button');
+  ok.disabled = true; // an empty reason would tell the worker nothing; the daemon refuses it too
+  reason.addEventListener('input', () => { ok.disabled = !reason.value.trim(); });
+  if ((await asked) !== 'Reject') return;
+  await act(async () => {
+    await api('POST', `/tickets/${id}/reject`, { reason: reason.value });
+    await sayLaunched([id]);
+  });
+}
 const newBrainstorm = () => act(async () => openTerminal(await api('POST', '/brainstorm')), 'Brainstorm started.');
 /** An operator terminal: an agent with the operator's reach on the board, given the mission typed here. The daemon refuses an empty one. */
 async function newOperator() {
@@ -314,6 +327,7 @@ function cardMenu(ts, x, y) {
     { label: 'Launch', disabled: !ts.some(launchable), run: () => launch(ts) },
     { label: 'Resume', disabled: !ts.some(resumable), run: () => launch(ts, 'resume') },
     ...(ts.length === 1 && restartable(ts[0]) ? [{ label: 'Restart', run: () => restart(ts[0].id) }] : []),
+    ...(ts.length === 1 && ts[0].status === 'done' ? [{ label: 'Reject', run: () => reject(ts[0].id) }] : []),
     '-',
     { label: 'Model', items: [
       { label: `Phase default${tick('model', null)}`, run: () => set('model', null) },
@@ -543,7 +557,8 @@ function ticketForm(w, t) {
     h('div', { class: 'field-row-stacked' }, h('label', {}, 'Depends on'), deps),
     h('div', { class: 'field-row' }, h('button', { onclick: save }, t ? 'Save' : 'Create'),
       t && h('button', { disabled: t.status !== 'backlog', onclick: () => launch([t]) }, 'Launch'),
-      t && h('button', { onclick: () => restart(t.id) }, 'Restart')));
+      t && h('button', { onclick: () => restart(t.id) }, 'Restart'),
+      t?.status === 'done' && h('button', { onclick: () => reject(t.id) }, 'Reject')));
 }
 
 // ---- terminals ----

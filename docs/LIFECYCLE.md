@@ -23,6 +23,7 @@ Status is one of **backlog → in_progress → testing → done**. Two flags sit
 | `merge` | the operator retrying a failed merge, `POST /api/tickets/:id/merge` |
 | `resume` | the operator, Resume in the card menu or the Inbox, `POST /api/tickets/:id/resume` |
 | `restart` | the operator, Restart in the card menu, the ticket window (Ctrl+R) or the Inbox, `POST /api/tickets/:id/restart` |
+| `reject` | the operator, Reject on a Done card's menu or in its ticket window, `POST /api/tickets/:id/reject` |
 
 The tester's verdict is the move: `report_test` writes the PASS or FAIL note, then applies `pass` or `fail`, so a tester that stops after reporting cannot leave the ticket in Testing. It is refused, with no note written, on a ticket not in testing. A `move_ticket` to the column the ticket is already in returns the ticket unchanged and raises no event, so an agent following the old report-then-move script is not refused.
 
@@ -41,7 +42,7 @@ The tester's verdict is the move: `report_test` writes the PASS or FAIL note, th
 | in_progress | restart | | in_progress | `needs_human` off | end every live session (outcome `restart`, grant revoked, pty killed), operator failure note, execute agent again |
 | testing | restart | | testing | `needs_human` off | as above, then test agent again (the diff is re-rendered from the worktree) |
 | in_progress | submit | | testing | | the base merged into the worktree first (see Sync below); clean or already up to date: worker session ended (grant revoked, pty killed), tester grant, test agent. Otherwise `conflict` instead |
-| testing | pass | the tester called `report_test(passed: true)` during this test run | done | | tester session ended, merge queued |
+| testing | pass | the tester called `report_test(passed: true)` during this test run | done | `merged_at` cleared (set again when it lands; only a rejected ticket had one) | tester session ended, merge queued |
 | testing | fail | `retry` < 3 | in_progress | `retry` + 1 | tester session ended, execute agent again, with the failure notes and the ticket's (possibly escalated) model |
 | testing | fail | `retry` = 3 | in_progress | `retry` + 1, `needs_human` on | tester session ended, failure note "stopped after 4 failed tests", chord. Stops |
 | running | ask | | same | `needs_human` on | question note, chord. The agent's terminal stays open |
@@ -54,6 +55,7 @@ The tester's verdict is the move: `report_test` writes the PASS or FAIL note, th
 | done | conflict | `retry` = 3 | done | `needs_human` on | the same failure note, chord. Worktree kept |
 | done | dirty | | done | `needs_human` on | failure note naming the uncommitted files, chord |
 | done | merge | not merged yet | done | | merge queued again |
+| done | reject | no live agent session | in_progress | `needs_human` off, `retry` 0, `merged_at` kept | the operator's reason as an `operator` failure note, execute agent (see Reject below) |
 
 Resume and launch on a running ticket are not in the original spec. Before them, the only way past a silent exit was Reset to Backlog and Launch, which threw away `retry` and the phase. The new prompt carries the exit's failure note like any retry (`failureNotes` in `daemon/src/context.ts`: failure notes since the latest execute run). Resume is the strict form (only a flagged ticket); Launch on a running ticket also starts an unflagged one with no agent, such as one dragged by hand into a running column.
 
@@ -64,8 +66,16 @@ Resume and launch on a running ticket are not in the original spec. Before them,
 | Resume | flagged running ticket, no live agent | starts one | kept |
 | Restart | any running ticket, live agent or not, flagged or not | ends the live one, starts a new one | kept |
 | Reset to Backlog | any ticket | ends the live one, starts none | back to Backlog, `retry` 0 |
+| Reject | a done ticket, merged or not | starts a worker | back to In Progress, `retry` 0; the worktree is kept if it still exists, otherwise a fresh one from the base |
 
-Restart is for an agent that is live but stuck: idle, hung, or its CLI died without the pty closing. The old session's outcome is set to `restart` before the kill (as `end_session` does for a reported move), so its exit is expected and does not raise the `exit` row's flag. The operator note ("restarted by the operator; the previous session was ended without reporting. Continue from the state of this worktree: read `git status` and `git log` first") lands under "What failed on the last attempt" in the new prompt. Restart has no `done` row: a done ticket that did not merge has Retry merge (`merge`).
+Restart is for an agent that is live but stuck: idle, hung, or its CLI died without the pty closing. The old session's outcome is set to `restart` before the kill (as `end_session` does for a reported move), so its exit is expected and does not raise the `exit` row's flag. The operator note ("restarted by the operator; the previous session was ended without reporting. Continue from the state of this worktree: read `git status` and `git log` first") lands under "What failed on the last attempt" in the new prompt. Restart has no `done` row: a done ticket that did not merge has Retry merge (`merge`), and one the operator does not accept has Reject.
+
+### Reject
+
+Reject is how the operator sends a Done ticket they do not accept back to a worker, with a reason, instead of Reset to Backlog, which loses both the reason and the work. The reason is required (the REST route refuses a missing or blank one with `400`, the dialog will not submit it) and is written as a `failure` note with role `operator`, so the worker sees it under "What failed on the last attempt" as `- [operator] …`. `retry` goes back to 0: a rejection starts a new cycle, it is not a failed test. No chord, nothing in the Inbox: the ticket is simply running again.
+
+- **Not merged yet** (waiting in the merge queue, or flagged `dirty` or `conflict`): the worktree is still there and the worker continues in it. The queued merge job checks the status before it waits on the tester's pty, after it, and once more with no await between that check and starting `git merge` (`merge`'s `wanted`, `daemon/src/merge.ts`), so a ticket no longer `done` is dropped and never lands. Only a reject that arrives while `git merge` itself is running is too late: that merge lands, the ticket stays with its worker (no `merged` row) and the next pass merges again.
+- **Merged**: its worktree and branch were removed on merge. The launch forks a fresh worktree from the current base, which holds the merged work, so the worker continues from what shipped. If the branch survived (removed by hand, or cleanup failed), `createWorktree` (`daemon/src/git.ts`) resets it to the base when the base already contains it, and reuses it when it holds work the base lacks. `merged_at` keeps the first merge's time until the next `pass` clears it; the next merge is a new merge commit of the same branch, titled with the ticket title as always.
 
 The `merge` row is not in the original spec: it is how the operator finishes a flagged merge. They fix the branch in its worktree (merge the base into it and commit) or clean the main checkout, then retry the merge.
 
@@ -197,7 +207,8 @@ The count is derived from the database (`template = 'execute' AND merged_at IS N
 | POST | `/api/tickets/:id/merge` | `merge` |
 | POST | `/api/tickets/:id/resume` | `resume` |
 | POST | `/api/tickets/:id/restart` | `restart` |
+| POST | `/api/tickets/:id/reject` | `reject`; body `{ "reason": "..." }`, non-empty (`400` otherwise) |
 
-Each returns the ticket (`200`), `409` with the refusal when the table has no row, and is audited like every REST mutation (`tickets.launch`, `tickets.answer`, `tickets.merge`, `tickets.resume`, `tickets.restart`).
+Each returns the ticket (`200`), `409` with the refusal when the table has no row, and is audited like every REST mutation (`tickets.launch`, `tickets.answer`, `tickets.merge`, `tickets.resume`, `tickets.restart`, `tickets.reject`).
 
 `GET /api/runner` returns `{on, why?, running: [ids], left, backlog}`: the flag, why it last stopped itself, the tickets it waits on, the candidates left and the number of backlog tickets. `PUT /api/runner` with `{"on": true | false}` turns it on (and launches at once) or off and returns the same; audited as `runner.set`.
