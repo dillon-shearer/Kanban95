@@ -11,6 +11,7 @@ import { audit, revoke } from './grants.js';
 import { killGrantSession, sessions, sessionsOf, type Session } from './launcher.js';
 import { apply, brainstorm, changed, housekeeping, operator, Refused, runner, runnerState, setRunner, type Board } from './lifecycle.js';
 import { BadConfig, CONFIGS, configPath, knownModels, preferencesPath, readPreferences, writeConfig, writePreferences, type ConfigName } from './settings.js';
+import { resetTemplate, templatePath, TEMPLATES, unknownVar, VARS, writeTemplate, type TemplateName } from './templates.js';
 import { trustStatus, untrustClaude } from './trust.js';
 import { download, status as voiceStatus } from './voice.js';
 
@@ -364,6 +365,21 @@ const routes: [method: string, path: RegExp, mutation: string | null, handler: (
     const name = configName(params[0]);
     return { status: 200, body: { path: configPath(name), value: writeConfig(name, body) } };
   }],
+  // <repo>/.kanban95/templates/*.md, the prompt sources. `vars` is the only list of allowed {{variables}}; the UI shows it.
+  ['GET', /^\/api\/templates$/, null, ({ board }) => ({ status: 200, body: { vars: VARS, templates: Object.keys(TEMPLATES).map((n) => templateView(board, n as TemplateName)) } })],
+  ['PUT', /^\/api\/templates\/(\w+)$/, 'template.write', ({ board, params, body }) => {
+    const name = templateName(params[0]);
+    if (typeof body.text !== 'string') throw new HttpError(400, 'text must be a string');
+    const v = unknownVar(body.text);
+    if (v !== null) throw new HttpError(400, `unknown variable {{${v}}}; allowed: ${VARS.join(', ')}`);
+    writeTemplate(board.repo, name, body.text);
+    return { status: 200, body: templateView(board, name) };
+  }],
+  ['POST', /^\/api\/templates\/(\w+)\/reset$/, 'template.reset', ({ board, params }) => {
+    const name = templateName(params[0]);
+    resetTemplate(board.repo, name);
+    return { status: 200, body: templateView(board, name) };
+  }],
   ['GET', /^\/api\/models$/, null, async () => ({ status: 200, body: await knownModels() })],
   ['GET', /^\/api\/trust$/, null, ({ board }) => ({ status: 200, body: trustStatus(board.db, board.repo) })],
   ['DELETE', /^\/api\/trust$/, 'trust.clear', ({ board }) => {
@@ -407,6 +423,14 @@ function configName(s: string): ConfigName {
   if (!(CONFIGS as string[]).includes(s)) throw new HttpError(404, 'not found');
   return s as ConfigName;
 }
+
+function templateName(s: string): TemplateName {
+  if (!Object.hasOwn(TEMPLATES, s)) throw new HttpError(404, 'no such template');
+  return s as TemplateName;
+}
+
+// The raw file, not loadTemplate: a copy with a bad variable must still show so the operator can fix it.
+const templateView = (board: Board, name: TemplateName) => ({ name, path: templatePath(board.repo, name), text: readFileSync(templatePath(board.repo, name), 'utf8') });
 
 /** The whole body. One over `max` bytes is still read to the end (so the client gets the 413, not a reset), then refused. */
 async function readRaw(req: IncomingMessage, max: number, tooLarge: string): Promise<Buffer> {

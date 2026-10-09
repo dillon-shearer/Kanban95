@@ -71,7 +71,7 @@ A merged ticket's worktree and branch are removed by the board. Every ten merged
 | Terminal | opens by itself; Ticket → Runs → Terminal | one agent session, keyboard and mic |
 | Inbox | taskbar "Inbox n", Start → Inbox | every ticket that needs you: questions to answer, and failures with what resolves them |
 | Brain | Start → Brain | search what agents learned (no query lists the newest), add a note yourself. Each row shows when it was written and from which ticket, with that ticket's status, so a row written for work that never landed stands out. **Edit** changes a row in place, **Delete** removes it after a confirm; merge rows by editing the survivor and deleting the rest. Agents name rows to delete in their summary notes, since only you and the planner can delete |
-| Settings | Start → Settings | Models, CLI paths and trusted folders (**Clear Claude trust**), Prompts (preferences), Grants, Voice, sounds |
+| Settings | Start → Settings | Models, CLI paths and trusted folders (**Clear Claude trust**), Prompts (preferences, templates), Grants, Voice, sounds |
 | Notepad | Start → Notepad | your own scratch notes for this repo, saved as you type |
 
 The desktop has an icon for Board, Inbox, Brain, Settings, Notepad, New ticket and New brainstorm down its left edge: click selects, double-click or Enter does what the Start menu entry does. Icons sit under every window.
@@ -113,6 +113,10 @@ Inside a terminal every key goes to the agent instead: Esc interrupts Claude Cod
 ## Preferences
 
 Standing instructions for every agent, for example "No em dashes or non-ASCII characters in output" or "Keep responses brief". Write them in **Settings → Prompts → Preferences** and press **Save**; that writes `~/.kanban95/preferences.md` (the path is shown on the tab), up to 16 KB. Every prompt rendered after that (brainstorm, operator, plan, execute, test, housekeeping) carries them under "Operator preferences"; sessions already running keep the prompt they started with. They are yours, not the repo's, so they apply to every project the board works on. Never put a key or token in them: they are copied into every session's prompt.
+
+## Prompt templates
+
+Every agent session starts from a markdown template: brainstorm, operator, plan, execute, housekeeping and test. The shipped defaults are in the board's `templates/`; on first start each repo gets its own copies in `<repo>/.kanban95/templates/`, and those are what agents read. Edit them in **Settings → Prompts → Templates**: pick one, change the text, **Save**. The next run of that phase uses it (its rendered prompt is in the ticket's **Runs** tab); sessions already running keep theirs. A template may only use the variables listed under the editor, such as `{{ticket}}`; Save refuses any other and names it in the status bar. **Reset to default** puts the shipped text back. The copies belong to the repo, not to you: commit them to share an edit.
 
 ## Grants
 

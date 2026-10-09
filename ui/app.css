@@ -117,7 +117,7 @@ menu[role=tablist] { flex: none; margin-bottom: -2px !important; }
 .k95-brain input[type=search] { flex: 1; }
 .k95-brain textarea { flex: 1; }
 .k95-question textarea { flex: 1; }
-#preferences { flex: 1; }
+#preferences, #template-text { flex: 1; }
 .k95-notepad { flex: 1; min-height: 0; display: flex; gap: 4px; }
 .k95-notepad textarea { flex: 1; resize: none; font-family: Consolas, monospace; font-size: 12px; }
 fieldset { margin: 0; }
