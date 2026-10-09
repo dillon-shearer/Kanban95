@@ -9,7 +9,7 @@ import * as ui from './state.js';
 
 const desktop = document.getElementById('desktop');
 const tasks = document.getElementById('tasks');
-const wins = new Map(); // id → { el, task, onClose, api, toggleMax, items, tile, rebase }
+const wins = new Map(); // id → { el, task, onClose, api, toggleMax, items, tile, slot, free, rebase }
 let z = 10;
 // The UI zoom: CSS `zoom` on body, so menus and dialogs appended to it scale too. Inside it, offsets and inline styles (and so
 // the saved geometry) are CSS px before zoom, while pointer coordinates and getBoundingClientRect are screen px: divide those by it.
@@ -30,16 +30,19 @@ export function setZoom(f) {
 // ---- terminal slots ----
 // The terminal region is the desktop left of the action column: from its left edge to the left edge of the leftmost open,
 // non-minimized, non-maximized window in ACTION (the whole desktop when none is open, or when that leaves less than
-// MIN_REGION px), full height. Tiled windows (opened with `tile`) that are open, not minimized and not maximized fill it in
-// reading order, in the order they opened, on the grid of the first SLOTS row whose count covers them. Past the last row's
-// count the rest are not tiled: they stay where they opened (`place`) and take a slot once one frees.
+// MIN_REGION px), full height. A tiled window (opened with `tile`) takes the lowest slot no other tiled window holds and keeps
+// it for life: nothing else moves when one opens, closes, minimizes or ends, and a minimized or maximized one keeps its slot
+// for when it is restored. The grid is the first SLOTS row whose count covers the highest held slot, slots in reading order, so
+// it grows only when every slot is taken and shrinks when the top slots free. Dragged or resized, a tiled window is free: it
+// stays where it was left and its slot is empty; a double-click on its title bar takes it back to the lowest empty slot. Past
+// the last row's count a window is not tiled: it stays where it opened (`place`) and takes a slot once one is empty.
 // To change the arrangement, edit SLOTS: [up to n windows, columns, rows], ascending n.
 export const SLOTS = [[1, 1, 1], [2, 2, 1], [3, 3, 1], [4, 2, 2], [6, 3, 2], [9, 3, 3], [12, 4, 3]];
 const ACTION = ['board', 'inbox', 'notepad'];
 const MIN_REGION = 240;
 
 let tiling = null;
-/** Puts every tiled window in its slot of the current region. */
+/** Gives every waiting tiled window the lowest empty slot, then puts each shown one in its slot of the current region. */
 export function retile() {
   clearTimeout(tiling);
   const W = desktop.clientWidth;
@@ -47,15 +50,23 @@ export function retile() {
   const shown = (el) => !el.hidden && !el.classList.contains('max');
   const edge = Math.min(W, ...ACTION.map((id) => wins.get(id)?.el).filter((el) => el && shown(el)).map((el) => el.offsetLeft));
   const R = edge < MIN_REGION ? W : edge;
-  const list = [...wins.values()].filter((w) => w.tile && shown(w.el)).slice(0, SLOTS.at(-1)[0]);
-  if (!list.length) return;
-  const [, cols, rows] = SLOTS.find(([n]) => list.length <= n);
-  list.forEach(({ el }, i) => {
-    const [c, r] = [i % cols, Math.floor(i / cols)];
+  const list = [...wins.values()].filter((w) => w.tile);
+  const held = new Set(list.map((w) => w.slot).filter((s) => s != null));
+  for (const w of list.filter((w) => w.slot == null && !w.free)) {
+    let s = 0;
+    while (held.has(s)) s++;
+    if (s >= SLOTS.at(-1)[0]) break;
+    held.add((w.slot = s));
+  }
+  if (!held.size) return;
+  const [, cols, rows] = SLOTS.find(([n]) => n > Math.max(...held));
+  for (const { el, slot } of list) {
+    if (slot == null || !shown(el)) continue;
+    const [c, r] = [slot % cols, Math.floor(slot / cols)];
     const x = Math.round((c * R) / cols);
     const y = Math.round((r * H) / rows);
     Object.assign(el.style, { left: `${x}px`, top: `${y}px`, width: `${Math.round(((c + 1) * R) / cols) - x}px`, height: `${Math.round(((r + 1) * H) / rows) - y}px` });
-  });
+  }
 }
 /** retile() once things settle: a drag of the Board moves the region many times a second. */
 const retileSoon = () => { clearTimeout(tiling); tiling = setTimeout(retile, 50); };
@@ -152,7 +163,7 @@ export function raise(id) {
  * `onX`: runs instead of closing when the operator clicks X; `close` and `api.close` still close at once.
  * `items`: extra entries for its taskbar button's menu, as `menu()` takes them.
  * `icon`: its taskbar button's picture, `icons/<icon>.svg`; the title is the button's tooltip.
- * `tile`: takes a terminal slot (`SLOTS`) instead of a place of its own.
+ * `tile`: takes a terminal slot (`SLOTS`) instead of a place of its own, until the operator drags or resizes it.
  */
 export function open(id, { title, w = 480, h: height = 320, persist = false, tile = false, background = false, onClose, onX, extra = [], items = [], icon = 'window' }) {
   if (wins.has(id)) {
@@ -205,11 +216,22 @@ export function open(id, { title, w = 480, h: height = 320, persist = false, til
     save();
     if (shapes(id)) retileSoon();
   }
-  el.querySelector('.title-bar').addEventListener('dblclick', (e) => { if (!e.target.closest('button')) toggleMax(); });
-  el.addEventListener('pointerdown', () => focus(id), true);
+  // On a free terminal (not maximized) a double-click takes it back to a slot instead.
+  el.querySelector('.title-bar').addEventListener('dblclick', (e) => {
+    if (e.target.closest('button')) return;
+    if (!win.free || el.classList.contains('max')) return toggleMax();
+    win.free = false;
+    retile();
+  });
+  let before; // the geometry at pointerdown: a pointerup that changed it ends a drag or a resize
+  el.addEventListener('pointerdown', () => { before = JSON.stringify(rect(el)); focus(id); }, true);
   // The window is CSS-resizable (resize: both); its size is saved when the operator lets go.
-  // Moving or resizing the action column moves the region; a terminal dragged out of its slot goes back to it.
-  el.addEventListener('pointerup', () => { save(); if (shapes(id)) retileSoon(); });
+  // Moving or resizing the action column moves the region; a terminal dragged or resized leaves its slot and stays put.
+  el.addEventListener('pointerup', () => {
+    if (tile && !el.classList.contains('max') && JSON.stringify(rect(el)) !== before) Object.assign(win, { slot: null, free: true });
+    save();
+    if (shapes(id)) retileSoon();
+  });
   drag(el, el.querySelector('.title-bar'), save, () => ACTION.includes(id) && retileSoon());
   if (!background || !focused()) focus(id);
   else {
