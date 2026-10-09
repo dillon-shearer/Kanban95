@@ -122,6 +122,7 @@ Any other drop snaps back, and the status bar names where that card may go.
 | Ctrl+= or Ctrl++ | Zoom the whole UI in by 10% (up to 200%) |
 | Ctrl+- | Zoom out by 10% (down to 80%) |
 | Ctrl+0 | Zoom back to 100% |
+| F11 | Full screen on and off (also Start → Full screen): the board takes the whole monitor it is on, over the Windows taskbar. Works inside a terminal too |
 
 Inside a terminal every key goes to the agent instead: Esc interrupts Claude Code, Ctrl+L clears its screen. The zoom keys do not zoom there: Ctrl+- reaches the agent as Ctrl+_ does in a native terminal, and Ctrl+= and Ctrl+0 do nothing. Click a title bar or the desktop first to zoom.
 

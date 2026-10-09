@@ -65,10 +65,12 @@ Resume and launch on a running ticket are not in the original spec. Before them,
 |---|---|---|---|
 | Resume | flagged running ticket, no live agent | starts one | kept |
 | Restart | any running ticket, live agent or not, flagged or not | ends the live one, starts a new one | kept |
-| Reset to Backlog | any ticket | ends the live one, starts none | back to Backlog, `retry` 0 |
+| Reset to Backlog | any ticket | the daemon ends every live one on the move (run outcome `reset`), starts none; the ticket's terminal windows close, live or already "(ended)" | back to Backlog, `retry` 0; the worktree is kept, so the next launch starts in it |
 | Reject | a done ticket, merged or not | starts a worker | back to In Progress, `retry` 0; the worktree is kept if it still exists, otherwise a fresh one from the base |
 
 Restart is for an agent that is live but stuck: idle, hung, or its CLI died without the pty closing. The old session's outcome is set to `restart` before the kill (as `end_session` does for a reported move), so its exit is expected and does not raise the `exit` row's flag. The operator note ("restarted by the operator; the previous session was ended without reporting. Continue from the state of this worktree: read `git status` and `git log` first") lands under "What failed on the last attempt" in the new prompt. Restart has no `done` row: a done ticket that did not merge has Retry merge (`merge`), and one the operator does not accept has Reject.
+
+Reset to Backlog is not a lifecycle event: it is `PATCH /api/tickets/:id` with `status: backlog`, from any UI path (drag, card menu, Ticket window, Inbox) or a REST client. When the ticket was not already in Backlog, the handler ends the ticket's live sessions before the update the way a delete does (`endSessions` in `daemon/src/api.ts`: outcome `reset` first, then revoke the grant, then kill the pty), so the exit flags nothing. The UI closes every terminal window of a ticket it refreshes in Backlog.
 
 ### Reject
 
@@ -102,7 +104,7 @@ The ticket's `model` and `effort` override the execute phase only, so a retry ru
 
 ### Ending a session
 
-Both CLIs run interactive sessions that never exit by themselves. When an agent's `move_ticket` or the tester's `report_test` is accepted, the board revokes its grant and kills its terminal; that exit is expected (`runs.outcome` = the event: `submit`, `pass`, `fail`). The operator's X on a terminal (`DELETE /api/sessions/:id`) sets `runs.outcome` = `closed`, revokes the grant and kills the pty, then applies `exit` itself with the failure note "ended by the operator from the terminal window" (role `operator`), so the ticket is flagged with the usual "To resolve:" line and offers Resume; the exit handler sees `closed` and writes no second note. A brainstorm has no ticket, so ending one only stops it. Any other exit, including the operator revoking a grant and the daemon shutting down, is the `exit` event (`runs.outcome` = `exit`), so a ticket can never sit in a running column with no agent and no flag.
+Both CLIs run interactive sessions that never exit by themselves. When an agent's `move_ticket` or the tester's `report_test` is accepted, the board revokes its grant and kills its terminal; that exit is expected (`runs.outcome` = the event: `submit`, `pass`, `fail`). The operator's X on a terminal (`DELETE /api/sessions/:id`) sets `runs.outcome` = `closed`, revokes the grant and kills the pty, then applies `exit` itself with the failure note "ended by the operator from the terminal window" (role `operator`), so the ticket is flagged with the usual "To resolve:" line and offers Resume; the exit handler sees `closed` and writes no second note. A brainstorm has no ticket, so ending one only stops it. A reset to Backlog ends the ticket's sessions with `runs.outcome` = `reset` and flags nothing (Resume, Restart and Reset). Any other exit, including the operator revoking a grant and the daemon shutting down, is the `exit` event (`runs.outcome` = `exit`), so a ticket can never sit in a running column with no agent and no flag.
 
 ### Restart
 
