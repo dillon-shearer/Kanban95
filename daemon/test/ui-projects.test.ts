@@ -1,12 +1,14 @@
 // In headless Edge or Chrome against a running daemon (setup in ui.ts): Settings → Projects, the wallpaper colour and the title.
 import './home.ts'; // also here, not only in vitest.config.ts: a run from the repo root skips that config and wrote the real home
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { basename, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { until } from './cdp.ts';
-import { page, base, repo, statusBar } from './ui.ts';
+import { boards, entryPath } from '../src/boards.ts';
+import { writeProjects } from '../src/settings.ts';
+import { page, base, repo, srv, statusBar } from './ui.ts';
 
 const other = realpathSync.native(mkdtempSync(join(tmpdir(), 'k95-other-')));
 execFileSync('git', ['init', '-q'], { cwd: other });
@@ -66,5 +68,48 @@ describe('ui-projects', { timeout: 60_000 }, () => {
     await page.goto(base);
     await board();
     await until(async () => (await wall()) === 'rgb(18, 52, 86)', 'the colour kept after a reload');
+  });
+
+  it('Start → Projects lists every project, marks the running one, greys out its own, and opens or focuses on a click', async () => {
+    const own = realpathSync.native(repo);
+    const idle = realpathSync.native(mkdtempSync(join(tmpdir(), 'k95-idle-')));
+    execFileSync('git', ['init', '-q'], { cwd: idle });
+    const root = mkdtempSync(join(tmpdir(), 'k95-root-')); // a checkout with a built shell; nothing is really started
+    for (const f of ['daemon/src/server.ts', 'shell/target/debug/kanban95-shell.exe', 'Kanban95.command']) {
+      mkdirSync(dirname(join(root, f)), { recursive: true });
+      writeFileSync(join(root, f), '');
+    }
+    const started: string[][] = [];
+    boards.start = async (cmd, args) => void started.push([cmd, ...args]);
+    srv.board.root = root;
+    writeProjects([{ path: own, colour: '#008080' }, { path: other, colour: 200 }, { path: idle, colour: 300 }], own);
+    writeFileSync(entryPath(process.ppid), JSON.stringify({ pid: process.ppid, repo: other, port: 1, started: '' })); // a live pid serving `other`
+    const projects = () => page.evaluate<[string, boolean][]>(`[...[...document.querySelectorAll('.k95-menu > li.sub')]
+      .find((li) => li.firstChild.textContent === 'Projects').querySelectorAll('li')].map((li) => [li.textContent, li.hasAttribute('aria-disabled')])`);
+    const pick = (label: string) => page.evaluate(`[...document.querySelectorAll('.k95-menu li.sub li')].find((li) => li.textContent === ${JSON.stringify(label)}).click()`);
+    try {
+      await page.goto(base); // the list is read at boot
+      await board();
+      const want = [[`${basename(own)} (this board)`, true], [`${basename(other)} (running)`, false], [basename(idle), false]];
+      await until(async () => {
+        await page.evaluate(`document.getElementById('start').click()`);
+        return JSON.stringify(await projects()) === JSON.stringify(want);
+      }, 'the Projects submenu');
+
+      await pick(`${basename(own)} (this board)`); // disabled: nothing happens
+      await pick(basename(idle));
+      await until(async () => (await statusBar()) === `Opening ${basename(idle)}…`, 'the opening status');
+      await until(() => started.length === 1, 'the start');
+      expect(started[0].at(-1)).toBe(idle);
+
+      await page.evaluate(`document.getElementById('start').click()`);
+      await pick(`${basename(other)} (running)`); // no window has that title here, so it is not found
+      await until(async () => (await statusBar()) === `${basename(other)} is running: switch to its window.`, 'the focus status');
+      expect(started).toHaveLength(1);
+    } finally {
+      rmSync(entryPath(process.ppid), { force: true });
+      srv.board.root = undefined;
+      for (const d of [idle, root]) rmSync(d, { recursive: true, force: true, maxRetries: 5 });
+    }
   });
 });
