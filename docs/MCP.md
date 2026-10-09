@@ -166,14 +166,14 @@ Ask the human operator a question you cannot resolve from the ticket, the brain 
 
 ### report_test
 
-Record the structured result of testing a ticket against its acceptance criteria. passed is the overall verdict; summary says which criteria passed or failed and why; evidence lists what proves it (test output, screenshot paths kept as run evidence, commands run). The report is the verdict: it moves the ticket to done (the board merges the branch) or back to in_progress (the worker retries, and a failed report becomes the failure note it sees), and ends your session. No move_ticket is needed. Returns the note id and the ticket.
+Record the structured result of testing a ticket against its acceptance criteria. passed is the overall verdict; summary says which criteria passed or failed and why; evidence lists what proves it, one string per item (test output, screenshot paths kept as run evidence, commands run); a single string is taken as one item. The report is the verdict: it moves the ticket to done (the board merges the branch) or back to in_progress (the worker retries, and a failed report becomes the failure note it sees), and ends your session. No move_ticket is needed. Returns the note id and the ticket.
 
 | argument | type | required | description |
 |---|---|---|---|
 | ticket_id | integer | no | Ticket id. Worker and tester grants are bound to one ticket and may omit it; a planner or operator must give it. |
 | passed | boolean | yes |  |
 | summary | string | yes |  |
-| evidence | string[] | default `[]` |  |
+| evidence | string[] \| string | default `[]` |  |
 
 ### report_cleanup
 
