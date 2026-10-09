@@ -15,7 +15,7 @@ export type Scope = (typeof SCOPES)[number];
 export type Brains = Record<Scope, DatabaseSync>;
 
 export const MIGRATIONS_DIR = resolve(import.meta.dirname, '../migrations');
-export const GLOBAL_MIGRATIONS_DIR = join(MIGRATIONS_DIR, 'global');
+const GLOBAL_MIGRATIONS_DIR = join(MIGRATIONS_DIR, 'global');
 /** How long a write waits for another daemon's lock on the shared global brain before failing with SQLITE_BUSY. */
 const BUSY_MS = 5000;
 const INNER_GITIGNORE = 'board.db\nboard.db-*\nsessions/\nattachments/\nnotepad.md\nrunner.json\nui.json\n';

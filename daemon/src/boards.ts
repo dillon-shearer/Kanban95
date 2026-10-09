@@ -7,7 +7,7 @@ import { boardHome, normal, readProjects, same } from './settings.js';
 
 export interface Entry { pid: number; repo: string; port: number; started: string }
 
-export const runningDir = () => join(boardHome(), 'running');
+const runningDir = () => join(boardHome(), 'running');
 export const entryPath = (pid: number) => join(runningDir(), `${pid}.json`);
 
 /** On daemon start, once it has its port. Returns the removal, which close() calls. */
