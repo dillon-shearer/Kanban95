@@ -20,7 +20,9 @@ const FILES = {
   models: z.object({ cli: z.enum(CLIS), claude: perCli.optional(), codex: perCli.optional() }).strict(),
   settings: z.object({
     paths: z.object({ claude: exe, codex: exe }).partial().strict().default({}),
-    sounds: z.boolean().default(true),
+    // A pre-split file has one boolean for both sounds; it carries over to each.
+    sounds: z.preprocess((v) => (typeof v === 'boolean' ? { merge: v, attention: v } : v),
+      z.object({ merge: z.boolean().default(true), attention: z.boolean().default(true) }).strict().default({ merge: true, attention: true })),
     voice: z.object({ backend: z.enum(['local']).default('local'), mode: z.enum(['push', 'toggle']).default('push') }).strict()
       .default({ backend: 'local', mode: 'push' }),
   }).strict(),

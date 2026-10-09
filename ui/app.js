@@ -32,7 +32,7 @@ let sessions = [];
 let inbox = [];
 let runner = { on: false, concurrency: 3, running: [], left: 0, backlog: 0, waits: [] }; // GET /api/runner: the Run button and its status-bar line
 let models = null; // ~/.kanban95/models.json as written, for the cards' default model and effort
-let settings = { paths: {}, sounds: true, voice: { backend: 'local', mode: 'push' } };
+let settings = { paths: {}, sounds: { merge: true, attention: true }, voice: { backend: 'local', mode: 'push' } };
 let limits = null; // GET /api/limits: { rows, errors, fetched_at }, null until the first answer
 const views = new Map(); // open window id → redraw(ticketId | null)
 
@@ -57,12 +57,17 @@ async function refreshShared() {
 }
 const redraw = (ticket) => views.forEach((f) => f(ticket));
 
+const SOUND_SETTING = { ding: 'merge', chord: 'attention' };
+
 function listen() {
   const ws = new WebSocket(`ws://${location.host}/events`);
   ws.onmessage = async (m) => {
     const e = JSON.parse(m.data);
     if (e.sound) {
-      if (settings.sounds) new Audio(`sounds/${e.sound}.wav`).play().catch(() => {});
+      if (settings.sounds[SOUND_SETTING[e.sound]]) new Audio(`sounds/${e.sound}.wav`).play().catch(() => {});
+      // The chord's reason is said by refreshTicket when it first sees the flag, so the later change event does not repeat it.
+      if (e.sound === 'chord' && e.ticket != null) await refreshTicket(e.ticket);
+      else if (e.sound === 'ding' && e.ticket != null) say(`#${e.ticket} merged.`);
       return;
     }
     if (e.ticket != null) await refreshTicket(e.ticket);
@@ -797,8 +802,9 @@ function openSettings(tab) {
         runner = await api('PUT', '/runner', { concurrency: Number(at.value) });
         drawBoard();
       }, 'Saved.');
-      p.replaceChildren(h('div', { class: 'field-row' }, h('input', { type: 'checkbox', id: 'sounds', checked: settings.sounds,
-        onchange: (e) => act(() => saveSettings({ sounds: e.target.checked }), 'Saved.') }), h('label', { for: 'sounds' }, 'Sounds: ding when a ticket merges, chord when the board needs you')),
+      p.replaceChildren(...[['merge', 'Ding when a ticket merges'], ['attention', 'Chord when the board needs you']].map(([k, label]) =>
+        h('div', { class: 'field-row' }, h('input', { type: 'checkbox', id: `sound-${k}`, checked: settings.sounds[k],
+          onchange: (e) => act(() => saveSettings({ sounds: { ...settings.sounds, [k]: e.target.checked } }), 'Saved.') }), h('label', { for: `sound-${k}` }, label))),
         h('fieldset', {}, h('legend', {}, 'Runner'),
           h('div', { class: 'field-row' }, h('label', { for: 'concurrency' }, 'Tickets running at once'), at),
           h('button', { onclick: saveRunner }, 'Save')));

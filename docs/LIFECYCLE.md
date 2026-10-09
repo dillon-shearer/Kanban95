@@ -168,7 +168,7 @@ A repo's prompts come from its own `.kanban95/templates/`, copied from `template
 
 ## Sounds
 
-`ding.wav` when a ticket is merged, `chord.wav` whenever `needs_human` is raised by the table (question, silent exit, retry cap, conflict at the cap, dirty base). The daemon sends `{"sound": "ding" | "chord", "ticket": <id>}` on the `/events` websocket; the UI plays `ui/sounds/<sound>.wav` unless sounds are off in Settings → General. Every transition also sends `{"ticket": <id>}`, so the board redraws that card without a reload (`docs/ARCHITECTURE.md` → Events).
+`ding.wav` when a ticket is merged, `chord.wav` whenever `needs_human` is raised by the table (question, silent exit, retry cap, conflict at the cap, dirty base). The daemon sends `{"sound": "ding" | "chord", "ticket": <id>}` on the `/events` websocket; the UI plays `ui/sounds/<sound>.wav` unless that sound is off in Settings → General, and says the reason in the status bar ("#<id> merged.", or the needs-human reason). Every transition also sends `{"ticket": <id>}`, so the board redraws that card without a reload (`docs/ARCHITECTURE.md` → Events).
 
 ## Janitor
 
