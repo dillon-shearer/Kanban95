@@ -1077,6 +1077,7 @@ const START = [
   '-',
   { label: 'Save startup layout', run: saveLayout },
   { label: 'Reset startup layout', run: resetLayout },
+  { get label() { return document.fullscreenElement ? 'Exit full screen' : 'Full screen'; }, run: toggleFullscreen },
   { label: 'Restart board', run: restartBoard },
 ];
 
@@ -1110,7 +1111,16 @@ const clock = () => { document.getElementById('clock').textContent = new Date().
 // brainstorm, Ctrl+Shift+N an operator terminal, Ctrl+R restarts the focused ticket's agent, Ctrl+= (or Ctrl++) and Ctrl+- zoom
 // the UI and Ctrl+0 resets it. Inside a terminal every key goes to the agent instead (Esc interrupts Claude Code, Ctrl+L clears
 // the screen, Ctrl+- and Ctrl+= are the agent's).
+/** Start → Full screen, or F11: the page's fullscreen, which the shell turns into a borderless window over the whole screen. */
+function toggleFullscreen() { // a declaration: START, built at load, refers to it
+  (document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen()).catch((e) => say(`Full screen failed: ${e.message}`));
+}
+
 addEventListener('keydown', (e) => {
+  if (e.key === 'F11') { // before the terminal and dialog checks: it works everywhere
+    e.preventDefault();
+    return toggleFullscreen();
+  }
   if (document.querySelector('dialog[open]') || e.target.closest?.('.xterm')) return;
   const plainCtrl = e.ctrlKey && !e.shiftKey && !e.altKey;
   if (e.key === 'Escape') {
