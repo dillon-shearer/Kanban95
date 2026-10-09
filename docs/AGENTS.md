@@ -17,7 +17,7 @@ Each session starts from one rendered template. The board pushes only this; ever
 | `{{base}}` | the branch the ticket's worktree forked from and merges into (the main checkout's current branch); `(none)` for a brainstorm or operator terminal |
 | `{{tools}}` | the MCP tools this session's role may call, with the access cell from `docs/MCP.md` |
 | `{{preferences}}` | the operator's standing instructions, `~/.kanban95/preferences.md` as written (Settings → Prompts), under every template's "## Operator preferences" heading |
-| `{{mission}}` | operator terminals only: the mission the operator typed, verbatim. `(none)` everywhere else |
+| `{{mission}}` | an operator terminal's typed mission, or a brainstorm's starting notes (Notepad → New brainstorm from selection), verbatim. `(none)` everywhere else. A launch with text whose template lacks `{{mission}}` (a repo copy older than the slot) is refused, not run without it |
 
 Empty values render as `(none)`, except `{{diff}}` outside a test session (empty) and the attachments block (left out when there are none). Values are inserted literally: a brain note containing `{{ticket}}` stays that text. A template naming a variable that has no value is refused, never rendered.
 

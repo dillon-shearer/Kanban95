@@ -321,7 +321,12 @@ const routes: [method: string, path: RegExp, mutation: string | null, handler: (
     }
     return { status: 204 };
   }],
-  ['POST', /^\/api\/brainstorm$/, 'brainstorm.launch', ({ board }) => ({ status: 201, body: sessionView(brainstorm(board)) })],
+  // Optional `mission`: the operator's draft (Notepad's selection), put in the planner's brief verbatim.
+  ['POST', /^\/api\/brainstorm$/, 'brainstorm.launch', ({ board, body }) => {
+    const { mission = '' } = body;
+    if (typeof mission !== 'string') throw new HttpError(400, 'mission must be a string');
+    return { status: 201, body: sessionView(brainstorm(board, mission.trim() || undefined)) };
+  }],
   // An operator terminal: the typed mission goes into its brief verbatim (docs/SECURITY.md → Operator terminal).
   ['POST', /^\/api\/operator$/, 'operator.launch', ({ board, body }) => {
     if (typeof body.mission !== 'string' || !body.mission.trim()) throw new HttpError(400, 'mission must be a non-empty string');

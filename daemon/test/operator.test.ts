@@ -216,3 +216,33 @@ describe('POST /api/operator', () => {
     }
   });
 });
+
+describe('POST /api/brainstorm', () => {
+  const prompt = (view: { id: number }) => readFileSync(join(sessions.get(view.id)!.dir, 'prompt.md'), 'utf8');
+
+  it("puts the operator's draft in the planner's brief verbatim, and (none) when there is none", async () => {
+    expect((await post('/brainstorm', { mission: 3 })).status).toBe(400);
+    const notes = 'Login keeps failing.\nKeep {{brain}} & $1 as typed.';
+    const seeded = await (await post('/brainstorm', { mission: notes })).json();
+    expect(prompt(seeded)).toContain(`## Starting notes\n\n${notes}\n`);
+    await end(sessions.get(seeded.id)!);
+    const blank = await (await post('/brainstorm', { mission: ' \n ' })).json();
+    expect(prompt(blank)).toContain('## Starting notes\n\n(none)\n');
+    await end(sessions.get(blank.id)!);
+  });
+
+  it('refuses a draft when the repo template has no {{mission}} rather than drop it, and still runs without one', async () => {
+    const file = join(repo, '.kanban95', 'templates', 'brainstorm.md'), saved = readFileSync(file, 'utf8');
+    try {
+      writeFileSync(file, '# Brainstorm\n\n{{tools}}\n');
+      const r = await post('/brainstorm', { mission: 'go' });
+      expect(r.status).toBe(400);
+      expect((await r.json()).error).toMatch(/brainstorm\.md has no \{\{mission\}\}/);
+      expect(sessions.size).toBe(0);
+      const view = await (await post('/brainstorm', {})).json();
+      await end(sessions.get(view.id)!);
+    } finally {
+      writeFileSync(file, saved);
+    }
+  });
+});
