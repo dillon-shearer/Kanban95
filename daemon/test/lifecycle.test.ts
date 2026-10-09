@@ -340,6 +340,20 @@ describe('lifecycle', { timeout: 60_000 }, () => {
     expect(notes(broken, 'failure')[0]).toMatch(/^launch failed: unknown cli nope/);
   });
 
+  it('a ticket whose model is not in the catalog list is flagged at launch with the model named, and no session runs', async () => {
+    const file = join(process.env.USERPROFILE!, '.kanban95', 'models.json');
+    writeFileSync(file, JSON.stringify({ cli: 'claude', claude: { models: ['work', 'pass'], execute: { model: 'work', effort: 'low' } } }));
+    try {
+      const id = ticket('Typo model', { model: 'wrok' });
+      await post(`/api/tickets/${id}/launch`);
+      await until(() => t(id).flags.needs_human, 'the launch failure');
+      expect(notes(id, 'failure')[0]).toMatch(/^launch failed: model wrok is not in the claude model list in .*models\.json/);
+      expect(sessionsOf(id)).toEqual([]);
+    } finally {
+      models();
+    }
+  });
+
   it("the operator's X ends a session: a ticket's is flagged once with the operator note, a brainstorm's touches no ticket", async () => {
     const del = (key: number) => fetch(`http://127.0.0.1:${srv.port}/api/sessions/${key}`, { method: 'DELETE', headers: { cookie: `k95=${srv.secret}` } });
     expect((await del(9999)).status).toBe(404);

@@ -779,6 +779,7 @@ function openSettings(tab) {
       })));
       const save = () => act(async () => {
         const out = { cli: cli.value };
+        for (const c of CLIS) if (m[c]?.models) (out[c] ??= {}).models = m[c].models; // hand-edited; kept as is
         for (const c of CLIS) for (const ph of PHASES) {
           const { model, effort } = cells[`${c}.${ph}`];
           if (model.value.trim()) (out[c] ??= {})[ph] = { model: model.value.trim(), effort: effort.value };
