@@ -162,9 +162,10 @@ export function raise(id) {
  * `onX`: runs instead of closing when the operator clicks X; `close` and `api.close` still close at once.
  * `items`: extra entries for its taskbar button's menu, as `menu()` takes them.
  * `icon`: its taskbar button's picture, `icons/<icon>.svg`; the title is the button's tooltip.
+ * `label`: the short text beside that icon (default the title); `api.title(text, label)` changes both.
  * `tile`: takes a terminal slot (`SLOTS`) instead of a place of its own, until the operator drags or resizes it.
  */
-export function open(id, { title, w = 480, h: height = 320, persist = false, tile = false, background = false, onClose, onX, extra = [], items = [], icon = 'window' }) {
+export function open(id, { title, w = 480, h: height = 320, persist = false, tile = false, background = false, onClose, onX, extra = [], items = [], icon = 'window', label = title }) {
   if (wins.has(id)) {
     focus(id);
     return wins.get(id).api;
@@ -190,9 +191,9 @@ export function open(id, { title, w = 480, h: height = 320, persist = false, til
       e.preventDefault();
       const r = task.getBoundingClientRect();
       taskMenu(id, r.left, r.top);
-    } }, h('img', { src: `icons/${icon}.svg`, alt: '', width: 16, height: 16, draggable: 'false' }));
+    } }, h('img', { src: `icons/${icon}.svg`, alt: '', width: 16, height: 16, draggable: 'false' }), h('span', {}, label));
   dragTask(task);
-  const api = { el, body, title: (t) => { text.textContent = t; task.title = t; task.setAttribute('aria-label', t); }, close: () => close(id) };
+  const api = { el, body, title: (t, l = t) => { text.textContent = t; task.title = t; task.setAttribute('aria-label', t); task.lastChild.textContent = l; }, close: () => close(id) };
   let last; // the geometry last saved
   const win = { el, task, onClose, api, toggleMax, items, tile, rebase: () => { last = JSON.stringify(rect(el)); } };
   wins.set(id, win);
