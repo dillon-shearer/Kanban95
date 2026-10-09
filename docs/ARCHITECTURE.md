@@ -214,6 +214,7 @@ Gotchas collected while the board was built. Each one cost a phase some time.
 - Every test file runs with a throwaway home (`daemon/test/home.ts`), and `daemon/test/real-home-guard.ts` fails the run if the real home was touched (`docs/SECURITY.md` → Operator files the board writes). Keep it that way.
 - Headless Edge resizes its window to `--window-size` minus chrome; `cdp.ts` sets the viewport with `Emulation.setDeviceMetricsOverride` to get an exact size.
 - `/events` carries several frame shapes; anything listening must ignore frames it does not know.
+- A ticket worktree gets its own `npm ci` with Node 24 on PATH. Never junction the main checkout's `node_modules` into it: the janitor's `git worktree remove --force` follows the junction (and `node_modules/@kanban95/daemon` inside it) and deletes the main checkout's `daemon/`.
 - The suite is load-sensitive (ptys, headless browsers, real git). Rerun a failing file alone before treating it as a regression.
 - `api.ts` and `mcp.ts` import each other. A value from `api.ts` read while `mcp.ts` loads (inside the `TOOLS` table, not inside a `run`) is in its temporal dead zone when the built daemon starts from `main.js`: `server.test.ts` times out with "Cannot access X before initialization" while the vitest files that import `api.ts` first pass. Put such constants in a leaf module (`db.ts` holds the brain ones).
 
