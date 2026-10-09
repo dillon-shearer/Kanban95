@@ -33,7 +33,7 @@ The tester's verdict is the move: `report_test` writes the PASS or FAIL note, th
 
 | from | event | guard | to | flags / counters | side effects |
 |---|---|---|---|---|---|
-| backlog | launch | every dependency merged | in_progress | `blocked_on_deps` off | worktree, worker grant, execute agent |
+| backlog | launch | every dependency merged | in_progress | `blocked_on_deps` off | worktree (and its setup, below), worker grant, execute agent |
 | backlog | launch | a dependency not merged | backlog | `blocked_on_deps` on | none; launched again when the dependency merges, if the runner is on |
 | in_progress | launch | no live agent session | in_progress | `needs_human` off | execute agent again in the same worktree, `retry` unchanged. Refused while an agent is live: "it already has a running agent; open its terminal, or Reset to Backlog to stop it" |
 | testing | launch | no live agent session | testing | `needs_human` off | test agent again in the same worktree, `retry` unchanged. Refused while an agent is live, as above |
@@ -144,6 +144,12 @@ Agents already running carry on, and the operator's own Launch, Resume, Restart 
 ### Cancel wait
 
 `PATCH /api/tickets/:id {"blocked_on_deps": false}` clears a hold and nothing else: status, `retry` and notes stay, and a later merge of the dependency launches nothing; the ticket starts when the operator launches it or the runner picks it up as a candidate. The card menu's **Cancel wait** sends it for the selected held cards; **Cancel waiting** on the Board toolbar sends it for every held Backlog ticket after a confirm that lists them. Reset to Backlog also clears the hold, but resets `retry` and `needs_human` too. No event is needed: no status changes and no effect runs. The Board's status bar shows "n waiting to launch by themselves" while any Backlog ticket has `blocked_on_deps` on.
+
+### Worktree setup
+
+A new worktree has no build dependencies. `.kanban95/config.json` `worktree_setup` (`docs/DATA.md`; `npm ci` for this repo) is a shell command the daemon runs in the worktree after creating it and before the first agent starts there (`prepareWorktree` in `daemon/src/launcher.ts`). It runs with the agent's pty environment (the allowlist, the daemon's Node first on `PATH`, `KANBAN95_AGENT`, no token) and asynchronously, so the daemon keeps serving meanwhile. While it runs the ticket counts as live (a second Launch is refused) but has no session or run yet. On success a marker in the worktree's git dir (`git rev-parse --git-path kanban95-setup-done`) records it, so a resumed, restarted or retried run in the same worktree does not run it again; the marker goes with the worktree, and a fresh worktree (a rejected merged ticket) runs it again.
+
+A non-zero exit, a command that will not start or one still running after 15 minutes is a launch failure: the `exit` row flags the ticket with `launch failed: worktree_setup "<command>" failed (<exit code>) in <worktree>; last output:` and the last 20 non-blank lines. No marker is written, so Resume runs it again. A ticket reset or moved while its setup ran starts nothing afterwards. An absent key runs nothing; a key that is not a non-empty string is a launch failure naming it.
 
 ### Sync: the base merged into the worktree
 
