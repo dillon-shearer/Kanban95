@@ -9,6 +9,7 @@ import { tmpdir } from 'node:os';
 import { delimiter, join, resolve } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { afterAll, beforeAll } from 'vitest';
+import { sources } from '../src/limits.ts';
 import { start } from '../src/server.ts';
 import { browser, until, type Page } from './cdp.ts';
 
@@ -51,6 +52,7 @@ export let db: DatabaseSync;
 export let page: Page;
 export let base: string;
 const PATH0 = process.env.PATH;
+export let limitCalls = 0;
 export const git = (...a: string[]) => execFileSync('git', a, { cwd: repo, encoding: 'utf8' }).trim();
 export const ticket = (title: string, cols: Record<string, unknown> = {}) => {
   const keys = ['title', ...Object.keys(cols)];
@@ -89,6 +91,9 @@ beforeAll(async () => {
   writeFileSync(join(process.env.USERPROFILE!, '.kanban95', 'models.json'), JSON.stringify({
     cli: 'claude', claude: { execute: { model: 'work', effort: 'low' }, test: { model: 'pass', effort: 'low' } },
   }));
+  // The tray asks for limits on load: canned answers, never the real CLIs. Claude's count says how often it was asked.
+  sources.claude = async () => `Current session: ${62 + limitCalls++}% used · resets Oct 8, 7:59pm (America/New_York)`;
+  sources.codex = async () => { throw new Error('codex app-server could not start: ENOENT'); };
   srv = await start({ repo });
   db = srv.db;
   base = `http://127.0.0.1:${srv.port}/`;

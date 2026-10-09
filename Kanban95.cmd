@@ -17,7 +17,7 @@ for /f "delims=" %%i in ('fnm exec --using=24 where node 2^>nul') do if not defi
 if defined NODE24 set "PATH=%NODE24%;%PATH%"
 node -e "process.exit(process.versions.node.split('.')[0] < 24 ? 1 : 0)" 2>nul && goto run
 echo Kanban95 needs Node 24 or newer. Install it, for example: fnm install 24
-pause
+if not defined KANBAN95_HIDDEN pause
 exit /b 1
 
 :run
@@ -30,5 +30,5 @@ exit /b 0
 :failed
 echo.
 echo Kanban95 did not start. The messages above say why.
-pause
+if not defined KANBAN95_HIDDEN pause
 exit /b 1
