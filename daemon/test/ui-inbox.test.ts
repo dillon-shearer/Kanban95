@@ -31,7 +31,7 @@ describe('ui-inbox', { timeout: 60_000 }, () => {
     db.prepare("INSERT INTO notes (ticket_id, role, kind, body) VALUES (?, 'tester', 'failure', ?)").run(id, body);
     try {
       await page.goto(base);
-      await until(() => column(id), 'the card');
+      await until(() => page.evaluate(`!!document.querySelector('[data-win="board"] [data-status="done"]')`), 'the board'); // its card is in the folded Done
       const n = (await (await fetch(`${base}api/inbox`, { headers: { cookie: `k95=${srv.secret}` } })).json()).length;
       // The count arrives on its own fetch after the board; under full-suite load it can trail the card.
       await until(async () => (await page.evaluate(`document.getElementById('inbox-count').textContent`)) === `Inbox ${n}`, `the taskbar to say Inbox ${n}`);
