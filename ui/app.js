@@ -576,7 +576,8 @@ function openTerminal(s, auto = false) {
       say(e.message);
     }
   };
-  const w = open(wid, { title, w: 760, h: 440, background: auto, onX, extra: [micButton((text) => send({ data: text }))],
+  // Placed per ticket, not per session: every later phase, retry and relaunch opens where the operator left the last one.
+  const w = open(wid, { title, w: 760, h: 440, persist: s.ticket_id !== null && `term-ticket-${s.ticket_id}`, background: auto, onX, extra: [micButton((text) => send({ data: text }))],
     items: s.ticket_id === null ? [] : [{ label: 'Open ticket', run: () => openTicket(s.ticket_id) }], onClose: () => { terms.delete(wid); ro.disconnect(); ws.close(); term.dispose(); } });
   terms.set(wid, s.ticket_id);
   w.body.classList.add('k95-term');
