@@ -9,11 +9,25 @@ Living document. Update it in the same change that alters the schema.
 - `<repo>/.kanban95/attachments/<ticket-id>/<filename>`: files the operator attached to a ticket (pasted screenshots, dropped files), written by `POST /api/tickets/:id/attachments` (`daemon/src/attachments.ts`). Plain files, no table: the directory listing is the list. The `{{ticket}}` prompt variable and MCP `get_ticket` name each by absolute path so an agent opens it with its own file reader. Removed with the ticket.
 - `<repo>/.worktrees/t-<id>/`: the ticket's git worktree on branch `ticket/<id>`, excluded through `.git/info/exclude`. Removed with the branch once the ticket merges (`docs/LIFECYCLE.md` → Janitor).
 - `<repo>/.kanban95/notepad.md`: the operator's Notepad window, free text, at most 256 KB, read and written whole by `GET`/`PUT /api/notepad`. Git-ignored (the inner `.gitignore` lists it) and never given to an agent. Absent means empty.
-- `<repo>/.kanban95/config.json`: optional, committed, no secrets. Read by the lifecycle: `operator: { model, effort }` (either or both; the operator terminal's model and effort, default the plan phase's). The daemon never writes it: a write would dirty a repo that commits it, and a dirty base refuses launches and merges.
+- `<repo>/.kanban95/config.json`: optional, committed, no secrets. The daemon never writes it: a write would dirty a repo that commits it, and a dirty base refuses launches and merges. Read by the lifecycle. Keys:
+  - `operator: { model, effort }` (either or both; the operator terminal's model and effort, default the plan phase's).
 - `<repo>/.kanban95/runner.json`: `{"on": true | false, "why"?: "nothing left to launch", "concurrency"?: 1-10}`, the Run toggle and how many tickets it keeps running (absent: 3; `docs/LIFECYCLE.md` → The runner). Written by the daemon on Run, Stop, Settings → General → Runner and when the runner stops itself; git-ignored. Absent means off.
 - `~/.kanban95/` is the board's config directory, overridable as a whole by the `KANBAN95_HOME` environment variable (the only override; `daemon/src/settings.ts` `boardHome`). The entries below are written there and nowhere else. Under vitest the daemon refuses the real one and throws unless `KANBAN95_HOME` is set, which `daemon/test/home.ts` does for every test file.
-- `~/.kanban95/models.json`: the operator's model catalog, read at each launch (`docs/LIFECYCLE.md` → Run settings): `cli` (the default CLI), and per CLI (`claude`, `codex`) an optional `models` list of allowed model ids plus the per-phase defaults `plan`/`execute`/`test`/`operator` as `{model, effort}`. When a CLI has a `models` list, a model id outside it is refused at launch and when set on a ticket. Written by Settings → Models → Save after a schema check. No secrets.
-- `~/.kanban95/settings.json`: `paths` (`claude`, `codex`: an absolute path to the executable, empty for PATH), `sounds` (`merge`, `attention`: booleans, default true; an old single boolean applies to both), `voice` (`backend`: `local`; `mode`: `push` or `toggle`), `housekeeping` (`auto`: boolean, default true; `every`: a positive integer, default 10), `terminals` (`auto`: the phases among `plan`, `execute`, `test` whose sessions open a terminal on their own, default `["plan", "execute", "test"]`), `zoom` (the UI zoom, a number from 0.8 to 2, default 1). Absent means all defaults. Written by Settings after a schema check. No secrets.
+- `~/.kanban95/models.json`: the operator's model catalog, read at each launch (`docs/LIFECYCLE.md` → Run settings). When a CLI has a `models` list, a model id outside it is refused at launch and when set on a ticket. Written by Settings → Models → Save after a schema check. No secrets. Keys:
+  - `cli` (the default CLI)
+  - `claude`, `codex`: one object per CLI, with these keys:
+    - `execute`: the execute phase's default, as `{model, effort}`
+    - `models`: an optional list of allowed model ids
+    - `operator`: the operator phase's default, as `{model, effort}`
+    - `plan`: the plan phase's default, as `{model, effort}`
+    - `test`: the test phase's default, as `{model, effort}`
+- `~/.kanban95/settings.json`: absent means all defaults. Written by Settings after a schema check. No secrets. Keys:
+  - `housekeeping` (`auto`: boolean, default true; `every`: a positive integer, default 10)
+  - `paths` (`claude`, `codex`: an absolute path to the executable, empty for PATH)
+  - `sounds` (`merge`, `attention`: booleans, default true; an old single boolean applies to both)
+  - `terminals` (`auto`: the phases among `plan`, `execute`, `test` whose sessions open a terminal on their own, default `["plan", "execute", "test"]`)
+  - `voice` (`backend`: `local`; `mode`: `push` or `toggle`)
+  - `zoom` (the UI zoom, a number from 0.8 to 2, default 1)
 - `~/.kanban95/projects.json`: `[{ "path", "colour" }]`, every repo the operator runs a board on. `path` is the repo's absolute path in the file system's own spelling (resolved, real case), listed once; `colour` is the board's wallpaper colour, `#rgb`/`#rrggbb` or a hue number 0 to 360 (painted as `hsl(<hue> 100% 25%)`, the teal's saturation and lightness). The display name is the folder's basename and is not stored. A daemon adds the repo it serves on start, with `#008080` (the Win95 teal), unless it is listed. Written whole by Settings → Projects (`PUT /api/projects`): every path must be an existing git repo (it has a `.git`), and the board's own project cannot be dropped. Reading checks only the shape, so a repo deleted since does not break other boards; remove it in Settings → Projects. Absent means none yet. No secrets.
 - `~/.kanban95/preferences.md`: the operator's standing instructions for every agent, free text, at most 16 KB. Injected into every prompt as `{{preferences}}` (`docs/AGENTS.md`). Absent means none. Written by Settings → Prompts → Save. Do not put secrets in it: it is copied into every session's prompt.md.
 - `~/.kanban95/models/whisper-base.en/`: the speech model, downloaded on the operator's OK and hash-checked (`docs/SECURITY.md` → Voice model). Not data; delete it to free 80 MB, the mic will offer the download again.
@@ -104,10 +118,42 @@ A grant is live when `revoked_at IS NULL AND expires_at > now`. Rows are kept af
 | id | INTEGER PK | |
 | grant_id | INTEGER FK | null for operator actions over REST; set-null on grant delete |
 | ticket_id | INTEGER FK | null when the action was not about one ticket, or the ticket no longer exists; set-null on delete |
-| tool | TEXT | REST: `tickets.create` `tickets.update` `tickets.delete` `grants.revoke` `tickets.launch` `tickets.answer` `tickets.merge` `tickets.resume` `tickets.housekeeping` `brainstorm.launch` `operator.launch` `runner.set` `brain.add` `brain.update` `brain.delete` `attachments.add` `attachments.remove` `config.write` `trust.clear` `voice.download`. MCP: the tool name (`create_ticket`, `move_ticket`, ..., see `docs/MCP.md`). Board: `trust.write` (a key written into an agent CLI's config, `docs/SECURITY.md`) and `janitor.worktree` `janitor.session` `janitor.grant` `janitor.run` `janitor.scrollback` (`docs/LIFECYCLE.md`), all with a null grant. |
+| tool | TEXT | what was called: a REST action, an MCP tool or a board action, listed under the table |
 | args_summary | TEXT | JSON of the request, truncated to 200 characters. Callers must never put a token in it. |
 | outcome | TEXT | `ok` `denied` `error` |
 | created_at | TEXT | |
+
+`tool` values:
+
+- REST:
+  - `attachments.add`
+  - `attachments.remove`
+  - `brain.add`
+  - `brain.delete`
+  - `brain.update`
+  - `brainstorm.launch`
+  - `config.write`
+  - `grants.revoke`
+  - `operator.launch`
+  - `runner.set`
+  - `tickets.answer`
+  - `tickets.create`
+  - `tickets.delete`
+  - `tickets.housekeeping`
+  - `tickets.launch`
+  - `tickets.merge`
+  - `tickets.resume`
+  - `tickets.update`
+  - `trust.clear`
+  - `voice.download`
+- MCP: the tool name (`create_ticket`, `move_ticket`, ..., see `docs/MCP.md`).
+- Board, all with a null grant:
+  - `janitor.grant` (`docs/LIFECYCLE.md`)
+  - `janitor.run` (`docs/LIFECYCLE.md`)
+  - `janitor.scrollback` (`docs/LIFECYCLE.md`)
+  - `janitor.session` (`docs/LIFECYCLE.md`)
+  - `janitor.worktree` (`docs/LIFECYCLE.md`)
+  - `trust.write` (a key written into an agent CLI's config, `docs/SECURITY.md`)
 
 ### schema_migrations
 `(version TEXT PK, applied_at TEXT)`, one row per applied migration file.

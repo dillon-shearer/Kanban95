@@ -18,7 +18,25 @@ Living document. Update it in the same change that alters the shape described he
 ```
 
 - **Shell** (`shell/`): owns the OS window and the daemon's lifetime. No app logic. It runs `node` from PATH on the daemon staged next to its exe (installed) or on `daemon/dist/server.js` in the repo (dev); see Packaging.
-- **Daemon** (`daemon/src/`): the only process with state. `server.ts` is the HTTP plumbing (bind, origin guard, static files, `/health`, routes `/api/*` to `api.ts`). `db.ts` opens and migrates the per-repo SQLite file (schema in `docs/DATA.md`). `grants.ts` mints, verifies, revokes bearer grants and writes audit rows (`docs/SECURITY.md`). `mcp.ts` is the agent-facing MCP server at `/mcp`: one table of tools, each with a description, a role access cell and a handler, enforced per grant and audited per call. `mcp-doc.ts` renders `docs/MCP.md` from that table. `templates.ts` copies the default prompt templates from `templates/` into `<repo>/.kanban95/templates/` once and renders them; `context.ts` builds the variables for a ticket and records the rendered prompt on a `runs` row (`startRun`) before anything is spawned (see Prompts below). `git.ts` creates and removes the per-ticket worktree and merges the base into it (`syncWorktree`, on submit and in the merge queue). `launcher.ts` launches an agent (worktree, run row, grant, session dir, argv, pty) and tears it down (see Launch below); `pty.ts` spawns the CLI in a pseudo-terminal with an env allowlist and keeps a 2000-line scrollback. `trust.ts` pre-trusts the repo root for Claude Code before a launch. `lifecycle.ts` is the ticket state machine: one table of transitions, `apply(board, ticket, event)` and the runner's `tick` (`docs/LIFECYCLE.md`). `merge.ts` is the one serialized merge queue. `janitor.ts` removes worktrees, branches, session dirs, grants and old scrollback nobody needs any more. `settings.ts` reads and writes the operator's `~/.kanban95/models.json`, `settings.json` (schema-checked), `projects.json` (adds the served repo on start) and `preferences.md`, lists the models the installed CLIs know (`knownModels`, for the Settings dropdowns), and resolves a run's CLI, model, effort and executable. `attachments.ts` stores, lists and removes the files attached to a ticket under `<repo>/.kanban95/attachments/<id>/`. `voice.ts` downloads, verifies and serves the speech model (see Voice below). `limits.ts` asks each CLI for its account's usage limits and caches them 5 minutes (`docs/OPERATOR.md` → Limits). The repo it serves is `argv[2]`, defaulting to the cwd.
+- **Daemon** (`daemon/src/`): the only process with state. The repo it serves is `argv[2]`, defaulting to the cwd. Its modules:
+  - `attachments.ts` stores, lists and removes the files attached to a ticket under `<repo>/.kanban95/attachments/<id>/`.
+  - `context.ts` builds the variables for a ticket and records the rendered prompt on a `runs` row (`startRun`) before anything is spawned (see Prompts below).
+  - `db.ts` opens and migrates the per-repo SQLite file (schema in `docs/DATA.md`).
+  - `git.ts` creates and removes the per-ticket worktree and merges the base into it (`syncWorktree`, on submit and in the merge queue).
+  - `grants.ts` mints, verifies, revokes bearer grants and writes audit rows (`docs/SECURITY.md`).
+  - `janitor.ts` removes worktrees, branches, session dirs, grants and old scrollback nobody needs any more.
+  - `launcher.ts` launches an agent (worktree, run row, grant, session dir, argv, pty) and tears it down (see Launch below).
+  - `lifecycle.ts` is the ticket state machine: one table of transitions, `apply(board, ticket, event)` and the runner's `tick` (`docs/LIFECYCLE.md`).
+  - `limits.ts` asks each CLI for its account's usage limits and caches them 5 minutes (`docs/OPERATOR.md` → Limits).
+  - `mcp.ts` is the agent-facing MCP server at `/mcp`: one table of tools, each with a description, a role access cell and a handler, enforced per grant and audited per call.
+  - `mcp-doc.ts` renders `docs/MCP.md` from the `mcp.ts` tool table.
+  - `merge.ts` is the one serialized merge queue.
+  - `pty.ts` spawns the CLI in a pseudo-terminal with an env allowlist and keeps a 2000-line scrollback.
+  - `server.ts` is the HTTP plumbing (bind, origin guard, static files, `/health`, routes `/api/*` to `api.ts`).
+  - `settings.ts` reads and writes the operator's `~/.kanban95/models.json`, `settings.json` (schema-checked), `projects.json` (adds the served repo on start) and `preferences.md`, lists the models the installed CLIs know (`knownModels`, for the Settings dropdowns), and resolves a run's CLI, model, effort and executable.
+  - `templates.ts` copies the default prompt templates from `templates/` into `<repo>/.kanban95/templates/` once and renders them.
+  - `trust.ts` pre-trusts the repo root for Claude Code before a launch.
+  - `voice.ts` downloads, verifies and serves the speech model (see Voice below).
 - **UI** (`ui/`): plain files served by the daemon, ES modules, no bundler (see UI below). 98.css, xterm.js and transformers.js are vendored in `ui/vendor/` so nothing loads from a CDN at runtime.
 
 ## Port handshake
@@ -124,7 +142,30 @@ The template is read from disk on every render, so operator edits (by hand or in
 
 ```
 package.json      npm workspace root: build / test / dev scripts
-daemon/           src/{server,api,db,grants,mcp,mcp-doc,templates,context,git,pty,launcher,trust,lifecycle,merge,janitor,settings,attachments,voice,limits}.ts, voice-model.json (the pinned speech model), migrations/*.sql, test/ (test/cdp.ts drives headless Edge/Chrome, test/ui.ts is the shared daemon-plus-browser setup of the ui-<area>.test.ts files, which vitest.config.ts runs as a second group after the rest; test/changed.ts is `npm run test:changed`; test/.cache/ is gitignored), tsconfig.json, vitest.config.ts; compiled to dist/ (gitignored)
+daemon/           src/ (see Daemon above):
+                    api.ts
+                    attachments.ts
+                    context.ts
+                    db.ts
+                    git.ts
+                    grants.ts
+                    janitor.ts
+                    launcher.ts
+                    lifecycle.ts
+                    limits.ts
+                    mcp.ts
+                    mcp-doc.ts
+                    merge.ts
+                    pty.ts
+                    server.ts
+                    settings.ts
+                    templates.ts
+                    trust.ts
+                    voice.ts
+                  voice-model.json (the pinned speech model)
+                  migrations/*.sql
+                  test/ (test/cdp.ts drives headless Edge/Chrome, test/ui.ts is the shared daemon-plus-browser setup of the ui-<area>.test.ts files, which vitest.config.ts runs as a second group after the rest; test/changed.ts is `npm run test:changed`; test/.cache/ is gitignored)
+                  tsconfig.json, vitest.config.ts; compiled to dist/ (gitignored)
 ui/               index.html, app.js (data layer and windows), wm.js (window manager), voice.js (mic and transcription), app.css, icons/*.svg (desktop icons), sounds/{ding,chord}.wav, vendor/{98.css and fonts, xterm/, transformers/}
 templates/        default prompt templates (brainstorm, operator, plan, execute, test, housekeeping), copied into each repo once
 skills/           the Claude Code plugin `kanban95` (.claude-plugin/plugin.json and one folder per skill; docs/AGENTS.md)
@@ -134,7 +175,12 @@ Kanban95.command  macOS launcher: the same steps as Kanban95.cmd
 shell/            Cargo.toml, build.rs, tauri.conf.json, tauri.bundle.json (installer overlay), stage.mjs (stages the installed daemon), src/main.rs, icons/icon.ico
 docs/             this file, LEARNING.md (guided tour for newcomers), OPERATOR.md (driving the board), img/ (its screenshots), LIFECYCLE.md (state machine, merge queue, janitor), CLIS.md (how each CLI is launched), DATA.md (schema), AGENTS.md (what agents receive and how they behave), SECURITY.md (grants, audit, network), MCP.md (generated tool reference)
 <repo>/.kanban95/ board.db (gitignored), .gitignore, sessions/ (gitignored), attachments/ (gitignored), templates/*.md (committed, operator-editable); created by the daemon on first start. config.json (optional, committed)
-~/.kanban95/      models.json (model catalog, read at each launch), settings.json (CLI paths, sounds, voice), projects.json (every repo with a board and its wallpaper colour; the daemon adds its own repo on start), preferences.md (operator's standing instructions for agents), models/ (the downloaded speech model); written only from Settings, the download dialog and, for projects.json, the daemon's start
+~/.kanban95/      written only from Settings, the download dialog and, for projects.json, the daemon's start:
+                    models.json (model catalog, read at each launch)
+                    models/ (the downloaded speech model)
+                    preferences.md (operator's standing instructions for agents)
+                    projects.json (every repo with a board and its wallpaper colour; the daemon adds its own repo on start)
+                    settings.json (CLI paths, sounds, voice)
 ```
 
 ## Launch
@@ -167,8 +213,19 @@ Any failure after the run row is written revokes the grant and removes the sessi
 `ui/`, plain ES modules, no build step. How to use it: `docs/OPERATOR.md`.
 
 - `icons/`: the desktop icons, self-drawn 32x32 SVGs served from the daemon's origin (`img-src 'self'`). The wallpaper is CSS gradients in `app.css`, no image, over a base colour in `--k95-wall` on `body` (default teal): `app.js` sets it from `GET /api/project` at boot and after Settings → Projects saves, and sets `document.title` to `<folder name> — Kanban95`. Tauri 2 does not copy `document.title` to the OS window, so the shell titles its window the same from its repo argument (`title()` in `shell/src/main.rs`).
-- `wm.js`: the window manager. Windows are 98.css `.window`s positioned on `#desktop`, dragged by the title bar (pointer events), resized by CSS (`resize: both`), minimized to a taskbar button, maximized to fill `#desktop` (the `max` class overrides the inline geometry, which stays as the restore geometry; drag and resize are off), clamped so a title bar is always reachable. Taskbar buttons shrink to 60px; past that `#tasks` scrolls (arrow buttons at its ends and the mouse wheel), and focusing a window scrolls its button into view. Each button has a menu (right-click, Shift+F10, Menu key; `open()`'s `items` add entries, such as a terminal's Open ticket), a Ctrl/Shift+click selection whose menu acts on every selected window, and pointer drag to reorder (session only, not saved). Windows opened with `persist` (Board, Brain, Inbox, Settings) keep position, size and maximized state in `localStorage`, under the window id, or under the key when `persist` is a string: a ticket's terminals share `term-ticket-<ticket id>`, so every session of that ticket opens where the operator left the last one. A window with nothing saved opens at `place()`: of the desktop corners and a half-window grid, the spot overlapping the least area of the open, non-minimized windows (top-most, then left-most on a tie). `snapshot(ids)` returns the open windows among `ids` with that geometry, bottom-most first, and `remember(key, r)` writes a window's saved place: `app.js` builds the startup layout on these (`k95.layout` in `localStorage`; `boot` writes each entry over the window's own key, then opens it, so the layout wins at start and the per-window key afterwards; no stored layout means `defaultLayout()`, Board top right and Inbox bottom right). Also modal dialogs (`<dialog>`) and pop-up menus. `setZoom(f)` sets the UI zoom (`settings.json` `zoom`, Ctrl+=/−/0 in `app.js`) as CSS `zoom` on `body`, so dialogs and menus appended to it scale too, and re-clamps every window. Inside the zoom, offsets, inline styles and saved geometry are CSS px before zoom, while `clientX`/`clientY` and `getBoundingClientRect` are screen px: divide those by `scale()` before writing them to a style (drag, menus, the card ghost, the Start menu). xterm measures its cells after zoom, so terminals keep their `fontSize` and only refit.
-- `app.js`: the data layer and every window. It loads tickets, sessions, the Inbox and both settings files once, then listens on `/events`: a `{ticket}` frame refetches that ticket, then the live sessions and the Inbox, and asks each open window to redraw; each window decides whether the event concerns it (a ticket window only for its own ticket; form tabs never, so typing is not lost). A new session opens its terminal window automatically, behind the focused window; a terminal whose run the board ended (`submit`, `pass`, `fail`, or `conflict` and `restart`, which start a new run of the same ticket) closes itself after a moment; one the agent exited on its own, or that was revoked or died, stays open, marked ended. When `refreshTicket` finds a ticket in Backlog it closes all of that ticket's terminals, ended or not: a reset stopped its agents. Add any new lifecycle event that runs `end_session` to that list in `openTerminal`, or its stale window will sit in front of the new run and the ticket will look stuck. A terminal's title bar is coloured by `termState(s, ended)` in `app.js`, first match wins: ended, the ticket's `needs_human`, then brainstorm/operator, then the phase. It sets `data-state` on the window; the palette is the `.k95-win[data-state=…]` rules in `app.css`, whose unfocused (`.inactive`) gradient is the same two colours mixed toward grey. `refreshTicket` repaints that ticket's open terminals, so a flag recolours them in place.
+- `wm.js`: the window manager.
+  - Windows are 98.css `.window`s positioned on `#desktop`, dragged by the title bar (pointer events), resized by CSS (`resize: both`), minimized to a taskbar button, maximized to fill `#desktop` (the `max` class overrides the inline geometry, which stays as the restore geometry; drag and resize are off), clamped so a title bar is always reachable.
+  - Taskbar buttons shrink to 60px; past that `#tasks` scrolls (arrow buttons at its ends and the mouse wheel), and focusing a window scrolls its button into view. Each button has a menu (right-click, Shift+F10, Menu key; `open()`'s `items` add entries, such as a terminal's Open ticket), a Ctrl/Shift+click selection whose menu acts on every selected window, and pointer drag to reorder (session only, not saved).
+  - Windows opened with `persist` (Board, Brain, Inbox, Settings) keep position, size and maximized state in `localStorage`, under the window id, or under the key when `persist` is a string: a ticket's terminals share `term-ticket-<ticket id>`, so every session of that ticket opens where the operator left the last one.
+  - A window with nothing saved opens at `place()`: of the desktop corners and a half-window grid, the spot overlapping the least area of the open, non-minimized windows (top-most, then left-most on a tie).
+  - `snapshot(ids)` returns the open windows among `ids` with that geometry, bottom-most first, and `remember(key, r)` writes a window's saved place: `app.js` builds the startup layout on these (`k95.layout` in `localStorage`; `boot` writes each entry over the window's own key, then opens it, so the layout wins at start and the per-window key afterwards; no stored layout means `defaultLayout()`, Board top right and Inbox bottom right).
+  - Also modal dialogs (`<dialog>`) and pop-up menus.
+  - `setZoom(f)` sets the UI zoom (`settings.json` `zoom`, Ctrl+=/−/0 in `app.js`) as CSS `zoom` on `body`, so dialogs and menus appended to it scale too, and re-clamps every window. Inside the zoom, offsets, inline styles and saved geometry are CSS px before zoom, while `clientX`/`clientY` and `getBoundingClientRect` are screen px: divide those by `scale()` before writing them to a style (drag, menus, the card ghost, the Start menu). xterm measures its cells after zoom, so terminals keep their `fontSize` and only refit.
+- `app.js`: the data layer and every window.
+  - It loads tickets, sessions, the Inbox and both settings files once, then listens on `/events`: a `{ticket}` frame refetches that ticket, then the live sessions and the Inbox, and asks each open window to redraw; each window decides whether the event concerns it (a ticket window only for its own ticket; form tabs never, so typing is not lost).
+  - A new session opens its terminal window automatically, behind the focused window; a terminal whose run the board ended (`submit`, `pass`, `fail`, or `conflict` and `restart`, which start a new run of the same ticket) closes itself after a moment; one the agent exited on its own, or that was revoked or died, stays open, marked ended.
+  - When `refreshTicket` finds a ticket in Backlog it closes all of that ticket's terminals, ended or not: a reset stopped its agents. Add any new lifecycle event that runs `end_session` to that list in `openTerminal`, or its stale window will sit in front of the new run and the ticket will look stuck.
+  - A terminal's title bar is coloured by `termState(s, ended)` in `app.js`, first match wins: ended, the ticket's `needs_human`, then brainstorm/operator, then the phase. It sets `data-state` on the window; the palette is the `.k95-win[data-state=…]` rules in `app.css`, whose unfocused (`.inactive`) gradient is the same two colours mixed toward grey. `refreshTicket` repaints that ticket's open terminals, so a flag recolours them in place.
 - Board drag uses pointer events, not HTML5 drag and drop. Only operator moves are accepted (Backlog → In Progress; anything → Backlog, which also clears flags and retries; the daemon stops a live agent on that move and the ticket's terminal windows close); an illegal drop snaps back and the status bar names the allowed columns. Clicking a column's legend folds it to a 24px strip (label and count vertical, no cards; the grid's `grid-template-columns` gives the others the width). A strip keeps `data-status`, so drops onto it work; its count turns red when it holds a needs-human ticket. The folded set is in `localStorage` as `k95.collapsed` (per origin, so per daemon and repo).
 - The Board's Filter, Sort and Group (`view` in `ui/app.js`, `localStorage` `k95.view`) only change what a redraw shows: `shown(t)` decides a card, `sorted` orders each column (ties by id), `columnBody` adds the tag headings. A card the filter hides is out of the selection (`picked()` drops it, Ctrl+A skips it), and Shift+click ranges follow the drawn order (`order`). With Group by tag a card with two tags is drawn under both.
 - `voice.js`: the mic button and `transcribe(blob)` (see Voice).
