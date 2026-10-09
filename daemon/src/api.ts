@@ -363,6 +363,7 @@ const routes: [method: string, path: RegExp, mutation: string | null, handler: (
   }],
   // The runner (docs/LIFECYCLE.md → The runner): `{on?, concurrency?}` turns it on or off and sets how many tickets it keeps
   // running; both return what the status bar shows. A new concurrency while on launches at once if there is room.
+  // `{on: false}` (Stop) also clears every Backlog hold, so nothing staged starts later by itself, and says how many in `cleared`.
   ['GET', /^\/api\/runner$/, null, ({ board }) => ({ status: 200, body: runnerState(board) })],
   ['PUT', /^\/api\/runner$/, 'runner.set', ({ board, body }) => {
     const { on, concurrency: c } = body;
@@ -371,7 +372,10 @@ const routes: [method: string, path: RegExp, mutation: string | null, handler: (
     if (on === undefined && c === undefined) throw new HttpError(400, 'send on, concurrency or both');
     const cur = runner(board);
     setRunner(board, on ?? cur.on, on === undefined ? cur.why : undefined, (c as number | undefined) ?? cur.concurrency);
-    return { status: 200, body: runnerState(board) };
+    if (on !== false) return { status: 200, body: runnerState(board) };
+    const held = (board.db.prepare("UPDATE tickets SET blocked_on_deps = 0 WHERE status = 'backlog' AND blocked_on_deps = 1 RETURNING id").all() as { id: number }[]);
+    for (const { id } of held) changed(id);
+    return { status: 200, body: { ...runnerState(board), cleared: held.length } };
   }],
   // The status bar's Push button: the base to its upstream with the operator's own git credentials (docs/OPERATOR.md → Push).
   ['POST', /^\/api\/push$/, 'board.push', async ({ board }) => {

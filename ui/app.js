@@ -197,14 +197,6 @@ async function reset(ts) {
 /** Clears blocked_on_deps only: retry, notes and status stay (docs/LIFECYCLE.md → Cancel wait). */
 const cancelWait = (ts) => each(ts, (t) => api('PATCH', `/tickets/${t.id}`, { blocked_on_deps: false }), (n) => `${n} no longer waiting.`);
 const heldTickets = () => [...tickets.values()].filter((t) => t.status === 'backlog' && t.flags.blocked_on_deps);
-async function cancelWaiting() {
-  const ts = heldTickets();
-  if (!ts.length) return say('Nothing is waiting to launch.');
-  const ask = h('div', {}, h('p', {}, `Stop ${ts.length === 1 ? 'this ticket' : `these ${ts.length} tickets`} from launching by themselves when ${ts.length === 1 ? 'its' : 'their'} dependencies merge?`),
-    h('ul', {}, ts.map((t) => h('li', {}, `#${t.id} ${t.title}`))));
-  if ((await dialog('Cancel waiting', ask, ['Clear holds', 'Cancel'])) === 'Clear holds') await cancelWait(ts);
-}
-
 const count = (ts) => (ts.length === 1 ? `#${ts[0].id}` : `${ts.length} tickets`);
 /** Runs fn on each ticket in turn; one that refuses is named and the rest still go. Says the outcome once. */
 async function each(ts, fn, ok) {
@@ -255,9 +247,12 @@ async function launch(ts, verb = 'launch') {
   if (go.length < ts.length) more.push(`Skipped ${ts.length - go.length} ${verb === 'launch' ? 'not in Backlog' : 'with nothing to resume'}.`);
   await act(() => sayLaunched(ok, more));
 }
+/** Stop also clears every Backlog hold (docs/LIFECYCLE.md → Stop); running agents finish their phase. */
 const toggleRunner = () => act(async () => {
-  runner = await api('PUT', '/runner', { on: !runner.on });
+  const { cleared, ...r } = await api('PUT', '/runner', { on: !runner.on });
+  runner = r;
   drawBoard();
+  if (cleared !== undefined) say(`Runner stopped, ${cleared} ${cleared === 1 ? 'hold' : 'holds'} cleared.`);
 });
 /** While on: what it waits on against the limit, what is left, and who waits on shared files. Off by itself: why. Off by Stop: nothing. */
 const runnerLine = (r) => r.on
@@ -469,9 +464,7 @@ function openBoard() {
       h('button', { onclick: () => launch(picked()) }, 'Launch'),
       run,
       h('button', { onclick: newBrainstorm, title: 'Ctrl+N' }, 'New brainstorm'),
-      h('button', { onclick: () => openTicket(null) }, 'New ticket'),
       h('button', { onclick: housekeeping }, 'Housekeeping'),
-      h('button', { onclick: cancelWaiting, title: 'Stop held tickets from launching when their dependencies merge' }, 'Cancel waiting'),
       filter,
       h('label', {}, 'Sort ', choose('sort', SORTS)),
       h('label', {}, 'Group ', choose('group', { none: 'none', tag: 'tag' }))),

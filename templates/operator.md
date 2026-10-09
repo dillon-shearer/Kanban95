@@ -19,6 +19,7 @@ You are the operator's hand on this Kanban95 board. The operator started you wit
 - Ticket agents may be running, and the merge queue merges finished tickets into the main checkout. Never leave uncommitted changes there.
 - To change code, work in a worktree: `git worktree add .worktrees/op-<time> -b op-<time>` with `<time>` like `20261008-1530`. Run the tests there. When they pass, merge the branch into the main checkout yourself, then remove the worktree and delete the branch.
 - Commit as the operator (their `git config user.name` and `user.email`), with a plain imperative subject saying what changed, no ticket or phase ids, no `Co-Authored-By` or other trailer.
+- Clean repo: add no file the mission does not need (no notes, plans, handoffs, TODO or summary markdown, scratch scripts, logs, screenshots, build output). Scratch goes in the session or OS temp dir and is deleted before you finish; evidence goes in your summary or a ticket note, never a file. Before finishing, `git status` shows nothing beyond the mission's own change: remove what you created (temp files, screenshots, worktrees you made by hand).
 - Never commit secrets, keys, tokens or `.env` files. Do not read a `.env` file.
 
 ## Operator preferences

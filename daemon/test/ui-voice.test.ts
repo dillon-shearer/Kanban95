@@ -10,7 +10,8 @@ describe('ui-voice', { timeout: 60_000 }, () => {
   it('shows the download dialog on the first mic press and fetches nothing until OK', async () => {
     rmSync(modelDir(MANIFEST), { recursive: true, force: true });
     await page.goto(base);
-    await click('.k95-toolbar button:nth-child(4)'); // New ticket: a window with text fields, so with mics
+    await click('#start'); // Start → New ticket: a window with text fields, so with mics
+    await page.evaluate(`[...document.querySelectorAll('.k95-menu li')].find((li) => li.textContent === 'New ticket').click()`);
     await until(() => page.evaluate(`!!document.querySelector('[data-win="ticket-new"] .k95-mic')`), 'a mic button');
     await click('[data-win="ticket-new"] .k95-mic');
     const dlg = await until(() => page.evaluate<string>(`document.querySelector('dialog[open]')?.textContent ?? ''`), 'the download dialog');

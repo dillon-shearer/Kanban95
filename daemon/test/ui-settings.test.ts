@@ -7,6 +7,23 @@ import { until } from './cdp.ts';
 import { srv, db, page, base, repo, ticket, statusBar } from './ui.ts';
 
 describe('ui-settings', { timeout: 60_000 }, () => {
+  it('marks the selected tab bold and joined to its panel, and moves the mark when the tab changes', async () => {
+    await page.goto(base);
+    await until(() => page.evaluate(`!!document.querySelector('[data-win="board"]')`), 'the board');
+    await page.evaluate(`document.querySelector('[data-icon="Settings"]').dispatchEvent(new MouseEvent('dblclick'))`);
+    // Per tab: [name, bold, bottom edge reaches past the panel's top border]
+    const look = () => page.evaluate<[string, boolean, boolean][]>(`(() => {
+      const panel = document.querySelector('[data-win="settings"] [role=tabpanel]').getBoundingClientRect();
+      return [...document.querySelectorAll('[data-win="settings"] [role=tab]')].map((t) => [t.textContent,
+        Number(getComputedStyle(t).fontWeight) >= 700, t.getBoundingClientRect().bottom >= panel.top + 2]);
+    })()`);
+    await page.evaluate(`[...document.querySelectorAll('[data-win="settings"] [role=tab] a')].find((t) => t.textContent === 'Grants').click()`);
+    await until(async () => (await look()).some(([n, b]) => n === 'Grants' && b), 'Grants marked');
+    for (const [n, bold, joined] of await look()) expect([n, bold, joined]).toEqual([n, n === 'Grants', n === 'Grants']);
+    await page.evaluate(`[...document.querySelectorAll('[data-win="settings"] [role=tab] a')].find((t) => t.textContent === 'General').click()`);
+    for (const [n, bold, joined] of await look()) expect([n, bold, joined]).toEqual([n, n === 'General', n === 'General']);
+  });
+
   it('saves preferences from Settings > Prompts and shows a refusal over 16 KB', async () => {
     const file = join(process.env.USERPROFILE!, '.kanban95', 'preferences.md');
     await page.goto(base);

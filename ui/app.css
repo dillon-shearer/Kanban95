@@ -102,6 +102,9 @@ body { background: linear-gradient(transparent 55%, rgb(0 0 0 / 0.22)),
 
 /* Tabs, tables, text */
 menu[role=tablist] { flex: none; margin-bottom: -2px !important; }
+/* 98.css's selected tab is faint: bold, 2px taller, and its silver box covers the panel's top border so it joins the panel. */
+menu[role=tablist] > li[aria-selected=true] { font-weight: bold; margin-top: -4px; margin-bottom: -4px; padding-bottom: 6px; background: silver; }
+menu[role=tablist] > li[aria-selected=true] > a { color: #000; }
 .k95-panel { flex: 1; min-height: 0; display: flex; }
 .k95-panel > .window-body { flex: 1; overflow: auto; margin: 6px; display: flex; flex-direction: column; gap: 6px; }
 .sunken-panel { flex: none; max-height: 220px; overflow: auto; }
