@@ -681,6 +681,11 @@ function termIcon(s) {
   if (s.ticket_id === null) return s.role === 'operator' ? 'operator' : 'brainstorm';
   return { plan: 'brainstorm', execute: 'execute', test: 'test' }[s.phase] ?? 'window';
 }
+/** A terminal's taskbar label: whose agent it is, short ("#74 execute", "Brainstorm"); the title adds the model. */
+function termLabel(s) {
+  if (s.ticket_id === null) return s.role === 'operator' ? 'Operator' : 'Brainstorm';
+  return `#${s.ticket_id} ${s.phase}`;
+}
 /**
  * Opens a terminal for each new session of a phase in Settings → General (`terminals.auto`); brainstorms and operator
  * terminals always. The rest are marked seen, so they never pop up later; card → Terminal opens one.
@@ -722,7 +727,7 @@ function openTerminal(s, auto = false) {
     }
   };
   const w = open(wid, { title, w: 760, h: 440, tile: true, background: auto, onX, extra: [micButton((text) => send({ data: text }))],
-    icon: termIcon(s),
+    icon: termIcon(s), label: termLabel(s),
     items: s.ticket_id === null ? [] : [{ label: 'Open ticket', run: () => openTicket(s.ticket_id) }], onClose: () => { terms.delete(wid); ro.disconnect(); ws.close(); term.dispose(); } });
   let was = null;
   const paint = () => {
@@ -741,7 +746,7 @@ function openTerminal(s, auto = false) {
   ws.onopen = () => { fit.fit(); send({ resize: [term.cols, term.rows] }); };
   ws.onclose = () => {
     term.write('\r\n\x1b[90m[session ended]\x1b[0m\r\n');
-    w.title(`${title} (ended)`);
+    w.title(`${title} (ended)`, `${termLabel(s)} (ended)`);
     w.el.classList.add('ended');
     paint();
     if (!auto || s.run_id === null) return;

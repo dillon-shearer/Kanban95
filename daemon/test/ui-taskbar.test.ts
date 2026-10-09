@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest';
 import { sessions } from '../src/launcher.ts';
 import { changed } from '../src/lifecycle.ts';
 import { until } from './cdp.ts';
-import { srv, page, base, ticket, statusBar, click, rightClick, menuItems, menuPick } from './ui.ts';
+import { srv, db, page, base, ticket, statusBar, click, rightClick, menuItems, menuPick } from './ui.ts';
 
 describe('ui-taskbar', { timeout: 60_000 }, () => {
   it('pins a compact tray at the far right of one taskbar row', async () => {
@@ -28,7 +28,7 @@ describe('ui-taskbar', { timeout: 60_000 }, () => {
     expect(m.overflow).toBe(0);
   });
 
-  it('scrolls an overflowing taskbar with its arrows, the wheel and focus; buttons keep their icon size', async () => {
+  it('scrolls an overflowing taskbar with its arrows, the wheel and focus; buttons keep their width', async () => {
     await page.goto(base);
     await until(() => page.evaluate(`!!document.querySelector('[data-win="board"]')`), 'the board');
     const wm = (js: string) => page.evaluate(`import('/wm.js').then((wm) => { ${js} })`);
@@ -38,12 +38,12 @@ describe('ui-taskbar', { timeout: 60_000 }, () => {
       const b = document.querySelector('#tasks [data-task="${id}"]').getBoundingClientRect();
       return b.left >= t.left - 0.5 && b.right <= t.right + 0.5;
     })()`);
-    const ids = Array.from({ length: 60 }, (_, i) => `scroll-${i}`); // icon buttons: it takes many to fill the bar
+    const ids = Array.from({ length: 60 }, (_, i) => `scroll-${i}`); // more than fit at any test viewport
     expect(await arrowsShown()).toBe(false);
     await wm(`${JSON.stringify(ids)}.forEach((id) => wm.open(id, { title: id }));`);
     try {
       expect(await arrowsShown()).toBe(true);
-      expect(await page.evaluate<number>(`Math.min(...[...document.querySelectorAll('#tasks .task')].map((b) => b.getBoundingClientRect().width))`)).toBe(34);
+      expect(await page.evaluate<number>(`Math.min(...[...document.querySelectorAll('#tasks .task')].map((b) => b.getBoundingClientRect().width))`)).toBe(110);
       expect(await shown('scroll-59')).toBe(true); // the newest window is focused, so its button scrolled into view
 
       await page.evaluate(`document.getElementById('tasks').scrollLeft = 0`);
@@ -113,7 +113,7 @@ describe('ui-taskbar', { timeout: 60_000 }, () => {
     await page.evaluate(`import('/wm.js').then((wm) => wm.close('sel-2'))`);
   });
 
-  it("pins the desktop items after Start as one-click icons; each window's button is its kind's icon with the title as tooltip", async () => {
+  it("pins the desktop items after Start as one-click icons; each window's button is its kind's icon and a label, the title as tooltip", async () => {
     await page.goto(base);
     await until(() => page.evaluate(`!!document.querySelector('[data-win="board"]')`), 'the board');
     const pins = await page.evaluate<string[]>(`[...document.querySelectorAll('#pinned button')].map((b) => b.title)`);
@@ -125,14 +125,49 @@ describe('ui-taskbar', { timeout: 60_000 }, () => {
     await page.evaluate(`document.querySelector('[data-win="brain"] [aria-label="Close"]')?.click()`);
     await click('#pinned [data-pin="Brain"]');
     await until(() => page.evaluate(`!!document.querySelector('[data-win="brain"]')`), 'the Brain window');
+    expect(await page.evaluate(`[...document.querySelectorAll('#pinned button')].map((b) => b.textContent).join('')`)).toBe('');
     const task = (id: string) => page.evaluate<{ text: string; title: string; icon: string; loaded: boolean }>(`(() => {
       const b = document.querySelector('[data-task="${id}"]'), i = b.querySelector('img');
       return { text: b.textContent, title: b.title, icon: i.getAttribute('src'), loaded: i.complete && i.naturalWidth > 0 };
     })()`);
     await until(async () => (await task('brain')).loaded, 'the Brain button icon');
-    expect(await task('brain')).toEqual({ text: '', title: 'Brain', icon: 'icons/brain.svg', loaded: true });
+    expect(await task('brain')).toEqual({ text: 'Brain', title: 'Brain', icon: 'icons/brain.svg', loaded: true });
     expect((await task('board')).icon).toBe('icons/board.svg');
     await page.evaluate(`document.querySelector('[data-win="brain"] [aria-label="Close"]').click()`);
+  });
+
+  it('labels a terminal by ticket and phase, or Brainstorm, keeps "(ended)" on it, and cuts a long label with an ellipsis', async () => {
+    const id = ticket('Label me');
+    await page.goto(base);
+    await until(() => page.evaluate(`!!document.querySelector('[data-win="board"]')`), 'the board');
+    const cookie = { cookie: `k95=${srv.secret}` };
+    const label = (wid: string) => page.evaluate<string>(`document.querySelector('[data-task="${wid}"] span').textContent`);
+    const launched = async (res: Response, what: string) => {
+      expect(res.status).toBeLessThan(300);
+      const s = await until(async () => (await (await fetch(`${base}api/sessions`, { headers: cookie })).json())
+        .find((x: { ticket_id: number | null; role: string }) => (what === 'ticket' ? x.ticket_id === id : x.ticket_id === null && x.role !== 'operator')), `the ${what} session`);
+      await until(() => page.evaluate(`!!document.querySelector('[data-task="term-${s.id}"]')`), `the ${what} terminal`);
+      return { wid: `term-${s.id}`, grant: s.grant_id as number };
+    };
+
+    const { wid: term, grant } = await launched(await fetch(`${base}api/tickets/${id}/launch`, { method: 'POST', headers: cookie }), 'ticket');
+    expect(await label(term)).toBe(`#${id} execute`);
+    await fetch(`${base}api/grants/${grant}`, { method: 'DELETE', headers: cookie });
+    await until(async () => (await label(term)) === `#${id} execute (ended)`, 'the ended label');
+    db.prepare("UPDATE tickets SET status = 'done', merged_at = 'x' WHERE id = ?").run(id);
+
+    const bs = await launched(await fetch(`${base}api/brainstorm`, { method: 'POST', headers: { ...cookie, 'content-type': 'application/json' }, body: '{}' }), 'brainstorm');
+    expect(await label(bs.wid)).toBe('Brainstorm');
+    await fetch(`${base}api/grants/${bs.grant}`, { method: 'DELETE', headers: cookie });
+
+    await page.evaluate(`import('/wm.js').then((wm) => wm.open('long', { title: 'A window whose label is far too long for its button' }))`);
+    const m = await page.evaluate<{ w: number; cut: boolean }>(`(() => {
+      const b = document.querySelector('[data-task="long"]'), s = b.querySelector('span');
+      return { w: b.getBoundingClientRect().width, cut: s.scrollWidth > s.clientWidth && getComputedStyle(s).textOverflow === 'ellipsis' };
+    })()`);
+    expect(m).toEqual({ w: 110, cut: true });
+    await page.evaluate(`import('/wm.js').then((wm) => wm.close('long'))`);
+    await until(() => sessions.size === 0, 'the agents to exit');
   });
 
   it('opens Settings from a double-clicked desktop icon and Inbox from Enter; icons stay under windows', async () => {
