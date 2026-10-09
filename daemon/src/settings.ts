@@ -30,8 +30,8 @@ const FILES = {
       .default({ auto: true, every: 10 }),
     // Phases whose sessions open a terminal on their own; the rest run unseen until the operator opens one (card → Terminal).
     // Brainstorms and operator terminals always open: the operator started them.
-    terminals: z.object({ auto: z.array(z.enum(['plan', 'execute', 'test'])).default(['plan', 'execute']) }).strict()
-      .default({ auto: ['plan', 'execute'] }),
+    terminals: z.object({ auto: z.array(z.enum(['plan', 'execute', 'test'])).default(['plan', 'execute', 'test']) }).strict()
+      .default({ auto: ['plan', 'execute', 'test'] }),
     // CSS zoom of the whole UI (Ctrl+= / Ctrl+- / Ctrl+0, Settings → General), here so it follows the operator across repos.
     zoom: z.number().min(0.8).max(2).default(1),
   }).strict(),
