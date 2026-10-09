@@ -218,7 +218,7 @@ export function writePreferences(value: unknown): string {
  * The display name is the folder's basename, never stored.
  */
 export const projectsPath = () => join(boardHome(), 'projects.json');
-export const DEFAULT_COLOUR = '#008080';
+const DEFAULT_COLOUR = '#008080';
 const projectList = z.array(z.object({
   path: z.string().refine(isAbsolute, 'must be an absolute path'),
   colour: z.union([z.string().regex(/^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i, 'must be #rgb or #rrggbb'), z.number().min(0).max(360)]),
