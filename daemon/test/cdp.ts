@@ -31,7 +31,8 @@ export async function browser(args: string[] = []) {
   if (!exe) throw new Error('the UI tests need Edge or Chrome; set KANBAN95_BROWSER to its executable');
   const profile = mkdtempSync(join(tmpdir(), 'k95-browser-'));
   const argv = ['--headless=new', '--remote-debugging-port=0', `--user-data-dir=${profile}`, '--no-first-run',
-    '--no-default-browser-check', '--window-size=1280,720', ...args, 'about:blank'];
+    // Muted: a headless browser still plays sound, so every test merge and question rang the board's chimes on the operator's speakers.
+    '--no-default-browser-check', '--window-size=1280,720', '--mute-audio', ...args, 'about:blank'];
   // A headed browser opens a window on the operator's desktop while they work; never allow one.
   if (!argv.some((a) => a.startsWith('--headless'))) throw new Error('cdp.ts must start the browser with --headless');
   const proc = spawn(exe, argv, { stdio: 'ignore' });
