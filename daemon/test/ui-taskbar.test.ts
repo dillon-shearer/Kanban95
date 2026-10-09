@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { sessions } from '../src/launcher.ts';
+import { changed } from '../src/lifecycle.ts';
 import { until } from './cdp.ts';
 import { srv, page, base, ticket, statusBar, click, rightClick, menuItems, menuPick } from './ui.ts';
 
@@ -169,5 +170,32 @@ describe('ui-taskbar', { timeout: 60_000 }, () => {
     expect(shutdowns).toBe(0);
     Object.assign(srv.board, { root: undefined, shutdown: undefined });
     rmSync(root, { recursive: true, force: true });
+  });
+
+  it('a stale daemon: the status bar says restart, the tray shows a Restart badge that opens the Restart board confirm', async () => {
+    await page.goto(base);
+    await until(() => page.evaluate(`!!document.querySelector('[data-win="board"]')`), 'the board');
+    const badge = () => page.evaluate<boolean>(`!document.getElementById('restart-badge').hidden`);
+    const bar = () => page.evaluate<string>(`document.querySelector('.k95-board .status-bar').textContent`);
+    const dialog = () => page.evaluate<string | null>(`[...document.querySelectorAll('dialog[open]')].find((d) => d.querySelector('.title-bar-text').textContent === 'Restart board')?.querySelector('.window-body').textContent ?? null`);
+    expect(await badge()).toBe(false);
+    expect(await bar()).not.toContain('Restart the board');
+    try {
+      for (const stale of ['daemon', 'shell'] as const) {
+        srv.board.stale = stale;
+        changed(null);
+        await until(badge, 'the Restart badge');
+        expect(await bar()).toContain('Restart the board to use the merged changes.');
+        await click('#restart-badge');
+        await until(dialog, 'the confirm');
+        expect((await dialog())!.includes('A merge changed the shell itself')).toBe(stale === 'shell');
+        await page.evaluate(`[...document.querySelectorAll('dialog[open] button')].find((b) => b.textContent === 'Cancel').click()`);
+        srv.board.stale = false; // a restart clears it; the next round then waits on a fresh refetch
+        changed(null);
+        await until(async () => !(await badge()), 'the badge to go');
+      }
+    } finally {
+      srv.board.stale = false;
+    }
   });
 });
