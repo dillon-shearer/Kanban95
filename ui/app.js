@@ -32,7 +32,7 @@ let sessions = [];
 let inbox = [];
 let runner = { on: false, concurrency: 3, running: [], left: 0, backlog: 0, waits: [] }; // GET /api/runner: the Run button and its status-bar line
 let models = null; // ~/.kanban95/models.json as written, for the cards' default model and effort
-let settings = { paths: {}, sounds: true, voice: { backend: 'local', mode: 'push' }, housekeeping: { auto: true, every: 10 } };
+let settings = { paths: {}, sounds: { merge: true, attention: true }, voice: { backend: 'local', mode: 'push' }, housekeeping: { auto: true, every: 10 } };
 let limits = null; // GET /api/limits: { rows, errors, fetched_at }, null until the first answer
 const views = new Map(); // open window id → redraw(ticketId | null)
 
@@ -41,13 +41,14 @@ async function refreshTicket(id) {
     const was = tickets.get(id)?.flags.needs_human;
     const t = await api('GET', `/tickets/${id}`);
     tickets.set(id, t);
+    for (const term of terms.values()) if (term.s.ticket_id === id) term.paint();
     if (t.flags.needs_human && !was) say(await flagReason(id));
   } catch (e) {
     if (e.status !== 404) throw e;
     tickets.delete(id); // deleted: it leaves the board, and its windows close (its agents were stopped by the delete)
     selection.delete(id);
     close(`ticket-${id}`);
-    for (const [wid, ticket] of terms) if (ticket === id) close(wid);
+    for (const [wid, term] of terms) if (term.s.ticket_id === id) close(wid);
   }
 }
 async function refreshShared() {
@@ -57,12 +58,17 @@ async function refreshShared() {
 }
 const redraw = (ticket) => views.forEach((f) => f(ticket));
 
+const SOUND_SETTING = { ding: 'merge', chord: 'attention' };
+
 function listen() {
   const ws = new WebSocket(`ws://${location.host}/events`);
   ws.onmessage = async (m) => {
     const e = JSON.parse(m.data);
     if (e.sound) {
-      if (settings.sounds) new Audio(`sounds/${e.sound}.wav`).play().catch(() => {});
+      if (settings.sounds[SOUND_SETTING[e.sound]]) new Audio(`sounds/${e.sound}.wav`).play().catch(() => {});
+      // The chord's reason is said by refreshTicket when it first sees the flag, so the later change event does not repeat it.
+      if (e.sound === 'chord' && e.ticket != null) await refreshTicket(e.ticket);
+      else if (e.sound === 'ding' && e.ticket != null) say(`#${e.ticket} merged.`);
       return;
     }
     if (e.ticket != null) await refreshTicket(e.ticket);
@@ -254,6 +260,19 @@ async function restart(id) {
     await sayLaunched([id]);
   });
 }
+// Sends a Done ticket, merged or not, back to a worker with the operator's reason as its failure note (docs/LIFECYCLE.md → Reject).
+async function reject(id) {
+  const reason = h('textarea', { rows: 6, cols: 60 });
+  const asked = dialog(`Reject #${id}`, h('div', { class: 'field-row-stacked' }, h('label', {}, 'What is wrong and what done looks like'), reason), ['Reject', 'Cancel']);
+  const ok = reason.closest('dialog').querySelector('.k95-buttons button');
+  ok.disabled = true; // an empty reason would tell the worker nothing; the daemon refuses it too
+  reason.addEventListener('input', () => { ok.disabled = !reason.value.trim(); });
+  if ((await asked) !== 'Reject') return;
+  await act(async () => {
+    await api('POST', `/tickets/${id}/reject`, { reason: reason.value });
+    await sayLaunched([id]);
+  });
+}
 const newBrainstorm = () => act(async () => openTerminal(await api('POST', '/brainstorm')), 'Brainstorm started.');
 /** An operator terminal: an agent with the operator's reach on the board, given the mission typed here. The daemon refuses an empty one. */
 async function newOperator() {
@@ -309,6 +328,7 @@ function cardMenu(ts, x, y) {
     { label: 'Launch', disabled: !ts.some(launchable), run: () => launch(ts) },
     { label: 'Resume', disabled: !ts.some(resumable), run: () => launch(ts, 'resume') },
     ...(ts.length === 1 && restartable(ts[0]) ? [{ label: 'Restart', run: () => restart(ts[0].id) }] : []),
+    ...(ts.length === 1 && ts[0].status === 'done' ? [{ label: 'Reject', run: () => reject(ts[0].id) }] : []),
     '-',
     { label: 'Model', items: [
       { label: `Phase default${tick('model', null)}`, run: () => set('model', null) },
@@ -341,6 +361,10 @@ function cardMenu(ts, x, y) {
   ]);
 }
 
+// Folded columns, by status. localStorage is per origin and one daemon serves one repo, so the key is per repo as wm.js's geometry is.
+const collapsed = new Set((() => { try { return JSON.parse(localStorage.getItem('k95.collapsed')) ?? []; } catch { return []; } })());
+const saveCollapsed = () => { try { localStorage.setItem('k95.collapsed', JSON.stringify([...collapsed])); } catch { /* storage off: columns reopen */ } };
+
 function openBoard() {
   const w = open('board', { title: 'Board', w: 1000, h: 560, persist: true, onClose: () => { views.delete('board'); say = console.log; } });
   if (w.body.firstChild) return;
@@ -370,8 +394,12 @@ function openBoard() {
     const focus = focused && cols.contains(focused) ? [focused.closest('.col').dataset.status, focused.dataset.id] : null;
     cols.replaceChildren(...COLUMNS.map(([s, label]) => {
       const list = all.filter((t) => t.status === s);
-      return h('fieldset', { class: 'col', 'data-status': s }, h('legend', {}, `${label} (${list.length})`), h('div', { class: 'cards' }, list.map(card)));
+      const shut = collapsed.has(s);
+      const legend = h('legend', { class: list.some((t) => t.flags.needs_human) ? 'alert' : '', title: shut ? 'Expand' : 'Collapse',
+        onclick: (e) => { e.stopPropagation(); shut ? collapsed.delete(s) : collapsed.add(s); saveCollapsed(); drawBoard(); } }, `${label} (${list.length})`);
+      return h('fieldset', { class: `col${shut ? ' collapsed' : ''}`, 'data-status': s }, legend, h('div', { class: 'cards' }, shut ? [] : list.map(card)));
     }));
+    cols.style.gridTemplateColumns = COLUMNS.map(([s]) => (collapsed.has(s) ? '24px' : 'minmax(0, 1fr)')).join(' ');
     for (const c of cols.querySelectorAll('.col')) c.querySelector('.cards').scrollTop = scroll[c.dataset.status] ?? 0;
     if (focus) cols.querySelector(`.col[data-status="${focus[0]}"] .card[data-id="${focus[1]}"]`)?.focus();
     count.textContent = `${all.length} tickets · ${sessions.length} agents`;
@@ -538,13 +566,23 @@ function ticketForm(w, t) {
     h('div', { class: 'field-row-stacked' }, h('label', {}, 'Depends on'), deps),
     h('div', { class: 'field-row' }, h('button', { onclick: save }, t ? 'Save' : 'Create'),
       t && h('button', { disabled: t.status !== 'backlog', onclick: () => launch([t]) }, 'Launch'),
-      t && h('button', { onclick: () => restart(t.id) }, 'Restart')));
+      t && h('button', { onclick: () => restart(t.id) }, 'Restart'),
+      t?.status === 'done' && h('button', { onclick: () => reject(t.id) }, 'Reject')));
 }
 
 // ---- terminals ----
 
 const seen = new Set();
-const terms = new Map(); // open terminal window id → its session's ticket id
+const terms = new Map(); // open terminal window id → { s: its session, paint: recolour its title bar }
+// A terminal's title-bar colour, first match wins; app.css → `.k95-win[data-state]` holds the palette. A new state is a line
+// here and a rule there.
+function termState(s, ended) {
+  if (ended) return 'ended';
+  if (tickets.get(s.ticket_id)?.flags.needs_human) return 'human';
+  if (s.ticket_id === null) return 'plan'; // brainstorm (planner) or operator terminal
+  if (s.phase === 'execute' || s.phase === 'test') return s.phase;
+  return null;
+}
 function openNewTerminals() {
   for (const s of sessions) if (!seen.has(s.id)) openTerminal(s, true);
 }
@@ -567,7 +605,7 @@ function openTerminal(s, auto = false) {
   // X ends the agent for good, after a confirm; the board's own closes (after a report, a deleted ticket) never do.
   const onX = async () => {
     if (w.el.classList.contains('ended')) return w.close();
-    const ask = s.ticket_id === null ? 'End this brainstorm?' : `End the agent for #${s.ticket_id}? The ticket is flagged so you can resume it.`;
+    const ask = s.ticket_id === null ? `End this ${s.role === 'operator' ? 'operator terminal' : 'brainstorm'}?` : `End the agent for #${s.ticket_id}? The ticket is flagged so you can resume it.`;
     if ((await dialog('End agent', `${ask} Minimize to keep it running.`, ['End', 'Cancel'])) !== 'End') return;
     try {
       await api('DELETE', `/sessions/${s.id}`);
@@ -579,7 +617,13 @@ function openTerminal(s, auto = false) {
   // Placed per ticket, not per session: every later phase, retry and relaunch opens where the operator left the last one.
   const w = open(wid, { title, w: 760, h: 440, persist: s.ticket_id !== null && `term-ticket-${s.ticket_id}`, background: auto, onX, extra: [micButton((text) => send({ data: text }))],
     items: s.ticket_id === null ? [] : [{ label: 'Open ticket', run: () => openTicket(s.ticket_id) }], onClose: () => { terms.delete(wid); ro.disconnect(); ws.close(); term.dispose(); } });
-  terms.set(wid, s.ticket_id);
+  const paint = () => {
+    const state = termState(s, w.el.classList.contains('ended'));
+    if (state) w.el.dataset.state = state;
+    else delete w.el.dataset.state; // an unknown phase keeps the 98.css look
+  };
+  terms.set(wid, { s, paint });
+  paint();
   w.body.classList.add('k95-term');
   term.loadAddon(fit);
   term.open(w.body);
@@ -589,6 +633,7 @@ function openTerminal(s, auto = false) {
     term.write('\r\n\x1b[90m[session ended]\x1b[0m\r\n');
     w.title(`${title} (ended)`);
     w.el.classList.add('ended');
+    paint();
     if (!auto || s.run_id === null) return;
     // The run's outcome is written as its terminal closes; its output stays in Ticket → Runs. Every outcome the board itself
     // ends a run with closes it: after conflict and restart a new run is already open, and a stale "ended" window in front of
@@ -734,6 +779,7 @@ function openSettings(tab) {
       })));
       const save = () => act(async () => {
         const out = { cli: cli.value };
+        for (const c of CLIS) if (m[c]?.models) (out[c] ??= {}).models = m[c].models; // hand-edited; kept as is
         for (const c of CLIS) for (const ph of PHASES) {
           const { model, effort } = cells[`${c}.${ph}`];
           if (model.value.trim()) (out[c] ??= {})[ph] = { model: model.value.trim(), effort: effort.value };
@@ -800,8 +846,9 @@ function openSettings(tab) {
       }, 'Saved.');
       const hkAuto = h('input', { type: 'checkbox', id: 'hk-auto', checked: settings.housekeeping.auto });
       const hkEvery = h('input', { type: 'number', id: 'hk-every', min: 1, step: 1, value: settings.housekeeping.every });
-      p.replaceChildren(h('div', { class: 'field-row' }, h('input', { type: 'checkbox', id: 'sounds', checked: settings.sounds,
-        onchange: (e) => act(() => saveSettings({ sounds: e.target.checked }), 'Saved.') }), h('label', { for: 'sounds' }, 'Sounds: ding when a ticket merges, chord when the board needs you')),
+      p.replaceChildren(...[['merge', 'Ding when a ticket merges'], ['attention', 'Chord when the board needs you']].map(([k, label]) =>
+        h('div', { class: 'field-row' }, h('input', { type: 'checkbox', id: `sound-${k}`, checked: settings.sounds[k],
+          onchange: (e) => act(() => saveSettings({ sounds: { ...settings.sounds, [k]: e.target.checked } }), 'Saved.') }), h('label', { for: `sound-${k}` }, label))),
         h('fieldset', {}, h('legend', {}, 'Runner'),
           h('div', { class: 'field-row' }, h('label', { for: 'concurrency' }, 'Tickets running at once'), at),
           h('button', { onclick: saveRunner }, 'Save')),

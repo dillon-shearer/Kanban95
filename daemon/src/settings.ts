@@ -14,13 +14,15 @@ export const EFFORT = ['low', 'medium', 'high', 'max'] as const;
 export type Effort = (typeof EFFORT)[number];
 
 const phase = z.object({ model: z.string().trim().min(1), effort: z.enum(EFFORT).default('medium') }).strict();
-const perCli = z.object({ plan: phase, execute: phase, test: phase, operator: phase }).partial().strict();
+const perCli = z.object({ models: z.array(z.string().trim().min(1)), plan: phase, execute: phase, test: phase, operator: phase }).partial().strict();
 const exe = z.string().refine((p) => p === '' || (isAbsolute(p) && existsSync(p)), 'must be empty or an absolute path to an existing file');
 const FILES = {
   models: z.object({ cli: z.enum(CLIS), claude: perCli.optional(), codex: perCli.optional() }).strict(),
   settings: z.object({
     paths: z.object({ claude: exe, codex: exe }).partial().strict().default({}),
-    sounds: z.boolean().default(true),
+    // A pre-split file has one boolean for both sounds; it carries over to each.
+    sounds: z.preprocess((v) => (typeof v === 'boolean' ? { merge: v, attention: v } : v),
+      z.object({ merge: z.boolean().default(true), attention: z.boolean().default(true) }).strict().default({ merge: true, attention: true })),
     voice: z.object({ backend: z.enum(['local']).default('local'), mode: z.enum(['push', 'toggle']).default('push') }).strict()
       .default({ backend: 'local', mode: 'push' }),
     // Off: no ticket is filed after merges; the Housekeeping button still works.
@@ -148,8 +150,26 @@ export function runSettings(t: Ticket | null, phase: 'plan' | 'execute' | 'test'
   const model = (own && t?.model) || d.model || '';
   const effort = (own && t?.effort) || d.effort || 'medium';
   if (!model && phase !== 'operator') throw new Error(`no ${phase} model for ${cli} in ${file}`);
+  const bad = model && uncatalogued(model, cli);
+  if (bad) throw new Error(bad);
+  // ponytail: only a model id outside the list is caught before launch. An agent stuck at its prompt for another reason stays
+  // In Progress unflagged; the upgrade is an idle timer on pty output.
   if (!EFFORT.includes(effort)) throw new Error(`bad effort ${effort} for ${cli} ${phase} in ${file}`);
   return { cli, model, effort, path: readConfig('settings').paths[cli as Cli] || undefined };
+}
+
+/**
+ * Why a model id may not run on a CLI: it is not in that CLI's `models` list in models.json. No list (or no file) means
+ * no check, so a catalog written before the list existed keeps launching. Null when the model is fine.
+ */
+export function uncatalogued(model: string, cli?: string | null): string | null {
+  const file = configPath('models');
+  if (!existsSync(file)) return null;
+  const cfg = JSON.parse(readFileSync(file, 'utf8'));
+  const c = cli ?? cfg.cli;
+  const list = cfg[c]?.models;
+  if (!Array.isArray(list) || list.includes(model)) return null;
+  return `model ${model} is not in the ${c} model list in ${file}`;
 }
 
 /** The operator's configured executable for a CLI, else its bare name for PATH. A broken settings.json reads as unset. */

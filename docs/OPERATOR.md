@@ -38,7 +38,7 @@ Each card shows its id, title, model, effort and CLI (grey italic means "the pha
 
 ### 3. Watch, or don't
 
-Every agent gets its own terminal window titled `#id — phase — model`. The board opens them by itself, behind whatever you are working in; a terminal whose agent finished its step, or that the board ended to start a new one (a merge conflict on submit, a Restart), closes itself a moment later (its output stays in the ticket's Runs tab). If a card says *running* but the terminal in front says "(ended)", the ended one is an older run: the live one is behind it, in the taskbar, or under Ticket → Runs. You can type into any terminal; it is the agent's real session. **Minimize** hides a terminal and keeps its agent running (reopen it from the taskbar or Ticket → Runs). **X** stops the agent for good: it asks first ("End the agent for #id? The ticket is flagged so you can resume it. Minimize to keep it running."; for a brainstorm, "End this brainstorm?"), and Cancel or Esc keeps everything running. An ended ticket agent turns the card red with the note "ended by the operator from the terminal window" and offers **Resume** in the Inbox and the card menu. A terminal titled "(ended)" has no agent left, so its X just closes the window.
+Every agent gets its own terminal window titled `#id — phase — model`. The board opens them by itself, behind whatever you are working in; a terminal whose agent finished its step, or that the board ended to start a new one (a merge conflict on submit, a Restart), closes itself a moment later (its output stays in the ticket's Runs tab). If a card says *running* but the terminal in front says "(ended)", the ended one is an older run: the live one is behind it, in the taskbar, or under Ticket → Runs. You can type into any terminal; it is the agent's real session. **Minimize** hides a terminal and keeps its agent running (reopen it from the taskbar or Ticket → Runs). **X** stops the agent for good: it asks first ("End the agent for #id? The ticket is flagged so you can resume it. Minimize to keep it running."; for a brainstorm, "End this brainstorm?"; for an operator terminal, "End this operator terminal?"), and Cancel or Esc keeps everything running. An ended ticket agent turns the card red with the note "ended by the operator from the terminal window" and offers **Resume** in the Inbox and the card menu. A terminal titled "(ended)" has no agent left, so its X just closes the window.
 
 The ticket moves on its own: In Progress → Testing → Done. A failed test sends it back to In Progress with the tester's notes, up to three retries. When it merges you hear the **ding**.
 
@@ -62,6 +62,8 @@ For anything else, open the ticket (double-click the card): the Notes tab has th
 
 A merged ticket's worktree and branch are removed by the board. Every ten merged tickets the board files a housekeeping ticket in Backlog; the **Housekeeping** button files and launches one on demand. Settings → General → Housekeeping switches the automatic ticket off or changes the interval.
 
+If you review a Done ticket and it is not right, **Reject** it (card menu, or the button in its ticket window; only on Done tickets). The dialog has one box, "What is wrong and what done looks like", and will not submit empty. The ticket goes back to In Progress with its retry count at 0 and a worker starts at once, with your text in its brief under "What failed on the last attempt". If the ticket had not merged yet, its merge is cancelled and the worker continues in the same worktree; if it had, the worker gets a fresh worktree from the base branch, which already holds the merged work, and the next pass merges again. Reset to Backlog, by contrast, starts over and loses your reason.
+
 ## The windows
 
 | Window | Open from | What it is for |
@@ -79,6 +81,8 @@ The desktop has an icon for Board, Inbox, Brain, Settings, Notepad, Limits, New 
 
 Windows can be dragged by the title bar, resized from the corner, minimized to the taskbar and maximized to fill the desktop (Maximize button or double-click the title bar; Restore puts it back). Board, Brain, Inbox, Settings and Notepad remember where you left them, maximized or not. So does a ticket's terminal, per ticket: once you move or resize it, every later terminal for that ticket (the test phase, a retry, a Restart or Resume, reopening it from Ticket → Runs) opens at the same place and size, also after the board is closed and reopened. A window with no remembered place (a ticket's first terminal, brainstorm and operator terminals, Ticket windows) opens where it covers the least of the windows already open, minimized ones aside: in free space while the desktop has room, so several new terminals sit side by side instead of on top of each other, and on a full desktop at the spot least covered, always inside the desktop. With more windows than fit, small arrows appear at the ends of the taskbar buttons; click them or turn the mouse wheel over the taskbar to scroll. Right-click a taskbar button (or focus it and press Shift+F10 or the Menu key) for Restore, Minimize, Maximize and Close, plus **Open ticket** on a ticket's terminal; Close there only closes the window, the agent keeps running. Ctrl+click buttons to select several, Shift+click to select a range; right-click a selected one to Restore, Minimize or Close them all. A plain click clears the selection. Drag a button sideways to reorder the taskbar (the order resets on reload).
 
+**Terminal colours.** A terminal's title bar shows what its agent is doing, whether or not the window is focused; an unfocused one shows a paler version of the same colour. **Blue**: executing a ticket. **Green**: testing a ticket. **Purple**: a brainstorm or an operator terminal. **Orange**: the ticket needs you (an open question or a failure that stopped it; the Inbox says why), whatever its phase; it goes back to blue or green when the flag clears. **Grey**: the session has ended, whatever the ticket's flags. Every other window keeps the standard blue title bar when focused and grey when not.
+
 ## Notepad
 
 A place to draft before you hand words to an agent or a ticket. One plain text area, with the mic beside it. It saves half a second after you stop typing and again when you close the window, to `.kanban95/notepad.md` in the repo (git-ignored; each repo has its own). **New ticket from selection** opens the New ticket form with the selected text in Body, or all of it when nothing is selected; **Copy** puts the same text on the clipboard. Up to 256 KB; past that the status line says it was not saved and the file keeps the last text that fit. Agents never read it.
@@ -87,7 +91,7 @@ A place to draft before you hand words to an agent or a ticket. One plain text a
 
 Click a card to select it, Ctrl+click to add or remove one, Shift+click to select the run of cards in the same column from the last one you clicked, Ctrl+A to select every card; click empty column space to clear the selection. Right-click a selected card and its menu acts on the whole selection: one confirmation for Reset to Backlog or Delete naming the count, Launch starts only the Backlog cards and says how many it skipped, Open opens at most 8 Ticket windows, and the status bar reports the outcome once ("Effort set to high on 4 tickets."), naming any ticket the daemon refused while the rest go ahead.
 
-Right-click a card for its menu: Open, Launch, Resume (a red running card whose agent is gone), Restart (one In progress or Testing card: replaces its agent), **Model**, **Effort** and **CLI** (set or clear this ticket's override without opening it), Retry merge (after you fixed a conflict or cleaned the main checkout), Reset to Backlog (also on a card waiting on a dependency: it cancels the wait, so it will not launch by itself), Delete.
+Right-click a card for its menu: Open, Launch, Resume (a red running card whose agent is gone), Restart (one In progress or Testing card: replaces its agent), **Model**, **Effort** and **CLI** (set or clear this ticket's override without opening it), Retry merge (after you fixed a conflict or cleaned the main checkout), Reject (one Done card: send it back to a worker with a reason, see Done above), Reset to Backlog (also on a card waiting on a dependency: it cancels the wait, so it will not launch by itself), Delete.
 
 ![Card menu](img/card-menu.png)
 
@@ -143,7 +147,10 @@ If the microphone is blocked, the board says how to allow it: Windows Settings �
 
 ## Sounds
 
-`ding` when a ticket merges, `chord` when the board needs you. **Settings → General** turns them off.
+- **Ding** (a soft two-tone chime): a ticket merged; the status bar says "#<id> merged." It also plays once, with no message, when the runner stops because nothing is left to launch.
+- **Chord** (a gentle three-note chord): the board needs you on a ticket (a question, a silent exit, the retry cap, a merge conflict, a dirty base); the status bar says why, and the Inbox has it too.
+
+**Settings → General** has one checkbox per sound; each silences only its own.
 
 ## Dogfood walkthrough
 

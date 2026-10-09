@@ -1,7 +1,7 @@
 // One git worktree per ticket: <repo>/.worktrees/t-<id> on branch ticket/<id>, forked from the repo's current branch.
 import { execFileSync } from 'node:child_process';
-import { appendFileSync, existsSync, readFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { appendFileSync, existsSync, lstatSync, readdirSync, readFileSync, readlinkSync, realpathSync, unlinkSync } from 'node:fs';
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 
 export const git = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: 'pipe' }).trim();
 
@@ -16,7 +16,8 @@ function excludeWorktrees(repo: string) {
 }
 
 /**
- * Creates the ticket's worktree, or returns the existing one (retries and the test phase reuse it).
+ * Creates the ticket's worktree, or returns the existing one (retries and the test phase reuse it). A rejected ticket whose
+ * worktree was removed on merge gets a fresh one from the base, which holds its merged work.
  * Refuses when the base branch has uncommitted changes to tracked files: the ticket would silently fork without them.
  * Untracked files do not count; they are not part of any commit either way.
  */
@@ -29,9 +30,22 @@ export function createWorktree(repo: string, ticketId: number): { path: string; 
   const dirty = git(repo, 'status', '--porcelain', '--untracked-files=no');
   if (dirty) throw new Error(`base branch ${base} has uncommitted changes; commit or stash them before launching:\n${dirty}`);
   excludeWorktrees(repo);
+  git(repo, 'worktree', 'prune'); // a worktree directory deleted by hand stays registered and blocks its branch
+  // A branch left from an earlier cycle is reused when it holds work the base lacks; one already merged (a rejected ticket
+  // whose branch survived cleanup) is reset to the base, which has that work and everything since.
   const exists = git(repo, 'branch', '--list', branch) !== '';
-  git(repo, 'worktree', 'add', ...(exists ? [path, branch] : ['-b', branch, path, base]));
+  const merged = exists && isAncestor(repo, branch, base);
+  git(repo, 'worktree', 'add', ...(exists && !merged ? [path, branch] : [exists ? '-B' : '-b', branch, path, base]));
   return { path, branch, base };
+}
+
+function isAncestor(repo: string, a: string, b: string): boolean {
+  try {
+    git(repo, 'merge-base', '--is-ancestor', a, b);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -62,12 +76,60 @@ export function syncWorktree(repo: string, ticketId: number): { ok: true } | { o
  */
 export function removeWorktree(repo: string, ticketId: number, force = false): { branchDeleted: boolean } {
   const path = worktreePath(repo, ticketId);
-  if (existsSync(path)) git(repo, 'worktree', 'remove', ...(force ? ['--force'] : []), path);
+  if (existsSync(path)) {
+    unlinkLinks(repo, path);
+    git(repo, 'worktree', 'remove', ...(force ? ['--force'] : []), path);
+  }
   try {
     git(repo, 'branch', '-d', branchName(ticketId));
     return { branchDeleted: true };
   } catch {
     return { branchDeleted: false }; // unmerged or absent: the operator decides
+  }
+}
+
+/**
+ * Unlinks every junction and symlink under `dir` (and `dir` itself if it is one) without following it. Call it before deleting
+ * anything under `.worktrees/`: `git worktree remove --force` followed a worktree's `node_modules` junction to the main
+ * checkout's and emptied main's `daemon/`, and `rmSync` is not trusted to stop at a junction either. Node's lstat reports a
+ * Windows junction as a symbolic link and `unlinkSync` removes the junction, not its target. Throws, deleting nothing more,
+ * when a link that resolves into the main checkout outside `.worktrees/` could not be unlinked.
+ */
+export function unlinkLinks(repo: string, dir: string): void {
+  const stuck: string[] = [];
+  const visit = (path: string) => {
+    const st = lstatSync(path, { throwIfNoEntry: false });
+    if (st?.isSymbolicLink()) {
+      try {
+        unlinkSync(path);
+      } catch (e) {
+        if (intoMain(repo, path)) stuck.push(`${path}: ${(e as Error).message}`);
+      }
+    } else if (st?.isDirectory()) {
+      for (const d of readdirSync(path, { withFileTypes: true })) if (!d.isFile()) visit(join(path, d.name)); // a plain file is no link: skip its lstat
+    }
+  };
+  visit(dir);
+  if (stuck.length) throw new Error(`refusing to remove ${dir}: a link into the main checkout could not be unlinked\n${stuck.join('\n')}`);
+}
+
+/** Whether `link` resolves into `repo` outside `.worktrees/`. A link whose target cannot be read counts as in. */
+function intoMain(repo: string, link: string): boolean {
+  const within = (root: string, p: string) => {
+    const rel = relative(root, p);
+    return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
+  };
+  try {
+    let target: string;
+    try {
+      target = realpathSync.native(link);
+    } catch {
+      target = resolve(dirname(link), readlinkSync(link)); // a dangling link: where it would point
+    }
+    const root = realpathSync.native(repo);
+    return within(root, target) && !within(join(root, '.worktrees'), target);
+  } catch {
+    return true;
   }
 }
 

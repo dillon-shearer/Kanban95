@@ -2,7 +2,7 @@
 import { existsSync, readdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
-import { git, removeWorktree, worktreePath } from './git.js';
+import { git, removeWorktree, unlinkLinks, worktreePath } from './git.js';
 import { audit, revoke } from './grants.js';
 import { sessions } from './launcher.js';
 
@@ -14,8 +14,10 @@ const log = (db: DatabaseSync, ticket: number | null, tool: string, args: unknow
   audit(db, { grant_id: null, ticket_id: ticket, tool, args, outcome });
 const message = (e: unknown) => ((e as { stderr?: string }).stderr || (e as Error).message).trim();
 // A directory something still holds open (a running exe, an editor, OneDrive) is left for the next sweep, never fatal.
-const remove = (path: string): string | undefined => {
+// Links inside are unlinked first, so the delete never reaches through a junction into the main checkout.
+const remove = (repo: string, path: string): string | undefined => {
   try {
+    unlinkLinks(repo, path);
     rmSync(path, { recursive: true, force: true });
   } catch (e) {
     return message(e);
@@ -68,7 +70,7 @@ export function sweep(b: Board): void {
           log(db, ticket, 'janitor.worktree', { path, error: message(e) }, 'error');
           continue;
         }
-        const error = remove(path); // a directory git does not know: left over, not a worktree
+        const error = remove(repo, path); // a directory git does not know: left over, not a worktree
         log(db, ticket, 'janitor.worktree', { path, registered: false, error }, error ? 'error' : 'ok');
       }
     }
@@ -78,7 +80,7 @@ export function sweep(b: Board): void {
   if (existsSync(sessRoot)) {
     for (const name of readdirSync(sessRoot)) {
       if (sessions.has(Number(name))) continue;
-      const error = remove(join(sessRoot, name));
+      const error = remove(repo, join(sessRoot, name));
       log(db, null, 'janitor.session', { dir: join(sessRoot, name), error }, error ? 'error' : 'ok');
     }
   }
