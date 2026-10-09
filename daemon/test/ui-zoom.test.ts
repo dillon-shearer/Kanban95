@@ -18,6 +18,8 @@ const zoom = () => page.evaluate<number>(`Number(document.body.style.zoom || 1)`
 type Rect = { left: number; top: number; right: number; bottom: number; width: number; height: number };
 const rect = (sel: string) => page.evaluate<Rect>(`(() => { const r = document.querySelector(${JSON.stringify(sel)}).getBoundingClientRect();
   return { left: r.left, top: r.top, right: r.right, bottom: r.bottom, width: r.width, height: r.height }; })()`);
+/** The font a toolbar button is drawn in: 98.css's pixel font only at a whole-number zoom. */
+const font = () => page.evaluate<string>(`getComputedStyle(document.querySelector('[data-win="board"] button')).fontFamily`);
 const board = () => until(() => page.evaluate(`!!document.querySelector('[data-win="board"]')`), 'the board');
 const dblclickIcon = (name: string) => page.evaluate(`document.querySelector('[data-icon="${name}"]').dispatchEvent(new MouseEvent('dblclick'))`);
 
@@ -31,8 +33,10 @@ describe('ui-zoom', { timeout: 90_000 }, () => {
     await board();
     const win = await rect('[data-win="board"]');
     const bar = await rect('#taskbar');
+    expect(await font()).toMatch(/^"Pixelated MS Sans Serif"/);
     await ctrl('=');
     expect(await zoom()).toBe(1.1);
+    expect(await font()).toMatch(/^Tahoma/);
     expect((await rect('[data-win="board"]')).width).toBeCloseTo(win.width * 1.1, 0);
     expect((await rect('#taskbar')).height).toBeCloseTo(bar.height * 1.1, 0);
     await until(() => saved() === 1.1, 'zoom 1.1 in settings.json');
@@ -53,6 +57,7 @@ describe('ui-zoom', { timeout: 90_000 }, () => {
     await page.goto(base);
     await board();
     expect(await zoom()).toBe(0.9);
+    expect(await font()).toMatch(/^Tahoma/); // after a reload too
     await dblclickIcon('Settings');
     await page.evaluate(`[...document.querySelectorAll('[data-win="settings"] [role=tab] a')].find((t) => t.textContent === 'Board').click()`);
     await until(() => page.evaluate(`!!document.querySelector('#zoom')`), 'the Board tab');
@@ -63,6 +68,7 @@ describe('ui-zoom', { timeout: 90_000 }, () => {
     await click('[data-win="settings"] .title-bar-text'); // focus off the select
     await ctrl('0');
     expect(await zoom()).toBe(1);
+    expect(await font()).toMatch(/^"Pixelated MS Sans Serif"/);
     expect(await page.evaluate(`document.querySelector('#zoom').value`)).toBe('1');
     await until(() => saved() === 1, 'zoom reset in settings.json');
     for (let i = 0; i < 5; i++) await ctrl('-');
@@ -80,6 +86,7 @@ describe('ui-zoom', { timeout: 90_000 }, () => {
     await click('[data-win="settings"] .title-bar-text');
     for (let i = 0; i < 12; i++) await ctrl('=');
     expect(await zoom()).toBe(2); // the ceiling
+    expect(await font()).toMatch(/^"Pixelated MS Sans Serif"/); // a whole number: the pixel font scales cleanly
     const desk = await rect('#desktop');
     for (const w of ['board', 'brain', 'settings']) {
       const r = await rect(`[data-win="${w}"]`);

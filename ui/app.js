@@ -35,7 +35,7 @@ let runner = { on: false, concurrency: 3, running: [], left: 0, backlog: 0, wait
 let models = null; // ~/.kanban95/models.json as written, for the cards' default model and effort
 // Sounds stay off until /config/settings loads: listen() starts first, and a ding in that gap ignored the operator's choice.
 // `terminals` is absent until then too, so no session is opened or passed over before the operator's phases are known.
-let settings = { paths: {}, sounds: { merge: false, attention: false }, voice: { backend: 'local', mode: 'push' }, housekeeping: { auto: true, every: 10 }, idle_minutes: 20, zoom: 1, push_after_merge: true };
+let settings = { paths: {}, sounds: { merge: false, attention: false, done: false }, voice: { backend: 'local', mode: 'push' }, housekeeping: { auto: true, every: 10 }, idle_minutes: 20, zoom: 1, push_after_merge: true };
 let limits = null; // GET /api/limits: { rows, errors, fetched_at }, null until the first answer
 const views = new Map(); // open window id → redraw(ticketId | null)
 
@@ -63,7 +63,7 @@ async function refreshShared() {
 }
 const redraw = (ticket) => views.forEach((f) => f(ticket));
 
-const SOUND_SETTING = { ding: 'merge', chord: 'attention' };
+const SOUND_SETTING = { ding: 'merge', chord: 'attention', done: 'done' };
 
 function listen() {
   const ws = new WebSocket(`ws://${location.host}/events`);
@@ -74,6 +74,7 @@ function listen() {
       // The chord's reason is said by refreshTicket when it first sees the flag, so the later change event does not repeat it.
       if (e.sound === 'chord' && e.ticket != null) await refreshTicket(e.ticket);
       else if (e.sound === 'ding' && e.ticket != null) say(`#${e.ticket} merged.`);
+      else if (e.sound === 'done' && e.ticket != null) say(`#${e.ticket} passed, in Done.`);
       return;
     }
     if (e.ticket != null) await refreshTicket(e.ticket);
@@ -1086,7 +1087,7 @@ function openSettings(tab) {
         h('fieldset', {}, h('legend', {}, 'Zoom'),
           h('div', { class: 'field-row' }, h('label', { for: 'zoom' }, 'Zoom (Ctrl+= / Ctrl+- / Ctrl+0)'), zoom)),
         h('fieldset', {}, h('legend', {}, 'Sounds'),
-          ...[['merge', 'Ding when a ticket merges'], ['attention', 'Chord when the board needs you']].map(([k, label]) =>
+          ...[['merge', 'Ding when a ticket merges'], ['attention', 'Chord when the board needs you'], ['done', 'Sound when a ticket lands in Done']].map(([k, label]) =>
             h('div', { class: 'field-row' }, h('input', { type: 'checkbox', id: `sound-${k}`, checked: settings.sounds[k],
               onchange: (e) => act(() => saveSettings({ sounds: { ...settings.sounds, [k]: e.target.checked } }), 'Saved.') }), h('label', { for: `sound-${k}` }, label)))),
         h('fieldset', {}, h('legend', {}, 'Open a terminal automatically for'),
@@ -1368,7 +1369,11 @@ async function boot() {
   for (const s of ui.get('k95.collapsed') ?? ['done']) collapsed.add(s); // nothing saved: Done starts folded
   Object.assign(view, ui.get('k95.view'));
   for (const t of list) tickets.set(t.id, t);
-  settings = { ...settings, terminals: { auto: ['plan', 'execute', 'test'] }, ...st.value, voice: { ...settings.voice, ...st.value?.voice }, housekeeping: { ...settings.housekeeping, ...st.value?.housekeeping } };
+  // GET returns the file as written: a sound it does not name (no file, or one from before that sound) takes the schema's default, on,
+  // and an old single boolean applies to every sound.
+  const sounds = st.value?.sounds;
+  settings = { ...settings, terminals: { auto: ['plan', 'execute', 'test'] }, ...st.value,
+    sounds: typeof sounds === 'boolean' ? { merge: sounds, attention: sounds, done: sounds } : { merge: true, attention: true, done: true, ...sounds }, voice: { ...settings.voice, ...st.value?.voice }, housekeeping: { ...settings.housekeeping, ...st.value?.housekeeping } };
   models = md.value;
   configure(settings.voice);
   applyZoom(settings.zoom);
