@@ -29,7 +29,6 @@ const call = (name, args = {}) => fetch(mcp.url, {
 console.log('FAKE ' + model); // ConPTY may not end a kill on a console that has printed nothing yet
 if (brief.startsWith('# Test')) {
   await call('report_test', { passed: true, summary: 'ok' });
-  await call('move_ticket', { status: 'done' });
 } else if (model !== 'hang') {
   const file = basename(process.cwd()) + '.txt';
   writeFileSync(file, 'done\\n');

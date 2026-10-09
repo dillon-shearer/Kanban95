@@ -12,17 +12,19 @@ Status is one of **backlog → in_progress → testing → done**. Two flags sit
 |---|---|
 | `launch` | the operator (Launch), the runner, or the board when the last dependency of a held ticket merges |
 | `submit` | the worker's `move_ticket(testing)` |
-| `pass` | the tester's `move_ticket(done)` |
-| `fail` | the tester's `move_ticket(in_progress)` |
+| `pass` | the tester's `report_test(passed: true)` (an operator's `move_ticket(done)` after it) |
+| `fail` | the tester's `report_test(passed: false)`, or an operator's `move_ticket(in_progress)` on a ticket in testing |
 | `ask` | `ask_operator` from any agent |
 | `answer` | the operator, `POST /api/tickets/:id/answer` |
-| `exit` | the agent's terminal closed without a `move_ticket`, or its launch failed |
+| `exit` | the agent's terminal closed without a `move_ticket` or `report_test`, or its launch failed |
 | `merged` | the merge queue |
 | `conflict` | the board, when the base will not merge into the ticket's worktree (on submit or in the merge queue) or the worktree has uncommitted changes |
 | `dirty` | the merge queue, once the main checkout has had uncommitted changes for the whole wait (10 min) |
 | `merge` | the operator retrying a failed merge, `POST /api/tickets/:id/merge` |
 | `resume` | the operator, Resume in the card menu or the Inbox, `POST /api/tickets/:id/resume` |
 | `restart` | the operator, Restart in the card menu, the ticket window (Ctrl+R) or the Inbox, `POST /api/tickets/:id/restart` |
+
+The tester's verdict is the move: `report_test` writes the PASS or FAIL note, then applies `pass` or `fail`, so a tester that stops after reporting cannot leave the ticket in Testing. It is refused, with no note written, on a ticket not in testing. A `move_ticket` to the column the ticket is already in returns the ticket unchanged and raises no event, so an agent following the old report-then-move script is not refused.
 
 ## The table
 
@@ -90,7 +92,7 @@ The ticket's `model` and `effort` override the execute phase only, so a retry ru
 
 ### Ending a session
 
-Both CLIs run interactive sessions that never exit by themselves. When an agent's `move_ticket` is accepted, the board revokes its grant and kills its terminal; that exit is expected (`runs.outcome` = the event: `submit`, `pass`, `fail`). The operator's X on a terminal (`DELETE /api/sessions/:id`) sets `runs.outcome` = `closed`, revokes the grant and kills the pty, then applies `exit` itself with the failure note "ended by the operator from the terminal window" (role `operator`), so the ticket is flagged with the usual "To resolve:" line and offers Resume; the exit handler sees `closed` and writes no second note. A brainstorm has no ticket, so ending one only stops it. Any other exit, including the operator revoking a grant and the daemon shutting down, is the `exit` event (`runs.outcome` = `exit`), so a ticket can never sit in a running column with no agent and no flag.
+Both CLIs run interactive sessions that never exit by themselves. When an agent's `move_ticket` or the tester's `report_test` is accepted, the board revokes its grant and kills its terminal; that exit is expected (`runs.outcome` = the event: `submit`, `pass`, `fail`). The operator's X on a terminal (`DELETE /api/sessions/:id`) sets `runs.outcome` = `closed`, revokes the grant and kills the pty, then applies `exit` itself with the failure note "ended by the operator from the terminal window" (role `operator`), so the ticket is flagged with the usual "To resolve:" line and offers Resume; the exit handler sees `closed` and writes no second note. A brainstorm has no ticket, so ending one only stops it. Any other exit, including the operator revoking a grant and the daemon shutting down, is the `exit` event (`runs.outcome` = `exit`), so a ticket can never sit in a running column with no agent and no flag.
 
 ### Restart
 
