@@ -499,7 +499,7 @@ function openBoard() {
     if (focus) cols.querySelector(`.col[data-status="${focus[0]}"] .card[data-id="${focus[1]}"]`)?.focus();
     count.textContent = `${all.length} tickets · ${sessions.length} agents`;
     run.textContent = runner.on ? 'Stop' : 'Run';
-    runField.textContent = runField.title = runner.stale ? STALE : runnerLine(runner);
+    runField.textContent = runField.title = runner.gitError ?? (runner.stale ? STALE : runnerLine(runner)); // gitError: GET /api/runner, set at start
     runField.hidden = !runField.textContent;
     viewField.textContent = viewField.title = [view.filter.trim() && `Filter: ${view.filter.trim()}`, view.sort !== 'id' && `Sort: ${SORTS[view.sort]}`,
       view.group !== 'none' && `Group: ${view.group}`].filter(Boolean).join(' · ');
@@ -935,7 +935,7 @@ async function projectsPanel(p) {
     await paintProject();
     draw();
   }, ok);
-  const add = h('input', { type: 'text', id: 'project-add', placeholder: 'C:\\path\\to\\repo', style: 'flex: 1' });
+  const add = h('input', { type: 'text', id: 'project-add', placeholder: 'C:\\path\\to\\folder', style: 'flex: 1' });
   const draw = () => p.replaceChildren(h('p', {}, `${path}. A board's own project cannot be removed.`),
     table(['Project', 'Path', 'Colour', ''], list.map((x, i) => {
       const self = x.path === own.path; // both spelled by the daemon
@@ -944,7 +944,7 @@ async function projectsPanel(p) {
           onchange: (e) => save(list.map((y, j) => (j === i ? { ...y, colour: e.target.value } : y)), 'Colour saved.') })),
         h('td', {}, h('button', { disabled: self, onclick: () => save(list.filter((_, j) => j !== i), 'Project removed.') }, 'Remove')));
     })),
-    h('div', { class: 'field-row' }, h('label', { for: 'project-add' }, 'Repo path'), add,
+    h('div', { class: 'field-row' }, h('label', { for: 'project-add' }, 'Folder'), add,
       h('button', { onclick: () => save([...list, { path: add.value.trim(), colour: '#008080' }], 'Project added.') }, 'Add')));
   draw();
 }

@@ -1,12 +1,50 @@
 // One git worktree per ticket: <repo>/.worktrees/t-<id> on branch ticket/<id>, forked from the repo's current branch.
 import { execFileSync } from 'node:child_process';
-import { appendFileSync, existsSync, lstatSync, readdirSync, readFileSync, readlinkSync, realpathSync, unlinkSync } from 'node:fs';
+import { appendFileSync, existsSync, lstatSync, readdirSync, readFileSync, readlinkSync, realpathSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { INNER_GITIGNORE } from './db.js';
 
 export const git = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: 'pipe' }).trim();
 
 export const worktreePath = (repo: string, ticketId: number) => join(repo, '.worktrees', `t-${ticketId}`);
 export const branchName = (ticketId: number) => `ticket/${ticketId}`;
+
+/** A plain folder's first `.gitignore`: the usual build output, the ticket worktrees and the board's own state. */
+const FIRST_GITIGNORE = ['node_modules/', 'dist/', 'build/', '.worktrees/', ...INNER_GITIGNORE.split('\n').filter(Boolean).map((l) => `.kanban95/${l}`)].join('\n') + '\n';
+export const FIRST_COMMIT = 'Start the Kanban95 board';
+
+/**
+ * On daemon start: makes a plain folder a local repo the board can run on. No `.git`: `git init`. No commit yet: a
+ * `.gitignore` unless there is one, then everything is added and committed once as FIRST_COMMIT by the operator's own git
+ * identity (`user.useConfigOnly`: git never makes one up from the host name). A repo with commits is left alone. Steps are
+ * logged to stderr (stdout's first line is the handshake). Throws a message for the operator: git missing, or no identity.
+ */
+export function initRepo(repo: string): void {
+  try {
+    if (!existsSync(join(repo, '.git'))) {
+      git(repo, 'init', '-q');
+      console.error(`[git] ${repo} is not a git repo: ran git init`);
+    }
+    try {
+      git(repo, 'rev-parse', '--verify', '-q', 'HEAD');
+      return;
+    } catch { /* no commit yet */ }
+    if (!existsSync(join(repo, '.gitignore'))) {
+      writeFileSync(join(repo, '.gitignore'), FIRST_GITIGNORE);
+      console.error('[git] wrote .gitignore');
+    }
+    git(repo, 'add', '-A');
+    git(repo, '-c', 'user.useConfigOnly=true', 'commit', '-q', '--allow-empty', '-m', FIRST_COMMIT);
+    console.error(`[git] committed the folder as "${FIRST_COMMIT}"`);
+  } catch (e) {
+    const { code, stderr } = e as { code?: string; stderr?: string };
+    const reason = code === 'ENOENT' ? 'git is not installed or not on PATH; install it'
+      : /tell me who you are|auto-detection is disabled|empty ident/i.test(stderr ?? '')
+        ? 'git has no user.name or user.email; set both with git config --global'
+        : (stderr ?? '').trim().split(/\r?\n/).pop() || (e as Error).message;
+    throw new Error(`no git repo with a commit, so no ticket can launch: ${reason}, then restart the board`);
+  }
+}
 
 /** Keeps .worktrees/ out of the operator's `git status` and out of any `git add -A` without touching a tracked file. */
 function excludeWorktrees(repo: string) {
