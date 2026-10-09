@@ -41,13 +41,14 @@ async function refreshTicket(id) {
     const was = tickets.get(id)?.flags.needs_human;
     const t = await api('GET', `/tickets/${id}`);
     tickets.set(id, t);
+    for (const term of terms.values()) if (term.s.ticket_id === id) term.paint();
     if (t.flags.needs_human && !was) say(await flagReason(id));
   } catch (e) {
     if (e.status !== 404) throw e;
     tickets.delete(id); // deleted: it leaves the board, and its windows close (its agents were stopped by the delete)
     selection.delete(id);
     close(`ticket-${id}`);
-    for (const [wid, ticket] of terms) if (ticket === id) close(wid);
+    for (const [wid, term] of terms) if (term.s.ticket_id === id) close(wid);
   }
 }
 async function refreshShared() {
@@ -549,7 +550,16 @@ function ticketForm(w, t) {
 // ---- terminals ----
 
 const seen = new Set();
-const terms = new Map(); // open terminal window id → its session's ticket id
+const terms = new Map(); // open terminal window id → { s: its session, paint: recolour its title bar }
+// A terminal's title-bar colour, first match wins; app.css → `.k95-win[data-state]` holds the palette. A new state is a line
+// here and a rule there.
+function termState(s, ended) {
+  if (ended) return 'ended';
+  if (tickets.get(s.ticket_id)?.flags.needs_human) return 'human';
+  if (s.ticket_id === null) return 'plan'; // brainstorm (planner) or operator terminal
+  if (s.phase === 'execute' || s.phase === 'test') return s.phase;
+  return null;
+}
 function openNewTerminals() {
   for (const s of sessions) if (!seen.has(s.id)) openTerminal(s, true);
 }
@@ -584,7 +594,13 @@ function openTerminal(s, auto = false) {
   // Placed per ticket, not per session: every later phase, retry and relaunch opens where the operator left the last one.
   const w = open(wid, { title, w: 760, h: 440, persist: s.ticket_id !== null && `term-ticket-${s.ticket_id}`, background: auto, onX, extra: [micButton((text) => send({ data: text }))],
     items: s.ticket_id === null ? [] : [{ label: 'Open ticket', run: () => openTicket(s.ticket_id) }], onClose: () => { terms.delete(wid); ro.disconnect(); ws.close(); term.dispose(); } });
-  terms.set(wid, s.ticket_id);
+  const paint = () => {
+    const state = termState(s, w.el.classList.contains('ended'));
+    if (state) w.el.dataset.state = state;
+    else delete w.el.dataset.state; // an unknown phase keeps the 98.css look
+  };
+  terms.set(wid, { s, paint });
+  paint();
   w.body.classList.add('k95-term');
   term.loadAddon(fit);
   term.open(w.body);
@@ -594,6 +610,7 @@ function openTerminal(s, auto = false) {
     term.write('\r\n\x1b[90m[session ended]\x1b[0m\r\n');
     w.title(`${title} (ended)`);
     w.el.classList.add('ended');
+    paint();
     if (!auto || s.run_id === null) return;
     // The run's outcome is written as its terminal closes; its output stays in Ticket → Runs. Every outcome the board itself
     // ends a run with closes it: after conflict and restart a new run is already open, and a stale "ended" window in front of

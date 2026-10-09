@@ -12,7 +12,14 @@ body { background: linear-gradient(transparent 55%, rgb(0 0 0 / 0.22)),
 .k95-win.max { left: 0 !important; top: 0 !important; width: 100% !important; height: 100% !important; resize: none; }
 .k95-win > .window-body { flex: 1; min-height: 0; overflow: auto; margin: 4px; display: flex; flex-direction: column; gap: 4px; }
 .k95-win .title-bar { touch-action: none; user-select: none; flex: none; }
-.k95-win.ended .title-bar { background: linear-gradient(90deg, #808080, #b5b5b5); }
+/* Terminal title bars by agent state (termState in app.js sets data-state). Unfocused is the same colour mixed toward grey. */
+.k95-win[data-state="execute"] { --k95-from: navy; --k95-to: #1084d0; }
+.k95-win[data-state="test"] { --k95-from: #006400; --k95-to: #2ea043; }
+.k95-win[data-state="plan"] { --k95-from: #4b0082; --k95-to: #9b59d0; }
+.k95-win[data-state="human"] { --k95-from: #b34700; --k95-to: #ff9a2e; }
+.k95-win[data-state="ended"] { --k95-from: #808080; --k95-to: #b5b5b5; }
+.k95-win[data-state] .title-bar { background: linear-gradient(90deg, var(--k95-from), var(--k95-to)); }
+.k95-win[data-state] .title-bar.inactive { background: linear-gradient(90deg, color-mix(in srgb, var(--k95-from) 45%, #c0c0c0), color-mix(in srgb, var(--k95-to) 45%, #c0c0c0)); }
 
 /* Desktop icons: a column down the left edge, below every window (windows start at z-index 1) */
 #icons { position: absolute; z-index: 0; left: 4px; top: 4px; display: flex; flex-direction: column; gap: 6px; }
