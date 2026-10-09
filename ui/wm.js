@@ -28,28 +28,40 @@ export function setZoom(f) {
 }
 
 // ---- terminal slots ----
-// The terminal region is the desktop left of the action column: from its left edge to the left edge of the leftmost open,
-// non-minimized, non-maximized window in ACTION (the whole desktop when none is open, or when that leaves less than
-// MIN_REGION px), full height. A tiled window (opened with `tile`) takes the lowest slot no other tiled window holds and keeps
-// it for life: nothing else moves when one opens, closes, minimizes or ends, and a minimized or maximized one keeps its slot
-// for when it is restored. The grid is the first SLOTS row whose count covers the highest held slot, slots in reading order, so
-// it grows only when every slot is taken and shrinks when the top slots free. Dragged or resized, a tiled window is free: it
-// stays where it was left and its slot is empty; a double-click on its title bar takes it back to the lowest empty slot. Past
-// the last row's count a window is not tiled: it stays where it opened (`place`) and takes a slot once one is empty.
+// The terminal region is the desktop between the desktop icons and the action column: from just right of the icon column, so
+// the icons always show, to the left edge of the leftmost open, non-minimized, non-maximized window in ACTION (the desktop's
+// right edge when none is open, or when that leaves less than MIN_REGION px), full height. A tiled window (opened with `tile`)
+// takes the lowest slot no other tiled window holds and keeps it for life: nothing else moves when one opens, closes,
+// minimizes or ends, and a minimized or maximized one keeps its slot for when it is restored. The grid is the first SLOTS row
+// whose count covers the highest held slot, slots in reading order, so it grows only when every slot is taken and shrinks when
+// the top slots free. Dragged or resized, a tiled window is free: it stays where it was left and its slot is empty; a
+// double-click on its title bar takes it back to the lowest empty slot. Past the last row's count a window is not tiled: it
+// stays where it opened (`place`) and takes a slot once one is empty. `setTiling(false)` (Settings → General,
+// `terminals.tile`) stops tiling: terminals open at the least-covered spot and stay where they are dragged.
 // To change the arrangement, edit SLOTS: [up to n windows, columns, rows], ascending n.
 export const SLOTS = [[1, 1, 1], [2, 2, 1], [3, 3, 1], [4, 2, 2], [6, 3, 2], [9, 3, 3], [12, 4, 3]];
 const ACTION = ['board', 'inbox', 'notepad'];
 const MIN_REGION = 240;
 
 let tiling = null;
+let tileOn = true;
+/** Turns terminal slots on (every tiled window, free or not, takes a slot now) or off (they stay where they are). */
+export function setTiling(on) {
+  tileOn = on;
+  if (on) for (const w of wins.values()) w.free = false;
+  retile();
+}
 /** Gives every waiting tiled window the lowest empty slot, then puts each shown one in its slot of the current region. */
 export function retile() {
   clearTimeout(tiling);
+  if (!tileOn) return;
   const W = desktop.clientWidth;
   const H = desktop.clientHeight;
+  const icons = document.getElementById('icons');
+  const L = icons ? icons.offsetLeft + icons.offsetWidth + 4 : 0;
   const shown = (el) => !el.hidden && !el.classList.contains('max');
   const edge = Math.min(W, ...ACTION.map((id) => wins.get(id)?.el).filter((el) => el && shown(el)).map((el) => el.offsetLeft));
-  const R = edge < MIN_REGION ? W : edge;
+  const R = edge - L < MIN_REGION ? W : edge;
   const list = [...wins.values()].filter((w) => w.tile);
   const held = new Set(list.map((w) => w.slot).filter((s) => s != null));
   for (const w of list.filter((w) => w.slot == null && !w.free)) {
@@ -63,9 +75,9 @@ export function retile() {
   for (const { el, slot } of list) {
     if (slot == null || !shown(el)) continue;
     const [c, r] = [slot % cols, Math.floor(slot / cols)];
-    const x = Math.round((c * R) / cols);
+    const x = L + Math.round((c * (R - L)) / cols);
     const y = Math.round((r * H) / rows);
-    Object.assign(el.style, { left: `${x}px`, top: `${y}px`, width: `${Math.round(((c + 1) * R) / cols) - x}px`, height: `${Math.round(((r + 1) * H) / rows) - y}px` });
+    Object.assign(el.style, { left: `${x}px`, top: `${y}px`, width: `${L + Math.round(((c + 1) * (R - L)) / cols) - x}px`, height: `${Math.round(((r + 1) * H) / rows) - y}px` });
   }
 }
 /** retile() once things settle: a drag of the Board moves the region many times a second. */
@@ -217,10 +229,10 @@ export function open(id, { title, w = 480, h: height = 320, persist = false, til
     save();
     if (shapes(id)) retileSoon();
   }
-  // On a free terminal (not maximized) a double-click takes it back to a slot instead.
+  // On a free terminal (not maximized, tiling on) a double-click takes it back to a slot instead.
   el.querySelector('.title-bar').addEventListener('dblclick', (e) => {
     if (e.target.closest('button')) return;
-    if (!win.free || el.classList.contains('max')) return toggleMax();
+    if (!tileOn || !win.free || el.classList.contains('max')) return toggleMax();
     win.free = false;
     retile();
   });

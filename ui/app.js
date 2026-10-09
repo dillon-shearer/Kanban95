@@ -5,7 +5,7 @@ import { FitAddon } from './vendor/xterm/addon-fit.mjs';
 import { Terminal } from './vendor/xterm/xterm.mjs';
 import { configure, ensureModel, micButton, micEverywhere } from './voice.js';
 import * as ui from './state.js';
-import { close, dialog, focus, focused, forget, h, isOpen, menu, open, raise, scale, seed, setZoom, snapshot } from './wm.js';
+import { close, dialog, focus, focused, forget, h, isOpen, menu, open, raise, scale, seed, setTiling, setZoom, snapshot } from './wm.js';
 
 // ---- data ----
 
@@ -492,7 +492,7 @@ function openBoard() {
     if (focus) cols.querySelector(`.col[data-status="${focus[0]}"] .card[data-id="${focus[1]}"]`)?.focus();
     count.textContent = `${all.length} tickets · ${sessions.length} agents`;
     run.textContent = runner.on ? 'Stop' : 'Run';
-    runField.textContent = runField.title = runner.stale ? STALE : runnerLine(runner);
+    runField.textContent = runField.title = runner.gitError ?? (runner.stale ? STALE : runnerLine(runner)); // gitError: GET /api/runner, set at start
     runField.hidden = !runField.textContent;
     const held = heldTickets().length;
     heldField.textContent = held ? `${held} waiting to launch by themselves` : '';
@@ -930,7 +930,7 @@ async function projectsPanel(p) {
     await paintProject();
     draw();
   }, ok);
-  const add = h('input', { type: 'text', id: 'project-add', placeholder: 'C:\\path\\to\\repo', style: 'flex: 1' });
+  const add = h('input', { type: 'text', id: 'project-add', placeholder: 'C:\\path\\to\\folder', style: 'flex: 1' });
   const draw = () => p.replaceChildren(h('p', {}, `${path}. A board's own project cannot be removed.`),
     table(['Project', 'Path', 'Colour', ''], list.map((x, i) => {
       const self = x.path === own.path; // both spelled by the daemon
@@ -939,7 +939,7 @@ async function projectsPanel(p) {
           onchange: (e) => save(list.map((y, j) => (j === i ? { ...y, colour: e.target.value } : y)), 'Colour saved.') })),
         h('td', {}, h('button', { disabled: self, onclick: () => save(list.filter((_, j) => j !== i), 'Project removed.') }, 'Remove')));
     })),
-    h('div', { class: 'field-row' }, h('label', { for: 'project-add' }, 'Repo path'), add,
+    h('div', { class: 'field-row' }, h('label', { for: 'project-add' }, 'Folder'), add,
       h('button', { onclick: () => save([...list, { path: add.value.trim(), colour: '#008080' }], 'Project added.') }, 'Add')));
   draw();
 }
@@ -1093,9 +1093,12 @@ function openSettings(tab) {
           onchange: (e) => act(() => saveSettings({ sounds: { ...settings.sounds, [k]: e.target.checked } }), 'Saved.') }), h('label', { for: `sound-${k}` }, label))),
         h('fieldset', {}, h('legend', {}, 'Open a terminal automatically for'),
           ...['plan', 'execute', 'test'].map((ph) => h('div', { class: 'field-row' }, h('input', { type: 'checkbox', id: `term-auto-${ph}`, checked: settings.terminals.auto.includes(ph),
-            onchange: (e) => act(() => saveSettings({ terminals: { auto: [...settings.terminals.auto.filter((x) => x !== ph), ...(e.target.checked ? [ph] : [])] } }), 'Saved.') }),
+            onchange: (e) => act(() => saveSettings({ terminals: { ...settings.terminals, auto: [...settings.terminals.auto.filter((x) => x !== ph), ...(e.target.checked ? [ph] : [])] } }), 'Saved.') }),
           h('label', { for: `term-auto-${ph}` }, ph))),
           h('p', {}, 'Brainstorms always open. A hidden session still runs: right-click its card → Terminal.')),
+        h('div', { class: 'field-row' }, h('input', { type: 'checkbox', id: 'term-tile', checked: settings.terminals.tile,
+          onchange: (e) => act(async () => { await saveSettings({ terminals: { ...settings.terminals, tile: e.target.checked } }); setTiling(settings.terminals.tile); }, 'Saved.') }),
+        h('label', { for: 'term-tile' }, 'Tile terminals into slots left of the Board')),
         h('fieldset', {}, h('legend', {}, 'Runner'),
           h('div', { class: 'field-row' }, h('label', { for: 'concurrency' }, 'Tickets running at once'), at),
           h('button', { onclick: saveRunner }, 'Save')),
@@ -1379,11 +1382,13 @@ async function boot() {
   // GET returns the file as written: a sound it does not name (no file, or one from before that sound) takes the schema's default, on,
   // and an old single boolean applies to every sound.
   const sounds = st.value?.sounds;
-  settings = { ...settings, terminals: { auto: ['plan', 'execute', 'test'] }, ...st.value,
-    sounds: typeof sounds === 'boolean' ? { merge: sounds, attention: sounds, done: sounds } : { merge: true, attention: true, done: true, ...sounds }, voice: { ...settings.voice, ...st.value?.voice }, housekeeping: { ...settings.housekeeping, ...st.value?.housekeeping } };
+  settings = { ...settings, ...st.value,
+    sounds: typeof sounds === 'boolean' ? { merge: sounds, attention: sounds, done: sounds } : { merge: true, attention: true, done: true, ...sounds }, voice: { ...settings.voice, ...st.value?.voice }, housekeeping: { ...settings.housekeeping, ...st.value?.housekeeping },
+    terminals: { auto: ['plan', 'execute', 'test'], tile: true, ...st.value?.terminals } };
   models = md.value;
   configure(settings.voice);
   applyZoom(settings.zoom);
+  setTiling(settings.terminals.tile);
   micEverywhere();
   for (const { id, ...r } of startupLayout()) {
     seed(id, r);

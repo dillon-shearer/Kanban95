@@ -9,7 +9,7 @@ import { WebSocketServer } from 'ws';
 import { handleApi } from './api.js';
 import { entryPath, register } from './boards.js';
 import { openDb, openGlobalBrain } from './db.js';
-import { git } from './git.js';
+import { git, initRepo } from './git.js';
 import { sweep, SWEEP_MS } from './janitor.js';
 import { killAll, launch, sessions } from './launcher.js';
 import { countUnpushed, events, recover, tick, watchSilence, type Board } from './lifecycle.js';
@@ -158,6 +158,12 @@ export function start(config: Config = {}): Promise<{
   }
   let self = '';
   const board: Board = { db, brain, repo, port: 0 };
+  try {
+    initRepo(repo); // a plain folder becomes a local repo with one commit (docs/ARCHITECTURE.md → Daemon lifetime)
+  } catch (e) {
+    board.gitError = (e as Error).message;
+    console.error(`[git] ${board.gitError}`);
+  }
   try {
     board.startCommit = git(repo, 'rev-parse', '--verify', '-q', 'HEAD');
   } catch { /* no commits yet: nothing can be stale */ }
