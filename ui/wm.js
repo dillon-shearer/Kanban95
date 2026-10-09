@@ -108,14 +108,7 @@ export function open(id, { title, w = 480, h: height = 320, persist = false, bac
   overflow(); // before focus() scrolls the button into view, so the arrows are already taking their room
   if (!saved?.max) clamp(el); // clamp reads the maximized box and would overwrite the restore geometry
 
-  const save = () => {
-    if (!key) return;
-    const max = el.classList.contains('max');
-    const s = el.style;
-    geo.set(key, max
-      ? { x: parseFloat(s.left), y: parseFloat(s.top), w: parseFloat(s.width), h: parseFloat(s.height), max }
-      : { x: el.offsetLeft, y: el.offsetTop, w: el.offsetWidth, h: el.offsetHeight });
-  };
+  const save = () => key && geo.set(key, rect(el));
   const maxBtn = el.querySelector('[aria-label="Maximize"], [aria-label="Restore"]');
   function toggleMax() {
     maxBtn.setAttribute('aria-label', el.classList.toggle('max') ? 'Restore' : 'Maximize');
@@ -162,6 +155,22 @@ function place(w, h) {
   }
   return { x: best.x, y: best.y };
 }
+
+/** A window's geometry as `open` restores it: the inline restore geometry while maximized (or minimized), else the laid-out box. */
+function rect(el) {
+  const s = el.style;
+  const max = el.classList.contains('max');
+  if (max || el.hidden) return { x: parseFloat(s.left), y: parseFloat(s.top), w: parseFloat(s.width), h: parseFloat(s.height), ...(max && { max }) };
+  return { x: el.offsetLeft, y: el.offsetTop, w: el.offsetWidth, h: el.offsetHeight };
+}
+
+/** The open windows among `ids` with their geometry ({ id, x, y, w, h, max? }), bottom-most first: a startup layout. */
+export const snapshot = (ids) => [...wins].filter(([id]) => ids.includes(id))
+  .sort(([, a], [, b]) => Number(a.el.style.zIndex) - Number(b.el.style.zIndex))
+  .map(([id, { el }]) => ({ id, ...rect(el) }));
+
+/** Remembers `r` as window `key`'s place, so its next `open` with `persist` opens there. */
+export const remember = (key, r) => geo.set(key, r);
 
 /** Keeps at least the title bar on the desktop. */
 function clamp(el) {

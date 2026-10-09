@@ -7,6 +7,7 @@
   "scripts": {
     "build": "npm run build -w daemon",
     "test": "npm test -w daemon",
+    "test:changed": "npm run test:changed -w daemon --",
     "test:shell": "cargo test --manifest-path shell/Cargo.toml",
     "docs:mcp": "npm run build && node daemon/dist/mcp-doc.js",
     "dev": "node -e \"if (process.env.KANBAN95_AGENT) { console.error('Kanban95 is already running; verify with npm test, not by starting the app.'); process.exit(1) }\" && npm run build && cargo run --manifest-path shell/Cargo.toml --",

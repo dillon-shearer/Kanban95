@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "build": "tsc",
-    "test": "tsc && vitest run"
+    "test": "tsc && vitest run",
+    "test:changed": "node test/changed.ts"
   },
   "devDependencies": {
     "@types/node": "^26.6.4",
