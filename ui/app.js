@@ -949,6 +949,35 @@ async function projectsPanel(p) {
   draw();
 }
 
+/**
+ * Start → Projects: every project by folder name, running ones marked, this board's own disabled. Read at boot, whenever
+ * this window gets focus (coming back from another board) and as Start opens, so the menu itself opens at once.
+ * ponytail: a board started or closed while this window kept focus shows from the second Start opening; a registry event would fix it.
+ */
+let projectItems = [];
+async function loadProjectItems() {
+  try {
+    const [own, { value, running }] = await Promise.all([api('GET', '/project'), api('GET', '/projects')]);
+    projectItems = value.map((p) => {
+      const name = p.path.split(/[\\/]/).pop();
+      const self = p.path === own.path; // both spelled by the daemon
+      return { label: name + (self ? ' (this board)' : running[p.path] ? ' (running)' : ''), disabled: self, run: () => switchProject(p.path, name, running[p.path]) };
+    });
+  } catch (e) {
+    projectItems = [{ label: `Projects: ${e.message}`, disabled: true }];
+  }
+}
+/** A running board's window comes to the front; any other project starts a new board (docs/OPERATOR.md → Start → Projects). */
+async function switchProject(path, name, live) {
+  say(live ? `Focusing ${name}…` : `Opening ${name}…`);
+  try {
+    const r = await api('POST', live ? '/projects/focus' : '/projects/open', { path });
+    if (live) say(r.focused ? `Focused ${name}` : `${name} is running: switch to its window.`);
+  } catch (e) {
+    say(`${name} not ${live ? 'focused' : 'opened'}: ${e.message}`);
+  }
+}
+
 let settingsTabs = null;
 /** `tab`: the tab to show, also when the window is already open. */
 function openSettings(tab) {
@@ -1227,6 +1256,7 @@ const START = [
   { label: 'Settings', run: () => openSettings() },
   { label: 'Notepad', run: openNotepad },
   { label: 'Limits', run: openLimits },
+  { label: 'Projects', get items() { return projectItems; } },
   '-',
   { label: 'New ticket', run: () => openTicket(null) },
   { label: 'New brainstorm', run: newBrainstorm },
@@ -1330,6 +1360,7 @@ addEventListener('paste', (e) => {
 async function boot() {
   const start = document.getElementById('start');
   start.addEventListener('click', () => {
+    loadProjectItems(); // for the next opening; this one shows the list as last read
     const m = menu(0, 0, START);
     const r = start.getBoundingClientRect();
     Object.assign(m.style, { left: `${r.left / scale()}px`, top: `${r.top / scale() - m.offsetHeight}px` });
@@ -1338,6 +1369,8 @@ async function boot() {
   document.getElementById('restart-badge').addEventListener('click', restartBoard);
   document.getElementById('limits').addEventListener('click', () => openSettings('Limits'));
   desktopIcons();
+  loadProjectItems();
+  addEventListener('focus', loadProjectItems);
   clock();
   setInterval(clock, 10_000);
   refreshLimits(); // a CLI start each, ~10 s: not awaited

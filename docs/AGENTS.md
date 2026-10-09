@@ -97,6 +97,16 @@ The brain is two tables of short facts (`docs/DATA.md` → brain): the **project
 
 - **Reading.** `{{brain}}` is picked by keyword overlap and most rows will not apply. Use a row only if it concerns what you are changing, and check it against the code. To find more, `brain_search` with 2–3 subsystem, file or tool names (every word must match).
 - **Which brain.** `scope: global` for a fact that holds in any repo: an external tool or CLI (Claude Code flags, git on Windows, node-pty, vitest, fnm), the OS, a library's behaviour. `project`, the default, for anything about this codebase: its files, its tests, its conventions, its decisions. When unsure, project: a wrong global row reaches every board. Only a planner, an operator terminal (`brain_update` `move_to`) or the operator (Brain window → Edit → scope) moves a row between the two; a worker or tester names the row to move in its summary.
+- **The gate.** Every `brain_add` must pass three questions; a row failing any one is not written. The housekeeping review uses the same three for its keep, rewrite, merge or delete verdicts.
+  1. **Quality:** would a future agent trip without it, stated so a reader with no context can act on it (what happens, why, what to do, where)? Not a plan, not ticket status, not what the code, docs or templates already say.
+     Passes: "`git worktree remove` fails on Windows while a terminal has the folder open; close the PTY first."
+     Fails: "Ticket #73 is in testing; finish the gate wording next."
+  2. **Scope:** holds in every repo (a tool, CLI, OS or model behaviour, with version and date) → `global`; only in this codebase → `project`. Unsure → project.
+     Passes: global "Node 22 `node:sqlite` lacks FTS5; use Node 24 (checked 2026-10)."
+     Fails: global "The daemon binds 127.0.0.1 on a random port" (a fact about this codebase, so project).
+  3. **Worth:** does keeping it serve the project, or is it bloat? A row nobody would search for, or one that restates a one-off, is bloat.
+     Passes: "vitest runs test files in parallel; tests that share `~/.kanban95` must use a temp home."
+     Fails: "A typo in `README.md` was fixed on 2026-10-01."
 - **Before writing,** `brain_search` the subject. If a row already covers it, correct that row with `brain_update` instead of adding a near-duplicate.
 - **What belongs.** One fact a future agent would trip on: a gotcha, a non-obvious decision, or an external tool's behaviour (with version and date). Not what the code, docs or templates already say: a durable convention goes into the matching living doc in your own ticket.
 - **How to write.** Title: a sentence naming the trap ("X does Y; do Z"). Body: what happens, why, what to do instead, and the file or function, under ~800 characters (1500 is refused). Tags: 4–8 words a future ticket's title would contain.

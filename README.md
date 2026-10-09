@@ -26,7 +26,7 @@ cd Kanban95
 .\Kanban95.cmd C:\path\to\your\project
 ```
 
-The project must be a git repository. `Kanban95.cmd` finds Node 24 (through fnm if an older Node is first on PATH), installs, builds and opens the board, keeping its console open for the session. To start without a console window, double-click `Kanban95.vbs` instead: it runs `Kanban95.cmd` hidden and shows a dialog with the end of its output (full log in `%TEMP%\kanban95-start.log`) if Node 24 is missing or the install or build fails. Either one opens the board on Kanban95 itself when double-clicked, and on a project folder dropped onto it.
+The project must be a git repository. `Kanban95.cmd` finds Node 24 (through fnm if an older Node is first on PATH), installs, builds and opens the board, keeping its console open for the session. To start without a console window, double-click `Kanban95.vbs` instead: it runs `Kanban95.cmd` hidden and shows a dialog with the end of its output (full log in `%TEMP%\kanban95-start-<random>.log`, kept only when the start fails) if Node 24 is missing or the install or build fails. Either one opens the board on Kanban95 itself when double-clicked, and on a project folder dropped onto it.
 
 On macOS, double-click `Kanban95.command` in Finder (a Terminal window opens and stays for the session) or run `./Kanban95.command /path/to/project`: the same Node 24 lookup through fnm, install, build and start. Then, once:
 

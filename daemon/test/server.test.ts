@@ -92,6 +92,21 @@ describe('shell secret', () => {
     }
   });
 
+  it('two boards in one browser keep their own cookies: each daemon takes its own among both, never the other one', async () => {
+    const a = await start({ repo });
+    const b = await start({ repo });
+    try {
+      const status = (port: number, cookie: string) => fetch(`http://127.0.0.1:${port}/api/tickets`, { headers: { cookie } }).then((r) => r.status);
+      const both = `k95-${a.port}=${a.secret}; k95-${b.port}=${b.secret}`;
+      expect(await status(a.port, both)).toBe(200);
+      expect(await status(b.port, both)).toBe(200);
+      expect(await status(a.port, `k95-${b.port}=${b.secret}`)).toBe(401);
+    } finally {
+      await b.close();
+      await a.close();
+    }
+  });
+
   it('trades ?k95=<secret> for an HttpOnly cookie and a redirect to /, and refuses a wrong one', async () => {
     const srv = await start({ repo });
     try {
@@ -99,7 +114,7 @@ describe('shell secret', () => {
       const ok = await fetch(`${base}/?k95=${srv.secret}`, { redirect: 'manual' });
       expect(ok.status).toBe(302);
       expect(ok.headers.get('location')).toBe('/');
-      expect(ok.headers.get('set-cookie')).toBe(`k95=${srv.secret}; HttpOnly; SameSite=Strict; Path=/`);
+      expect(ok.headers.get('set-cookie')).toBe(`k95-${srv.port}=${srv.secret}; HttpOnly; SameSite=Strict; Path=/`);
       const bad = await fetch(`${base}/?k95=guess`, { redirect: 'manual' });
       expect(bad.status).toBe(401);
       expect(bad.headers.get('set-cookie')).toBeNull();

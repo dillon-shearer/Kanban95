@@ -23,9 +23,9 @@ async function restarted(check: () => Promise<void>) {
     await check();
   } finally {
     await srv2.close();
-    // Cookies ignore the port: the second daemon's login replaced the first's, so log back in.
-    await page.send('Page.navigate', { url: `${base}?k95=${srv.secret}` });
-    await until(() => page.evaluate(`location.href === ${JSON.stringify(base)}`), 'the redirect back to /');
+    // Each daemon sets its own cookie (k95-<port>), so the second's login left the first's in place: no new login.
+    await page.send('Page.navigate', { url: base });
+    await board();
   }
 }
 
