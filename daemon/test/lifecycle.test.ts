@@ -26,7 +26,7 @@ describe('transition table', () => {
     ['restart a live ticket in progress', { status: 'in_progress', retry: 2 }, 'restart', { to: 'in_progress', set: { needs_human: 0 }, effects: ['end_session', 'note', 'spawn_execute'] }],
     ['restart a flagged ticket in testing with no agent', { status: 'testing', live: false, needs_human: true }, 'restart', { to: 'testing', set: { needs_human: 0 }, effects: ['end_session', 'note', 'spawn_test'] }],
     ['worker submits', { status: 'in_progress' }, 'submit', { to: 'testing', set: {}, effects: ['end_session', 'spawn_test'] }],
-    ['tester passes after report_test(pass)', { status: 'testing', passReported: true }, 'pass', { to: 'done', set: { merged: false }, effects: ['end_session', 'enqueue_merge'] }],
+    ['tester passes after report_test(pass)', { status: 'testing', passReported: true }, 'pass', { to: 'done', set: { merged: false }, effects: ['end_session', 'done', 'enqueue_merge'] }],
     ['first failure', { status: 'testing', retry: 0 }, 'fail', { to: 'in_progress', set: { retry: '+1' }, effects: ['end_session', 'spawn_execute'] }],
     ['third failure is the last retry', { status: 'testing', retry: MAX_RETRY - 1 }, 'fail', { to: 'in_progress', set: { retry: '+1' }, effects: ['end_session', 'spawn_execute'] }],
     ['fourth failure stops', { status: 'testing', retry: MAX_RETRY }, 'fail', { to: 'in_progress', set: { retry: '+1', needs_human: 1 }, effects: ['end_session', 'note', 'chord'] }],
@@ -261,7 +261,7 @@ afterEach(async () => {
 });
 
 describe('lifecycle', { timeout: 60_000 }, () => {
-  it('launch → execute → test → merge: one plain merge commit by the operator, a ding, and nothing left behind', async () => {
+  it('launch → execute → test → merge: one plain merge commit by the operator, a done sound then a ding, and nothing left behind', async () => {
     const ws = new WebSocket(`ws://127.0.0.1:${srv.port}/events`, { origin: `http://127.0.0.1:${srv.port}`, headers: { cookie: `k95=${srv.secret}` } });
     const frames: { sound?: string; ticket: number | null }[] = [];
     ws.on('message', (m) => frames.push(JSON.parse(String(m))));
@@ -289,8 +289,9 @@ describe('lifecycle', { timeout: 60_000 }, () => {
     expect(db.prepare('SELECT count(*) AS n FROM grants WHERE ticket_id = ? AND revoked_at IS NULL').get(id)).toEqual({ n: 0 });
     expect(db.prepare("SELECT outcome FROM audit WHERE tool = 'janitor.worktree' AND ticket_id = ?").all(id)).toEqual([{ outcome: 'ok' }]);
 
-    await until(() => frames.some((f) => 'sound' in f), 'the ding frame');
-    expect(frames.filter((f) => 'sound' in f)).toEqual([{ sound: 'ding', ticket: id }]);
+    await until(() => frames.some((f) => f.sound === 'ding'), 'the ding frame');
+    // The pass sends `done` as it lands in Done, before the merge queue's ding.
+    expect(frames.filter((f) => 'sound' in f)).toEqual([{ sound: 'done', ticket: id }, { sound: 'ding', ticket: id }]);
     // A change frame for every transition, so the UI refetches the card instead of reloading.
     expect(frames.filter((f) => !('sound' in f)).length).toBeGreaterThanOrEqual(5);
     expect(frames.every((f) => f.ticket === id)).toBe(true);
@@ -591,7 +592,7 @@ ${TO_RESOLVE}`]);
       git('checkout', 'a.txt');
       await landed(id);
       expect(t(id).flags.needs_human).toBe(false);
-      expect(sounds).toEqual([{ sound: 'ding', ticket: id }]);
+      expect(sounds).toEqual([{ sound: 'done', ticket: id }, { sound: 'ding', ticket: id }]);
     });
 
     it('the operator commits instead: the queue merges the new main into the worktree first, then lands it', async () => {
@@ -721,7 +722,7 @@ describe('push after merge', { timeout: 60_000 }, () => {
     expect(remote('rev-parse', 'main')).toBe(before);
     expect(existsSync(join(repo, '.worktrees', `t-${id}`))).toBe(true);
     expect(notes(id, 'failure')).toEqual([expect.stringMatching(/^merged into main, but git push to origin failed, so the ticket is not closed:\n[^]*denied by the remote[^]*\nTo resolve: .*Retry merge; it pushes again\.$/)]);
-    expect(sounds).toEqual([{ sound: 'chord', ticket: id }]);
+    expect(sounds).toEqual([{ sound: 'done', ticket: id }, { sound: 'chord', ticket: id }]);
 
     rmSync(join(bare, 'hooks', 'pre-receive'));
     expect((await post(`/api/tickets/${id}/merge`)).status).toBe(200);

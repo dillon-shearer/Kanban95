@@ -168,7 +168,7 @@ export function start(config: Config = {}): Promise<{
   // /pty/<key>: a session's terminal for xterm.js (key = run id, or minus the grant id for a brainstorm). Output goes out as text frames, starting with the scrollback so far.
   // In: JSON `{"data": "..."}` is typed into the pty, `{"resize": [cols, rows]}` resizes it. A browser always sends
   // Origin on a websocket, so here it is required, not optional.
-  // /events: board events for the UI, one JSON text frame each: `{"sound": "ding" | "chord", "ticket": n}`, or
+  // /events: board events for the UI, one JSON text frame each: `{"sound": "ding" | "chord" | "done", "ticket": n}`, or
   // `{"ticket": n | null}` when that ticket (or, for null, the set of live sessions) changed. Nothing comes in.
   const wss = new WebSocketServer({ noServer: true, maxPayload: 1 << 16 });
   server.on('upgrade', (req, socket, head) => {
