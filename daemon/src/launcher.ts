@@ -9,7 +9,7 @@ import type { IPty } from 'node-pty';
 import { buildContext, startRun } from './context.js';
 import { createWorktree } from './git.js';
 import { mint, revoke, type Role } from './grants.js';
-import { childEnv, spawnPty } from './pty.js';
+import { childEnv, cmdSafe, spawnPty } from './pty.js';
 import { fill, loadTemplate, TEMPLATES, type TicketTemplate } from './templates.js';
 import { BadConfig, type Cli, type Effort } from './settings.js';
 import { preTrustClaude } from './trust.js';
@@ -58,7 +58,10 @@ export interface ArgvIn {
  * Reach is limited by role, not by approvals: a planner cannot write files; workers, testers and the operator run with permissions off.
  */
 export function buildArgv(a: ArgvIn): string[] {
-  const brief = `Read ${relative(a.cwd, a.promptPath).replaceAll('\\', '/')} in full and follow it. It is your brief for this session.`;
+  // Absolute: given the relative form, agents resolved it against the home directory and had to retry (12 sessions, ticket #81).
+  // A path cmd.exe cannot carry (docs/CLIS.md) keeps the relative form, which drops the repo part where such a character would sit.
+  const abs = resolve(a.promptPath);
+  const brief = `Read ${(cmdSafe(abs) ? abs : relative(a.cwd, abs)).replaceAll('\\', '/')} in full and follow it. It is your brief for this session.`;
   const planner = a.role === 'planner';
   switch (a.cli) {
     case 'claude':

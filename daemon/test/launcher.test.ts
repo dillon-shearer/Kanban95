@@ -2,7 +2,7 @@ import './home.ts'; // also here, not only in vitest.config.ts: a run from the r
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { delimiter, join } from 'node:path';
+import { delimiter, join, resolve } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import WebSocket from 'ws';
@@ -85,7 +85,8 @@ const end = async (s: Session) => {
 
 describe('buildArgv', () => {
   const base = { repo: 'C:\\r', promptPath: 'C:/r/.kanban95/sessions/3/prompt.md', mcpConfigPath: 'C:/r/.kanban95/sessions/3/mcp.json', settingsPath: 'C:/r/.kanban95/sessions/3/settings.json', mcpUrl: 'http://127.0.0.1:5/mcp', cwd: 'C:/r/.worktrees/t-7' };
-  const msg = 'Read ../../.kanban95/sessions/3/prompt.md in full and follow it. It is your brief for this session.';
+  // The absolute path: agents given the relative one resolved it against the home directory.
+  const msg = `Read ${resolve(base.promptPath).replaceAll('\\', '/')} in full and follow it. It is your brief for this session.`;
   const claude = (model: string, effort: string, ...role: string[]) =>
     ['claude', '--mcp-config', base.mcpConfigPath, '--strict-mcp-config', ...(model ? ['--model', model] : []), '--effort', effort, ...role, '--dangerously-skip-permissions', msg];
   const codex = (model: string, effort: string, ...role: string[]) =>
@@ -121,6 +122,12 @@ describe('buildArgv', () => {
       '--dangerously-skip-permissions', RESUME_MESSAGE]);
     expect(RESUME_MESSAGE).not.toMatch(/["%\n]/); // it must cross cmd.exe
     expect(buildArgv({ ...base, cli: 'codex', role: 'worker', model: 'm', effort: 'low', sessionId: id, resume: true })).toEqual(codex('m', 'low', '--dangerously-bypass-approvals-and-sandbox'));
+  });
+
+  it('keeps the relative prompt path when the absolute one holds a character cmd.exe refuses', () => {
+    const p = (s: string) => s.replace('C:/r/', 'C:/100%/');
+    const argv = buildArgv({ ...base, promptPath: p(base.promptPath), cwd: p(base.cwd), cli: 'claude', role: 'worker', model: 'm', effort: 'low' });
+    expect(argv.at(-1)).toBe('Read ../../.kanban95/sessions/3/prompt.md in full and follow it. It is your brief for this session.');
   });
 
   it('refuses a repo path Codex trust cannot quote', () => {
@@ -173,7 +180,7 @@ describe('launch', () => {
     expect(cfg.url).toBe(`http://127.0.0.1:${srv.port}/mcp`);
     expect(cfg.headers.Authorization).toMatch(/^Bearer [\w-]{43}$/);
     expect(sessions.get(s.runId)?.pty.pid).toBeGreaterThan(0);
-    expect(fakeOut(s).argv.at(-1)).toBe(`Read ../../.kanban95/sessions/${s.runId}/prompt.md in full and follow it. It is your brief for this session.`);
+    expect(fakeOut(s).argv.at(-1)).toBe(`Read ${join(s.dir, 'prompt.md').replaceAll('\\', '/')} in full and follow it. It is your brief for this session.`);
     const argv = fakeOut(s).argv as string[];
     expect(runRow(s.runId).session_id).toMatch(/^[0-9a-f-]{36}$/);
     expect(argv[argv.indexOf('--session-id') + 1]).toBe(runRow(s.runId).session_id);

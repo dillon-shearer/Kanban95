@@ -8,8 +8,9 @@ import { TOOLS } from './mcp.js';
 export const MCP_DOC = resolve(import.meta.dirname, '../../docs/MCP.md');
 const ROLES: Role[] = ['planner', 'worker', 'tester', 'operator'];
 
-type Schema = { type?: string; enum?: unknown[]; items?: Schema; properties?: Record<string, Schema>; description?: string; default?: unknown };
+type Schema = { type?: string; anyOf?: Schema[]; enum?: unknown[]; items?: Schema; properties?: Record<string, Schema>; description?: string; default?: unknown };
 function typeOf(s: Schema): string {
+  if (s.anyOf) return s.anyOf.map(typeOf).join(' \\| ');
   if (s.enum) return s.enum.map(String).join(' \\| ');
   if (s.type === 'array') return `${typeOf(s.items ?? {})}[]`;
   if (s.type === 'object' && s.properties) return `{ ${Object.entries(s.properties).map(([k, v]) => `${k}: ${typeOf(v)}`).join(', ')} }`;
