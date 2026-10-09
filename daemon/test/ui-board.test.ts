@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { countUnpushed } from '../src/lifecycle.ts';
 import { until } from './cdp.ts';
-import { repo, srv, db, page, base, git, ticket, statusOf, column, statusBar, click, setUi } from './ui.ts';
+import { repo, srv, db, page, base, git, ticket, statusOf, column, statusBar, click, setUi, menuItems, menuPick } from './ui.ts';
 
 describe('ui-board', { timeout: 60_000 }, () => {
   it('snaps an illegal drop back and names the allowed targets; a legal drop moves the card without a reload', async () => {
@@ -192,6 +192,49 @@ describe('ui-board', { timeout: 60_000 }, () => {
       for (const t of [id, flagged]) db.prepare("UPDATE tickets SET status = 'done', merged_at = 'x', needs_human = 0 WHERE id = ?").run(t);
     }
   });
+  it('sorts each column on its own from the ▾ on its legend, keeps it across a reload, and reads an old single sort for every column', async () => {
+    // Done: the newest update is the highest id, so "updated" reverses id order. Backlog: effort max is the highest id.
+    const done = ['Oldest', 'Middle', 'Newest'].map((title, i) => ticket(title, { status: 'done', merged_at: 'x', updated_at: `2026-0${i + 1}-01T00:00:00.000Z` }));
+    const back = ['Low', 'Max'].map((title, i) => ticket(title, { effort: ['low', 'max'][i] }));
+    const ids = (s: string, mine: number[]) => page.evaluate<number[]>(`[...document.querySelectorAll('[data-status="${s}"] .card')].map((el) => Number(el.dataset.id)).filter((id) => ${JSON.stringify(mine)}.includes(id))`);
+    const legend = (s: string) => page.evaluate<string>(`document.querySelector('[data-status="${s}"] > legend').firstChild.textContent`);
+    try {
+      await page.goto(base);
+      await setUi('k95.collapsed', []); // Done starts folded when nothing is saved
+      await setUi('k95.view', undefined);
+      await page.goto(base);
+      await until(() => column(done[2]), 'the Done cards');
+      expect(await ids('done', done)).toEqual(done);
+
+      await click('[data-status="done"] > legend .k95-sort');
+      expect(await menuItems()).toEqual(['✓ id', 'updated', 'effort', 'model', 'tags', 'needs-human first']);
+      expect(await page.evaluate<boolean>(`!document.querySelector('[data-status="done"].collapsed')`)).toBe(true); // the ▾ does not fold
+      await menuPick('updated');
+      await until(async () => (await ids('done', done)).join() === [...done].reverse().join(), 'Done newest first');
+      expect(await ids('backlog', back)).toEqual(back);
+      expect(await legend('done')).toMatch(/^Done \(\d+\) · updated$/);
+      expect(await legend('backlog')).toMatch(/^Backlog \(\d+\)$/);
+
+      await page.goto(base);
+      await until(() => column(done[2]), 'the Done cards after the reload');
+      expect(await ids('done', done)).toEqual([...done].reverse());
+      expect(await ids('backlog', back)).toEqual(back);
+
+      // The shape before per-column sort: one sort for the board, and a group that no longer exists.
+      await setUi('k95.view', { sort: 'effort', group: 'tag' });
+      await page.goto(base);
+      await until(() => column(done[2]), 'the Done cards with the old view');
+      expect(await ids('backlog', back)).toEqual([...back].reverse());
+      expect(await legend('backlog')).toMatch(/· effort$/);
+      expect(await legend('done')).toMatch(/· effort$/);
+      expect(await page.evaluate<number>(`document.querySelectorAll('.k95-group, .k95-board select').length`)).toBe(0);
+    } finally {
+      await setUi('k95.view', undefined);
+      await setUi('k95.collapsed', undefined);
+      for (const id of back) db.prepare("UPDATE tickets SET status = 'done', merged_at = 'x' WHERE id = ?").run(id);
+    }
+  });
+
   it('a base ahead of its upstream at start shows "N commits not pushed"; Push pushes it and the field goes', async () => {
     const bare = mkdtempSync(join(tmpdir(), 'k95-remote-'));
     const remote = (...a: string[]) => execFileSync('git', a, { cwd: bare, encoding: 'utf8' }).trim();

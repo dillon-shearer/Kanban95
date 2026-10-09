@@ -386,9 +386,9 @@ function cardMenu(ts, x, y) {
 const collapsed = new Set();
 const saveCollapsed = () => ui.set('k95.collapsed', [...collapsed]);
 
-// The Board's filter, sort and group, in ui.json as `k95.view` like the folded columns; `boot` fills it.
-const view = { filter: '', sort: 'id', group: 'none' };
-const saveView = () => ui.set('k95.view', { ...view });
+// The Board's filter and each column's sort, in ui.json as `k95.view` like the folded columns; `boot` fills it.
+const view = { filter: '', sort: { backlog: 'id', in_progress: 'id', testing: 'id', done: 'id' } };
+const saveView = () => ui.set('k95.view', { filter: view.filter, sort: { ...view.sort } });
 const order = new Map(); // status → card ids as drawn, for a Shift+click range
 const SORTS = { id: 'id', updated: 'updated', effort: 'effort', model: 'model', tags: 'tags', human: 'needs-human first' };
 const RANK = { max: 0, high: 1, medium: 2, low: 3 };
@@ -416,16 +416,14 @@ const byKey = {
   tags: (a, b) => !a.tags - !b.tags || (a.tags ?? '').localeCompare(b.tags ?? ''), // untagged last
   human: (a, b) => !b.flags.needs_human - !a.flags.needs_human,
 };
-const sorted = (list) => list.sort((a, b) => (byKey[view.sort]?.(a, b) || 0) || a.id - b.id);
-/** A column's cards, or with Group by tag one heading per tag (a card under each of its tags) and the untagged last. */
-function columnBody(list) {
-  if (view.group !== 'tag') return list.map(card);
-  const groups = [...new Set(list.flatMap((t) => (t.tags ? t.tags.split(' ') : [])))].sort();
-  const untagged = list.filter((t) => !t.tags);
-  return [
-    ...groups.flatMap((g) => [h('div', { class: 'k95-group' }, g), ...list.filter((t) => t.tags?.split(' ').includes(g)).map(card)]),
-    ...(untagged.length && groups.length ? [h('div', { class: 'k95-group' }, 'untagged')] : []), ...untagged.map(card),
-  ];
+const sorted = (list, key) => list.sort((a, b) => (byKey[key]?.(a, b) || 0) || a.id - b.id);
+/** `k95.view` as saved: an old single sort (a string) applies to every column, an unknown key stays id, an old `group` is ignored. */
+function loadView(saved) {
+  view.filter = typeof saved?.filter === 'string' ? saved.filter : '';
+  for (const s of Object.keys(view.sort)) {
+    const k = typeof saved?.sort === 'string' ? saved.sort : saved?.sort?.[s];
+    view.sort[s] = Object.hasOwn(SORTS, k) ? k : 'id';
+  }
 }
 
 function openBoard() {
@@ -435,7 +433,6 @@ function openBoard() {
   const count = h('p', { class: 'status-bar-field k95-count' });
   const run = h('button', { onclick: toggleRunner, title: 'Ctrl+L' });
   const runField = h('p', { class: 'status-bar-field k95-runner' });
-  const viewField = h('p', { class: 'status-bar-field k95-view' });
   const filter = h('input', { type: 'text', class: 'k95-filter', 'data-mic': 'off', placeholder: 'Filter', value: view.filter,
     title: 'Ctrl+F. Every word must match the id, title, a tag, the model, CLI or effort; tag: model: cli: effort: narrow a word to that field.',
     oninput: () => {
@@ -450,8 +447,13 @@ function openBoard() {
       filter.value = '';
       filter.dispatchEvent(new Event('input'));
     } });
-  const choose = (k, opts) => h('select', { class: `k95-${k}`, onchange: (e) => { view[k] = e.target.value; saveView(); drawBoard(); } },
-    Object.entries(opts).map(([v, label]) => h('option', { value: v, selected: view[k] === v }, label)));
+  // The ▾ on a column's legend: pick that column's sort. It stops the click so the legend does not fold the column.
+  const sortPick = (s) => h('span', { class: 'k95-sort', title: 'Sort this column', onclick: (e) => {
+    e.stopPropagation();
+    const r = e.currentTarget.getBoundingClientRect();
+    menu(r.left, r.bottom, Object.entries(SORTS).map(([k, label]) => ({ label: `${view.sort[s] === k ? '✓ ' : ''}${label}`,
+      run: () => { view.sort[s] = k; saveView(); drawBoard(); } })));
+  } }, '▾');
   const heldField = h('p', { class: 'status-bar-field k95-held' });
   // runner.unpushed: commits on the base its upstream lacks, counted on start; Push runs the merge queue's push.
   const unpushedText = h('span');
@@ -465,12 +467,9 @@ function openBoard() {
       h('button', { onclick: () => launch(picked()) }, 'Launch'),
       run,
       h('button', { onclick: newBrainstorm, title: 'Ctrl+N' }, 'New brainstorm'),
-      h('button', { onclick: housekeeping }, 'Housekeeping'),
-      filter,
-      h('label', {}, 'Sort ', choose('sort', SORTS)),
-      h('label', {}, 'Group ', choose('group', { none: 'none', tag: 'tag' }))),
+      h('button', { onclick: housekeeping }, 'Housekeeping')),
     cols,
-    h('div', { class: 'status-bar' }, status, runField, unpushedField, heldField, viewField, count));
+    h('div', { class: 'status-bar' }, status, runField, unpushedField, heldField, h('p', { class: 'status-bar-field k95-filter-field' }, filter), count));
   say = (msg) => { status.textContent = msg; status.title = msg; };
   views.set('board', () => {
     const all = [...tickets.values()];
@@ -480,13 +479,13 @@ function openBoard() {
     const focus = focused && cols.contains(focused) ? [focused.closest('.col').dataset.status, focused.dataset.id] : null;
     cols.replaceChildren(...COLUMNS.map(([s, label]) => {
       const list = all.filter((t) => t.status === s);
-      const vis = sorted(list.filter(shown));
+      const vis = sorted(list.filter(shown), view.sort[s]);
       order.set(s, vis.map((t) => t.id));
       const shut = collapsed.has(s);
       const legend = h('legend', { class: list.some((t) => t.flags.needs_human) ? 'alert' : '', title: shut ? 'Expand' : 'Collapse',
         onclick: (e) => { e.stopPropagation(); shut ? collapsed.delete(s) : collapsed.add(s); saveCollapsed(); drawBoard(); } },
-      `${label} (${vis.length === list.length ? list.length : `${vis.length} of ${list.length}`})`);
-      return h('fieldset', { class: `col${shut ? ' collapsed' : ''}`, 'data-status': s }, legend, h('div', { class: 'cards' }, shut ? [] : columnBody(vis)));
+      `${label} (${vis.length === list.length ? list.length : `${vis.length} of ${list.length}`})${view.sort[s] === 'id' ? '' : ` · ${SORTS[view.sort[s]]}`}`, sortPick(s));
+      return h('fieldset', { class: `col${shut ? ' collapsed' : ''}`, 'data-status': s }, legend, h('div', { class: 'cards' }, shut ? [] : vis.map(card)));
     }));
     cols.style.gridTemplateColumns = COLUMNS.map(([s]) => (collapsed.has(s) ? '24px' : 'minmax(0, 1fr)')).join(' ');
     for (const c of cols.querySelectorAll('.col')) c.querySelector('.cards').scrollTop = scroll[c.dataset.status] ?? 0;
@@ -495,9 +494,6 @@ function openBoard() {
     run.textContent = runner.on ? 'Stop' : 'Run';
     runField.textContent = runField.title = runner.stale ? STALE : runnerLine(runner);
     runField.hidden = !runField.textContent;
-    viewField.textContent = viewField.title = [view.filter.trim() && `Filter: ${view.filter.trim()}`, view.sort !== 'id' && `Sort: ${SORTS[view.sort]}`,
-      view.group !== 'none' && `Group: ${view.group}`].filter(Boolean).join(' · ');
-    viewField.hidden = !viewField.textContent;
     const held = heldTickets().length;
     heldField.textContent = held ? `${held} waiting to launch by themselves` : '';
     heldField.hidden = !held;
@@ -685,6 +681,11 @@ function termIcon(s) {
   if (s.ticket_id === null) return s.role === 'operator' ? 'operator' : 'brainstorm';
   return { plan: 'brainstorm', execute: 'execute', test: 'test' }[s.phase] ?? 'window';
 }
+/** A terminal's taskbar label: whose agent it is, short ("#74 execute", "Brainstorm"); the title adds the model. */
+function termLabel(s) {
+  if (s.ticket_id === null) return s.role === 'operator' ? 'Operator' : 'Brainstorm';
+  return `#${s.ticket_id} ${s.phase}`;
+}
 /**
  * Opens a terminal for each new session of a phase in Settings → Board (`terminals.auto`); brainstorms and operator
  * terminals always. The rest are marked seen, so they never pop up later; card → Terminal opens one.
@@ -726,7 +727,7 @@ function openTerminal(s, auto = false) {
     }
   };
   const w = open(wid, { title, w: 760, h: 440, tile: true, background: auto, onX, extra: [micButton((text) => send({ data: text }))],
-    icon: termIcon(s),
+    icon: termIcon(s), label: termLabel(s),
     items: s.ticket_id === null ? [] : [{ label: 'Open ticket', run: () => openTicket(s.ticket_id) }], onClose: () => { terms.delete(wid); ro.disconnect(); ws.close(); term.dispose(); } });
   let was = null;
   const paint = () => {
@@ -745,7 +746,7 @@ function openTerminal(s, auto = false) {
   ws.onopen = () => { fit.fit(); send({ resize: [term.cols, term.rows] }); };
   ws.onclose = () => {
     term.write('\r\n\x1b[90m[session ended]\x1b[0m\r\n');
-    w.title(`${title} (ended)`);
+    w.title(`${title} (ended)`, `${termLabel(s)} (ended)`);
     w.el.classList.add('ended');
     paint();
     if (!auto || s.run_id === null) return;
@@ -1367,7 +1368,7 @@ async function boot() {
   paintProject().catch((e) => say(e.message));
   const [list, st, md] = await Promise.all([api('GET', '/tickets'), api('GET', '/config/settings'), api('GET', '/config/models').catch(() => ({ value: null })), ui.load()]);
   for (const s of ui.get('k95.collapsed') ?? ['done']) collapsed.add(s); // nothing saved: Done starts folded
-  Object.assign(view, ui.get('k95.view'));
+  loadView(ui.get('k95.view'));
   for (const t of list) tickets.set(t.id, t);
   // GET returns the file as written: a sound it does not name (no file, or one from before that sound) takes the schema's default, on,
   // and an old single boolean applies to every sound.
