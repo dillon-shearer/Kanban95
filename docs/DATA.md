@@ -83,6 +83,7 @@ How the kinds are written over MCP: `add_note` takes `plan` `decision` `failure`
 | prompt_rendered | TEXT | the exact prompt injected, written by `context.startRun` before the CLI is spawned; for the context viewer |
 | started_at, ended_at | TEXT | `ended_at` null while running |
 | outcome | TEXT | null while running. Set by the lifecycle when the terminal closes: `submit`, `pass`, `fail` (the agent's move was accepted and the board ended the session), `exit` (closed without reporting), or `lost` (set by the janitor for a run that has no end and no live session, after a daemon crash) |
+| session_id | TEXT | Claude Code's conversation id, a UUID the board picks and passes as `--session-id` at launch; a resumed run (`--resume`) repeats the id it continued. Null for Codex. Read by `resumable` in `daemon/src/launcher.ts` (docs/LIFECYCLE.md → Resume). Added in `007-run-session-id.sql` |
 | scrollback | TEXT | last 2000 lines of the agent's raw terminal output (ANSI included), written by the launcher when the pty exits; null while running or if the launch failed before spawning, and set back to null by the janitor 30 days after the run ended. Added in `002-run-scrollback.sql` |
 
 ### grants

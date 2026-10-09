@@ -511,7 +511,8 @@ export const RESTARTED = 'agent exited without reporting (the daemon restarted)'
 
 /**
  * Daemon start: no agent survives a restart. The agent did nothing wrong, so a running, unflagged ticket is resumed once: the
- * note goes into the new prompt and the agent for its phase starts again in the same worktree. If that agent then exits
+ * agent for its phase starts again in the same worktree, continuing its Claude Code conversation (launcher `resumable`) or
+ * else fresh with the note in its prompt. If that agent then exits
  * without reporting, the ordinary exit row flags it. A done ticket that never merged and is not flagged was cut off mid-queue:
  * it is queued again.
  */
