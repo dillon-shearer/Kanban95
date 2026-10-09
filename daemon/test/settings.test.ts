@@ -57,3 +57,12 @@ it('terminals open on their own for plan and execute by default; only plan, exec
   expect(() => writeConfig('settings', { terminals: { auto: ['operator'] } })).toThrow(/terminals/);
   expect(() => writeConfig('settings', { terminals: { auto: 'test' } })).toThrow(/terminals/);
 });
+
+it('zoom defaults to 1 and takes 0.8 to 2; 3, 0.5 and a string are refused', () => {
+  expect(writeConfig('settings', {}).zoom).toBe(1);
+  expect(writeConfig('settings', { zoom: 0.8 }).zoom).toBe(0.8);
+  expect(writeConfig('settings', { zoom: 2 }).zoom).toBe(2);
+  expect(() => writeConfig('settings', { zoom: 3 })).toThrow(/zoom/);
+  expect(() => writeConfig('settings', { zoom: 0.5 })).toThrow(/zoom/);
+  expect(() => writeConfig('settings', { zoom: '1.5' })).toThrow(/zoom/);
+});

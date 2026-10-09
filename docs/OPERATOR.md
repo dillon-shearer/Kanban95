@@ -119,8 +119,15 @@ Any other drop snaps back, and the status bar names where that card may go.
 | Ctrl+F | focus the Board's Filter box (Esc in the box clears it) |
 | Ctrl+N | New brainstorm |
 | Ctrl+Shift+N | New operator terminal |
+| Ctrl+= or Ctrl++ | Zoom the whole UI in by 10% (up to 200%) |
+| Ctrl+- | Zoom out by 10% (down to 80%) |
+| Ctrl+0 | Zoom back to 100% |
 
-Inside a terminal every key goes to the agent instead: Esc interrupts Claude Code, Ctrl+L clears its screen.
+Inside a terminal every key goes to the agent instead: Esc interrupts Claude Code, Ctrl+L clears its screen. The zoom keys do not zoom there: Ctrl+- reaches the agent as Ctrl+_ does in a native terminal, and Ctrl+= and Ctrl+0 do nothing. Click a title bar or the desktop first to zoom.
+
+## Zoom
+
+The zoom scales everything together: windows, cards, menus, dialogs, the taskbar and the terminals' text, so the Win95 layout keeps its proportions. **Settings → General → Zoom** shows the current level and sets it, 80% to 200% in steps of 10%. It is `zoom` in `~/.kanban95/settings.json` (1 is 100%), so it survives a reload and a restart and applies in every repo. Remembered window places are kept in unzoomed units; at any zoom a window is kept on the desktop, and one larger than the zoomed-in desktop is shrunk to fit it. A terminal refits to its window, so a larger zoom gives it fewer columns and rows of larger text.
 
 ## Preferences
 

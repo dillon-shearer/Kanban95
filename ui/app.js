@@ -4,7 +4,7 @@
 import { FitAddon } from './vendor/xterm/addon-fit.mjs';
 import { Terminal } from './vendor/xterm/xterm.mjs';
 import { configure, ensureModel, micButton, micEverywhere } from './voice.js';
-import { close, dialog, focus, focused, h, isOpen, menu, open, remember, snapshot } from './wm.js';
+import { close, dialog, focus, focused, h, isOpen, menu, open, remember, scale, setZoom, snapshot } from './wm.js';
 
 // ---- data ----
 
@@ -34,7 +34,7 @@ let runner = { on: false, concurrency: 3, running: [], left: 0, backlog: 0, wait
 let models = null; // ~/.kanban95/models.json as written, for the cards' default model and effort
 // Sounds stay off until /config/settings loads: listen() starts first, and a ding in that gap ignored the operator's choice.
 // `terminals` is absent until then too, so no session is opened or passed over before the operator's phases are known.
-let settings = { paths: {}, sounds: { merge: false, attention: false }, voice: { backend: 'local', mode: 'push' }, housekeeping: { auto: true, every: 10 } };
+let settings = { paths: {}, sounds: { merge: false, attention: false }, voice: { backend: 'local', mode: 'push' }, housekeeping: { auto: true, every: 10 }, zoom: 1 };
 let limits = null; // GET /api/limits: { rows, errors, fetched_at }, null until the first answer
 const views = new Map(); // open window id → redraw(ticketId | null)
 
@@ -155,7 +155,7 @@ function dragCard(el, t) {
         document.body.append(ghost);
         el.classList.add('dragging');
       }
-      Object.assign(ghost.style, { left: `${m.clientX - 16}px`, top: `${m.clientY - 8}px` });
+      Object.assign(ghost.style, { left: `${m.clientX / scale() - 16}px`, top: `${m.clientY / scale() - 8}px` });
     };
     const up = (u) => {
       removeEventListener('pointermove', move);
@@ -667,7 +667,7 @@ function ticketForm(w, t) {
 // ---- terminals ----
 
 const seen = new Set();
-const terms = new Map(); // open terminal window id → { s: its session, paint: recolour its title bar }
+const terms = new Map(); // open terminal window id → { s: its session, paint: recolour its title bar, fit: refit it to its window }
 // A terminal's title-bar colour, first match wins; app.css → `.k95-win[data-state]` holds the palette. A new state is a line
 // here and a rule there.
 function termState(s, ended) {
@@ -725,7 +725,7 @@ function openTerminal(s, auto = false) {
     if (state) w.el.dataset.state = state;
     else delete w.el.dataset.state; // an unknown phase keeps the 98.css look
   };
-  terms.set(wid, { s, paint });
+  terms.set(wid, { s, paint, fit: () => fit.fit() });
   paint();
   w.body.classList.add('k95-term');
   term.loadAddon(fit);
@@ -746,6 +746,14 @@ function openTerminal(s, auto = false) {
       if (['submit', 'pass', 'fail', 'conflict', 'restart'].includes(run?.outcome)) setTimeout(w.close, 1500);
     }, 500);
   };
+  // The zoom keys belong to the agent here. xterm sends nothing for them and lets them through to the webview's own zoom:
+  // Ctrl+- goes as 0x1f, as a native terminal sends it (Ctrl+_), and Ctrl+= and Ctrl+0, which have no byte, are swallowed.
+  term.attachCustomKeyEventHandler((e) => {
+    if (!e.ctrlKey || e.altKey || !['-', '=', '+', '0'].includes(e.key)) return true;
+    e.preventDefault();
+    if (e.type === 'keydown' && e.key === '-') send({ data: '\x1f' });
+    return false;
+  });
   term.onData((d) => send({ data: d }));
   term.onResize(({ cols, rows }) => send({ resize: [cols, rows] }));
   ro.observe(w.body);
@@ -840,6 +848,30 @@ async function saveSettings(patch) {
   settings = (await api('PUT', '/config/settings', { ...settings, ...patch })).value;
   configure(settings.voice);
 }
+
+// UI zoom, 80% to 200% in 10% steps. The body's CSS zoom scales the terminals' text as well (xterm measures its cells after
+// zoom), so their fontSize stays put and they only refit.
+const ZOOMS = Array.from({ length: 13 }, (_, i) => (8 + i) / 10);
+function applyZoom(f) {
+  setZoom(f);
+  for (const t of terms.values()) t.fit();
+}
+// One PUT at a time, so a fast run of key presses lands in order. Each sends the settings as they are now and does not take the
+// answer back: an earlier answer would put back an older zoom while the operator is still pressing.
+let zoomSaved = Promise.resolve();
+function zoomTo(f) {
+  if (f === settings.zoom) return;
+  settings.zoom = f;
+  applyZoom(f);
+  const pick = document.getElementById('zoom'); // Settings → General, when open
+  if (pick) pick.value = f;
+  zoomSaved = zoomSaved.then(() => act(() => api('PUT', '/config/settings', settings), `Zoom ${Math.round(f * 100)}%.`));
+}
+// From the nearest step, so a hand-edited 1.25 still moves by one.
+const zoomStep = (d) => {
+  const i = ZOOMS.reduce((b, f, j) => (Math.abs(f - settings.zoom) < Math.abs(ZOOMS[b] - settings.zoom) ? j : b), 0);
+  zoomTo(ZOOMS[Math.max(0, Math.min(ZOOMS.length - 1, i + d))]);
+};
 
 function grantTable(grants) {
   return table(['Grant', 'Ticket', 'Role', 'Session', 'Expires', ''], grants.map((g) => {
@@ -949,7 +981,10 @@ function openSettings(tab) {
       }, 'Saved.');
       const hkAuto = h('input', { type: 'checkbox', id: 'hk-auto', checked: settings.housekeeping.auto });
       const hkEvery = h('input', { type: 'number', id: 'hk-every', min: 1, step: 1, value: settings.housekeeping.every });
-      p.replaceChildren(...[['merge', 'Ding when a ticket merges'], ['attention', 'Chord when the board needs you']].map(([k, label]) =>
+      const zoom = h('select', { id: 'zoom', onchange: (e) => zoomTo(Number(e.target.value)) },
+        ZOOMS.map((f) => h('option', { value: f, selected: f === settings.zoom }, `${Math.round(f * 100)}%`)));
+      p.replaceChildren(h('div', { class: 'field-row' }, h('label', { for: 'zoom' }, 'Zoom (Ctrl+= / Ctrl+- / Ctrl+0)'), zoom),
+        ...[['merge', 'Ding when a ticket merges'], ['attention', 'Chord when the board needs you']].map(([k, label]) =>
         h('div', { class: 'field-row' }, h('input', { type: 'checkbox', id: `sound-${k}`, checked: settings.sounds[k],
           onchange: (e) => act(() => saveSettings({ sounds: { ...settings.sounds, [k]: e.target.checked } }), 'Saved.') }), h('label', { for: `sound-${k}` }, label))),
         h('fieldset', {}, h('legend', {}, 'Open a terminal automatically for'),
@@ -1140,9 +1175,9 @@ function taskbar() {
 const clock = () => { document.getElementById('clock').textContent = new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }); };
 
 // Esc closes the focused window, Ctrl+L turns the runner on or off, Ctrl+A selects every card the filter shows on a focused Board,
-// Ctrl+F focuses the Board's filter, Ctrl+N starts a
-// brainstorm, Ctrl+Shift+N an operator terminal, Ctrl+R restarts the focused ticket's agent. Inside a terminal every key goes to the
-// agent instead (Esc interrupts Claude Code, Ctrl+L clears the screen).
+// Ctrl+F focuses the Board's filter, Ctrl+N starts a brainstorm, Ctrl+Shift+N an operator terminal, Ctrl+R restarts the focused
+// ticket's agent, Ctrl+= (or Ctrl++) and Ctrl+- zoom the UI and Ctrl+0 resets it. Inside a terminal every key goes to the agent
+// instead (Esc interrupts Claude Code, Ctrl+L clears the screen, Ctrl+- and Ctrl+= are the agent's).
 addEventListener('keydown', (e) => {
   if (document.querySelector('dialog[open]') || e.target.closest?.('.xterm')) return;
   const plainCtrl = e.ctrlKey && !e.shiftKey && !e.altKey;
@@ -1172,6 +1207,10 @@ addEventListener('keydown', (e) => {
   } else if (e.ctrlKey && e.shiftKey && !e.altKey && e.key.toLowerCase() === 'n') {
     e.preventDefault();
     newOperator();
+  } else if (e.ctrlKey && !e.altKey && ['=', '+', '-', '0'].includes(e.key)) {
+    e.preventDefault(); // not the webview's own zoom
+    if (e.key === '0') zoomTo(1);
+    else zoomStep(e.key === '-' ? -1 : 1);
   }
 });
 
@@ -1188,7 +1227,7 @@ async function boot() {
   start.addEventListener('click', () => {
     const m = menu(0, 0, START);
     const r = start.getBoundingClientRect();
-    Object.assign(m.style, { left: `${r.left}px`, top: `${r.top - m.offsetHeight}px` });
+    Object.assign(m.style, { left: `${r.left / scale()}px`, top: `${r.top / scale() - m.offsetHeight}px` });
   });
   document.getElementById('inbox-count').addEventListener('click', openInbox);
   document.getElementById('restart-badge').addEventListener('click', restartBoard);
@@ -1204,6 +1243,7 @@ async function boot() {
   settings = { ...settings, terminals: { auto: ['plan', 'execute'] }, ...st.value, voice: { ...settings.voice, ...st.value?.voice }, housekeeping: { ...settings.housekeeping, ...st.value?.housekeeping } };
   models = md.value;
   configure(settings.voice);
+  applyZoom(settings.zoom);
   micEverywhere();
   for (const { id, ...r } of startupLayout()) {
     remember(id, r);
