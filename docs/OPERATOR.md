@@ -60,7 +60,7 @@ For anything else, open the ticket (double-click the card): the Notes tab has th
 
 ### 5. Done
 
-A merged ticket's worktree and branch are removed by the board. Every ten merged tickets the board files and launches a housekeeping ticket; the **Housekeeping** button does it on demand.
+A merged ticket's worktree and branch are removed by the board. Every ten merged tickets the board files a housekeeping ticket in Backlog; the **Housekeeping** button files and launches one on demand. Settings → General → Housekeeping switches the automatic ticket off or changes the interval.
 
 ## The windows
 

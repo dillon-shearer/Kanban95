@@ -1,6 +1,6 @@
 // The operator's own settings in ~/.kanban95/, edited in the Settings window. No secrets live here.
 // models.json: which CLI, and the model and effort per phase (docs/LIFECYCLE.md → Run settings). settings.json: CLI paths,
-// sounds, voice. Both are read on every use, so an edit applies to the next run without a restart.
+// sounds, voice, housekeeping. Both are read on every use, so an edit applies to the next run without a restart.
 import { execFile } from 'node:child_process';
 import { createReadStream, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -23,6 +23,9 @@ const FILES = {
     sounds: z.boolean().default(true),
     voice: z.object({ backend: z.enum(['local']).default('local'), mode: z.enum(['push', 'toggle']).default('push') }).strict()
       .default({ backend: 'local', mode: 'push' }),
+    // Off: no ticket is filed after merges; the Housekeeping button still works.
+    housekeeping: z.object({ auto: z.boolean().default(true), every: z.number().int().min(1).default(10) }).strict()
+      .default({ auto: true, every: 10 }),
   }).strict(),
 };
 export type ConfigName = keyof typeof FILES;
@@ -51,7 +54,7 @@ function check<N extends ConfigName>(name: N, value: unknown, where: string): Co
 }
 
 /** models.json has no default (the operator picks the models); a missing settings.json is all defaults. */
-function readConfig<N extends ConfigName>(name: N): Config<N> {
+export function readConfig<N extends ConfigName>(name: N): Config<N> {
   const file = configPath(name);
   if (!existsSync(file)) {
     if (name === 'models') throw new BadConfig(`no model catalog at ${file}`);
