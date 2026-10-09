@@ -9,7 +9,7 @@ import { BRAIN_BODY_MAX } from './db.js';
 import { attachments } from './attachments.js';
 import { audit, verify, type Grant, type Role } from './grants.js';
 import { apply, changed, Refused, type Board } from './lifecycle.js';
-import { EFFORT } from './settings.js';
+import { EFFORT, uncatalogued } from './settings.js';
 
 const STATUS = ['backlog', 'in_progress', 'testing', 'done'] as const;
 /** Where each role may move a ticket: its own, or for the operator any. The planner never moves anything. */
@@ -79,6 +79,8 @@ export const TOOLS: Record<string, Tool<z.ZodRawShape>> = {
       effort: z.enum(EFFORT).optional().describe('Effort override; omit for the phase default.'),
     },
     run(c, a) {
+      const bad = a.model && uncatalogued(a.model);
+      if (bad) throw new Error(bad);
       const id = transaction(c.db, () => {
         const r = c.db
           .prepare('INSERT INTO tickets (title, body, criteria, model, effort) VALUES (?, ?, ?, ?, ?)')
@@ -136,7 +138,9 @@ export const TOOLS: Record<string, Tool<z.ZodRawShape>> = {
     run(c, a) {
       const id = (c.ticket = own(c, a.ticket_id));
       if (a.model === undefined && a.effort === undefined) throw new Error('give model and/or effort');
-      readTicket(c.db, id);
+      const t = readTicket(c.db, id);
+      const bad = a.model !== undefined && uncatalogued(a.model, t.cli);
+      if (bad) throw new Error(bad);
       const set: Record<string, unknown> = {};
       if (a.model !== undefined) set.model = a.model;
       if (a.effort !== undefined) set.effort = a.effort;
