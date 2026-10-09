@@ -85,7 +85,7 @@ Windows can be dragged by the title bar, resized from the corner, minimized to t
 
 ## Notepad
 
-A place to draft before you hand words to an agent or a ticket. One plain text area, with the mic beside it. It saves half a second after you stop typing and again when you close the window, to `.kanban95/notepad.md` in the repo (git-ignored; each repo has its own). **New ticket from selection** opens the New ticket form with the selected text in Body, or all of it when nothing is selected; **Copy** puts the same text on the clipboard. Up to 256 KB; past that the status line says it was not saved and the file keeps the last text that fit. Agents never read it.
+A place to draft before you hand words to an agent or a ticket. One plain text area, with the mic beside it. It saves half a second after you stop typing and again when you close the window, to `.kanban95/notepad.md` in the repo (git-ignored; each repo has its own). **New brainstorm from selection** starts a brainstorm whose planner gets the selected text (or all of it when nothing is selected) as its starting notes, so it asks about what your draft leaves open; **Copy** puts the same text on the clipboard. Up to 256 KB; past that the status line says it was not saved and the file keeps the last text that fit. Agents never read it.
 
 ## Cards
 
