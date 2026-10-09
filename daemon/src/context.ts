@@ -67,7 +67,7 @@ function attachmentList(repo: string, ticketId: number): string {
 
 /** Left out of the inline diff (still named in the stat): docs and lockfiles were 40-100% of the large tester prompts (ticket #43). */
 const DIFF_SKIP = [':(exclude)*.md', ':(exclude)docs/**', ':(exclude)*package-lock.json', ':(exclude)*.lock'];
-export const DIFF_CHARS = 32000;
+const DIFF_CHARS = 32000;
 
 /**
  * The tester's view of the change: `git diff --stat` of every file, then the diff of code and config only, capped at `chars`

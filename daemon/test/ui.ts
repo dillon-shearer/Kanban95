@@ -88,7 +88,7 @@ beforeAll(async () => {
   process.env.PATH = bin + delimiter + PATH0;
   mkdirSync(join(process.env.USERPROFILE!, '.kanban95'), { recursive: true });
   writeFileSync(join(process.env.USERPROFILE!, '.kanban95', 'models.json'), JSON.stringify({
-    cli: 'claude', claude: { execute: { model: 'work', effort: 'low' }, test: { model: 'pass', effort: 'low' } },
+    cli: 'claude', claude: { plan: { model: 'plan', effort: 'low' }, execute: { model: 'work', effort: 'low' }, test: { model: 'pass', effort: 'low' } },
   }));
   // The tray asks for limits on load: canned answers, never the real CLIs. Claude's count says how often it was asked.
   sources.claude = async () => `Current session: ${62 + limitCalls++}% used · resets Oct 8, 7:59pm (America/New_York)`;

@@ -17,7 +17,7 @@ Each session starts from one rendered template. The board pushes only this; ever
 | `{{base}}` | the branch the ticket's worktree forked from and merges into (the main checkout's current branch); `(none)` for a brainstorm or operator terminal |
 | `{{tools}}` | the MCP tools this session's role may call, with the access cell from `docs/MCP.md` |
 | `{{preferences}}` | the operator's standing instructions, `~/.kanban95/preferences.md` as written (Settings → Prompts), under every template's "## Operator preferences" heading |
-| `{{mission}}` | operator terminals only: the mission the operator typed, verbatim. `(none)` everywhere else |
+| `{{mission}}` | an operator terminal's typed mission, or a brainstorm's starting notes (Notepad → New brainstorm from selection), verbatim. `(none)` everywhere else. A launch with text whose template lacks `{{mission}}` (a repo copy older than the slot) is refused, not run without it |
 
 Empty values render as `(none)`, except `{{diff}}` outside a test session (empty) and the attachments block (left out when there are none). Values are inserted literally: a brain note containing `{{ticket}}` stays that text. A template naming a variable that has no value is refused, never rendered.
 
@@ -36,7 +36,7 @@ A repo renders its own copies in `.kanban95/templates/`, copied once from `templ
 
 ## Expected behaviour
 
-**Planner (brainstorm).** Interviews the operator in its own terminal, one question at a time, waiting for each reply, before proposing anything. It has no `ask_operator`: that tool is for ticket agents only (worker, tester), since it needs a running ticket. It reads the code and brain, agrees the list with the operator, then calls `create_ticket` for each: imperative title, a body saying what and why, measurable acceptance criteria one per line, `depends_on`, and `model`/`effort` only when clearly warranted (`low` for trivial, `high` for hard). Writes no code. Turns brain rows that record a bug found but not fixed, or unbuilt work, into tickets and then deletes them (`brain_delete`). Ends by listing what it created.
+**Planner (brainstorm).** Interviews the operator in its own terminal, one question at a time, waiting for each reply, before proposing anything. It has no `ask_operator`: that tool is for ticket agents only (worker, tester), since it needs a running ticket. It reads the code and brain, agrees the list with the operator, then calls `create_ticket` for each: imperative title, a body saying what and why, measurable acceptance criteria one per line, `depends_on`, and `model`/`effort` only when clearly warranted (`low` for trivial, `high` for hard). Writes no code. Removes a ticket it made by mistake with `delete_ticket` (Backlog, no notes, no runs). Turns brain rows that record a bug found but not fixed, or unbuilt work, into tickets and then deletes them (`brain_delete`). Ends by listing what it created.
 
 **Operator terminal (operator).** The operator's hand on the board. Reads `CLAUDE.md`, pulls only the context the mission needs (`list_tickets`, `get_ticket`, `brain_search`), does the work, and records decisions and gotchas with `brain_add`. Changes code only in a worktree under `.worktrees/op-<time>` and merges it into the main checkout itself once the tests pass, because ticket agents may be running and the merge queue merges there. Commits as the operator with a plain imperative subject. Creates tickets only when the mission says so. Ends with a short written summary in its terminal. Never calls `report_test`. Like the planner it is interactive, so it asks the operator in its terminal and has no `ask_operator`.
 
@@ -45,11 +45,13 @@ A repo renders its own copies in `.kanban95/templates/`, copied once from `templ
 **Worker (execute).**
 - Works only inside the current directory, the ticket's worktree.
 - Reads only what the change needs: `CLAUDE.md` (loaded by the CLI) points it at `docs/ARCHITECTURE.md` → Working on the board, the ARCHITECTURE section for the part it touches and that part's living doc, not the whole of README and ARCHITECTURE up front. Each file read early is paid again on every later call of the session (ticket #43).
+- Installs dependencies in the worktree itself (`npm install`, or the repo's equivalent), never junctions or symlinks the main checkout's `node_modules` or anything else of the main checkout's into it: removing the worktree, or a tool deleting through the link, reaches the main checkout's files. The tester's template says the same.
 - Verify with `npm test` or a script built on `daemon/test/cdp.ts`, never by starting the app (`npm run dev`, `Kanban95.cmd`, `cargo run`) or a visible browser.
 - Puts new tests in a new file named for the feature (`daemon/test/<feature>.test.ts`) unless it is extending an existing test's scenario: several tickets run at once and appending to a shared test file is the most common merge conflict.
 - Records decisions with `add_note` kind `decision`, gotchas for future tickets with `brain_add` (rules below in The brain).
 - Before finishing, `brain_search`es the subsystems it changed and `brain_update`s every row the change made false; names rows to delete in its summary.
 - Asks with `ask_operator` instead of guessing, once, with the options it sees.
+- Files a manual touch or follow-up it finds with `create_ticket` instead of expanding its own scope. The ticket lands in Backlog with `Filed by #<its ticket>` at the top of the body and runs on the operator's default model and effort. The same session may fix it with `update_ticket` (title, body, criteria, dependencies) or remove it with `delete_ticket` while it is in Backlog; no other ticket (`docs/SECURITY.md` → MCP).
 - Never commits secrets and never reads a `.env`.
 - Commits in the worktree with a plain imperative subject, no ticket or phase ids, no trailers.
 - Finishes with tests and build passing, a `summary` note, then `move_ticket(testing)`. Once the move is accepted the board ends the session and starts the tester; nothing after it is read.

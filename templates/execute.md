@@ -27,11 +27,13 @@ If a failure note reports a merge conflict, `{{base}}` has moved on and no longe
 ## Rules
 
 - Work only inside the current directory. It is this ticket's git worktree. Do not touch files outside it.
+- If the worktree needs dependencies, install them in it (`npm install`, or the repo's equivalent). Never junction or symlink the main checkout's `node_modules`, or anything else of the main checkout's, into the worktree: removing the worktree, or any tool that deletes through the link, reaches the main checkout's files.
 - Verify with `npm test` or a script built on `daemon/test/cdp.ts`, never by starting the app (`npm run dev`, `Kanban95.cmd`, `cargo run`) or a visible browser.
 - Put new tests in a new file named for the feature (`daemon/test/<feature>.test.ts`) unless you are extending an existing test's scenario. Several tickets run at once and appending to a shared test file is the most common merge conflict.
 - Record decisions as you make them with `add_note` kind `decision`: what you chose and why.
 - Record gotchas a future ticket would trip on with `brain_add`, written for a reader with no context: one fact per row, never ticket status or plans. `brain_search` the subject first and `brain_update` a row that already covers it instead of adding a near-duplicate.
 - If you cannot resolve something from the ticket, the brain or the code, ask with `ask_operator` instead of guessing. Ask once, with the options you see.
+- File a manual touch or a follow-up you find with `create_ticket`; do not expand your own scope. You may fix or `delete_ticket` a ticket you filed while it is in Backlog.
 - Never commit secrets, keys, tokens or `.env` files. Do not read a `.env` file.
 - Use `get_ticket` and `brain_search` when you need more context. Nothing else will be sent to you.
 - Commit your work in this worktree. Commit message: a plain imperative sentence saying what changed, no ticket or phase ids, no `Co-Authored-By` or other trailer. Add a body only when the why is not obvious.

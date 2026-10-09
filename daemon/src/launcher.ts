@@ -9,8 +9,8 @@ import { buildContext, startRun } from './context.js';
 import { createWorktree } from './git.js';
 import { mint, revoke, type Role } from './grants.js';
 import { childEnv, spawnPty } from './pty.js';
-import { render, TEMPLATES, type TicketTemplate } from './templates.js';
-import type { Cli, Effort } from './settings.js';
+import { fill, loadTemplate, TEMPLATES, type TicketTemplate } from './templates.js';
+import { BadConfig, type Cli, type Effort } from './settings.js';
 import { preTrustClaude } from './trust.js';
 
 /** Codex reads the bearer token for the board's MCP server from this variable; it is set only in the CLI's own environment. */
@@ -125,14 +125,17 @@ export function launch(d: Daemon, o: { ticketId: number; template: TicketTemplat
 }
 
 /**
- * A session in the repo root with no ticket, so no worktree and no run row: a brainstorm (planner) or an operator terminal
- * (the operator's typed mission). Its grant has no ticket and is revoked when the pty exits.
+ * A session in the repo root with no ticket, so no worktree and no run row: a brainstorm (planner, optionally seeded with the
+ * operator's text) or an operator terminal (the operator's typed mission). Its grant has no ticket and is revoked when the pty exits.
  */
-export function launchRoot(d: Daemon, o: RunSettings & { template: 'brainstorm' } | RunSettings & { template: 'operator'; mission: string }): Session {
+export function launchRoot(d: Daemon, o: RunSettings & { template: 'brainstorm' | 'operator'; mission?: string }): Session {
   const { role } = TEMPLATES[o.template];
   const ctx = buildContext(d.db, d.repo, null, role);
-  if (o.template === 'operator') ctx.mission = o.mission;
-  const prompt = render(d.repo, o.template, ctx);
+  const text = loadTemplate(d.repo, o.template);
+  // A repo copy older than the {{mission}} slot would drop the operator's text without a word.
+  if (o.mission && !/\{\{\s*mission\s*\}\}/.test(text)) throw new BadConfig(`${o.template}.md has no {{mission}}: reset it in Settings → Templates`);
+  if (o.mission) ctx.mission = o.mission;
+  const prompt = fill(text, ctx);
   return spawnSession(d, o, { runId: null, ticketId: null, role, phase: o.template, cwd: d.repo, prompt });
 }
 

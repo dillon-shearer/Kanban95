@@ -359,8 +359,8 @@ function rootSession(b: Board, o: Parameters<typeof launchRoot>[1]): Session {
   return s;
 }
 
-/** A brainstorm session: a planner with plan-phase settings. */
-export const brainstorm = (b: Board) => rootSession(b, { ...runSettings(null, 'plan'), template: 'brainstorm' });
+/** A brainstorm session: a planner with plan-phase settings, optionally seeded with the operator's text (Notepad). */
+export const brainstorm = (b: Board, mission?: string) => rootSession(b, { ...runSettings(null, 'plan'), template: 'brainstorm', mission });
 
 /** An operator terminal: the operator phase (Settings → Models; the CLI's default model when unset) unless `.kanban95/config.json` has `operator: { model, effort }` (either or both). */
 export function operator(b: Board, mission: string): Session {
@@ -377,7 +377,7 @@ export function operator(b: Board, mission: string): Session {
 
 /** `.kanban95/runner.json`, git-ignored: whether the runner is on, why it last stopped itself, how many tickets it keeps running. Absent means off. */
 export type Runner = { on: boolean; why?: string; concurrency?: number };
-export const CONCURRENCY = 3;
+const CONCURRENCY = 3;
 const runnerFile = (b: Board) => join(b.repo, '.kanban95', 'runner.json');
 export function runner(b: Board): Runner {
   try {

@@ -72,7 +72,7 @@ describe('operator grant schema', () => {
     db.prepare("INSERT INTO audit (grant_id, ticket_id, tool, outcome) VALUES (1, 1, 'add_note', 'ok')").run();
     expect(() => db.prepare("INSERT INTO grants (token_hash, ticket_id, role, expires_at) VALUES ('h2', NULL, 'operator', '2999-01-01')").run()).toThrow(/CHECK/);
 
-    expect(migrate(db, MIGRATIONS_DIR)).toEqual(['004-operator-grants.sql']);
+    expect(migrate(db, MIGRATIONS_DIR)[0]).toBe('004-operator-grants.sql'); // later migrations follow it
     expect(db.prepare('SELECT grant_id FROM audit').get()).toEqual({ grant_id: 1 });
     const ins = db.prepare("INSERT INTO grants (token_hash, ticket_id, role, expires_at) VALUES (?, ?, 'operator', '2999-01-01')");
     expect(() => ins.run('h3', 1)).toThrow(/CHECK/);
@@ -213,6 +213,36 @@ describe('POST /api/operator', () => {
       expect((await r.json()).error).toMatch(/operator\.effort must be one of/);
     } finally {
       rmSync(cfg, { force: true });
+    }
+  });
+});
+
+describe('POST /api/brainstorm', () => {
+  const prompt = (view: { id: number }) => readFileSync(join(sessions.get(view.id)!.dir, 'prompt.md'), 'utf8');
+
+  it("puts the operator's draft in the planner's brief verbatim, and (none) when there is none", async () => {
+    expect((await post('/brainstorm', { mission: 3 })).status).toBe(400);
+    const notes = 'Login keeps failing.\nKeep {{brain}} & $1 as typed.';
+    const seeded = await (await post('/brainstorm', { mission: notes })).json();
+    expect(prompt(seeded)).toContain(`## Starting notes\n\n${notes}\n`);
+    await end(sessions.get(seeded.id)!);
+    const blank = await (await post('/brainstorm', { mission: ' \n ' })).json();
+    expect(prompt(blank)).toContain('## Starting notes\n\n(none)\n');
+    await end(sessions.get(blank.id)!);
+  });
+
+  it('refuses a draft when the repo template has no {{mission}} rather than drop it, and still runs without one', async () => {
+    const file = join(repo, '.kanban95', 'templates', 'brainstorm.md'), saved = readFileSync(file, 'utf8');
+    try {
+      writeFileSync(file, '# Brainstorm\n\n{{tools}}\n');
+      const r = await post('/brainstorm', { mission: 'go' });
+      expect(r.status).toBe(400);
+      expect((await r.json()).error).toMatch(/brainstorm\.md has no \{\{mission\}\}/);
+      expect(sessions.size).toBe(0);
+      const view = await (await post('/brainstorm', {})).json();
+      await end(sessions.get(view.id)!);
+    } finally {
+      writeFileSync(file, saved);
     }
   });
 });

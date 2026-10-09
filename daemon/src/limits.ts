@@ -9,7 +9,7 @@ import { cliPath, CLIS, type Cli } from './settings.js';
 export interface Row { cli: Cli; window: string; used: number; limit: number; resets_at: string | null }
 export interface Limits { rows: Row[]; errors: Partial<Record<Cli, string>>; fetched_at: string }
 
-export const REFRESH_MS = 5 * 60_000;
+const REFRESH_MS = 5 * 60_000;
 const TIMEOUT_MS = 30_000;
 const win = process.platform === 'win32';
 /** cmd.exe line for a `.cmd` shim (codex); Node refuses to spawn one without a shell. */

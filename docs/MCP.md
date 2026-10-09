@@ -15,8 +15,9 @@ A refused call returns a tool error whose text says why and, for `move_ticket`, 
 
 | tool | planner | worker | tester | operator |
 |------|---|---|---|---|
-| create_ticket | yes | no | no | yes |
-| update_ticket | any ticket | own, body/criteria only | no | any ticket |
+| create_ticket | yes | yes, Backlog follow-up, no model/effort | no | yes |
+| update_ticket | any ticket | own, body/criteria only; its Backlog follow-ups, title/body/criteria/depends_on | no | any ticket |
+| delete_ticket | Backlog, no notes or runs | its Backlog follow-ups | no | Backlog, no notes or runs |
 | set_model | any | no | no | any |
 | move_ticket | no | own → testing | own → done / in_progress | any → in_progress / testing / done |
 | add_note | any | own | own | any |
@@ -37,7 +38,7 @@ The operator role is an operator terminal: an agent the operator starts from the
 
 ### create_ticket
 
-Create a ticket in the backlog. Give it a title, a body that says what to build and why, and acceptance criteria a tester can check one by one. List depends_on ids when this work must wait for other tickets. Set model and effort only when the work clearly warrants it: trivial work gets effort low, hard work gets high. Returns the ticket.
+Create a ticket in the backlog. Give it a title, a body that says what to build and why, and acceptance criteria a tester can check one by one. List depends_on ids when this work must wait for other tickets. Set model and effort only when the work clearly warrants it: trivial work gets effort low, hard work gets high. A worker files a follow-up or a manual touch it found this way instead of widening its own scope: it lands in Backlog, its body starts with "Filed by #<your ticket>", it runs on the operator's default model and effort, and the worker may fix or delete it while it is still in Backlog. Returns the ticket.
 
 | argument | type | required | description |
 |---|---|---|---|
@@ -50,7 +51,7 @@ Create a ticket in the backlog. Give it a title, a body that says what to build 
 
 ### update_ticket
 
-Edit a ticket's title, body, criteria or dependencies. A worker may only refine the body and criteria of its own ticket, for example to record a clarified scope; use add_note for progress and decisions instead. Omitted fields are left unchanged. Returns the ticket.
+Edit a ticket's title, body, criteria or dependencies. A worker may only refine the body and criteria of its own ticket, for example to record a clarified scope, and fix any of these fields on a Backlog follow-up it created with create_ticket; use add_note for progress and decisions instead. Omitted fields are left unchanged. Returns the ticket.
 
 | argument | type | required | description |
 |---|---|---|---|
@@ -59,6 +60,14 @@ Edit a ticket's title, body, criteria or dependencies. A worker may only refine 
 | body | string | no |  |
 | criteria | string | no |  |
 | depends_on | integer[] | no | Replaces the full dependency list. |
+
+### delete_ticket
+
+Delete a Backlog ticket made by mistake, with its attachments, exactly as the operator's delete does. A planner may delete a Backlog ticket that has no notes and no runs; a worker may delete only a Backlog follow-up its own grant created with create_ticket. Anything else is refused with the reason. Returns the deleted id.
+
+| argument | type | required | description |
+|---|---|---|---|
+| ticket_id | integer | yes |  |
 
 ### set_model
 
