@@ -65,6 +65,13 @@ export const click = async (selector: string, modifiers = 0) => {
   await page.send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, modifiers, button: 'left', buttons: 1, clickCount: 1 });
   await page.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, modifiers, button: 'left', buttons: 0, clickCount: 1 });
 };
+export const rightClick = async (selector: string) => {
+  const { x, y } = await page.center(selector);
+  await page.send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'right', buttons: 2, clickCount: 1 });
+  await page.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'right', buttons: 0, clickCount: 1 });
+};
+export const menuItems = () => page.evaluate<string[]>(`[...document.querySelectorAll('.k95-menu > li[role="menuitem"]')].map((li) => li.textContent)`);
+export const menuPick = (label: string) => page.evaluate(`[...document.querySelectorAll('.k95-menu > li')].find((li) => li.textContent === ${JSON.stringify(label)}).click()`);
 
 beforeAll(async () => {
   repo = mkdtempSync(join(tmpdir(), 'k95-'));

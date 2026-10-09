@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { sessions } from '../src/launcher.ts';
 import { until } from './cdp.ts';
-import { repo, srv, db, page, base, ticket, column, statusBar, click } from './ui.ts';
+import { repo, srv, db, page, base, ticket, column, statusBar, click, rightClick, menuItems, menuPick } from './ui.ts';
 
 describe('ui-terminal', { timeout: 60_000 }, () => {
   it('keeps an ended terminal open while its ticket exists; deleting the ticket closes its terminal and Ticket window', async () => {
@@ -28,7 +28,9 @@ describe('ui-terminal', { timeout: 60_000 }, () => {
 
     db.prepare("UPDATE tickets SET status = 'backlog' WHERE id = ?").run(id);
     const second = await launchAgent();
-    await page.evaluate(`document.querySelector('.card[data-id="${id}"]').dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))`);
+    await rightClick(`[data-task="${second}"]`);
+    expect(await menuItems()).toEqual(['Restore', 'Minimize', 'Maximize', 'Open ticket', 'Close']);
+    await menuPick('Open ticket');
     await until(() => win(`ticket-${id}`), 'the Ticket window');
     expect(await tasks()).toBe(3);
 
