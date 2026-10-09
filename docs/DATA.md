@@ -49,6 +49,7 @@ Living document. Update it in the same change that alters the schema.
 | template | TEXT | `execute` `housekeeping`, default `execute`: which template the ticket's execute runs use. Added in `003-lifecycle.sql` |
 | merged_at | TEXT | null until the ticket's branch landed on the base. A dependency counts as done only once this is set. Added in `003-lifecycle.sql` |
 | created_by_grant | INTEGER | nullable, FK `grants(id)` `ON DELETE SET NULL`: the grant whose `create_ticket` made the ticket; null for one the UI made. A worker may edit and delete only Backlog tickets whose `created_by_grant` is its own grant (`docs/SECURITY.md`). Added in `005-ticket-creator.sql` |
+| tags | TEXT | default `''`: free-form grouping tags as distinct lowercase tokens matching `[a-z0-9-]+`, joined by one space. REST takes a string (split on commas and whitespace, lowercased) or an array; MCP takes an array; any other token is refused (400 / tool error) and nothing is written. Normalised by `normaliseTags` in `daemon/src/api.ts`. Added in `006-tags.sql` |
 | created_at, updated_at | TEXT | `updated_at` is bumped by trigger `tickets_touch` |
 
 The REST API presents the two flags as `flags: { needs_human, blocked_on_deps }` and the dependencies as `depends_on: number[]`.

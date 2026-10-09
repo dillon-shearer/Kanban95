@@ -4,7 +4,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import * as z from 'zod';
-import { brainDelete, brainSearch, brainUpdate, deleteTicket, readTicket, setDeps, transaction } from './api.js';
+import { brainDelete, brainSearch, brainUpdate, deleteTicket, normaliseTags, readTicket, setDeps, transaction } from './api.js';
 import { BRAIN_BODY_MAX } from './db.js';
 import { attachments } from './attachments.js';
 import { audit, verify, type Grant, type Role } from './grants.js';
@@ -25,7 +25,7 @@ const an = (r: Role) => `${r === 'operator' ? 'an' : 'a'} ${r}`;
 /** The only ticket columns a worker may edit on its own ticket. */
 const WORKER_FIELDS = ['body', 'criteria'] as const;
 /** What a worker may edit on a follow-up its own grant created, while it is in Backlog. */
-const FOLLOWUP_FIELDS = ['title', 'body', 'criteria', 'depends_on'] as const;
+const FOLLOWUP_FIELDS = ['title', 'body', 'criteria', 'tags', 'depends_on'] as const;
 const BRAIN_SEARCH_MAX = 50;
 
 /** A refusal. Audited as `denied`; anything else thrown is `error`. */
@@ -73,7 +73,7 @@ export const TOOLS: Record<string, Tool<z.ZodRawShape>> = {
   create_ticket: tool({
     description:
       'Create a ticket in the backlog. Give it a title, a body that says what to build and why, and acceptance criteria a tester can check one by one. ' +
-      'List depends_on ids when this work must wait for other tickets. Set model and effort only when the work clearly warrants it: trivial work gets effort low, hard work gets high. ' +
+      'List depends_on ids when this work must wait for other tickets. Tags (lowercase a-z, 0-9, -) group related tickets on the board. Set model and effort only when the work clearly warrants it: trivial work gets effort low, hard work gets high. ' +
       'A worker files a follow-up or a manual touch it found this way instead of widening its own scope: it lands in Backlog, its body starts with "Filed by #<your ticket>", ' +
       'it runs on the operator\x27s default model and effort, and the worker may fix or delete it while it is still in Backlog. Returns the ticket.',
     access: { planner: 'yes', worker: 'yes, Backlog follow-up, no model/effort', operator: 'yes' },
@@ -82,6 +82,7 @@ export const TOOLS: Record<string, Tool<z.ZodRawShape>> = {
       body: z.string().default('').describe('What to build and why, markdown.'),
       criteria: z.string().default('').describe('Acceptance criteria, one checkable statement per line.'),
       depends_on: z.array(z.number().int().positive()).default([]).describe('Ticket ids that must be done before this one starts.'),
+      tags: z.array(z.string()).optional().describe('Grouping tags, each lowercase a-z, 0-9 and - only, e.g. ["ui", "daemon"].'),
       model: z.string().min(1).optional().describe('Model override; omit for the phase default.'),
       effort: z.enum(EFFORT).optional().describe('Effort override; omit for the phase default.'),
     },
@@ -91,10 +92,11 @@ export const TOOLS: Record<string, Tool<z.ZodRawShape>> = {
       const bad = a.model && uncatalogued(a.model);
       if (bad) throw new Error(bad);
       const body = worker ? `Filed by #${c.grant.ticket_id}\n\n${a.body}` : a.body;
+      const tags = normaliseTags(a.tags ?? []);
       const id = transaction(c.db, () => {
         const r = c.db
-          .prepare('INSERT INTO tickets (title, body, criteria, model, effort, created_by_grant) VALUES (?, ?, ?, ?, ?, ?)')
-          .run(a.title, body, a.criteria, a.model ?? null, a.effort ?? null, c.grant.id);
+          .prepare('INSERT INTO tickets (title, body, criteria, tags, model, effort, created_by_grant) VALUES (?, ?, ?, ?, ?, ?, ?)')
+          .run(a.title, body, a.criteria, tags, a.model ?? null, a.effort ?? null, c.grant.id);
         const id = Number(r.lastInsertRowid);
         setDeps(c.db, id, a.depends_on);
         return id;
@@ -118,13 +120,15 @@ export const TOOLS: Record<string, Tool<z.ZodRawShape>> = {
       title: z.string().min(1).optional(),
       body: z.string().optional(),
       criteria: z.string().optional(),
+      tags: z.array(z.string()).optional().describe('Replaces the full tag list; [] clears it.'),
       depends_on: z.array(z.number().int().positive()).optional().describe('Replaces the full dependency list.'),
     },
-    run(c, { ticket_id, depends_on, ...cols }) {
+    run(c, { ticket_id, depends_on, tags, ...rest }) {
+      const cols: Record<string, unknown> = { ...rest, tags: tags && normaliseTags(tags) };
       // A worker's Backlog follow-up is the one foreign id it may name; any other goes through own() and its scope denial.
       const mine = c.grant.role === 'worker' && ticket_id !== undefined && followUp(c.db, c.grant, ticket_id);
       const id = (c.ticket = mine ? ticket_id : own(c, ticket_id));
-      const given = Object.keys(cols).filter((k) => cols[k as keyof typeof cols] !== undefined);
+      const given = Object.keys(cols).filter((k) => cols[k] !== undefined);
       if (depends_on) given.push('depends_on');
       if (given.length === 0) throw new Error('nothing to update');
       if (c.grant.role === 'worker' && !mine) {
@@ -250,7 +254,7 @@ export const TOOLS: Record<string, Tool<z.ZodRawShape>> = {
 
   list_tickets: tool({
     description:
-      'List tickets with id, title, status, flags and dependencies, optionally filtered by status. A planner or operator sees the whole board; ' +
+      'List tickets with id, title, status, tags, flags and dependencies, optionally filtered by status. A planner or operator sees the whole board; ' +
       'a worker sees its own ticket and the ones it depends on; a tester sees its own. Use get_ticket for the body and notes.',
     access: { planner: 'yes', worker: 'own + its deps', tester: 'own', operator: 'yes' },
     input: { status: z.enum(STATUS).optional() },
@@ -262,7 +266,7 @@ export const TOOLS: Record<string, Tool<z.ZodRawShape>> = {
       return ids
         .map((id) => readTicket(c.db, id))
         .filter((t) => a.status === undefined || t.status === a.status)
-        .map(({ id, title, status, flags, depends_on }) => ({ id, title, status, flags, depends_on }));
+        .map(({ id, title, status, tags, flags, depends_on }) => ({ id, title, status, tags, flags, depends_on }));
     },
   }),
 

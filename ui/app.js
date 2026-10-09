@@ -129,6 +129,7 @@ function card(t) {
     badge(t.model ?? d.model ?? 'no model', t.model ? '' : 'default'),
     badge(t.effort ?? d.effort ?? 'medium', t.effort ? '' : 'default'),
     badge(t.cli ?? models?.cli ?? 'cli?', t.cli ? '' : 'default'),
+    ...(t.tags ? t.tags.split(' ').map((g) => badge(g, 'tag')) : []),
     t.template === 'housekeeping' && badge('housekeeping'),
     live(t.id).length > 0 && badge('running', 'run'),
     t.flags.needs_human && badge('needs human', 'flag'),
@@ -542,9 +543,10 @@ function ticketForm(w, t) {
   const title = h('input', { type: 'text', value: t?.title ?? '' });
   const body = h('textarea', { rows: 6, 'data-field': 'body' }, t?.body ?? '');
   const criteria = h('textarea', { rows: 5 }, t?.criteria ?? '');
+  const tags = h('input', { type: 'text', 'data-mic': 'off', value: t?.tags.split(' ').join(', ') ?? '', placeholder: 'e.g. ui, daemon' });
   const deps = h('input', { type: 'text', 'data-mic': 'off', value: t?.depends_on.join(', ') ?? '', placeholder: 'e.g. 3, 4' });
   const save = async () => {
-    const fields = { title: title.value, body: body.value, criteria: criteria.value, depends_on: deps.value.split(/[\s,]+/).filter(Boolean).map(Number) };
+    const fields = { title: title.value, body: body.value, criteria: criteria.value, tags: tags.value, depends_on: deps.value.split(/[\s,]+/).filter(Boolean).map(Number) };
     try {
       if (t) {
         await api('PATCH', `/tickets/${t.id}`, fields);
@@ -563,6 +565,7 @@ function ticketForm(w, t) {
     h('div', { class: 'field-row-stacked' }, h('label', {}, 'Title'), title),
     h('div', { class: 'field-row-stacked' }, h('label', {}, 'Body'), body),
     h('div', { class: 'field-row-stacked' }, h('label', {}, 'Acceptance criteria, one per line'), criteria),
+    h('div', { class: 'field-row-stacked' }, h('label', {}, 'Tags, comma or space separated'), tags),
     h('div', { class: 'field-row-stacked' }, h('label', {}, 'Depends on'), deps),
     h('div', { class: 'field-row' }, h('button', { onclick: save }, t ? 'Save' : 'Create'),
       t && h('button', { disabled: t.status !== 'backlog', onclick: () => launch([t]) }, 'Launch'),

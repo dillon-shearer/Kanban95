@@ -32,6 +32,22 @@ const TICKET_FIELDS: Record<string, 'string' | 'int' | 'bool'> = {
   effort: 'string', retry: 'int', needs_human: 'bool', blocked_on_deps: 'bool',
 };
 const NULLABLE = new Set(['cli', 'model', 'effort']);
+const TAG = /^[a-z0-9-]+$/;
+
+/**
+ * Tags as stored: distinct lowercase tokens joined by one space. A string splits on commas and whitespace; an array gives
+ * one tag per element. A token outside [a-z0-9-] (a quote, a space inside an element) is refused. Shared by REST and MCP.
+ */
+export function normaliseTags(v: unknown): string {
+  let raw: string[];
+  if (typeof v === 'string') raw = v.split(/[\s,]+/);
+  else if (Array.isArray(v) && v.every((x) => typeof x === 'string')) raw = v.map((x) => x.trim());
+  else throw new HttpError(400, 'tags must be a string or an array of strings');
+  const tags = [...new Set(raw.filter(Boolean).map((x) => x.toLowerCase()))];
+  const bad = tags.filter((x) => !TAG.test(x));
+  if (bad.length) throw new HttpError(400, `tags may hold only a-z, 0-9 and -: not ${bad.map((x) => JSON.stringify(x)).join(', ')}`);
+  return tags.join(' ');
+}
 
 function ticketColumns(body: Json): { cols: string[]; vals: unknown[]; deps?: number[] } {
   const cols: string[] = [];
@@ -43,6 +59,7 @@ function ticketColumns(body: Json): { cols: string[]; vals: unknown[]; deps?: nu
       deps = v as number[];
       continue;
     }
+    if (k === 'tags') { cols.push(k); vals.push(normaliseTags(v)); continue; }
     const t = TICKET_FIELDS[k];
     if (!t) throw new HttpError(400, `unknown field ${k}`);
     if (v === null && NULLABLE.has(k)) { cols.push(k); vals.push(null); continue; }
@@ -57,7 +74,7 @@ function ticketColumns(body: Json): { cols: string[]; vals: unknown[]; deps?: nu
 
 export interface Ticket {
   id: number; title: string; body: string; criteria: string; status: string; cli: string | null; model: string | null;
-  effort: string | null; created_by_grant: number | null; retry: number; template: string; merged_at: string | null; created_at: string; updated_at: string;
+  effort: string | null; tags: string; created_by_grant: number | null; retry: number; template: string; merged_at: string | null; created_at: string; updated_at: string;
   flags: { needs_human: boolean; blocked_on_deps: boolean }; depends_on: number[];
 }
 
