@@ -22,6 +22,7 @@ const screen = () => [desktop.clientWidth * zoom, desktop.clientHeight * zoom];
 export function setZoom(f) {
   zoom = f;
   document.body.style.zoom = f;
+  document.body.classList.toggle('k95-vector', Math.abs(f - Math.round(f)) > 1e-6); // see the font rule in app.css
   for (const { el } of wins.values()) if (!el.hidden && !el.classList.contains('max')) clamp(el);
   retile();
 }
