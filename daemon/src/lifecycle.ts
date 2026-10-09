@@ -8,7 +8,7 @@ import { readTicket, transaction, type Ticket } from './api.js';
 import { branchName, git, syncWorktree } from './git.js';
 import { revoke, type Role } from './grants.js';
 import { cleanTicket } from './janitor.js';
-import { launch, launchRoot, sessionsOf, type Session } from './launcher.js';
+import { launch, launchRoot, prepareWorktree, sessionsOf, type Session } from './launcher.js';
 import { enqueue, merge } from './merge.js';
 import { BadConfig, EFFORT, readConfig, runSettings, type Effort } from './settings.js';
 import { TEMPLATES } from './templates.js';
@@ -165,7 +165,7 @@ function facts(b: Board, t: Ticket): Facts {
     merged: t.merged_at !== null,
     depsMerged: t.depends_on.every(merged),
     passReported: pass !== undefined,
-    live: sessionsOf(t.id).length > 0,
+    live: sessionsOf(t.id).length > 0 || settingUp.has(t.id),
   };
 }
 
@@ -252,14 +252,41 @@ const held = new Set<number>();
 /** An answer is typed into a terminal: a newline would submit half of it, so it becomes one line. */
 const oneLine = (s: string) => s.replace(/\s*[\r\n]+\s*/g, ' ').trim();
 
-/** Launches the phase's agent. A launch that fails is an agent that exited without reporting: the ticket is flagged. */
+/** Tickets whose new worktree is running `worktree_setup`. They count as live, so a second launch is refused meanwhile. */
+const settingUp = new Set<number>();
+
+/**
+ * Launches the phase's agent, after the repo's `worktree_setup` when its worktree is new. A launch that fails is an agent that
+ * exited without reporting: the ticket is flagged. A ticket moved on while its setup ran (Reset, a shutdown) starts nothing.
+ */
 function spawn(b: Board, id: number, template: 'execute' | 'housekeeping' | 'test', resume = false) {
+  const status = template === 'test' ? 'testing' : 'in_progress';
+  const fail = (e: unknown) => apply(b, id, 'exit', { note: { role: TEMPLATES[template].role, kind: 'failure', body: `launch failed: ${(e as Error).message}` } });
   try {
     if (b.closing) throw new Error('the daemon is shutting down');
     const settings = runSettings(readTicket(b.db, id), template === 'test' ? 'test' : 'execute');
-    launch({ ...b, onExit: (s) => exited(b, s) }, { ticketId: id, template, resume, ...settings });
+    const go = () => void launch({ ...b, onExit: (s) => exited(b, s) }, { ticketId: id, template, resume, ...settings });
+    const setup = prepareWorktree(b.repo, id, worktreeSetup(b.repo));
+    if (!setup) return go();
+    settingUp.add(id);
+    const after = async () => {
+      try {
+        await setup;
+      } finally {
+        settingUp.delete(id);
+      }
+      const t = readTicket(b.db, id);
+      if (!b.closing && t.status === status && !t.flags.needs_human && !sessionsOf(id).length) go();
+    };
+    void after().catch((e) => {
+      try {
+        if (!b.closing && readTicket(b.db, id).status === status) fail(e);
+      } catch (x) {
+        console.error('[lifecycle]', x); // deleted or moved on meanwhile: nothing to flag
+      }
+    }).finally(() => changed(id));
   } catch (e) {
-    apply(b, id, 'exit', { note: { role: TEMPLATES[template].role, kind: 'failure', body: `launch failed: ${(e as Error).message}` } });
+    fail(e);
   }
 }
 
@@ -342,6 +369,13 @@ function releaseDependents(b: Board, id: number) {
 /** `<repo>/.kanban95/config.json`, the repo's own board settings (docs/DATA.md); `{}` when absent. The daemon never writes it. */
 const repoConfigPath = (repo: string) => join(repo, '.kanban95', 'config.json');
 const repoConfig = (repo: string) => (existsSync(repoConfigPath(repo)) ? JSON.parse(readFileSync(repoConfigPath(repo), 'utf8')) : {});
+
+/** config.json `worktree_setup`: a shell command run once in each new ticket worktree before its first agent (docs/LIFECYCLE.md). */
+function worktreeSetup(repo: string): string | undefined {
+  const c = repoConfig(repo).worktree_setup;
+  if (c !== undefined && (typeof c !== 'string' || !c.trim())) throw new BadConfig(`${repoConfigPath(repo)} worktree_setup must be a non-empty string`);
+  return c;
+}
 
 /** settings.json `housekeeping: { auto, every }` (on, 10). Merged execute tickets are counted; housekeeping ones are not. The ticket waits in Backlog for the runner. */
 function maybeHousekeeping(b: Board, t: Ticket) {
