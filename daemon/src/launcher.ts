@@ -1,7 +1,7 @@
 // Launches an agent CLI on a ticket: worktree, run row, grant, session dir, argv, pty. Tears it all down on exit or revoke.
 import { execFileSync, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir, userInfo } from 'node:os';
 import { join, relative, resolve } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
@@ -101,6 +101,12 @@ export interface Session {
   /** For the terminal title: the run's phase (`brainstorm` or `operator` for a session without a ticket) and model. */
   phase: string;
   model: string;
+  cli: Cli;
+  cwd: string;
+  /** Claude Code's conversation id; Codex has none the board knows (`transcriptSize`). */
+  sessionId?: string;
+  /** Date.now() at spawn. */
+  started: number;
   /** Set by the lifecycle when it ends the session after the agent reported (a move_ticket); its exit is then expected. */
   outcome?: string;
   dir: string;
@@ -166,12 +172,57 @@ export function prepareWorktree(repo: string, ticketId: number, command?: string
  * Claude Code keeps each conversation in `<config>/projects/<cwd, mangled>/<id>.jsonl`. Every project dir is searched rather than
  * the mangling copied: the id is a UUID, so a match anywhere is this session's.
  */
-function hasTranscript(id: string) {
+function claudeTranscript(id: string): string | undefined {
   const projects = join(process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.claude'), 'projects');
   try {
-    return readdirSync(projects).some((p) => existsSync(join(projects, p, `${id}.jsonl`)));
+    return readdirSync(projects).map((p) => join(projects, p, `${id}.jsonl`)).find((f) => existsSync(f));
   } catch {
-    return false;
+    return undefined;
+  }
+}
+const hasTranscript = (id: string) => claudeTranscript(id) !== undefined;
+
+const samePath = (a: string, b: string) => (process.platform === 'win32' ? resolve(a).toLowerCase() === resolve(b).toLowerCase() : resolve(a) === resolve(b));
+/** Codex's `session_meta` line names the cwd near its start, before the long instructions. */
+const ROLLOUT_HEAD = 4096;
+
+/**
+ * Codex keeps each conversation in `<CODEX_HOME>/sessions/YYYY/MM/DD/rollout-<local time>-<id>.jsonl` (local date) and the board
+ * does not learn the id. The session's file is the newest one written since it started whose `session_meta` cwd is its worktree;
+ * a retry in the same worktree starts after the previous file's last write.
+ * ponytail: scans the start's and today's date dirs; upgrade is to record the id Codex prints (launch's resume ponytail).
+ */
+function codexRollout(cwd: string, started: number): string | undefined {
+  const root = join(process.env.CODEX_HOME ?? join(homedir(), '.codex'), 'sessions');
+  const day = (t: number) => { const d = new Date(t); return join(String(d.getFullYear()), String(d.getMonth() + 1).padStart(2, '0'), String(d.getDate()).padStart(2, '0')); };
+  const files = [...new Set([day(started), day(Date.now())])].flatMap((d) => {
+    try {
+      return readdirSync(join(root, d)).filter((f) => f.startsWith('rollout-') && f.endsWith('.jsonl')).map((f) => join(root, d, f));
+    } catch {
+      return [];
+    }
+  }).sort().reverse(); // the name starts with the time it was created: newest first
+  for (const f of files) {
+    try {
+      if (statSync(f).mtimeMs < started - 1000) continue;
+      const fd = openSync(f, 'r');
+      const buf = Buffer.alloc(ROLLOUT_HEAD);
+      const n = readSync(fd, buf, 0, ROLLOUT_HEAD, 0);
+      closeSync(fd);
+      const m = /"cwd":("(?:[^"\\]|\\.)*")/.exec(buf.toString('utf8', 0, n));
+      if (m && samePath(JSON.parse(m[1]), cwd)) return f;
+    } catch { /* gone or unreadable: not this session's */ }
+  }
+  return undefined;
+}
+
+/** The size in bytes of the session's transcript (Claude Code) or rollout (Codex), or -1 while there is none. Silence watch (lifecycle). */
+export function transcriptSize(s: Pick<Session, 'cli' | 'cwd' | 'sessionId' | 'started'>): number {
+  const f = s.cli === 'claude' ? s.sessionId && claudeTranscript(s.sessionId) : codexRollout(s.cwd, s.started);
+  try {
+    return f ? statSync(f).size : -1;
+  } catch {
+    return -1;
   }
 }
 
@@ -258,6 +309,7 @@ function spawnSession(d: Daemon, o: RunSettings & { sessionId?: string; resume?:
     let finished!: () => void;
     const s: Session = {
       key, runId: r.runId, grantId: grant.id, ticketId: r.ticketId, role: r.role, phase: r.phase, model: o.model, dir, pty, scrollback,
+      cli: o.cli, cwd: r.cwd, sessionId: o.sessionId, started: Date.now(),
       done: new Promise((ok) => (finished = ok)),
     };
     sessions.set(key, s);

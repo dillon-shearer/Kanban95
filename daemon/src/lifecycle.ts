@@ -8,8 +8,9 @@ import { readTicket, transaction, type Ticket } from './api.js';
 import { branchName, git, syncWorktree } from './git.js';
 import { revoke, type Role } from './grants.js';
 import { cleanTicket } from './janitor.js';
-import { launch, launchRoot, prepareWorktree, sessionsOf, type Session } from './launcher.js';
+import { launch, launchRoot, prepareWorktree, sessions, sessionsOf, transcriptSize, type Session } from './launcher.js';
 import { enqueue, merge } from './merge.js';
+import { lastLines } from './pty.js';
 import { BadConfig, EFFORT, readConfig, runSettings, type Effort } from './settings.js';
 import { TEMPLATES } from './templates.js';
 
@@ -24,6 +25,8 @@ export type Event =
   | 'ask' // ask_operator
   | 'answer' // the operator answers over REST
   | 'exit' // the agent's pty exited without a move_ticket, or its launch failed
+  | 'silent' // the agent's transcript gained no line for idle_minutes (the silence watch)
+  | 'woke' // a silent agent's transcript grew again
   | 'merged' // the merge queue's verdict
   | 'conflict' // the base would not merge into the worktree (on submit or in the merge queue), or the worktree was dirty
   | 'dirty' // the merge queue gave up waiting for the main checkout to be clean (DIRTY_WAIT)
@@ -93,6 +96,10 @@ export const TABLE: Row[] = [
   { from: RUNNING, event: 'answer', when: (f) => f.needs_human && f.live, why: 'no flagged question with a live agent session', set: { needs_human: 0 }, effects: ['note', 'answer_pty'] },
   { from: RUNNING, event: 'exit', set: { needs_human: 1 }, effects: ['note', 'chord'],
     resolve: () => RESUME },
+  // The agent is still running: it may be hung on an API call, or sitting at its prompt after an error it cannot get past.
+  { from: RUNNING, event: 'silent', when: (f) => f.live && !f.needs_human, why: 'it has no running agent, or it is flagged already', set: { needs_human: 1 }, effects: ['note', 'chord'],
+    resolve: () => 'open its terminal (card menu → Terminal). If it is waiting on something you can fix there (a model error, a prompt), fix it; if it is hung, Restart. The flag clears by itself if the agent writes again.' },
+  { from: RUNNING, event: 'woke', when: (f) => f.live && f.needs_human, why: 'it has no running agent, or it is not flagged', set: { needs_human: 0 }, effects: [] },
   { from: ['done'], event: 'merged', set: { merged: true, needs_human: 0 }, effects: ['ding', 'remove_worktree', 'release_dependents', 'housekeeping'] },
   // A submit whose base will not merge in (lifecycle submit) and a merge-queue conflict share the way back to the worker.
   { from: ['in_progress', 'done'], event: 'conflict', when: (f) => f.retry < MAX_RETRY, to: 'in_progress', set: { retry: '+1' }, effects: ['end_session', 'note', 'spawn_execute'] },
@@ -300,6 +307,66 @@ function exited(b: Board, s: Session) {
     apply(b, s.ticketId!, 'exit', { note: { role: s.role, kind: 'failure', body: 'agent exited without reporting' } });
   } catch (e) {
     if (!(e instanceof Refused)) throw e; // the ticket has moved on (operator edit); nothing to flag
+  }
+}
+
+// ---- the silence watch (docs/LIFECYCLE.md → Silent agents) ----
+
+/** How often running agents' transcripts are looked at, and how long one of settings.json's idle_minutes is. Tests shorten both. */
+export const SILENCE = { every: 60_000, minute: 60_000 };
+/** Per session key: the transcript size last seen, when the silence began, and the note that flagged it, if it did. */
+const heard = new Map<number, { size: number; at: number; note?: number }>();
+
+/** Starts the watch; the returned function stops it. */
+export function watchSilence(b: Board): () => void {
+  let timer: NodeJS.Timeout;
+  const next = () => (timer = setTimeout(() => {
+    try {
+      listen(b);
+    } finally {
+      next();
+    }
+  }, SILENCE.every).unref());
+  next();
+  return () => clearTimeout(timer);
+}
+
+/**
+ * The pty is no signal (Claude Code's spinner animates while it waits on the API), so a ticket's agent is judged by its transcript
+ * (`transcriptSize`): no new line for idle_minutes while the ticket is unflagged applies `silent`. Time spent flagged (a question
+ * waiting on the operator) does not count. A transcript that grows again while the silence note is still the ticket's latest
+ * applies `woke`, so a long step that was healthy after all does not hold the card red.
+ */
+function listen(b: Board) {
+  if (b.closing) return;
+  let limit = 20;
+  try {
+    limit = readConfig('settings').idle_minutes;
+  } catch { /* a broken settings.json: the default */ }
+  const now = Date.now();
+  for (const k of heard.keys()) if (!sessions.has(k)) heard.delete(k);
+  for (const s of sessions.values()) {
+    if (s.ticketId === null || s.outcome) continue;
+    try {
+      const size = transcriptSize(s);
+      const h = heard.get(s.key) ?? { size, at: s.started };
+      heard.set(s.key, h);
+      const flagged = readTicket(b.db, s.ticketId).flags.needs_human;
+      if (size !== h.size) {
+        const latest = (b.db.prepare('SELECT max(id) AS id FROM notes WHERE ticket_id = ?').get(s.ticketId) as { id: number | null }).id;
+        if (h.note !== undefined && flagged && latest === h.note) apply(b, s.ticketId, 'woke');
+        Object.assign(h, { size, at: now, note: undefined });
+      } else if (flagged) h.at = now;
+      else if (now - h.at >= limit * SILENCE.minute) {
+        const mins = Math.round((now - h.at) / SILENCE.minute);
+        const tail = lastLines(s.scrollback(), 10).join('\n') || '(nothing)';
+        const body = `agent silent for ${mins} min: its ${s.cli === 'codex' ? 'rollout' : 'transcript'} has had no new line since ${new Date(h.at).toISOString()}. ` +
+          `Last lines of its terminal:\n\`\`\`\n${tail}\n\`\`\``;
+        h.note = apply(b, s.ticketId, 'silent', { note: { role: s.role, kind: 'failure', body } }).noteId;
+      }
+    } catch (e) {
+      if (!(e instanceof Refused)) console.error('[silence]', e); // one session's trouble must not stop the watch for the rest
+    }
   }
 }
 
