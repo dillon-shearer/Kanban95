@@ -13,6 +13,9 @@ getrandom = "0.3"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Security", "Win32_System_JobObjects", "Win32_System_Threading", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+# The versions wry 0.57 uses, so nothing new is built: the page's fullscreen request goes to the window (main.rs).
+webview2-com = "0.39"
+windows-core = "0.62"
 
 [dev-dependencies]
 tauri = { version = "2", features = ["test"] }
