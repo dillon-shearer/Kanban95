@@ -16,7 +16,7 @@ Living document. Update it in the same change that alters the schema.
 - `~/.kanban95/settings.json`: `paths` (`claude`, `codex`: an absolute path to the executable, empty for PATH), `sounds` (`merge`, `attention`: booleans, default true; an old single boolean applies to both), `voice` (`backend`: `local`; `mode`: `push` or `toggle`), `housekeeping` (`auto`: boolean, default true; `every`: a positive integer, default 10). Absent means all defaults. Written by Settings after a schema check. No secrets.
 - `~/.kanban95/preferences.md`: the operator's standing instructions for every agent, free text, at most 16 KB. Injected into every prompt as `{{preferences}}` (`docs/AGENTS.md`). Absent means none. Written by Settings → Prompts → Save. Do not put secrets in it: it is copied into every session's prompt.md.
 - `~/.kanban95/models/whisper-base.en/`: the speech model, downloaded on the operator's OK and hash-checked (`docs/SECURITY.md` → Voice model). Not data; delete it to free 80 MB, the mic will offer the download again.
-- `localStorage` in the webview: window positions, sizes and maximized state only.
+- `localStorage` in the webview: window positions, sizes and maximized state, and which Board columns are collapsed (`k95.collapsed`). Nothing else.
 - Nothing in the database leaves the machine. There is no sync, no telemetry, no export yet (export is explicit when it arrives).
 - The daemon is the only writer. The UI goes through REST, agents go through MCP (`docs/MCP.md`).
 

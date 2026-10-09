@@ -134,4 +134,34 @@ describe('ui-board', { timeout: 60_000 }, () => {
     expect(await label()).toBe('Run');
     expect(await page.evaluate('window.__noReload')).toBe(true);
   });
+  it('collapses a column to a strip that survives a reload, takes drops, and shows a flag in its count', async () => {
+    const id = ticket('Fold me', { status: 'testing' });
+    const flagged = ticket('Flagged', { needs_human: 1 });
+    const width = (s: string) => page.evaluate<number>(`document.querySelector('[data-status="${s}"]').getBoundingClientRect().width`);
+    try {
+      await page.goto(base);
+      await until(() => column(id), 'the card');
+      const before = await width('testing');
+      await click('[data-status="done"] > legend');
+      await until(async () => (await width('done')) <= 24, 'the Done strip');
+      expect(await width('testing')).toBeGreaterThan(before);
+
+      await click('[data-status="backlog"] > legend');
+      expect(await page.evaluate<boolean>(`!document.querySelector('[data-status="backlog"] .card')`)).toBe(true);
+      expect(await page.evaluate<string>(`getComputedStyle(document.querySelector('[data-status="backlog"] > legend')).color`)).toBe('rgb(192, 0, 0)');
+      expect(await page.evaluate<string>(`getComputedStyle(document.querySelector('[data-status="testing"] > legend')).color`)).not.toBe('rgb(192, 0, 0)');
+
+      await page.drag(await page.center(`.card[data-id="${id}"]`), await page.center('[data-status="backlog"]'));
+      await until(() => statusOf(id) === 'backlog', 'the reset');
+      await until(async () => (await statusBar()) === `#${id} reset to Backlog.`, 'the status-bar message');
+
+      await page.goto(base);
+      await until(() => page.evaluate<boolean>(`!!document.querySelector('[data-status="done"].collapsed')`), 'Done still collapsed');
+      await click('[data-status="done"] > legend');
+      await until(async () => (await width('done')) > 24, 'Done expanded');
+    } finally {
+      await page.evaluate(`localStorage.removeItem('k95.collapsed')`);
+      for (const t of [id, flagged]) db.prepare("UPDATE tickets SET status = 'done', merged_at = 'x', needs_human = 0 WHERE id = ?").run(t);
+    }
+  });
 });
