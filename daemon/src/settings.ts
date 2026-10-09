@@ -1,6 +1,6 @@
 // The operator's own settings in ~/.kanban95/, edited in the Settings window. No secrets live here.
 // models.json: which CLI, and the model and effort per phase (docs/LIFECYCLE.md → Run settings). settings.json: CLI paths,
-// sounds, voice, housekeeping, auto-opened terminals. Both are read on every use, so an edit applies to the next run without a restart.
+// sounds, voice, housekeeping, auto-opened terminals, UI zoom. Both are read on every use, so an edit applies to the next run without a restart.
 import { execFile } from 'node:child_process';
 import { createReadStream, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -32,6 +32,8 @@ const FILES = {
     // Brainstorms and operator terminals always open: the operator started them.
     terminals: z.object({ auto: z.array(z.enum(['plan', 'execute', 'test'])).default(['plan', 'execute']) }).strict()
       .default({ auto: ['plan', 'execute'] }),
+    // CSS zoom of the whole UI (Ctrl+= / Ctrl+- / Ctrl+0, Settings → General), here so it follows the operator across repos.
+    zoom: z.number().min(0.8).max(2).default(1),
   }).strict(),
 };
 export type ConfigName = keyof typeof FILES;
