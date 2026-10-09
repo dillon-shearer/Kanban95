@@ -233,3 +233,14 @@ describe('operator preferences', () => {
     expect(render(repo, 'brainstorm', buildContext(db, repo, null, 'planner'))).toContain('## Operator preferences\n\n(none)\n');
   });
 });
+
+describe('brainstorm brief', () => {
+  it('interviews in the terminal and does not offer ask_operator', () => {
+    const out = render(repo, 'brainstorm', buildContext(db, repo, null, 'planner'));
+    const tools = out.slice(out.indexOf('## Tools you may call'));
+    expect(tools).toContain('create_ticket');
+    expect(tools).not.toContain('ask_operator');
+    expect(out).toMatch(/Interview the operator in this terminal/);
+    expect(out).toMatch(/wait for the reply/);
+  });
+});
