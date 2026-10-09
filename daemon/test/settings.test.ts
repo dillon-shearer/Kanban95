@@ -49,3 +49,11 @@ it('housekeeping defaults to on every 10 merges and refuses an interval under 1 
   expect(() => writeConfig('settings', { housekeeping: { every: 0 } })).toThrow(/every/);
   expect(() => writeConfig('settings', { housekeeping: { every: 2.5 } })).toThrow(/every/);
 });
+
+it('terminals open on their own for plan and execute by default; only plan, execute and test are accepted', () => {
+  expect(writeConfig('settings', {}).terminals).toEqual({ auto: ['plan', 'execute'] });
+  expect(writeConfig('settings', { terminals: { auto: [] } }).terminals.auto).toEqual([]);
+  expect(writeConfig('settings', { terminals: { auto: ['test'] } }).terminals.auto).toEqual(['test']);
+  expect(() => writeConfig('settings', { terminals: { auto: ['operator'] } })).toThrow(/terminals/);
+  expect(() => writeConfig('settings', { terminals: { auto: 'test' } })).toThrow(/terminals/);
+});
