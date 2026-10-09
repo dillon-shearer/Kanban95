@@ -5,11 +5,11 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { readTicket, transaction, type Ticket } from './api.js';
-import { branchName, git, syncWorktree } from './git.js';
+import { branchName, git, isAncestor, syncWorktree } from './git.js';
 import { revoke, type Role } from './grants.js';
 import { cleanTicket } from './janitor.js';
 import { launch, launchRoot, sessionsOf, type Session } from './launcher.js';
-import { enqueue, merge } from './merge.js';
+import { ahead, enqueue, merge, push } from './merge.js';
 import { BadConfig, EFFORT, readConfig, runSettings, type Effort } from './settings.js';
 import { TEMPLATES } from './templates.js';
 
@@ -27,6 +27,7 @@ export type Event =
   | 'merged' // the merge queue's verdict
   | 'conflict' // the base would not merge into the worktree (on submit or in the merge queue), or the worktree was dirty
   | 'dirty' // the merge queue gave up waiting for the main checkout to be clean (DIRTY_WAIT)
+  | 'unpushed' // the merge landed but git push of the base to its upstream failed
   | 'merge' // the operator retries a merge that failed
   | 'resume' // the operator restarts the agent of a flagged running ticket whose agent is gone
   | 'restart' // the operator replaces a running ticket's agent, live or not, with a fresh one in the same phase
@@ -102,6 +103,9 @@ export const TABLE: Row[] = [
     resolve: (id) => `in .worktrees/t-${id} run git merge with the base branch, fix the conflicting files keeping both sides' intent, run the tests, commit, then Retry merge.` },
   { from: ['done'], event: 'dirty', set: { needs_human: 1 }, effects: ['note', 'chord'],
     resolve: (_, repo) => `commit or stash those changes in the main checkout (${repo}), then Retry merge. While the board runs, work in a worktree, never in the main checkout.` },
+  // The merge stays in the base; Retry merge finds the branch already in it and only pushes again.
+  { from: ['done'], event: 'unpushed', set: { needs_human: 1 }, effects: ['note', 'chord'],
+    resolve: (_, repo) => `fix what git says in the main checkout (${repo}): when the remote has commits the base lacks, pull them and merge; when offline or signed out, reconnect or sign in to the remote with git. Then Retry merge; it pushes again.` },
   // A rejection is a new cycle, not a failed test. Unmerged, the queue drops it (status is no longer done); merged, its worktree
   // is gone and the worker's launch forks a fresh one from the base, which holds the merged work. merged_at is kept until a pass.
   { from: ['done'], event: 'reject', when: (f) => !f.live, why: busy, to: 'in_progress', set: { needs_human: 0, retry: 0 }, effects: ['note', 'spawn_execute'] },
@@ -143,6 +147,8 @@ export interface Board {
   startCommit?: string;
   /** A merge since start changed what the running daemon was built from: 'shell' when shell/ changed too (docs/OPERATOR.md → Restart board). */
   stale?: false | 'daemon' | 'shell';
+  /** Commits on the base its upstream lacks, counted on start (push_after_merge on) and zeroed by a push; the status bar's Push button. */
+  unpushed?: number;
 }
 
 /**
@@ -293,16 +299,26 @@ function queueMerge(b: Board, id: number, since = Date.now()) {
     // abort stays as a safety net.
     // ponytail: lands even when the sync brought in new commits (the worker merged and the tester tested at submit); upgrade is
     // to send it back to testing when the sync touched files the ticket also touched.
-    const s = syncWorktree(b.repo, id);
+    // Retry merge after a failed push: the branch is already in the base, so only the push is left.
+    const inBase = isAncestor(b.repo, branchName(id), 'HEAD');
+    const s = inBase ? { ok: true as const } : syncWorktree(b.repo, id);
     if (!s.ok) return void (await Promise.all(apply(b, id, 'conflict', { note: { role: 'tester', kind: 'failure', body: s.reason }, auto: true }).pending));
-    const r = await merge(b.repo, id, t.title, () => readTicket(b.db, id).status === 'done');
+    const r = inBase ? { ok: true as const } : await merge(b.repo, id, t.title, () => readTicket(b.db, id).status === 'done');
     if (!r) return;
     // Rejected while git merge ran: the work landed, but the ticket is a worker's again and its next pass merges again.
     if (r.ok && readTicket(b.db, id).status !== 'done') return;
     let out;
     if (r.ok) {
+      if (!inBase) markStale(b);
+      // Published before it counts as merged: a failed push flags the ticket and leaves the merge in the base.
+      const p = readConfig('settings').push_after_merge ? await push(b.repo) : { ok: true as const, pushed: false };
+      if (!p.ok) {
+        const body = `merged into ${p.base}, but git push to ${p.remote} failed, so the ticket is not closed:
+${p.reason}`;
+        return void apply(b, id, 'unpushed', { note: { role: 'tester', kind: 'failure', body } });
+      }
+      if (p.pushed) b.unpushed = 0;
       out = apply(b, id, 'merged');
-      markStale(b);
     }
     else if (r.dirty && Date.now() - since < DIRTY_WAIT.max) {
       waiting.set(id, setTimeout(() => b.closing || queueMerge(b, id, since), DIRTY_WAIT.every).unref());
@@ -313,6 +329,29 @@ function queueMerge(b: Board, id: number, since = Date.now()) {
     } else out = apply(b, id, 'conflict', { note: { role: 'tester', kind: 'failure', body: `merge conflict with ${r.base}: ${r.reason}` }, auto: true });
     await Promise.all(out.pending);
   });
+}
+
+/** Daemon start, before recover(): with push_after_merge on, how far the base is ahead of its upstream (a crash, or a time the setting was off). */
+export function countUnpushed(b: Board) {
+  // In the queue, so a push recover() queued cannot finish between the count and its write.
+  return enqueue(async () => {
+    if (!readConfig('settings').push_after_merge) return;
+    b.unpushed = await ahead(b.repo);
+    if (b.unpushed) changed(null);
+  });
+}
+
+/** The status bar's Push button: the merge queue's push, in the queue so it never runs beside a merge. Resolves to git's refusal or null. */
+export async function pushBase(b: Board): Promise<string | null> {
+  let failed: string | null = null;
+  await enqueue(async () => {
+    const p = await push(b.repo);
+    if (!p.ok) failed = `git push to ${p.remote} failed:
+${p.reason}`;
+    else b.unpushed = 0;
+  });
+  changed(null);
+  return failed;
 }
 
 /** After a merge: did it change the daemon's own code since start? The UI reads `stale` from GET /api/runner. */
@@ -464,7 +503,7 @@ export function runnerState(b: Board) {
   const { n } = b.db.prepare("SELECT count(*) AS n FROM tickets WHERE status = 'backlog'").get() as { n: number };
   const cs = candidates(b);
   const waits = [...overlaps(b, cs)].map(([id, on]) => ({ id, on }));
-  return { ...runner(b), concurrency: limit(b), running: running(b), left: cs.length, backlog: n, waits, stale: b.stale ?? false };
+  return { ...runner(b), concurrency: limit(b), running: running(b), left: cs.length, backlog: n, waits, stale: b.stale ?? false, unpushed: b.unpushed ?? 0 };
 }
 
 let ticking = false;

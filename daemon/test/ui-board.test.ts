@@ -1,8 +1,11 @@
-// In headless Edge or Chrome against a running daemon (setup in ui.ts): the Board window: drag and drop, redraws, launch refusals and the runner button.
+// In headless Edge or Chrome against a running daemon (setup in ui.ts): the Board window: drag and drop, redraws, launch refusals, the runner button and Push.
 import './home.ts'; // also here, not only in vitest.config.ts: a run from the repo root skips that config and wrote the real home
-import { writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { countUnpushed } from '../src/lifecycle.ts';
 import { until } from './cdp.ts';
 import { repo, srv, db, page, base, git, ticket, statusOf, column, statusBar, click } from './ui.ts';
 
@@ -186,6 +189,31 @@ describe('ui-board', { timeout: 60_000 }, () => {
     } finally {
       await page.evaluate(`localStorage.removeItem('k95.collapsed')`);
       for (const t of [id, flagged]) db.prepare("UPDATE tickets SET status = 'done', merged_at = 'x', needs_human = 0 WHERE id = ?").run(t);
+    }
+  });
+  it('a base ahead of its upstream at start shows "N commits not pushed"; Push pushes it and the field goes', async () => {
+    const bare = mkdtempSync(join(tmpdir(), 'k95-remote-'));
+    const remote = (...a: string[]) => execFileSync('git', a, { cwd: bare, encoding: 'utf8' }).trim();
+    const field = () => page.evaluate<string | null>(`(() => { const f = document.querySelector('.k95-unpushed'); return f.hidden ? null : f.querySelector('span').textContent; })()`);
+    try {
+      execFileSync('git', ['init', '-q', '--bare', '-b', 'main'], { cwd: bare });
+      git('remote', 'add', 'origin', bare);
+      git('push', '-q', '-u', 'origin', 'HEAD:main');
+      for (const f of ['p1', 'p2']) {
+        writeFileSync(join(repo, `${f}.txt`), 'x\n');
+        git('add', `${f}.txt`);
+        git('commit', '-qm', `Add ${f}`);
+      }
+      await countUnpushed(srv.board); // what daemon start runs
+      await page.goto(base);
+      await until(async () => (await field()) === '2 commits not pushed', 'the unpushed field');
+      await page.evaluate(`document.querySelector('.k95-unpushed button').click()`);
+      await until(async () => (await field()) === null, 'the field gone');
+      expect(await statusBar()).toBe('Pushed.');
+      expect(remote('rev-parse', 'main')).toBe(git('rev-parse', 'HEAD'));
+    } finally {
+      git('remote', 'remove', 'origin');
+      rmSync(bare, { recursive: true, force: true, maxRetries: 5 });
     }
   });
 });

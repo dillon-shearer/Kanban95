@@ -9,7 +9,7 @@ import { BRAIN_BODY_MAX, BRAIN_RANK, isConstraintError } from './db.js';
 import { ticketDiff } from './git.js';
 import { audit, revoke } from './grants.js';
 import { killGrantSession, sessions, sessionsOf, type Session } from './launcher.js';
-import { apply, brainstorm, changed, housekeeping, operator, Refused, runner, runnerState, setRunner, type Board } from './lifecycle.js';
+import { apply, brainstorm, changed, housekeeping, operator, pushBase, Refused, runner, runnerState, setRunner, type Board } from './lifecycle.js';
 import { BadConfig, CONFIGS, configPath, knownModels, preferencesPath, project, projectsPath, readPreferences, readProjects, uncatalogued, writeConfig, writePreferences, writeProjects, type ConfigName } from './settings.js';
 import { resetTemplate, templatePath, TEMPLATES, unknownVar, VARS, writeTemplate, type TemplateName } from './templates.js';
 import { trustStatus, untrustClaude } from './trust.js';
@@ -300,6 +300,12 @@ const routes: [method: string, path: RegExp, mutation: string | null, handler: (
     if (on === undefined && c === undefined) throw new HttpError(400, 'send on, concurrency or both');
     const cur = runner(board);
     setRunner(board, on ?? cur.on, on === undefined ? cur.why : undefined, (c as number | undefined) ?? cur.concurrency);
+    return { status: 200, body: runnerState(board) };
+  }],
+  // The status bar's Push button: the base to its upstream with the operator's own git credentials (docs/OPERATOR.md → Push).
+  ['POST', /^\/api\/push$/, 'board.push', async ({ board }) => {
+    const failed = await pushBase(board);
+    if (failed) throw new HttpError(502, failed);
     return { status: 200, body: runnerState(board) };
   }],
   ['POST', /^\/api\/tickets\/(\d+)\/merge$/, 'tickets.merge', ({ board, params }) => ({ status: 200, body: apply(board, Number(params[0]), 'merge').ticket })],

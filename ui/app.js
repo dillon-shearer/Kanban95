@@ -30,11 +30,11 @@ const MOVES = { backlog: ['in_progress'], in_progress: ['backlog'], testing: ['b
 const tickets = new Map();
 let sessions = [];
 let inbox = [];
-let runner = { on: false, concurrency: 3, running: [], left: 0, backlog: 0, waits: [] }; // GET /api/runner: the Run button and its status-bar line
+let runner = { on: false, concurrency: 3, running: [], left: 0, backlog: 0, waits: [], unpushed: 0 }; // GET /api/runner: the Run button and its status-bar line
 let models = null; // ~/.kanban95/models.json as written, for the cards' default model and effort
 // Sounds stay off until /config/settings loads: listen() starts first, and a ding in that gap ignored the operator's choice.
 // `terminals` is absent until then too, so no session is opened or passed over before the operator's phases are known.
-let settings = { paths: {}, sounds: { merge: false, attention: false }, voice: { backend: 'local', mode: 'push' }, housekeeping: { auto: true, every: 10 }, zoom: 1 };
+let settings = { paths: {}, sounds: { merge: false, attention: false }, voice: { backend: 'local', mode: 'push' }, housekeeping: { auto: true, every: 10 }, zoom: 1, push_after_merge: true };
 let limits = null; // GET /api/limits: { rows, errors, fetched_at }, null until the first answer
 const views = new Map(); // open window id → redraw(ticketId | null)
 
@@ -320,6 +320,11 @@ async function restartBoard() {
     if (e.status === 409) await dialog('Board not restarted', h('pre', { class: 'k95-pre' }, e.message));
   }
 }
+const pushBase = () => act(async () => {
+  say('Pushing…');
+  runner = await api('POST', '/push');
+  drawBoard();
+}, 'Pushed.');
 const housekeeping = () => act(async () => {
   const t = await api('POST', '/tickets/housekeeping');
   say(`Housekeeping ticket #${t.id} created and launched.`);
@@ -451,6 +456,9 @@ function openBoard() {
   const choose = (k, opts) => h('select', { class: `k95-${k}`, onchange: (e) => { view[k] = e.target.value; saveView(); drawBoard(); } },
     Object.entries(opts).map(([v, label]) => h('option', { value: v, selected: view[k] === v }, label)));
   const heldField = h('p', { class: 'status-bar-field k95-held' });
+  // runner.unpushed: commits on the base its upstream lacks, counted on start; Push runs the merge queue's push.
+  const unpushedText = h('span');
+  const unpushedField = h('p', { class: 'status-bar-field k95-unpushed' }, unpushedText, ' ', h('button', { onclick: pushBase }, 'Push'));
   const cols = h('div', { class: 'k95-columns', onclick: (e) => { // a click on empty column space clears the selection
     if (!e.target.closest('.card')) selection.clear(), drawBoard();
   } });
@@ -467,7 +475,7 @@ function openBoard() {
       h('label', {}, 'Sort ', choose('sort', SORTS)),
       h('label', {}, 'Group ', choose('group', { none: 'none', tag: 'tag' }))),
     cols,
-    h('div', { class: 'status-bar' }, status, runField, heldField, viewField, count));
+    h('div', { class: 'status-bar' }, status, runField, unpushedField, heldField, viewField, count));
   say = (msg) => { status.textContent = msg; status.title = msg; };
   views.set('board', () => {
     const all = [...tickets.values()];
@@ -498,6 +506,8 @@ function openBoard() {
     const held = heldTickets().length;
     heldField.textContent = held ? `${held} waiting to launch by themselves` : '';
     heldField.hidden = !held;
+    unpushedText.textContent = `${runner.unpushed} commit${runner.unpushed === 1 ? '' : 's'} not pushed`;
+    unpushedField.hidden = !runner.unpushed;
   });
   drawBoard();
 }
@@ -1021,6 +1031,8 @@ function openSettings(tab) {
         drawBoard();
       }, 'Saved.');
       const hkAuto = h('input', { type: 'checkbox', id: 'hk-auto', checked: settings.housekeeping.auto });
+      const pushAuto = h('input', { type: 'checkbox', id: 'push-after-merge', checked: settings.push_after_merge,
+        onchange: (e) => act(() => saveSettings({ push_after_merge: e.target.checked }), 'Saved.') });
       const hkEvery = h('input', { type: 'number', id: 'hk-every', min: 1, step: 1, value: settings.housekeeping.every });
       const zoom = h('select', { id: 'zoom', onchange: (e) => zoomTo(Number(e.target.value)) },
         ZOOMS.map((f) => h('option', { value: f, selected: f === settings.zoom }, `${Math.round(f * 100)}%`)));
@@ -1036,6 +1048,8 @@ function openSettings(tab) {
         h('fieldset', {}, h('legend', {}, 'Runner'),
           h('div', { class: 'field-row' }, h('label', { for: 'concurrency' }, 'Tickets running at once'), at),
           h('button', { onclick: saveRunner }, 'Save')),
+        h('fieldset', {}, h('legend', {}, 'Git'),
+          h('div', { class: 'field-row' }, pushAuto, h('label', { for: 'push-after-merge' }, 'Push the base branch to its upstream after each merge'))),
         h('fieldset', {}, h('legend', {}, 'Housekeeping'),
           h('div', { class: 'field-row' }, hkAuto, h('label', { for: 'hk-auto' }, 'File a housekeeping ticket after merges')),
           h('div', { class: 'field-row' }, h('label', { for: 'hk-every' }, 'Merged tickets between runs'), hkEvery),

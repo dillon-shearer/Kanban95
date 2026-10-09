@@ -1,6 +1,6 @@
 // The operator's own settings in ~/.kanban95/, edited in the Settings window. No secrets live here.
 // models.json: which CLI, and the model and effort per phase (docs/LIFECYCLE.md → Run settings). settings.json: CLI paths,
-// sounds, voice, housekeeping, auto-opened terminals, UI zoom. projects.json: every repo with a board and its wallpaper colour. All are read on every use, so an edit applies to the next run without a restart.
+// sounds, voice, housekeeping, auto-opened terminals, UI zoom, push after merge. projects.json: every repo with a board and its wallpaper colour. All are read on every use, so an edit applies to the next run without a restart.
 import { execFile } from 'node:child_process';
 import { createReadStream, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -34,6 +34,8 @@ const FILES = {
       .default({ auto: ['plan', 'execute', 'test'] }),
     // CSS zoom of the whole UI (Ctrl+= / Ctrl+- / Ctrl+0, Settings → General), here so it follows the operator across repos.
     zoom: z.number().min(0.8).max(2).default(1),
+    // On: the merge queue pushes the base to its upstream after each merge, before the ticket counts as merged.
+    push_after_merge: z.boolean().default(true),
   }).strict(),
 };
 export type ConfigName = keyof typeof FILES;
