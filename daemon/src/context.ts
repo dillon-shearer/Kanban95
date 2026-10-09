@@ -1,9 +1,8 @@
 // Builds the exact context an agent is given for a ticket. Everything else is pull (get_ticket, brain_search).
 import { execFileSync } from 'node:child_process';
 import type { DatabaseSync } from 'node:sqlite';
-import { readTicket } from './api.js';
+import { brainSearch, readTicket } from './api.js';
 import { attachments } from './attachments.js';
-import { BRAIN_RANK } from './db.js';
 import type { Role } from './grants.js';
 import { TOOLS } from './mcp.js';
 import { readPreferences } from './settings.js';
@@ -21,27 +20,30 @@ interface ContextOpts {
   base?: string;
   brainLimit?: number;
   brainChars?: number;
+  /** The global brain: its rows join the brain section in the same ranking. Without it, the section is the project's only. */
+  global?: DatabaseSync;
 }
 
 const orNone = (s: string) => s.trim() || '(none)';
 const bullet = (head: string, body: string) => `- ${head}${body.replaceAll('\n', '\n  ')}`;
 
 /**
- * Top matches for any word of the ticket's title and body, best first: the first BRAIN_BODIES with their body, the rest as an
- * index line. Cut on row boundaries within `chars`, with a visible marker; a body that does not fit falls back to its index line.
+ * Top matches for any word of the ticket's title and body across both brains, best first, a global row marked `[global]`: the
+ * first BRAIN_BODIES with their body, the rest as an index line. Cut on row boundaries within `chars`, with a visible marker;
+ * a body that does not fit falls back to its index line.
  */
-export function brainFor(db: DatabaseSync, text: string, limit = BRAIN_LIMIT, chars = BRAIN_CHARS): string {
+export function brainFor(db: DatabaseSync, text: string, limit = BRAIN_LIMIT, chars = BRAIN_CHARS, global?: DatabaseSync): string {
   const words = [...new Set(text.toLowerCase().match(/[\p{L}\p{N}_]{3,}/gu) ?? [])];
   if (words.length === 0) return '';
-  const rows = db
-    .prepare(`SELECT b.id, b.title, b.body, b.tags FROM brain_fts f JOIN brain b ON b.id = f.rowid WHERE brain_fts MATCH ? ORDER BY ${BRAIN_RANK}, b.id LIMIT ?`)
-    .all(words.map((w) => `"${w}"`).join(' OR '), limit) as { id: number; title: string; body: string; tags: string }[];
+  // brainSearch quotes each word as an AND term; the brain section wants any word, so the OR query is built here.
+  const rows = brainSearch({ project: db, global: global ?? db }, words.map((w) => `"${w}"`).join(' OR '), limit, global ? undefined : 'project', true);
   const room = chars - BRAIN_TRUNCATED.length;
   const lines: string[] = [];
   let used = -1; // no newline before the first line
   for (const [i, r] of rows.entries()) {
-    const index = `- [#${r.id}] ${r.title}${r.tags ? ` · ${r.tags}` : ''}`;
-    const line = [i < BRAIN_BODIES && bullet(`[#${r.id}] ${r.title}: `, r.body), index].find((l) => l && used + 1 + l.length <= room);
+    const ref = `${r.scope === 'global' ? '[global] ' : ''}[#${r.id}] ${r.title}`;
+    const index = `- ${ref}${r.tags ? ` · ${r.tags}` : ''}`;
+    const line = [i < BRAIN_BODIES && bullet(`${ref}: `, r.body), index].find((l) => l && used + 1 + l.length <= room);
     if (!line) return lines.join('\n') + BRAIN_TRUNCATED;
     lines.push(line);
     used += 1 + line.length;
@@ -102,7 +104,7 @@ export function buildContext(db: DatabaseSync, repo: string, ticketId: number | 
   return {
     ticket: [`#${t.id} ${t.title}\n\n${t.body}`.trimEnd(), attachmentList(repo, t.id)].filter(Boolean).join('\n\n'),
     criteria: orNone(t.criteria),
-    brain: orNone(brainFor(db, `${t.title} ${t.body}`, opts.brainLimit, opts.brainChars)),
+    brain: orNone(brainFor(db, `${t.title} ${t.body}`, opts.brainLimit, opts.brainChars, opts.global)),
     notes: orNone(failureNotes(db, t.id)),
     retry: String(t.retry),
     diff,
@@ -117,7 +119,7 @@ export function buildContext(db: DatabaseSync, repo: string, ticketId: number | 
 export function startRun(
   db: DatabaseSync,
   repo: string,
-  r: { ticketId: number; template: TicketTemplate; cli: string; model: string; effort: string; sessionId?: string | null } & ContextOpts,
+  r: { ticketId: number; template: TicketTemplate; cli: string; model: string; effort: string; sessionId?: string | null; global: DatabaseSync } & ContextOpts,
 ): { id: number; prompt: string } {
   const { role, phase } = TEMPLATES[r.template];
   const text = loadTemplate(repo, r.template); // a bad template fails here, before git runs or a row is written

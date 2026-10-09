@@ -6,7 +6,7 @@ Living document. Update it in the same change that moves a boundary described he
 
 - **No provider API keys.** Claude Code and Codex CLI authenticate themselves in their own config. The board never asks for, reads, or stores a provider key, and never reads a `.env`.
 - **Its own grant tokens, hashed.** The only secrets the board creates are per-session bearer tokens. The database stores a SHA-256 of each; the raw token exists in memory at mint time and in the agent's session: Claude Code reads it from `sessions/<run-id>/mcp.json` (owner-only, deleted at teardown), Codex from `KANBAN95_TOKEN` in its own pty environment. It is never put on a command line and must never appear in logs, audit rows, or REST responses.
-- **Everything else is plain project data** (tickets, notes, brain, runs, audit) in `<repo>/.kanban95/board.db`, gitignored, never uploaded.
+- **Everything else is plain project data** (tickets, notes, brain, runs, audit) in `<repo>/.kanban95/board.db`, gitignored, never uploaded, plus the global brain `~/.kanban95/brain.db` (facts shared by every board, `docs/DATA.md`).
 
 ## Grants
 
@@ -91,7 +91,7 @@ An agent the operator starts with a typed mission, for board work outside the ti
 
 ## Operator files the board writes
 
-In `~/.kanban95/` (or `$KANBAN95_HOME` when set; the board writes operator config nowhere else), only on an explicit operator action: `models.json`, `settings.json` and `preferences.md` when **Save** is pressed in Settings (the whole file is checked against its schema first and written through a temp file; a bad value is refused with the field named and the file is not touched), and `models/` when the speech model download is OK'd (see Voice model). No secrets go in `models.json` or `settings.json`; there is no field for one. `preferences.md` is free text copied into every prompt, so the operator is told not to put one there (`docs/DATA.md`). Without an operator action, the daemon adds its own repo to `projects.json` on start and keeps its entry in `running/` (pid, repo, port; no secret) while it runs.
+In `~/.kanban95/` (or `$KANBAN95_HOME` when set; the board writes operator config nowhere else), only on an explicit operator action: `models.json`, `settings.json` and `preferences.md` when **Save** is pressed in Settings (the whole file is checked against its schema first and written through a temp file; a bad value is refused with the field named and the file is not touched), and `models/` when the speech model download is OK'd (see Voice model). The one exception is `brain.db`, the global brain, which agents write through `brain_add`/`brain_update` with `scope: global` like the project brain. Without an operator action, the daemon adds its own repo to `projects.json` on start and keeps its entry in `running/` (pid, repo, port; no secret) while it runs. No secrets go in `models.json` or `settings.json`; there is no field for one. `preferences.md` is free text copied into every prompt, so the operator is told not to put one there (`docs/DATA.md`).
 
 **Start → Projects** (`POST /api/projects/open` and `/focus`, behind the shell cookie) acts only on a path listed in `projects.json`; any other is `400` before anything runs. Open starts a fixed program (the built shell, or the installed exe) with the listed path as its only argument, through one PowerShell call that reads the command line from its environment, so nothing from the request or the file is parsed as PowerShell. Focus passes only the window title the same way. Open is audited as `projects.open`.
 
@@ -139,7 +139,7 @@ The mic button's speech model is the only thing the board ever downloads, and th
 - A template may only name the known variables (`VARS` in `daemon/src/templates.ts`, listed in `docs/AGENTS.md`), and every one it names must have a value. Anything else (for example `{{transcript}}`) is refused when the template is loaded, before any context is built or any run row is written.
 - Values are substituted in one pass, so text an agent wrote into the brain or a note (including `{{...}}`) is inserted literally and cannot pull in another variable.
 - The template name is checked against a fixed set before any path is built, so it cannot read a file outside `.kanban95/templates/`.
-- Brain text and notes are agent-written and end up in later prompts. Treat them as untrusted input to the next agent, the same as any file in the repo.
+- Brain text and notes are agent-written and end up in later prompts. Treat them as untrusted input to the next agent, the same as any file in the repo. A global brain row written by an agent on one project reaches the prompts of every other project's agents, so it crosses the per-repo boundary; it is still only text in the brain section, and the operator sees and deletes global rows in any board's Brain window (filter Global).
 
 ## A malicious agent in a worktree
 

@@ -12,7 +12,7 @@ You are the tester for one ticket. Decide whether the work meets every acceptanc
 
 ## Brain notes that may apply
 
-Picked by keyword overlap, so most rows will not apply; use one only if it concerns what you are changing, and check it against the code. The first rows carry their body; fetch any other with `brain_search` and its `id`.
+Picked by keyword overlap, so most rows will not apply; use one only if it concerns what you are changing, and check it against the code. The first rows carry their body; fetch any other with `brain_search` and its `id` (and `scope: global` for a `[global]` row).
 
 {{brain}}
 

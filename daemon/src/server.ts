@@ -8,7 +8,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import { WebSocketServer } from 'ws';
 import { handleApi } from './api.js';
 import { entryPath, register } from './boards.js';
-import { openDb } from './db.js';
+import { openDb, openGlobalBrain } from './db.js';
 import { git } from './git.js';
 import { sweep, SWEEP_MS } from './janitor.js';
 import { killAll, launch, sessions } from './launcher.js';
@@ -143,6 +143,13 @@ export function start(config: Config = {}): Promise<{
   const repo = config.repo ?? process.cwd();
   const secret = config.secret ?? randomBytes(32).toString('hex');
   const db = openDb(repo);
+  let brain: DatabaseSync;
+  try {
+    brain = openGlobalBrain();
+  } catch (e) {
+    db.close();
+    throw e;
+  }
   initTemplates(repo);
   try {
     addProject(repo); // Settings → Projects lists every repo a board has run on
@@ -150,7 +157,7 @@ export function start(config: Config = {}): Promise<{
     console.error(`projects.json not updated: ${(e as Error).message}`); // stderr: stdout's first line is the handshake
   }
   let self = '';
-  const board: Board = { db, repo, port: 0 };
+  const board: Board = { db, brain, repo, port: 0 };
   try {
     board.startCommit = git(repo, 'rev-parse', '--verify', '-q', 'HEAD');
   } catch { /* no commits yet: nothing can be stale */ }
@@ -233,6 +240,7 @@ export function start(config: Config = {}): Promise<{
           await new Promise<void>((r) => server.close(() => r()));
           db.close();
           unregister();
+          brain.close();
         },
       });
     });

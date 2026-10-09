@@ -770,49 +770,58 @@ function openTerminal(s, auto = false) {
 
 // ---- brain ----
 
+// Two brains (docs/AGENTS.md → The brain): the project's own and the global one every board shares. A row is scope + id.
+const SCOPES = ['project', 'global'];
+const scopePick = (value, label = (s) => s) => h('select', {}, SCOPES.map((s) => h('option', { value: s, selected: s === value }, label(s))));
+const brainPath = (b) => `/brain/${b.id}?scope=${b.scope}`;
+
 function openBrain() {
   const w = open('brain', { title: 'Brain', w: 560, h: 460, persist: true, icon: 'brain' });
   if (w.body.firstChild) return;
   const q = h('input', { type: 'search', placeholder: 'Search notes' });
+  const only = h('select', { class: 'k95-brain-scope', title: 'Which brain', onchange: () => search() },
+    h('option', { value: '' }, 'All'), h('option', { value: 'project' }, 'Project'), h('option', { value: 'global' }, 'Global'));
   const results = h('ol', { class: 'k95-notes' });
   const search = async () => {
-    const rows = await api('GET', `/brain?q=${encodeURIComponent(q.value)}`);
-    results.replaceChildren(...(rows.length ? rows.map((b) => h('li', { class: 'note' },
+    const rows = await api('GET', `/brain?q=${encodeURIComponent(q.value)}&scope=${only.value}`);
+    results.replaceChildren(...(rows.length ? rows.map((b) => h('li', { class: 'note', 'data-scope': b.scope },
       h('div', { class: 'note-head' }, `#${b.id} ${b.title}`, b.tags && ` · ${b.tags}`),
       // Provenance: a row from a ticket that never landed may describe code that does not exist.
-      h('div', { class: 'note-meta' }, fmt(b.created_at), b.ticket_id && ` · ticket #${b.ticket_id} (${b.ticket_status ?? 'deleted'})`,
+      h('div', { class: 'note-meta' }, h('span', { class: 'scope' }, b.scope), ` · ${fmt(b.created_at)}`, b.ticket_id && ` · ticket #${b.ticket_id} (${b.ticket_status ?? 'deleted'})`,
         h('button', { onclick: () => edit(b) }, 'Edit'), h('button', { onclick: () => remove(b) }, 'Delete')),
       h('pre', {}, b.body))) : [h('li', {}, 'Nothing found.')]));
   };
-  // Merge = edit the survivor, delete the rest.
+  // Merge = edit the survivor, delete the rest. Choosing the other scope moves the row there under a new id.
   const edit = async (b) => {
-    const f = { title: h('input', { type: 'text', value: b.title }), tags: h('input', { type: 'text', 'data-mic': 'off', value: b.tags }), body: h('textarea', { rows: 10 }, b.body) };
+    const f = { title: h('input', { type: 'text', value: b.title }), tags: h('input', { type: 'text', 'data-mic': 'off', value: b.tags }), body: h('textarea', { rows: 10 }, b.body), scope: scopePick(b.scope) };
     const form = h('div', { class: 'k95-brain-edit' }, ...Object.entries(f).map(([k, el]) => h('div', { class: 'field-row-stacked' }, h('label', {}, k), el)));
-    if ((await dialog(`Edit brain #${b.id}`, form, ['Save', 'Cancel'])) !== 'Save') return;
+    if ((await dialog(`Edit ${b.scope} brain #${b.id}`, form, ['Save', 'Cancel'])) !== 'Save') return;
+    const move = f.scope.value !== b.scope;
     act(async () => {
-      await api('PATCH', `/brain/${b.id}`, { title: f.title.value, body: f.body.value, tags: f.tags.value });
+      await api('PATCH', brainPath(b), { title: f.title.value, body: f.body.value, tags: f.tags.value, ...(move && { move_to: f.scope.value }) });
       await search();
-    }, `Brain #${b.id} saved.`);
+    }, move ? `Brain #${b.id} moved to the ${f.scope.value} brain.` : `Brain #${b.id} saved.`);
   };
   const remove = async (b) => {
-    if ((await dialog('Delete brain note', `Delete #${b.id} "${b.title}"? No agent will see it again.`, ['Delete', 'Cancel'])) !== 'Delete') return;
+    if ((await dialog('Delete brain note', `Delete ${b.scope} #${b.id} "${b.title}"? No agent will see it again.`, ['Delete', 'Cancel'])) !== 'Delete') return;
     act(async () => {
-      await api('DELETE', `/brain/${b.id}`);
+      await api('DELETE', brainPath(b));
       await search();
     }, `Brain #${b.id} deleted.`);
   };
   const title = h('input', { type: 'text', placeholder: 'Title' });
   const tags = h('input', { type: 'text', 'data-mic': 'off', placeholder: 'tags' });
   const body = h('textarea', { rows: 3, placeholder: 'What the next agent should know' });
+  const scope = scopePick('project', (s) => (s === 'project' ? 'Project: about this codebase' : 'Global: holds in any repo'));
   const add = () => act(async () => {
-    await api('POST', '/brain', { title: title.value, body: body.value, tags: tags.value });
+    await api('POST', '/brain', { title: title.value, body: body.value, tags: tags.value, scope: scope.value });
     title.value = body.value = tags.value = '';
     await search();
   }, 'Note added to the brain.');
   q.addEventListener('keydown', (e) => e.key === 'Enter' && search());
   w.body.classList.add('k95-brain');
-  w.body.append(h('div', { class: 'field-row' }, q, h('button', { onclick: search }, 'Search')), results,
-    h('fieldset', {}, h('legend', {}, 'Add note'), h('div', { class: 'field-row' }, title, tags), h('div', { class: 'field-row' }, body), h('button', { onclick: add }, 'Add')));
+  w.body.append(h('div', { class: 'field-row' }, q, only, h('button', { onclick: search }, 'Search')), results,
+    h('fieldset', {}, h('legend', {}, 'Add note'), h('div', { class: 'field-row' }, title, tags), h('div', { class: 'field-row' }, body), h('div', { class: 'field-row' }, scope, h('button', { onclick: add }, 'Add'))));
   search();
 }
 
