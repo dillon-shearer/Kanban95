@@ -72,7 +72,7 @@ describe('operator grant schema', () => {
     db.prepare("INSERT INTO audit (grant_id, ticket_id, tool, outcome) VALUES (1, 1, 'add_note', 'ok')").run();
     expect(() => db.prepare("INSERT INTO grants (token_hash, ticket_id, role, expires_at) VALUES ('h2', NULL, 'operator', '2999-01-01')").run()).toThrow(/CHECK/);
 
-    expect(migrate(db, MIGRATIONS_DIR)).toEqual(['004-operator-grants.sql']);
+    expect(migrate(db, MIGRATIONS_DIR)[0]).toBe('004-operator-grants.sql'); // later migrations follow it
     expect(db.prepare('SELECT grant_id FROM audit').get()).toEqual({ grant_id: 1 });
     const ins = db.prepare("INSERT INTO grants (token_hash, ticket_id, role, expires_at) VALUES (?, ?, 'operator', '2999-01-01')");
     expect(() => ins.run('h3', 1)).toThrow(/CHECK/);

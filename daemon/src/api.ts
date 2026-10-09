@@ -57,7 +57,7 @@ function ticketColumns(body: Json): { cols: string[]; vals: unknown[]; deps?: nu
 
 export interface Ticket {
   id: number; title: string; body: string; criteria: string; status: string; cli: string | null; model: string | null;
-  effort: string | null; retry: number; template: string; merged_at: string | null; created_at: string; updated_at: string;
+  effort: string | null; created_by_grant: number | null; retry: number; template: string; merged_at: string | null; created_at: string; updated_at: string;
   flags: { needs_human: boolean; blocked_on_deps: boolean }; depends_on: number[];
 }
 
@@ -84,6 +84,20 @@ export function setDeps(db: DatabaseSync, id: number, deps: number[]) {
       UNION SELECT d.depends_on_id FROM ticket_deps d JOIN reach r ON d.ticket_id = r.id)
     SELECT 1 FROM reach WHERE id = ?`).get(id, id);
   if (cycle) throw new HttpError(400, `dependency cycle: ticket ${id} would end up depending on itself`);
+}
+
+/** Deletes a ticket with its sessions and attachments. The UI's DELETE route and the delete_ticket tool both come here. */
+export function deleteTicket(board: Board, id: number) {
+  const { db } = board;
+  // Its agents stop with it. The outcome makes their exit expected, so it flags nothing on a ticket that is gone.
+  for (const s of sessionsOf(id)) {
+    s.outcome = 'deleted';
+    revoke(db, s.grantId);
+    s.pty.kill();
+  }
+  const r = db.prepare('DELETE FROM tickets WHERE id = ?').run(id);
+  if (r.changes === 0) throw new HttpError(404, 'no such ticket');
+  rmSync(attachmentDir(board.repo, id), { recursive: true, force: true });
 }
 
 export function transaction<T>(db: DatabaseSync, fn: () => T): T {
@@ -177,17 +191,8 @@ const routes: [method: string, path: RegExp, mutation: string | null, handler: (
     });
     return { status: 200, body: readTicket(db, id) };
   }],
-  ['DELETE', /^\/api\/tickets\/(\d+)$/, 'tickets.delete', ({ board, db, params }) => {
-    const id = Number(params[0]);
-    // Its agents stop with it. The outcome makes their exit expected, so it flags nothing on a ticket that is gone.
-    for (const s of sessionsOf(id)) {
-      s.outcome = 'deleted';
-      revoke(db, s.grantId);
-      s.pty.kill();
-    }
-    const r = db.prepare('DELETE FROM tickets WHERE id = ?').run(id);
-    if (r.changes === 0) throw new HttpError(404, 'no such ticket');
-    rmSync(attachmentDir(board.repo, id), { recursive: true, force: true });
+  ['DELETE', /^\/api\/tickets\/(\d+)$/, 'tickets.delete', ({ board, params }) => {
+    deleteTicket(board, Number(params[0]));
     return { status: 204 };
   }],
   ['GET', /^\/api\/tickets\/(\d+)\/(notes|runs|audit)$/, null, ({ db, params }) => {

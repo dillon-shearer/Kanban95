@@ -4,7 +4,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import * as z from 'zod';
-import { brainDelete, brainSearch, brainUpdate, readTicket, setDeps, transaction } from './api.js';
+import { brainDelete, brainSearch, brainUpdate, deleteTicket, readTicket, setDeps, transaction } from './api.js';
 import { BRAIN_BODY_MAX } from './db.js';
 import { attachments } from './attachments.js';
 import { audit, verify, type Grant, type Role } from './grants.js';
@@ -24,6 +24,8 @@ const unbound = (r: Role) => r === 'planner' || r === 'operator';
 const an = (r: Role) => `${r === 'operator' ? 'an' : 'a'} ${r}`;
 /** The only ticket columns a worker may edit on its own ticket. */
 const WORKER_FIELDS = ['body', 'criteria'] as const;
+/** What a worker may edit on a follow-up its own grant created, while it is in Backlog. */
+const FOLLOWUP_FIELDS = ['title', 'body', 'criteria', 'depends_on'] as const;
 const BRAIN_SEARCH_MAX = 50;
 
 /** A refusal. Audited as `denied`; anything else thrown is `error`. */
@@ -53,6 +55,9 @@ function own(c: Call, id: number | undefined): number {
   return c.grant.ticket_id!;
 }
 const exists = (db: DatabaseSync, id: number) => db.prepare('SELECT 1 FROM tickets WHERE id = ?').get(id) !== undefined;
+/** A Backlog ticket this grant created: the only kind a worker may edit beyond its own, or delete. */
+const followUp = (db: DatabaseSync, grant: Grant, id: number) =>
+  db.prepare("SELECT 1 FROM tickets WHERE id = ? AND created_by_grant = ? AND status = 'backlog'").get(id, grant.id) !== undefined;
 const depsOf = (db: DatabaseSync, id: number) =>
   (db.prepare('SELECT depends_on_id FROM ticket_deps WHERE ticket_id = ?').all(id) as { depends_on_id: number }[]).map((r) => r.depends_on_id);
 function addNote(c: Call, ticket: number, kind: string, body: string): { note_id: number } {
@@ -68,8 +73,10 @@ export const TOOLS: Record<string, Tool<z.ZodRawShape>> = {
   create_ticket: tool({
     description:
       'Create a ticket in the backlog. Give it a title, a body that says what to build and why, and acceptance criteria a tester can check one by one. ' +
-      'List depends_on ids when this work must wait for other tickets. Set model and effort only when the work clearly warrants it: trivial work gets effort low, hard work gets high. Returns the ticket.',
-    access: { planner: 'yes', operator: 'yes' },
+      'List depends_on ids when this work must wait for other tickets. Set model and effort only when the work clearly warrants it: trivial work gets effort low, hard work gets high. ' +
+      'A worker files a follow-up or a manual touch it found this way instead of widening its own scope: it lands in Backlog, its body starts with "Filed by #<your ticket>", ' +
+      'it runs on the operator\x27s default model and effort, and the worker may fix or delete it while it is still in Backlog. Returns the ticket.',
+    access: { planner: 'yes', worker: 'yes, Backlog follow-up, no model/effort', operator: 'yes' },
     input: {
       title: z.string().min(1).describe('Short imperative title.'),
       body: z.string().default('').describe('What to build and why, markdown.'),
@@ -79,12 +86,15 @@ export const TOOLS: Record<string, Tool<z.ZodRawShape>> = {
       effort: z.enum(EFFORT).optional().describe('Effort override; omit for the phase default.'),
     },
     run(c, a) {
+      const worker = c.grant.role === 'worker';
+      if (worker && (a.model !== undefined || a.effort !== undefined)) throw new Deny('a worker may not set model or effort; the follow-up runs on the operator\x27s defaults');
       const bad = a.model && uncatalogued(a.model);
       if (bad) throw new Error(bad);
+      const body = worker ? `Filed by #${c.grant.ticket_id}\n\n${a.body}` : a.body;
       const id = transaction(c.db, () => {
         const r = c.db
-          .prepare('INSERT INTO tickets (title, body, criteria, model, effort) VALUES (?, ?, ?, ?, ?)')
-          .run(a.title, a.body, a.criteria, a.model ?? null, a.effort ?? null);
+          .prepare('INSERT INTO tickets (title, body, criteria, model, effort, created_by_grant) VALUES (?, ?, ?, ?, ?, ?)')
+          .run(a.title, body, a.criteria, a.model ?? null, a.effort ?? null, c.grant.id);
         const id = Number(r.lastInsertRowid);
         setDeps(c.db, id, a.depends_on);
         return id;
@@ -96,9 +106,13 @@ export const TOOLS: Record<string, Tool<z.ZodRawShape>> = {
 
   update_ticket: tool({
     description:
-      'Edit a ticket\'s title, body, criteria or dependencies. A worker may only refine the body and criteria of its own ticket, for example to record a clarified scope; ' +
-      'use add_note for progress and decisions instead. Omitted fields are left unchanged. Returns the ticket.',
-    access: { planner: 'any ticket', worker: `own, ${WORKER_FIELDS.join('/')} only`, operator: 'any ticket' },
+      'Edit a ticket\'s title, body, criteria or dependencies. A worker may only refine the body and criteria of its own ticket, for example to record a clarified scope, ' +
+      'and fix any of these fields on a Backlog follow-up it created with create_ticket; use add_note for progress and decisions instead. Omitted fields are left unchanged. Returns the ticket.',
+    access: {
+      planner: 'any ticket',
+      worker: `own, ${WORKER_FIELDS.join('/')} only; its Backlog follow-ups, ${FOLLOWUP_FIELDS.join('/')}`,
+      operator: 'any ticket',
+    },
     input: {
       ticket_id: ticketId,
       title: z.string().min(1).optional(),
@@ -107,11 +121,13 @@ export const TOOLS: Record<string, Tool<z.ZodRawShape>> = {
       depends_on: z.array(z.number().int().positive()).optional().describe('Replaces the full dependency list.'),
     },
     run(c, { ticket_id, depends_on, ...cols }) {
-      const id = (c.ticket = own(c, ticket_id));
+      // A worker's Backlog follow-up is the one foreign id it may name; any other goes through own() and its scope denial.
+      const mine = c.grant.role === 'worker' && ticket_id !== undefined && followUp(c.db, c.grant, ticket_id);
+      const id = (c.ticket = mine ? ticket_id : own(c, ticket_id));
       const given = Object.keys(cols).filter((k) => cols[k as keyof typeof cols] !== undefined);
       if (depends_on) given.push('depends_on');
       if (given.length === 0) throw new Error('nothing to update');
-      if (c.grant.role === 'worker') {
+      if (c.grant.role === 'worker' && !mine) {
         const bad = given.filter((k) => !(WORKER_FIELDS as readonly string[]).includes(k));
         if (bad.length) throw new Deny(`a worker may only update ${WORKER_FIELDS.join(', ')}; not ${bad.join(', ')}`);
       }
@@ -122,6 +138,27 @@ export const TOOLS: Record<string, Tool<z.ZodRawShape>> = {
         if (depends_on) setDeps(c.db, id, depends_on);
       });
       return readTicket(c.db, id);
+    },
+  }),
+
+  delete_ticket: tool({
+    description:
+      'Delete a Backlog ticket made by mistake, with its attachments, exactly as the operator\x27s delete does. A planner may delete a Backlog ticket that has no notes and no runs; ' +
+      'a worker may delete only a Backlog follow-up its own grant created with create_ticket. Anything else is refused with the reason. Returns the deleted id.',
+    access: { planner: 'Backlog, no notes or runs', worker: 'its Backlog follow-ups', operator: 'Backlog, no notes or runs' },
+    input: { ticket_id: z.number().int().positive() },
+    run(c, a) {
+      const id = (c.ticket = a.ticket_id);
+      const t = readTicket(c.db, id);
+      if (c.grant.role === 'worker' && t.created_by_grant !== c.grant.id) throw new Deny(`a worker may only delete a ticket its own grant created; ticket ${id} is not one`);
+      if (t.status !== 'backlog') throw new Deny(`ticket ${id} is in ${t.status}; only a Backlog ticket can be deleted here`);
+      if (c.grant.role !== 'worker') {
+        const count = (table: 'notes' | 'runs') => (c.db.prepare(`SELECT count(*) AS n FROM ${table} WHERE ticket_id = ?`).get(id) as { n: number }).n;
+        if (count('notes')) throw new Deny(`ticket ${id} has notes; only the operator can delete it, from the board`);
+        if (count('runs')) throw new Deny(`ticket ${id} has runs; only the operator can delete it, from the board`);
+      }
+      deleteTicket(c.board, id);
+      return { id };
     },
   }),
 
