@@ -1,12 +1,12 @@
 // Window manager: Win95 MDI windows on #desktop, one taskbar button each, modal dialogs and pop-up menus.
-// A window opened with `persist` keeps its position, size and maximized state in localStorage; the others cascade.
+// A window opened with `persist` keeps its position, size and maximized state in localStorage; one with nothing saved opens
+// where it covers the least of the open windows (`place`).
 // `persist: true` saves under the window id; a string saves under that key, so windows with different ids can share one place.
 // Maximized is the `max` class: CSS fills #desktop over the inline geometry, which stays as the restore geometry.
 const desktop = document.getElementById('desktop');
 const tasks = document.getElementById('tasks');
 const wins = new Map(); // id → { el, task, onClose, api, toggleMax, items }
 let z = 10;
-let cascade = 0;
 // Taskbar selection: Ctrl+click toggles a button, Shift+click takes the range from the last clicked one, in taskbar order.
 const sel = new Set();
 let anchor = null;
@@ -67,8 +67,7 @@ export function open(id, { title, w = 480, h: height = 320, persist = false, bac
   }
   const key = persist === true ? id : persist;
   const saved = key ? geo.get(key) : null;
-  const off = (cascade++ % 8) * 24;
-  const r = saved ?? { x: 40 + off, y: 20 + off, w, h: height };
+  const r = saved ?? { ...place(w, height), w, h: height };
   const text = h('div', { class: 'title-bar-text' }, title);
   const body = h('div', { class: 'window-body' });
   const el = h('div', { class: 'window k95-win', 'data-win': id },
@@ -119,6 +118,35 @@ export function open(id, { title, w = 480, h: height = 320, persist = false, bac
     el.querySelector('.title-bar').classList.add('inactive');
   }
   return api;
+}
+
+/**
+ * Where a w×h window with no saved geometry opens: of the desktop corners and a grid stepping by half a window, the spot
+ * that overlaps the least total area of the open, non-minimized windows; on a tie the top-most, then left-most.
+ * With room that is a free spot; on a full desktop, the least covered one.
+ */
+// ponytail: O(candidates × windows), about (2·W/w)·(2·H/h) candidates, so ~50 × a few dozen windows; fine for a desktop.
+// A free-rectangle search would find gaps off the half-window grid if windows ever get many or small.
+function place(w, h) {
+  const W = desktop.clientWidth;
+  const H = desktop.clientHeight;
+  const mx = Math.max(0, W - w);
+  const my = Math.max(0, H - h);
+  const boxes = [...wins.values()].filter((o) => !o.el.hidden)
+    .map(({ el }) => [el.offsetLeft, el.offsetTop, el.offsetLeft + el.offsetWidth, el.offsetTop + el.offsetHeight]);
+  const xs = new Set([0, mx]);
+  const ys = new Set([0, my]);
+  for (let x = 0; x < mx; x += w / 2) xs.add(Math.round(x));
+  for (let y = 0; y < my; y += h / 2) ys.add(Math.round(y));
+  let best = null;
+  for (const y of [...ys].sort((a, b) => a - b)) {
+    for (const x of [...xs].sort((a, b) => a - b)) {
+      let cover = 0;
+      for (const [l, t, r, b] of boxes) cover += Math.max(0, Math.min(x + w, r) - Math.max(x, l)) * Math.max(0, Math.min(y + h, b) - Math.max(y, t));
+      if (!best || cover < best.cover) best = { x, y, cover };
+    }
+  }
+  return { x: best.x, y: best.y };
 }
 
 /** Keeps at least the title bar on the desktop. */
