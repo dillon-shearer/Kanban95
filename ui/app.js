@@ -1242,7 +1242,7 @@ function resetLayout() {
   say('Startup layout reset: Board top right, Inbox bottom right, Notepad beside it from the next start.');
 }
 
-/** Start → Close ended terminals: the windows of sessions that ended; the live ones take the freed slots. */
+/** Start → Close ended terminals: the windows of sessions that ended; the live ones keep their slots. */
 function closeEnded() {
   for (const wid of [...terms.keys()]) if (document.querySelector(`[data-win="${wid}"]`)?.classList.contains('ended')) close(wid);
 }
