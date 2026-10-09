@@ -33,6 +33,7 @@ let inbox = [];
 let runner = { on: false, concurrency: 3, running: [], left: 0, backlog: 0, waits: [] }; // GET /api/runner: the Run button and its status-bar line
 let models = null; // ~/.kanban95/models.json as written, for the cards' default model and effort
 // Sounds stay off until /config/settings loads: listen() starts first, and a ding in that gap ignored the operator's choice.
+// `terminals` is absent until then too, so no session is opened or passed over before the operator's phases are known.
 let settings = { paths: {}, sounds: { merge: false, attention: false }, voice: { backend: 'local', mode: 'push' }, housekeeping: { auto: true, every: 10 } };
 let limits = null; // GET /api/limits: { rows, errors, fetched_at }, null until the first answer
 const views = new Map(); // open window id → redraw(ticketId | null)
@@ -330,6 +331,8 @@ function cardMenu(ts, x, y) {
       ts.slice(0, 8).forEach((t) => openTicket(t.id));
       if (ts.length > 8) say(`Opened 8 of ${ts.length} tickets; at most 8 open at once.`);
     } },
+    // A live session's terminal, also one that did not open on its own (Settings → General).
+    ...(ts.length === 1 && live(ts[0].id).length ? [{ label: 'Terminal', items: live(ts[0].id).map((s) => ({ label: `${s.phase} · ${s.model}`, run: () => openTerminal(s) })) }] : []),
     { label: 'Launch', disabled: !ts.some(launchable), run: () => launch(ts) },
     { label: 'Resume', disabled: !ts.some(resumable), run: () => launch(ts, 'resume') },
     ...(ts.length === 1 && restartable(ts[0]) ? [{ label: 'Restart', run: () => restart(ts[0].id) }] : []),
@@ -588,8 +591,17 @@ function termState(s, ended) {
   if (s.phase === 'execute' || s.phase === 'test') return s.phase;
   return null;
 }
+/**
+ * Opens a terminal for each new session of a phase in Settings → General (`terminals.auto`); brainstorms and operator
+ * terminals always. The rest are marked seen, so they never pop up later; card → Terminal opens one.
+ */
 function openNewTerminals() {
-  for (const s of sessions) if (!seen.has(s.id)) openTerminal(s, true);
+  if (!settings.terminals) return;
+  for (const s of sessions) {
+    if (seen.has(s.id)) continue;
+    if (s.ticket_id === null || settings.terminals.auto.includes(s.phase)) openTerminal(s, true);
+    else seen.add(s.id);
+  }
 }
 
 /**
@@ -854,6 +866,11 @@ function openSettings(tab) {
       p.replaceChildren(...[['merge', 'Ding when a ticket merges'], ['attention', 'Chord when the board needs you']].map(([k, label]) =>
         h('div', { class: 'field-row' }, h('input', { type: 'checkbox', id: `sound-${k}`, checked: settings.sounds[k],
           onchange: (e) => act(() => saveSettings({ sounds: { ...settings.sounds, [k]: e.target.checked } }), 'Saved.') }), h('label', { for: `sound-${k}` }, label))),
+        h('fieldset', {}, h('legend', {}, 'Open a terminal automatically for'),
+          ...['plan', 'execute', 'test'].map((ph) => h('div', { class: 'field-row' }, h('input', { type: 'checkbox', id: `term-auto-${ph}`, checked: settings.terminals.auto.includes(ph),
+            onchange: (e) => act(() => saveSettings({ terminals: { auto: [...settings.terminals.auto.filter((x) => x !== ph), ...(e.target.checked ? [ph] : [])] } }), 'Saved.') }),
+          h('label', { for: `term-auto-${ph}` }, ph))),
+          h('p', {}, 'Brainstorms always open. A hidden session still runs: right-click its card → Terminal.')),
         h('fieldset', {}, h('legend', {}, 'Runner'),
           h('div', { class: 'field-row' }, h('label', { for: 'concurrency' }, 'Tickets running at once'), at),
           h('button', { onclick: saveRunner }, 'Save')),
@@ -1094,7 +1111,7 @@ async function boot() {
   listen();
   const [list, st, md] = await Promise.all([api('GET', '/tickets'), api('GET', '/config/settings'), api('GET', '/config/models').catch(() => ({ value: null }))]);
   for (const t of list) tickets.set(t.id, t);
-  settings = { ...settings, ...st.value, voice: { ...settings.voice, ...st.value?.voice }, housekeeping: { ...settings.housekeeping, ...st.value?.housekeeping } };
+  settings = { ...settings, terminals: { auto: ['plan', 'execute'] }, ...st.value, voice: { ...settings.voice, ...st.value?.voice }, housekeeping: { ...settings.housekeeping, ...st.value?.housekeeping } };
   models = md.value;
   configure(settings.voice);
   micEverywhere();

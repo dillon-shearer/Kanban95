@@ -13,7 +13,8 @@ import { sources } from '../src/limits.ts';
 import { start } from '../src/server.ts';
 import { browser, until, type Page } from './cdp.ts';
 
-// Fake `claude`: asks the operator a question when its model is `ask`, commits the answer and submits; a test run passes.
+// Fake `claude`: asks the operator a question when its model is `ask`, commits the answer and submits; `submit` commits and
+// submits at once. A test run passes, unless its model is `hold`: then it waits.
 const FAKE = `
 import { execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
@@ -30,10 +31,10 @@ const call = (name, args = {}) => fetch(mcp.url, {
 const line = () => new Promise((ok) => process.stdin.setEncoding('utf8').once('data', (d) => ok(d.trim())));
 console.log('FAKE ' + model);
 if (brief.startsWith('# Test')) {
-  await call('report_test', { passed: true, summary: 'ok' });
-} else if (model === 'ask') {
-  await call('ask_operator', { question: 'Which colour?' });
-  writeFileSync('answer.txt', await line());
+  if (model !== 'hold') await call('report_test', { passed: true, summary: 'ok' });
+} else if (model === 'ask' || model === 'submit') {
+  if (model === 'ask') await call('ask_operator', { question: 'Which colour?' });
+  writeFileSync('answer.txt', model === 'ask' ? await line() : 'done');
   execFileSync('git', ['add', 'answer.txt']);
   execFileSync('git', ['commit', '-qm', 'Add the answer']);
   await call('move_ticket', { status: 'testing' });

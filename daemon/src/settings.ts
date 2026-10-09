@@ -1,6 +1,6 @@
 // The operator's own settings in ~/.kanban95/, edited in the Settings window. No secrets live here.
 // models.json: which CLI, and the model and effort per phase (docs/LIFECYCLE.md → Run settings). settings.json: CLI paths,
-// sounds, voice, housekeeping. Both are read on every use, so an edit applies to the next run without a restart.
+// sounds, voice, housekeeping, auto-opened terminals. Both are read on every use, so an edit applies to the next run without a restart.
 import { execFile } from 'node:child_process';
 import { createReadStream, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -28,6 +28,10 @@ const FILES = {
     // Off: no ticket is filed after merges; the Housekeeping button still works.
     housekeeping: z.object({ auto: z.boolean().default(true), every: z.number().int().min(1).default(10) }).strict()
       .default({ auto: true, every: 10 }),
+    // Phases whose sessions open a terminal on their own; the rest run unseen until the operator opens one (card → Terminal).
+    // Brainstorms and operator terminals always open: the operator started them.
+    terminals: z.object({ auto: z.array(z.enum(['plan', 'execute', 'test'])).default(['plan', 'execute']) }).strict()
+      .default({ auto: ['plan', 'execute'] }),
   }).strict(),
 };
 export type ConfigName = keyof typeof FILES;
