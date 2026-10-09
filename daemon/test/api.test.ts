@@ -6,6 +6,7 @@ import { request } from 'node:http';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { mint, verify } from '../src/grants.ts';
 import { start } from '../src/server.ts';
+import { configPath, writeConfig } from '../src/settings.ts';
 
 let repo: string;
 let srv: Awaited<ReturnType<typeof start>>;
@@ -99,6 +100,15 @@ describe('tickets', () => {
     expect(c.depends_on).toEqual([a.id, b.id]);
     expect((await call('PATCH', `/api/tickets/${c.id}`, { depends_on: [c.id] })).status).toBe(400);
     expect((await call('DELETE', `/api/tickets/${a.id}`)).status).toBe(400); // still depended on
+    writeConfig('models', { cli: 'claude', claude: { models: ['ok'], execute: { model: 'ok' } } });
+    try {
+      const r = await call('PATCH', `/api/tickets/${c.id}`, { model: 'nope' });
+      expect(r.status).toBe(400);
+      expect((await r.json()).error).toMatch(/^model nope is not in the claude model list in .*models\.json$/);
+      expect((await call('PATCH', `/api/tickets/${c.id}`, { model: 'ok' })).status).toBe(200);
+    } finally {
+      rmSync(configPath('models'), { force: true });
+    }
     const cleared = await (await call('PATCH', `/api/tickets/${c.id}`, { depends_on: [] })).json();
     expect(cleared.depends_on).toEqual([]);
   });

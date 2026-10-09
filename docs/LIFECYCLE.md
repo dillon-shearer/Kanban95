@@ -47,7 +47,7 @@ The tester's verdict is the move: `report_test` writes the PASS or FAIL note, th
 | testing | fail | `retry` = 3 | in_progress | `retry` + 1, `needs_human` on | tester session ended, failure note "stopped after 4 failed tests", chord. Stops |
 | running | ask | | same | `needs_human` on | question note, chord. The agent's terminal stays open |
 | running | answer | `needs_human` on and an agent session is live | same | `needs_human` off | answer note; the answer typed into the agent's terminal as one line, then Enter as a separate keystroke 300 ms later (one burst would read as a paste, leaving the answer unsubmitted) |
-| running | exit | | same | `needs_human` on | failure note ("agent exited without reporting" or "launch failed: …", then a "To resolve:" line naming Resume and Reset to Backlog), chord |
+| running | exit | | same | `needs_human` on | failure note ("agent exited without reporting" or "launch failed: …", e.g. a model outside the CLI's `models` list (Run settings), then a "To resolve:" line naming Resume and Reset to Backlog), chord |
 | done | merged | | done | `merged_at` set, `needs_human` off | ding, worktree and branch removed, held dependents launched, housekeeping check |
 | in_progress | conflict | `retry` < 3 | in_progress | `retry` + 1 | worker session ended, failure note ("merge conflict with <base>: <git output>" or "worktree has uncommitted changes; …"), execute agent again in the kept worktree. No tester round is spent on stale code |
 | in_progress | conflict | `retry` = 3 | in_progress | `needs_human` on | worker session ended, the same failure note, chord. Worktree kept |
@@ -156,6 +156,7 @@ The board names no model. Each run's CLI, model and effort come from `~/.kanban9
 {
   "cli": "claude",
   "claude": {
+    "models": ["<model id>", "..."],
     "plan": { "model": "<model id>", "effort": "medium" },
     "execute": { "model": "<model id>", "effort": "medium" },
     "test": { "model": "<model id>", "effort": "medium" },
@@ -168,7 +169,7 @@ The board names no model. Each run's CLI, model and effort come from `~/.kanban9
 }
 ```
 
-The ticket's `cli` overrides `cli`; its `model` and `effort` override the execute phase. `plan` is the brainstorm's phase; `operator` the operator terminal's, and the only one that may be absent (the CLI then runs its own default model). Effort defaults to `medium`. A missing file, CLI, model or a bad effort fails the launch, which flags the ticket with the reason. Settings → CLIs can name the executable per CLI (`~/.kanban95/settings.json` → `paths`); unset, the CLI is found on `PATH`.
+The ticket's `cli` overrides `cli`; its `model` and `effort` override the execute phase. `plan` is the brainstorm's phase; `operator` the operator terminal's, and the only one that may be absent (the CLI then runs its own default model). Effort defaults to `medium`. `models` is optional: when a CLI has one, a run's model (the ticket's or the phase default) must be in it. A missing file, CLI, model, a model outside that CLI's `models` list or a bad effort fails the launch at once ("launch failed: model <id> is not in the <cli> model list in <file>"), which flags the ticket with the reason and leaves no session running. The list is also checked when a model is set: `POST`/`PATCH /api/tickets` answer 400 and the MCP `create_ticket`/`set_model` refuse an id outside it, so a typo is never stored. No list, no check. Settings keeps the list on Save but does not edit it; add it by hand. Settings → CLIs can name the executable per CLI (`~/.kanban95/settings.json` → `paths`); unset, the CLI is found on `PATH`.
 
 ## Operator preferences
 
