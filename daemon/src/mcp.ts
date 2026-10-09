@@ -346,21 +346,22 @@ export const TOOLS: Record<string, Tool<z.ZodRawShape>> = {
   report_test: tool({
     description:
       'Record the structured result of testing a ticket against its acceptance criteria. passed is the overall verdict; summary says which criteria passed or failed and why; ' +
-      'evidence lists what proves it (test output, screenshot paths kept as run evidence, commands run). The report is the verdict: it moves the ticket to done (the board merges the branch) ' +
+      'evidence lists what proves it, one string per item (test output, screenshot paths kept as run evidence, commands run); a single string is taken as one item. The report is the verdict: it moves the ticket to done (the board merges the branch) ' +
       'or back to in_progress (the worker retries, and a failed report becomes the failure note it sees), and ends your session. No move_ticket is needed. Returns the note id and the ticket.',
     access: { tester: 'own' },
     input: {
       ticket_id: ticketId,
       passed: z.boolean(),
       summary: z.string().min(1),
-      evidence: z.array(z.string().min(1)).default([]),
+      // A string is taken as one item: agents passed one 42 times in 28 tickets and had to repeat the call.
+      evidence: z.union([z.array(z.string().min(1)), z.string().min(1)]).default([]),
     },
     run(c, a) {
       const id = (c.ticket = own(c, a.ticket_id));
       const { status } = readTicket(c.db, id);
       // Checked before the note is written, so a refused verdict leaves nothing behind.
       if (status !== 'testing') throw new Refused(`cannot report a test on a ticket in ${status}`);
-      const body = [`${a.passed ? 'PASS' : 'FAIL'}: ${a.summary}`, ...a.evidence.map((e) => `- ${e}`)].join('\n');
+      const body = [`${a.passed ? 'PASS' : 'FAIL'}: ${a.summary}`, ...[a.evidence].flat().map((e) => `- ${e}`)].join('\n');
       const { note_id } = addNote(c, id, a.passed ? 'summary' : 'failure', body);
       // The report is the verdict: it drives the move, so a tester that stops after reporting cannot strand the ticket in Testing.
       return { note_id, ticket: apply(c.board, id, a.passed ? 'pass' : 'fail').ticket };
