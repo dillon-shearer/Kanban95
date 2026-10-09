@@ -205,6 +205,7 @@ If the microphone is blocked, the board says how to allow it: Windows Settings â
 
 - **Ding** (a soft two-tone chime): a ticket merged; the status bar says "#<id> merged." It also plays once, with no message, when the runner stops because nothing is left to launch.
 - **Chord** (a gentle three-note chord): the board needs you on a ticket (a question, a silent exit, a silent agent, the retry cap, a merge conflict, a dirty base); the status bar says why, and the Inbox has it too.
+- **Done** (a quick rising three-note pluck): the tester passed a ticket and it landed in Done, before it merges; the status bar says "#<id> passed, in Done." The ding follows once the merge lands.
 
 **Settings â†’ General** has one checkbox per sound; each silences only its own.
 
