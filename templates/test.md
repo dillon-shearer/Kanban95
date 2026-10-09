@@ -34,9 +34,10 @@ Retry count: {{retry}} (after 3 failed retries the ticket stops and goes to the 
 
 - If the worktree needs dependencies, install them in it (`npm install`, or the repo's equivalent). Never junction or symlink the main checkout's `node_modules`, or anything else of the main checkout's, into the worktree: removing the worktree, or any tool that deletes through the link, reaches the main checkout's files.
 - Verify with `npm test` or a script built on `daemon/test/cdp.ts`, never by starting the app (`npm run dev`, `Kanban95.cmd`, `cargo run`) or a visible browser.
+- Your step 1 run of `npm test` is the only full run of the suite for this ticket; the worker ran only `npm run test:changed`. While you iterate on tests you add in step 3, use `npm run test:changed -- {{base}}`, which runs only the tests the changes against `{{base}}` can affect.
 - Put new tests in a new file named for the feature (`daemon/test/<feature>.test.ts`) unless you are extending an existing test's scenario. Several tickets run at once and appending to a shared test file is the most common merge conflict.
 
-1. Run the full test suite and the build. A failure is a failed ticket.
+1. Run the full test suite (`npm test`) and the build, once. A failure is a failed ticket.
 2. Review the diff against each acceptance criterion, one by one. Note which pass and which fail, and why.
 3. Where the diff adds behaviour that no test covers, write the missing tests and commit them. Each test must be able to fail for a real reason.
 4. `brain_search` the subsystems the diff changes. Name every row the diff made false, with its id, in your `report_test` summary.
