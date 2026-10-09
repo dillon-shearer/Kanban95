@@ -1,4 +1,4 @@
-// In headless Edge or Chrome against a running daemon (setup in ui.ts): the UI zoom (Ctrl+= / Ctrl+- / Ctrl+0, Settings → General).
+// In headless Edge or Chrome against a running daemon (setup in ui.ts): the UI zoom (Ctrl+= / Ctrl+- / Ctrl+0, Settings → Board).
 import './home.ts'; // also here, not only in vitest.config.ts: a run from the repo root skips that config and wrote the real home
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -22,7 +22,7 @@ const board = () => until(() => page.evaluate(`!!document.querySelector('[data-w
 const dblclickIcon = (name: string) => page.evaluate(`document.querySelector('[data-icon="${name}"]').dispatchEvent(new MouseEvent('dblclick'))`);
 
 describe('ui-zoom', { timeout: 90_000 }, () => {
-  it('zooms everything by 10% a key, keeps it in settings.json across a reload, and shows it in Settings > General', async () => {
+  it('zooms everything by 10% a key, keeps it in settings.json across a reload, and shows it in Settings > Board', async () => {
     await page.goto(base);
     await board();
     // A Board with room to grow: the default's spans the desktop, and zooming in shrinks it to fit.
@@ -54,8 +54,8 @@ describe('ui-zoom', { timeout: 90_000 }, () => {
     await board();
     expect(await zoom()).toBe(0.9);
     await dblclickIcon('Settings');
-    await page.evaluate(`[...document.querySelectorAll('[data-win="settings"] [role=tab] a')].find((t) => t.textContent === 'General').click()`);
-    await until(() => page.evaluate(`!!document.querySelector('#zoom')`), 'the General tab');
+    await page.evaluate(`[...document.querySelectorAll('[data-win="settings"] [role=tab] a')].find((t) => t.textContent === 'Board').click()`);
+    await until(() => page.evaluate(`!!document.querySelector('#zoom')`), 'the Board tab');
     expect(await page.evaluate(`document.querySelector('#zoom').selectedOptions[0].textContent`)).toBe('90%');
     await page.evaluate(`(() => { const s = document.querySelector('#zoom'); s.value = '1.5'; s.dispatchEvent(new Event('change')); })()`);
     expect(await zoom()).toBe(1.5);

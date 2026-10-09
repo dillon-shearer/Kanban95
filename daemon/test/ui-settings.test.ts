@@ -7,10 +7,13 @@ import { until } from './cdp.ts';
 import { srv, db, page, base, repo, ticket, statusBar } from './ui.ts';
 
 describe('ui-settings', { timeout: 60_000 }, () => {
-  it('marks the selected tab bold and joined to its panel, and moves the mark when the tab changes', async () => {
+  it('shows the five tabs in order, marks the selected one bold and joined to its panel, and moves the mark when the tab changes', async () => {
     await page.goto(base);
     await until(() => page.evaluate(`!!document.querySelector('[data-win="board"]')`), 'the board');
     await page.evaluate(`document.querySelector('[data-icon="Settings"]').dispatchEvent(new MouseEvent('dblclick'))`);
+    await until(() => page.evaluate(`!!document.querySelector('[data-win="settings"] [role=tab]')`), 'the Settings tabs');
+    expect(await page.evaluate(`[...document.querySelectorAll('[data-win="settings"] [role=tab]')].map((t) => t.textContent)`))
+      .toEqual(['Agents', 'Prompts', 'Board', 'Projects', 'Grants']);
     // Per tab: [name, bold, bottom edge reaches past the panel's top border]
     const look = () => page.evaluate<[string, boolean, boolean][]>(`(() => {
       const panel = document.querySelector('[data-win="settings"] [role=tabpanel]').getBoundingClientRect();
@@ -20,8 +23,8 @@ describe('ui-settings', { timeout: 60_000 }, () => {
     await page.evaluate(`[...document.querySelectorAll('[data-win="settings"] [role=tab] a')].find((t) => t.textContent === 'Grants').click()`);
     await until(async () => (await look()).some(([n, b]) => n === 'Grants' && b), 'Grants marked');
     for (const [n, bold, joined] of await look()) expect([n, bold, joined]).toEqual([n, n === 'Grants', n === 'Grants']);
-    await page.evaluate(`[...document.querySelectorAll('[data-win="settings"] [role=tab] a')].find((t) => t.textContent === 'General').click()`);
-    for (const [n, bold, joined] of await look()) expect([n, bold, joined]).toEqual([n, n === 'General', n === 'General']);
+    await page.evaluate(`[...document.querySelectorAll('[data-win="settings"] [role=tab] a')].find((t) => t.textContent === 'Board').click()`);
+    for (const [n, bold, joined] of await look()) expect([n, bold, joined]).toEqual([n, n === 'Board', n === 'Board']);
   });
 
   it('saves preferences from Settings > Prompts and shows a refusal over 16 KB', async () => {
@@ -48,7 +51,7 @@ describe('ui-settings', { timeout: 60_000 }, () => {
     const text = () => page.evaluate<string>(`document.querySelector('#template-text').value`);
     await page.goto(base);
     await until(() => page.evaluate(`!!document.querySelector('[data-win="board"]')`), 'the board');
-    // Settings opens on Models; hold its /api/models answer until Prompts has drawn, so that late draw must not replace the editor.
+    // Settings opens on Agents; hold its /api/models answer until Prompts has drawn, so that late draw must not replace the editor.
     await page.evaluate(`(() => { const f = window.fetch; window.fetch = (u, o) => String(u).endsWith('/api/models')
       ? new Promise((r) => { window.releaseModels = () => { const p = f(u, o); r(p); return p.then((x) => x.clone().text()); }; }) : f(u, o); })()`);
     await page.evaluate(`document.querySelector('[data-icon="Settings"]').dispatchEvent(new MouseEvent('dblclick'))`);
@@ -77,7 +80,7 @@ describe('ui-settings', { timeout: 60_000 }, () => {
     expect(await marked()).toEqual([true, 'test']);
   });
 
-  it('Settings > General sets the runner concurrency; the status line shows the limit and who waits on shared files', async () => {
+  it('Settings > Agents sets the runner concurrency; the status line shows the limit and who waits on shared files', async () => {
     db.prepare("UPDATE tickets SET status = 'done', merged_at = coalesce(merged_at, 'x'), needs_human = 0").run(); // earlier tests' leftovers
     const a = ticket('Edits a', { status: 'in_progress', body: 'Change `a.txt`.' }); // counted as running; no agent needed
     const b = ticket('Also edits a', { body: 'a.txt too' });
@@ -88,8 +91,8 @@ describe('ui-settings', { timeout: 60_000 }, () => {
       await until(() => page.evaluate(`!!document.querySelector('[data-win="board"]')`), 'the board');
       await page.evaluate('window.__noReload = true');
       await page.evaluate(`document.querySelector('[data-icon="Settings"]').dispatchEvent(new MouseEvent('dblclick'))`);
-      await page.evaluate(`[...document.querySelectorAll('[data-win="settings"] [role=tab] a')].find((t) => t.textContent === 'General').click()`);
-      await until(() => page.evaluate(`!!document.querySelector('#concurrency')`), 'the General tab');
+      await page.evaluate(`[...document.querySelectorAll('[data-win="settings"] [role=tab] a')].find((t) => t.textContent === 'Agents').click()`);
+      await until(() => page.evaluate(`!!document.querySelector('#concurrency')`), 'the Agents tab');
       expect(await page.evaluate(`document.querySelector('label[for=concurrency]').textContent`)).toBe('Tickets running at once');
       await page.evaluate(`(() => { const f = document.querySelector('#concurrency'); f.value = '1'; f.closest('fieldset').querySelector('button').click(); })()`);
       await until(async () => (await runnerApi()).concurrency === 1, 'the saved concurrency');
@@ -102,14 +105,14 @@ describe('ui-settings', { timeout: 60_000 }, () => {
     }
   });
 
-  it('Settings > General shows idle_minutes at its default of 20 and saves a new value to settings.json', async () => {
+  it('Settings > Agents shows idle_minutes at its default of 20 and saves a new value to settings.json', async () => {
     const file = join(process.env.USERPROFILE!, '.kanban95', 'settings.json');
     rmSync(file, { force: true });
     await page.goto(base);
     await until(() => page.evaluate(`!!document.querySelector('[data-win="board"]')`), 'the board');
     await page.evaluate(`document.querySelector('[data-icon="Settings"]').dispatchEvent(new MouseEvent('dblclick'))`);
-    await page.evaluate(`[...document.querySelectorAll('[data-win="settings"] [role=tab] a')].find((t) => t.textContent === 'General').click()`);
-    await until(() => page.evaluate(`!!document.querySelector('#idle-minutes')`), 'the General tab');
+    await page.evaluate(`[...document.querySelectorAll('[data-win="settings"] [role=tab] a')].find((t) => t.textContent === 'Agents').click()`);
+    await until(() => page.evaluate(`!!document.querySelector('#idle-minutes')`), 'the Agents tab');
     expect(await page.evaluate(`document.querySelector('#idle-minutes').value`)).toBe('20');
     await page.evaluate(`(() => { const f = document.querySelector('#idle-minutes'); f.value = '35'; f.closest('fieldset').querySelector('button').click(); })()`);
     await until(() => existsSync(file) && JSON.parse(readFileSync(file, 'utf8')).idle_minutes === 35, 'the saved idle_minutes');

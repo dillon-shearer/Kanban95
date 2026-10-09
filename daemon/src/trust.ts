@@ -55,7 +55,7 @@ export function trustStatus(db: DatabaseSync, repo: string) {
 }
 
 /**
- * Settings → Clear: removes `hasTrustDialogAccepted` from the repo root's entry and nothing else (Claude Code keeps other
+ * Settings → Agents → Clear Claude trust: removes `hasTrustDialogAccepted` from the repo root's entry and nothing else (Claude Code keeps other
  * per-folder state there). The next Claude launch writes it again; clearing is for when the board is no longer used here.
  */
 export function untrustClaude(db: DatabaseSync, repo: string) {

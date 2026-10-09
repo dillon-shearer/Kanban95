@@ -118,7 +118,7 @@ Both CLIs run interactive sessions that never exit by themselves. When an agent'
 
 ### Silent agents
 
-An agent can stop without exiting: an API call that never returns, or a CLI sitting at its prompt after an error it cannot get past ("There's an issue with the selected model"). The pty is no signal, because Claude Code's spinner animates while it waits. The board watches the transcript instead (`watchSilence` in `daemon/src/lifecycle.ts`): every minute it looks at each live ticket session's transcript, Claude Code's `<config>/projects/<cwd>/<runs.session_id>.jsonl` or, for Codex, the newest `<CODEX_HOME>/sessions/YYYY/MM/DD/rollout-*.jsonl` written since the session started whose `session_meta` cwd is the worktree (`transcriptSize` in `daemon/src/launcher.ts`). A session whose transcript has not grown for `idle_minutes` (`~/.kanban95/settings.json`, Settings → General → Silent agents, default 20) gets the `silent` row: `needs_human`, a note naming the minutes and the last 10 lines of its terminal (escape codes stripped), and the chord. A session with no transcript yet counts from its start. Time the ticket spends flagged (a question waiting for the operator) does not count as silence.
+An agent can stop without exiting: an API call that never returns, or a CLI sitting at its prompt after an error it cannot get past ("There's an issue with the selected model"). The pty is no signal, because Claude Code's spinner animates while it waits. The board watches the transcript instead (`watchSilence` in `daemon/src/lifecycle.ts`): every minute it looks at each live ticket session's transcript, Claude Code's `<config>/projects/<cwd>/<runs.session_id>.jsonl` or, for Codex, the newest `<CODEX_HOME>/sessions/YYYY/MM/DD/rollout-*.jsonl` written since the session started whose `session_meta` cwd is the worktree (`transcriptSize` in `daemon/src/launcher.ts`). A session whose transcript has not grown for `idle_minutes` (`~/.kanban95/settings.json`, Settings → Agents → Silent agents, default 20) gets the `silent` row: `needs_human`, a note naming the minutes and the last 10 lines of its terminal (escape codes stripped), and the chord. A session with no transcript yet counts from its start. Time the ticket spends flagged (a question waiting for the operator) does not count as silence.
 
 The default is above the 10 min tool timeout, so a long test run is not flagged. The agent is left running: the operator opens its terminal, fixes what it waits on there or presses Restart. If its transcript grows again while the silence note is still the ticket's latest note (no question since), the watch applies `woke` and the flag clears by itself, so a long step that was healthy after all does not hold the card red or keep the runner waiting.
 
@@ -132,7 +132,7 @@ There is no Pause yet; when it exists, a paused board flags these tickets (`exit
 
 **Run** (Board toolbar, Start menu, Ctrl+L) lets the board work the backlog by itself, up to `concurrency` tickets start to finish (execute, test, merge) at a time. `tick` in `daemon/src/lifecycle.ts` runs after every `apply` and once on daemon start, after `recover`. While the runner is on and fewer than `concurrency` tickets are running, it applies `launch` to the next candidate.
 
-- **Concurrency** lives in `<repo>/.kanban95/runner.json` next to the flag, default **3** when absent, set from Settings → General → Runner (`PUT /api/runner {concurrency}`, an integer 1 to 10). A new value while the runner is on ticks at once: a raise launches straight away, a cut stops new launches until running drops below it; nothing running is stopped.
+- **Concurrency** lives in `<repo>/.kanban95/runner.json` next to the flag, default **3** when absent, set from Settings → Agents → Runner (`PUT /api/runner {concurrency}`, an integer 1 to 10). A new value while the runner is on ticks at once: a raise launches straight away, a cut stops new launches until running drops below it; nothing running is stopped.
 
 - **Running** means not flagged and in `in_progress` or `testing`, or in `done` and not merged yet: the next ticket starts only once the previous one has merged. A flagged ticket does not count; it waits for the operator in the Inbox while the runner goes on.
 - **A candidate** is a backlog ticket with `needs_human = 0` whose every dependency is merged. The runner never launches a flagged ticket or one whose dependency has not merged; it takes the next one instead.
@@ -191,7 +191,7 @@ A job whose branch is already in the base (`git merge-base --is-ancestor ticket/
 
 ### Push
 
-With `push_after_merge` on (`~/.kanban95/settings.json`, default on, Settings → General → Git), the queue runs `git push <remote> <base>:<branch>` in the main checkout, where `<remote>` and `<branch>` are the base's upstream (`branch.<base>.remote` and `branch.<base>.merge`). Only then is the ticket `merged` (`merged_at`, cleanup). The push sends the whole base, so any earlier commits the upstream lacks go with it. It runs inside the queue job, so pushes never run beside a merge. `push` in `daemon/src/merge.ts`.
+With `push_after_merge` on (`~/.kanban95/settings.json`, default on, Settings → Board → Git), the queue runs `git push <remote> <base>:<branch>` in the main checkout, where `<remote>` and `<branch>` are the base's upstream (`branch.<base>.remote` and `branch.<base>.merge`). Only then is the ticket `merged` (`merged_at`, cleanup). The push sends the whole base, so any earlier commits the upstream lacks go with it. It runs inside the queue job, so pushes never run beside a merge. `push` in `daemon/src/merge.ts`.
 
 - **No upstream**: nothing is run and the ticket closes, so a local-only repo works as before.
 - **Setting off**: nothing is pushed and tickets close as before.
@@ -202,7 +202,7 @@ On daemon start, with the setting on, the board counts the commits on the base i
 
 ## Run settings
 
-The board names no model. Each run's CLI, model and effort come from `~/.kanban95/models.json`, which the operator edits in **Settings → Models** (or by hand):
+The board names no model. Each run's CLI, model and effort come from `~/.kanban95/models.json`, which the operator edits in **Settings → Agents → Models** (or by hand):
 
 ```json
 {
@@ -221,7 +221,7 @@ The board names no model. Each run's CLI, model and effort come from `~/.kanban9
 }
 ```
 
-The ticket's `cli` overrides `cli`; its `model` and `effort` override the execute phase. `plan` is the brainstorm's phase; `operator` the operator terminal's, and the only one that may be absent (the CLI then runs its own default model). Effort defaults to `medium`. `models` is optional: when a CLI has one, a run's model (the ticket's or the phase default) must be in it. A missing file, CLI, model, a model outside that CLI's `models` list or a bad effort fails the launch at once ("launch failed: model <id> is not in the <cli> model list in <file>"), which flags the ticket with the reason and leaves no session running. The list is also checked when a model is set: `POST`/`PATCH /api/tickets` answer 400 and the MCP `create_ticket`/`set_model` refuse an id outside it, so a typo is never stored. No list, no check. Settings keeps the list on Save but does not edit it; add it by hand. Settings → CLIs can name the executable per CLI (`~/.kanban95/settings.json` → `paths`); unset, the CLI is found on `PATH`.
+The ticket's `cli` overrides `cli`; its `model` and `effort` override the execute phase. `plan` is the brainstorm's phase; `operator` the operator terminal's, and the only one that may be absent (the CLI then runs its own default model). Effort defaults to `medium`. `models` is optional: when a CLI has one, a run's model (the ticket's or the phase default) must be in it. A missing file, CLI, model, a model outside that CLI's `models` list or a bad effort fails the launch at once ("launch failed: model <id> is not in the <cli> model list in <file>"), which flags the ticket with the reason and leaves no session running. The list is also checked when a model is set: `POST`/`PATCH /api/tickets` answer 400 and the MCP `create_ticket`/`set_model` refuse an id outside it, so a typo is never stored. No list, no check. Settings keeps the list on Save but does not edit it; add it by hand. Settings → Agents → Executables can name the executable per CLI (`~/.kanban95/settings.json` → `paths`); unset, the CLI is found on `PATH`.
 
 ## Operator preferences
 
@@ -231,7 +231,7 @@ A repo's prompts come from its own `.kanban95/templates/`, copied from `template
 
 ## Sounds
 
-`ding.wav` when a ticket is merged, `chord.wav` whenever `needs_human` is raised by the table (question, silent exit, silent agent, retry cap, conflict at the cap, dirty base, failed push). The daemon sends `{"sound": "ding" | "chord", "ticket": <id>}` on the `/events` websocket; the UI plays `ui/sounds/<sound>.wav` unless that sound is off in Settings → General, and says the reason in the status bar ("#<id> merged.", or the needs-human reason). Every transition also sends `{"ticket": <id>}`, so the board redraws that card without a reload (`docs/ARCHITECTURE.md` → Events).
+`ding.wav` when a ticket is merged, `chord.wav` whenever `needs_human` is raised by the table (question, silent exit, silent agent, retry cap, conflict at the cap, dirty base, failed push). The daemon sends `{"sound": "ding" | "chord", "ticket": <id>}` on the `/events` websocket; the UI plays `ui/sounds/<sound>.wav` unless that sound is off in Settings → Board → Sounds, and says the reason in the status bar ("#<id> merged.", or the needs-human reason). Every transition also sends `{"ticket": <id>}`, so the board redraws that card without a reload (`docs/ARCHITECTURE.md` → Events).
 
 ## Janitor
 
@@ -245,7 +245,7 @@ No removal deletes through a link. Before a worktree, a leftover directory under
 
 ## Housekeeping
 
-Every time the number of merged tickets (housekeeping tickets not counted) reaches a multiple of `housekeeping.every`, the board creates a ticket that runs the `housekeeping.md` template and leaves it in Backlog, where the runner picks it up like any other (or the operator launches it): same worktree, test, retry and merge path. The **Housekeeping** button creates one and launches it at once. Settings → General → Housekeeping switches the automatic ticket off and sets the interval; both live in `~/.kanban95/settings.json` and default to on, every 10:
+Every time the number of merged tickets (housekeeping tickets not counted) reaches a multiple of `housekeeping.every`, the board creates a ticket that runs the `housekeeping.md` template and leaves it in Backlog, where the runner picks it up like any other (or the operator launches it): same worktree, test, retry and merge path. The **Housekeeping** button creates one and launches it at once. Settings → Agents → Housekeeping switches the automatic ticket off and sets the interval; both live in `~/.kanban95/settings.json` and default to on, every 10:
 
 ```json
 { "housekeeping": { "auto": true, "every": 10 } }

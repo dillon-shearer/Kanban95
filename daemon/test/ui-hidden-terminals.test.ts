@@ -1,5 +1,5 @@
 // In headless Edge or Chrome against a running daemon (setup in ui.ts): which phases open a terminal on their own
-// (Settings > General), and reaching a hidden session from its card.
+// (Settings > Board), and reaching a hidden session from its card.
 import './home.ts'; // also here, not only in vitest.config.ts: a run from the repo root skips that config and wrote the real home
 import { readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -55,15 +55,15 @@ describe('ui-hidden-terminals', { timeout: 60_000 }, () => {
     }
   });
 
-  it('with execute and test unchecked in Settings > General, a launch opens no terminal and the tester still takes the ticket to Done', async () => {
+  it('with execute and test unchecked in Settings > Board, a launch opens no terminal and the tester still takes the ticket to Done', async () => {
     const settings = join(process.env.USERPROFILE!, '.kanban95', 'settings.json');
     rmSync(settings, { force: true }); // all defaults, also on a retry
     const id = ticket('No windows', { model: 'submit' });
     await page.goto(base);
     await until(() => column(id), 'the card');
     await page.evaluate(`document.querySelector('[data-icon="Settings"]').dispatchEvent(new MouseEvent('dblclick'))`);
-    await page.evaluate(`[...document.querySelectorAll('[data-win="settings"] [role=tab] a')].find((t) => t.textContent === 'General').click()`);
-    await until(() => page.evaluate(`!!document.querySelector('#term-auto-execute')`), 'the General tab');
+    await page.evaluate(`[...document.querySelectorAll('[data-win="settings"] [role=tab] a')].find((t) => t.textContent === 'Board').click()`);
+    await until(() => page.evaluate(`!!document.querySelector('#term-auto-execute')`), 'the Board tab');
     expect(await page.evaluate(`['plan', 'execute', 'test'].map((p) => document.querySelector('#term-auto-' + p).checked)`)).toEqual([true, true, true]);
     await page.evaluate(`document.querySelector('#term-auto-execute').click()`);
     await until(() => { try { return JSON.parse(readFileSync(settings, 'utf8')).terminals.auto.join() === 'plan,test'; } catch { return false; } }, 'settings.json');
