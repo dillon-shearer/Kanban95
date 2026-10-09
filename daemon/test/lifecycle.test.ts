@@ -127,7 +127,6 @@ if (brief.startsWith('# Test') && model !== 'hang') {
   const passed = model === 'pass';
   const tested = execFileSync('git', ['log', '-1', '--format=%s'], { encoding: 'utf8' }).trim();
   await call('report_test', { passed, summary: (passed ? 'every criterion passes' : 'criterion 1 fails') + ' (tested: ' + tested + ')' });
-  await call('move_ticket', { status: passed ? 'done' : 'in_progress' });
 } else if (model === 'silent') {
   process.exit(0);
 } else if (model !== 'hang') {
@@ -283,6 +282,8 @@ describe('lifecycle', { timeout: 60_000 }, () => {
     await until(() => t(id).flags.needs_human && sessionsOf(id).length === 0, 'the retry cap');
     await new Promise((r) => setTimeout(r, 500));
     expect(runs(id).map((x) => x.phase)).toEqual(['execute', 'test', 'execute', 'test', 'execute', 'test', 'execute', 'test']);
+    // The fake tester only calls report_test(false): the report alone ends each test run and sends the ticket back.
+    expect(runs(id).filter((x) => x.phase === 'test').map((x) => x.outcome)).toEqual(['fail', 'fail', 'fail', 'fail']);
     expect(t(id)).toMatchObject({ status: 'in_progress', retry: MAX_RETRY + 1, flags: { needs_human: true } });
     expect(sounds).toEqual([{ sound: 'chord', ticket: id }]);
     expect(notes(id, 'failure').at(-1)).toMatch(/^stopped after 4 failed tests\nTo resolve: .*Reset to Backlog and Launch/);

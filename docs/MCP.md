@@ -72,7 +72,7 @@ Change the model and/or effort a ticket runs with; give either or both. Lower ef
 
 ### move_ticket
 
-Move a ticket to another column. A worker moves its ticket to testing when the work is committed in the worktree and ready to be checked. A tester moves it to done after report_test with passed true (the board then merges the branch), or back to in_progress after report_test with the failure so the worker retries. Once the move is accepted your session is over: the board ends it and starts the next agent. An operator grant may move any ticket the same ways, which ends that ticket's agent, not its own session, and may launch a backlog ticket by moving it to in_progress; it still cannot finish a ticket the tester has not passed. Returns the ticket.
+Move a ticket to another column. A worker moves its ticket to testing when the work is committed in the worktree and ready to be checked. A tester does not need it: report_test moves the ticket (to done or back to in_progress) and ends the session. A move to the column the ticket is already in returns the ticket unchanged. Once the move is accepted your session is over: the board ends it and starts the next agent. An operator grant may move any ticket the same ways, which ends that ticket's agent, not its own session, and may launch a backlog ticket by moving it to in_progress; it still cannot finish a ticket the tester has not passed. Returns the ticket.
 
 | argument | type | required | description |
 |---|---|---|---|
@@ -155,7 +155,7 @@ Ask the human operator a question you cannot resolve from the ticket, the brain 
 
 ### report_test
 
-Record the structured result of testing a ticket against its acceptance criteria. passed is the overall verdict; summary says which criteria passed or failed and why; evidence lists what proves it (test output, screenshot paths kept as run evidence, commands run). Call this before move_ticket. A failed report becomes the failure note the worker sees on retry.
+Record the structured result of testing a ticket against its acceptance criteria. passed is the overall verdict; summary says which criteria passed or failed and why; evidence lists what proves it (test output, screenshot paths kept as run evidence, commands run). The report is the verdict: it moves the ticket to done (the board merges the branch) or back to in_progress (the worker retries, and a failed report becomes the failure note it sees), and ends your session. No move_ticket is needed. Returns the note id and the ticket.
 
 | argument | type | required | description |
 |---|---|---|---|

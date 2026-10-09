@@ -4,7 +4,7 @@ import { existsSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { until } from './cdp.ts';
-import { srv, db, page, base, ticket, statusBar } from './ui.ts';
+import { srv, db, page, base, repo, ticket, statusBar } from './ui.ts';
 
 describe('ui-settings', { timeout: 60_000 }, () => {
   it('saves preferences from Settings > Prompts and shows a refusal over 16 KB', async () => {
@@ -22,6 +22,38 @@ describe('ui-settings', { timeout: 60_000 }, () => {
     await until(async () => (await statusBar()).includes('over 16 KB'), 'the refusal in the status bar');
     expect(readFileSync(file, 'utf8')).toBe('no em dashes');
     rmSync(file);
+  });
+
+  it('shows, saves, refuses and resets a template from Settings > Prompts', async () => {
+    const file = join(repo, '.kanban95', 'templates', 'test.md');
+    const shipped = readFileSync(join(import.meta.dirname, '../../templates/test.md'), 'utf8');
+    const click = (label: string) => page.evaluate(`[...document.querySelectorAll('[data-win="settings"] button')].filter((b) => b.textContent === '${label}').at(-1).click()`);
+    const text = () => page.evaluate<string>(`document.querySelector('#template-text').value`);
+    await page.goto(base);
+    await until(() => page.evaluate(`!!document.querySelector('[data-win="board"]')`), 'the board');
+    // Settings opens on Models; hold its /api/models answer until Prompts has drawn, so that late draw must not replace the editor.
+    await page.evaluate(`(() => { const f = window.fetch; window.fetch = (u, o) => String(u).endsWith('/api/models')
+      ? new Promise((r) => { window.releaseModels = () => { const p = f(u, o); r(p); return p.then((x) => x.clone().text()); }; }) : f(u, o); })()`);
+    await page.evaluate(`document.querySelector('[data-icon="Settings"]').dispatchEvent(new MouseEvent('dblclick'))`);
+    await page.evaluate(`[...document.querySelectorAll('[data-win="settings"] [role=tab] a')].find((t) => t.textContent === 'Prompts').click()`);
+    await until(() => page.evaluate(`!!document.querySelector('#template-text')`), 'the template editor');
+    await page.evaluate(`window.releaseModels().then(() => new Promise((r) => setTimeout(r, 100)))`);
+    expect(await page.evaluate(`!!document.querySelector('#template-text')`)).toBe(true);
+    expect(await page.evaluate<string>(`document.querySelector('#template-vars').textContent`)).toContain('{{ticket}}');
+    await page.evaluate(`(() => { const s = document.querySelector('#template'); s.value = 'test'; s.dispatchEvent(new Event('change')); })()`);
+    expect(await text()).toBe(shipped);
+
+    await page.evaluate(`document.querySelector('#template-text').value = 'mine {{ticket}}'`);
+    await click('Save');
+    await until(() => readFileSync(file, 'utf8') === 'mine {{ticket}}', 'test.md saved');
+    await page.evaluate(`document.querySelector('#template-text').value = 'bad {{nope}}'`);
+    await click('Save');
+    await until(async () => (await statusBar()).includes('{{nope}}'), 'the refusal in the status bar');
+    expect(readFileSync(file, 'utf8')).toBe('mine {{ticket}}');
+
+    await click('Reset to default');
+    await until(async () => (await text()) === shipped, 'the default in the editor');
+    expect(readFileSync(file, 'utf8')).toBe(shipped);
   });
 
   it('Settings > General sets the runner concurrency; the status line shows the limit and who waits on shared files', async () => {
