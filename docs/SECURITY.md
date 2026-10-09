@@ -30,6 +30,7 @@ Every REST mutation and every MCP tool call writes one `audit` row: grant id (nu
 - Ticket attachments (`.kanban95/attachments/`, `docs/DATA.md`) are operator uploads behind the same cookie. A name with a path separator or `..` is refused, never cleaned into another path, and the stored name is a sanitised basename. Only raster images (PNG, JPEG, GIF, WebP, BMP) are served inline; everything else, SVG and HTML included, is served as an `application/octet-stream` download, so an attached file cannot run script on the board's origin.
 - REST (`/api/*`) and the `/events` and `/pty/<key>` websockets need the shell secret (below). MCP (`/mcp`) requires a bearer grant: see MCP. Static UI files, `/health` and `/voice-model/*` (only the files the pinned speech-model manifest lists) are open: they are public code and say nothing about the board.
 - Request bodies over 1 MiB are refused.
+- The UI stores nothing in the browser (no `localStorage`, `sessionStorage` or IndexedDB): its state (window places, startup layout, folded columns, the Board's filter, sort and group) is `<repo>/.kanban95/ui.json` behind the same cookie (`docs/DATA.md`). A new start is a new origin, and the WebView2 profile is not a place for board data.
 
 ### Shell secret
 
@@ -98,6 +99,8 @@ In an agent CLI's config, one file, only for Claude Code launches: `~/.claude.js
 - merged: every other key in the file is preserved; the first write copies the original to `~/.claude.json.kanban95.bak` (same mode); the new content is written to an owner-only (0600) temp file and renamed over the original;
 - audited: `trust.write` with the file and the key, attributed to the launching ticket;
 - removable from Settings → CLIs (`trust.clear`), which deletes only that key, by the same write path.
+
+To resume a killed Claude Code session the board only checks that `<uuid>.jsonl` exists under `~/.claude/projects/*/` (or `$CLAUDE_CONFIG_DIR/projects/*/`): it lists those dirs and never opens a transcript (`docs/CLIS.md` → Resuming a killed session).
 
 Codex is trusted per process with `-c`, so `~/.codex/config.toml` is never written. Claude Code's one-time bypass-permissions warning (`skipDangerousModePermissionPrompt` in `~/.claude/settings.json`) is not written by the board: the operator accepts it once by hand.
 

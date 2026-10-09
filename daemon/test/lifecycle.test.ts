@@ -9,7 +9,7 @@ import WebSocket from 'ws';
 import { readTicket } from '../src/api.ts';
 import { createWorktree } from '../src/git.ts';
 import { mint } from '../src/grants.ts';
-import { sessions, sessionsOf } from '../src/launcher.ts';
+import { RESUME_MESSAGE, sessions, sessionsOf } from '../src/launcher.ts';
 import { DIRTY_WAIT, events, MAX_RETRY, Refused, RESTART_NOTE, RESTARTED, TABLE, TO_RESOLVE, transition, type Event, type Facts, type Status } from '../src/lifecycle.ts';
 import { start } from '../src/server.ts';
 
@@ -100,6 +100,8 @@ describe('transition table', () => {
 
 // Fake `claude` first on PATH: a scripted agent that talks to /mcp like the real CLI and stays up until the board ends it.
 // The brief's heading says which phase it is in; the model name says how it behaves (see `behave` below).
+// Like Claude Code it keeps a transcript per --session-id under ~/.claude/projects. Started with --resume it records its argv
+// and bearer in resumed.json in the worktree and stays up.
 const bin = mkdtempSync(join(tmpdir(), 'k95-bin-'));
 const FAKE = `
 import { execFileSync, spawn } from 'node:child_process';
@@ -108,7 +110,17 @@ import { basename, dirname } from 'node:path';
 const argv = process.argv.slice(2);
 const model = argv[argv.indexOf('--model') + 1];
 const mcp = JSON.parse(readFileSync(argv[argv.indexOf('--mcp-config') + 1], 'utf8')).mcpServers.kanban95;
-const brief = readFileSync(/^Read (\\S+) in full/.exec(argv.at(-1))[1], 'utf8');
+if (argv.includes('--session-id')) {
+  const project = process.env.USERPROFILE + '/.claude/projects/' + process.cwd().replace(/[^A-Za-z0-9]/g, '-');
+  mkdirSync(project, { recursive: true });
+  writeFileSync(project + '/' + argv[argv.indexOf('--session-id') + 1] + '.jsonl', '{}\\n');
+}
+if (argv.includes('--resume')) {
+  writeFileSync('resumed.json', JSON.stringify({ argv, auth: mcp.headers.Authorization }));
+  console.log('FAKE RESUMED');
+  await new Promise(() => process.stdin.resume());
+}
+const brief = argv.includes('--resume') ? '' : readFileSync(/^Read (\\S+) in full/.exec(argv.at(-1))[1], 'utf8');
 const name = basename(process.cwd());
 let n = 0;
 async function call(tool, args = {}) {
@@ -187,8 +199,8 @@ const ticket = (title: string, cols: Record<string, unknown> = {}) => {
   return Number(r.lastInsertRowid);
 };
 const t = (id: number) => readTicket(db, id);
-const runs = (id: number) => db.prepare('SELECT phase, model, outcome, prompt_rendered, started_at FROM runs WHERE ticket_id = ? ORDER BY id').all(id) as
-  { phase: string; model: string; outcome: string | null; prompt_rendered: string; started_at: string }[];
+const runs = (id: number) => db.prepare('SELECT phase, model, outcome, prompt_rendered, started_at, session_id FROM runs WHERE ticket_id = ? ORDER BY id').all(id) as
+  { phase: string; model: string; outcome: string | null; prompt_rendered: string; started_at: string; session_id: string | null }[];
 const notes = (id: number, kind: string) => (db.prepare('SELECT body FROM notes WHERE ticket_id = ? AND kind = ? ORDER BY id').all(id, kind) as { body: string }[]).map((r) => r.body);
 const send = (method: string) => (path: string, body?: unknown) =>
   fetch(`http://127.0.0.1:${srv.port}${path}`, { method, headers: { 'content-type': 'application/json', cookie: `k95=${srv.secret}` }, body: body === undefined ? undefined : JSON.stringify(body) });
@@ -906,6 +918,84 @@ describe('resume', { timeout: 60_000 }, () => {
     expect(t(id).flags.needs_human).toBe(false);
     expect(runs(id)).toHaveLength(2);
     expect(runs(id)[1].prompt_rendered).toContain(RESTARTED);
+  });
+
+  // The fake keeps a transcript per --session-id; resumed.json is what a session started with --resume saw.
+  const resumed = (id: number) => join(repo, '.worktrees', `t-${id}`, 'resumed.json');
+  const launchedClaude = async (id: number) => {
+    expect((await post(`/api/tickets/${id}/launch`)).status).toBe(200);
+    const [s] = sessionsOf(id);
+    await until(() => s.scrollback().includes('FAKE'), 'the agent');
+    return s;
+  };
+  const transcript = (sessionId: string) => readdirSync(join(process.env.USERPROFILE!, '.claude', 'projects'), { recursive: true, encoding: 'utf8' })
+    .find((f) => f.endsWith(`${sessionId}.jsonl`));
+
+  it('a Claude launch carries --session-id and stores the id on its run', async () => {
+    models({ execute: 'hang' });
+    const id = ticket('Named session');
+    await launchedClaude(id);
+    const [run] = runs(id);
+    expect(run.session_id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+    expect(transcript(run.session_id!)).toBeDefined(); // the fake got it as --session-id
+  });
+
+  it('after Restart board, recovery continues the killed conversation with --resume <stored id> and a new grant', async () => {
+    models({ execute: 'hang' });
+    const id = ticket('Resume me');
+    const old = await launchedClaude(id);
+    const sessionId = runs(id)[0].session_id!;
+    await srv.close();
+    srv = await start({ repo });
+    db = srv.db;
+    await until(() => existsSync(resumed(id)), 'the resumed session');
+    const seen = JSON.parse(readFileSync(resumed(id), 'utf8')) as { argv: string[]; auth: string };
+    expect(seen.argv.slice(seen.argv.indexOf('--resume'), seen.argv.indexOf('--resume') + 2)).toEqual(['--resume', sessionId]);
+    expect(seen.argv).not.toContain('--session-id');
+    expect(seen.argv.at(-1)).toBe(RESUME_MESSAGE);
+    expect(runs(id).map((r) => r.session_id)).toEqual([sessionId, sessionId]);
+    const [now] = sessionsOf(id);
+    expect(now.grantId).not.toBe(old.grantId);
+    expect(seen.auth).toMatch(/^Bearer [\w-]{43}$/);
+    const grant = (g: number) => db.prepare('SELECT revoked_at FROM grants WHERE id = ?').get(g) as { revoked_at: string | null };
+    expect(grant(old.grantId).revoked_at).not.toBeNull();
+    expect(grant(now.grantId).revoked_at).toBeNull();
+    expect(t(id).flags.needs_human).toBe(false);
+  });
+
+  it('Resume of a flagged ticket continues the conversation; Restart starts a fresh one', async () => {
+    models({ execute: 'hang' });
+    const id = ticket('Crashed');
+    const old = await launchedClaude(id);
+    const sessionId = runs(id)[0].session_id!;
+    old.pty.kill(); // the agent died: exit flags the ticket
+    await until(() => t(id).flags.needs_human, 'the flag');
+    expect((await post(`/api/tickets/${id}/resume`)).status).toBe(200);
+    await until(() => existsSync(resumed(id)), 'the resumed session');
+    expect(JSON.parse(readFileSync(resumed(id), 'utf8')).argv).toEqual(expect.arrayContaining(['--resume', sessionId]));
+    expect(runs(id)[1].session_id).toBe(sessionId);
+    rmSync(resumed(id));
+    expect((await post(`/api/tickets/${id}/restart`)).status).toBe(200);
+    await until(() => runs(id).length === 3 && sessionsOf(id).length === 1, 'the restarted agent');
+    expect(runs(id)[2].session_id).not.toBe(sessionId);
+    expect(existsSync(resumed(id))).toBe(false);
+  });
+
+  it('a missing transcript falls back to a fresh session with the brief', async () => {
+    models({ execute: 'hang' });
+    const id = ticket('Transcript gone');
+    await launchedClaude(id);
+    const sessionId = runs(id)[0].session_id!;
+    await srv.close();
+    rmSync(join(process.env.USERPROFILE!, '.claude', 'projects', transcript(sessionId)!));
+    srv = await start({ repo });
+    db = srv.db;
+    await until(() => sessionsOf(id).length, 'the fresh agent');
+    const [, fresh] = runs(id);
+    expect(fresh.session_id).not.toBe(sessionId);
+    await until(() => transcript(fresh.session_id!), 'the fresh session id passed as --session-id');
+    expect(existsSync(resumed(id))).toBe(false);
+    expect(fresh.prompt_rendered).toContain(RESTARTED);
   });
 
   it('restart resumes a running ticket once by itself; an agent that then exits silently flags it with what to do', async () => {

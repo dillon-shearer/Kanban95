@@ -26,11 +26,13 @@ A Claude Code worker or tester also gets `CLAUDE_CODE_PROMPT_CACHE_TTL=5m` in it
 ## Claude Code
 
 ```
-claude --mcp-config <session>/mcp.json --strict-mcp-config --model <model> --effort <effort> [planner: --disallowedTools Edit Write NotebookEdit Bash PowerShell Agent] [worker, tester: --setting-sources project,local --settings <session>/settings.json --disable-slash-commands] --dangerously-skip-permissions "<initial message>"
+claude --mcp-config <session>/mcp.json --strict-mcp-config [ticket: --session-id <uuid> | --resume <uuid>] --model <model> --effort <effort> [planner: --disallowedTools Edit Write NotebookEdit Bash PowerShell Agent] [worker, tester: --setting-sources project,local --settings <session>/settings.json --disable-slash-commands] --dangerously-skip-permissions "<initial message>"
 ```
 
 | Need | Flag | Notes |
 |---|---|---|
+| session id | `--session-id <uuid>` | ticket runs only: a fresh UUID per run, stored on `runs.session_id` so the conversation can be continued. Must be a valid UUID |
+| continue | `--resume <uuid>` | instead of `--session-id`, when a killed session is resumed (Resuming a killed session); keeps the same id |
 | model | `--model <model>` | alias or full name, taken from the board's model config |
 | effort | `--effort <level>` | accepts `low medium high xhigh max`; the board uses `low medium high max` unchanged |
 | MCP | `--mcp-config <file>` | variadic, so it comes first and a boolean flag separates it from the message |
@@ -81,7 +83,17 @@ Codex has no equivalent of `--strict-mcp-config`; MCP servers from the operator'
 
 ## Resuming a killed session
 
-Both CLIs can continue an earlier conversation: Claude Code with `--resume <session-id>` (and `--session-id <uuid>` to choose the id at launch), Codex with `codex resume <SESSION_ID>` (or `--last`, the newest session in the working directory). The board does not use either yet: Resume and the restart recovery start a fresh session with the ticket's failure notes in the brief, in the same worktree, so committed and uncommitted work is kept but the conversation is not. The upgrade path: pass `--session-id` at launch and keep it on the `runs` row, then `--resume <id>` with a fresh `mcp.json` on Resume; for Codex, record the session id Codex prints and use `codex resume <id>`. Checked against `claude --help` and `codex resume --help` on 2026-10-08.
+Every Claude Code ticket run starts with `--session-id <uuid>`, a fresh UUID the board stores on `runs.session_id`. Resume, Launch on a running ticket with no agent, and the recovery after a daemon restart (docs/LIFECYCLE.md → Resume) look at the ticket's latest run. When it was Claude Code in the same phase, ended without reporting (`exit`, `lost`, `closed`), and Claude Code still has its transcript, the new run starts
+
+```
+claude --mcp-config <new session>/mcp.json --strict-mcp-config --resume <uuid> --model ... "The board restarted this session after it ended without reporting. Your board tools work again under a new grant; carry on where you left off."
+```
+
+in the same worktree: a new grant, so a new bearer in a new `mcp.json`, and the rest of the argv as for a fresh launch with the current model settings. The conversation, with the brief it already read and the work it already did, continues; `prompt.md` is still written but not pointed at. The transcript is `<config>/projects/<cwd, every non-alphanumeric character as ->/<uuid>.jsonl`, where `<config>` is `$CLAUDE_CONFIG_DIR` or `~/.claude`; the board looks for `<uuid>.jsonl` in every project dir rather than copying that mangling (`hasTranscript` in `daemon/src/launcher.ts`, read-only). No transcript, or any other case, starts a fresh session with the failure notes in the brief, as before.
+
+Codex can continue a conversation too (`codex resume <SESSION_ID>`, or `--last`, the newest session in the working directory), but the board does not use it: a Codex run always starts fresh (`// ponytail:` in `launch`). The upgrade path: record the session id Codex prints and launch `codex resume <id>`.
+
+`--session-id <uuid>` ("must be a valid UUID") and `-r, --resume [value]` checked against `claude --help` of Claude Code 2.1.295 on 2026-10-08; `codex resume --help` on 2026-10-08.
 
 ## Model lists
 

@@ -7,7 +7,8 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { BRAIN_TRUNCATED, brainFor, buildContext, gitDiff, startRun } from '../src/context.ts';
 import { openDb } from '../src/db.ts';
 import { preferencesPath } from '../src/settings.ts';
-import { DEFAULTS_DIR, initTemplates, render, TEMPLATES, VARS, type Ctx, type TemplateName } from '../src/templates.ts';
+import { createHash } from 'node:crypto';
+import { DEFAULTS_DIR, initTemplates, isStale, render, resetTemplate, shippedPath, TEMPLATES, VARS, type Ctx, type TemplateName } from '../src/templates.ts';
 
 let repo: string;
 let db: DatabaseSync;
@@ -34,6 +35,42 @@ describe('templates', () => {
     expect(readFileSync(tpl('execute'), 'utf8')).toBe('mine {{ticket}}');
     writeFileSync(tpl('execute'), 'edited {{retry}}');
     expect(render(repo, 'execute', ctx)).toBe('edited <retry>');
+  });
+
+  it('records the default sha256 on copy and reset; on start an unedited copy follows a changed default, an edited or unrecorded one never does', () => {
+    const sha = (t: string) => createHash('sha256').update(t).digest('hex');
+    const record = () => JSON.parse(readFileSync(shippedPath(repo), 'utf8'));
+    const def = (n: string) => readFileSync(join(DEFAULTS_DIR, `${n}.md`), 'utf8');
+    for (const n of Object.keys(TEMPLATES)) expect(record()[n]).toBe(sha(def(n)));
+
+    // test.md was copied from an older default (its hash recorded); execute.md was edited after its copy; plan.md predates the record.
+    const old = 'older default {{ticket}}';
+    writeFileSync(tpl('test'), old);
+    writeFileSync(tpl('execute'), 'edited {{ticket}}');
+    writeFileSync(tpl('plan'), 'pre-record {{ticket}}');
+    const { plan: _, ...rest } = record();
+    writeFileSync(shippedPath(repo), JSON.stringify({ ...rest, test: sha(old) }));
+    initTemplates(repo);
+    expect(readFileSync(tpl('test'), 'utf8')).toBe(def('test'));
+    expect(record().test).toBe(sha(def('test')));
+    expect(readFileSync(tpl('execute'), 'utf8')).toBe('edited {{ticket}}');
+    expect(readFileSync(tpl('plan'), 'utf8')).toBe('pre-record {{ticket}}');
+    expect(record().plan).toBeUndefined();
+    expect(isStale('execute', readFileSync(tpl('execute'), 'utf8'))).toBe(true);
+    expect(isStale('plan', readFileSync(tpl('plan'), 'utf8'))).toBe(true);
+    expect(isStale('test', readFileSync(tpl('test'), 'utf8'))).toBe(false);
+
+    resetTemplate(repo, 'plan');
+    expect(readFileSync(tpl('plan'), 'utf8')).toBe(def('plan'));
+    expect(record().plan).toBe(sha(def('plan')));
+  });
+
+  it('a corrupt record protects every copy and is rewritten', () => {
+    writeFileSync(tpl('test'), 'mine {{ticket}}');
+    writeFileSync(shippedPath(repo), '{not json');
+    initTemplates(repo);
+    expect(readFileSync(tpl('test'), 'utf8')).toBe('mine {{ticket}}');
+    expect(JSON.parse(readFileSync(shippedPath(repo), 'utf8')).test).toBeUndefined();
   });
 
   it('refuses an unknown variable by name and template, even when ctx would supply it', () => {

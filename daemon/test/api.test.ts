@@ -320,10 +320,11 @@ describe('prompt templates', () => {
     const all = await (await call('GET', '/api/templates')).json();
     expect(all.vars).toContain('ticket');
     expect(all.templates.map((t: { name: string }) => t.name)).toEqual(expect.arrayContaining(['brainstorm', 'plan', 'execute', 'housekeeping', 'test']));
-    expect(all.templates.find((t: { name: string }) => t.name === 'test')).toEqual({ name: 'test', path: file('test'), text: shipped('test') });
+    expect(all.templates.find((t: { name: string }) => t.name === 'test')).toEqual({ name: 'test', path: file('test'), text: shipped('test'), stale: false });
 
     const saved = await call('PUT', '/api/templates/execute', { text: 'mine {{ ticket }}' });
     expect(saved.status).toBe(200);
+    expect((await saved.json()).stale).toBe(true);
     expect(readFileSync(file('execute'), 'utf8')).toBe('mine {{ ticket }}');
 
     const bad = await call('PUT', '/api/templates/execute', { text: '{{ticket}} {{nope}}' });
@@ -336,7 +337,7 @@ describe('prompt templates', () => {
 
     const reset = await call('POST', '/api/templates/execute/reset');
     expect(reset.status).toBe(200);
-    expect((await reset.json()).text).toBe(shipped('execute'));
+    expect(await reset.json()).toMatchObject({ text: shipped('execute'), stale: false });
     expect(readFileSync(file('execute'), 'utf8')).toBe(shipped('execute'));
   });
 });
@@ -352,5 +353,23 @@ describe('notepad', () => {
     expect((await big.json()).error).toMatch(/256 KB/);
     expect(readFileSync(file, 'utf8')).toBe('x'.repeat(256 * 1024));
     expect((await call('PUT', '/api/notepad', { value: null })).status).toBe(400);
+  });
+});
+
+describe('ui state', () => {
+  it('reads {} when absent, replaces the whole object, refuses a non-object or over 64 KB with 400 without touching the file', async () => {
+    const file = join(repo, '.kanban95', 'ui.json');
+    expect(await (await call('GET', '/api/ui')).json()).toEqual({});
+    const state = { 'k95.win.board': { x: 1, y: 2, w: 300, h: 200 }, 'k95.collapsed': ['done'] };
+    expect((await call('PUT', '/api/ui', state)).status).toBe(200);
+    expect((await call('PUT', '/api/ui', { 'k95.layout': [] })).status).toBe(200);
+    expect(await (await call('GET', '/api/ui')).json()).toEqual({ 'k95.layout': [] });
+    // `{"k":"…"}` is 8 bytes around the value: this one is exactly 64 KB, one more byte is over.
+    expect((await call('PUT', '/api/ui', { k: 'x'.repeat(64 * 1024 - 8) })).status).toBe(200);
+    for (const bad of [{ k: 'x'.repeat(64 * 1024 - 7) }, [1, 2], 'text', null]) {
+      const r = await call('PUT', '/api/ui', bad);
+      expect(r.status, JSON.stringify(bad).slice(0, 20)).toBe(400);
+    }
+    expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({ k: 'x'.repeat(64 * 1024 - 8) });
   });
 });

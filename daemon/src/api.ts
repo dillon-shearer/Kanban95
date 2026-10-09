@@ -11,7 +11,7 @@ import { audit, revoke } from './grants.js';
 import { killGrantSession, sessions, sessionsOf, type Session } from './launcher.js';
 import { apply, brainstorm, changed, housekeeping, operator, pushBase, Refused, runner, runnerState, setRunner, type Board } from './lifecycle.js';
 import { BadConfig, CONFIGS, configPath, knownModels, preferencesPath, project, projectsPath, readPreferences, readProjects, uncatalogued, writeConfig, writePreferences, writeProjects, type ConfigName } from './settings.js';
-import { resetTemplate, templatePath, TEMPLATES, unknownVar, VARS, writeTemplate, type TemplateName } from './templates.js';
+import { isStale, resetTemplate, templatePath, TEMPLATES, unknownVar, VARS, writeTemplate, type TemplateName } from './templates.js';
 import { trustStatus, untrustClaude } from './trust.js';
 import { download, status as voiceStatus } from './voice.js';
 import { limits } from './limits.js';
@@ -175,6 +175,8 @@ function ftsQuery(q: string): string {
 const NOTEPAD_MAX = 256 * 1024;
 const BUILD_TIMEOUT = 120_000;
 const notepadPath = (board: Board) => join(board.repo, '.kanban95', 'notepad.md');
+const UI_MAX = 64 * 1024;
+const uiPath = (board: Board) => join(board.repo, '.kanban95', 'ui.json');
 
 const UPLOAD = /^\/api\/tickets\/(\d+)\/attachments$/;
 const ATTACHMENT = /^\/api\/tickets\/(\d+)\/attachments\/([^/]+)$/;
@@ -399,6 +401,24 @@ const routes: [method: string, path: RegExp, mutation: string | null, handler: (
     renameSync(`${file}.tmp`, file);
     return { status: 200, body: { value: body.value } };
   }],
+  // <repo>/.kanban95/ui.json, the UI's window places, startup layout and folded columns (ui/state.js): one object, {} when absent.
+  // Not audited, as the notepad: it is written after every drag.
+  ['GET', /^\/api\/ui$/, null, ({ board }) => {
+    try {
+      return { status: 200, body: JSON.parse(readFileSync(uiPath(board), 'utf8')) };
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code === 'ENOENT' || e instanceof SyntaxError) return { status: 200, body: {} };
+      throw e;
+    }
+  }],
+  ['PUT', /^\/api\/ui$/, null, ({ board, body }) => {
+    const text = JSON.stringify(body);
+    if (Buffer.byteLength(text) > UI_MAX) throw new HttpError(400, `UI state over ${UI_MAX / 1024} KB`);
+    const file = uiPath(board);
+    writeFileSync(`${file}.tmp`, text);
+    renameSync(`${file}.tmp`, file);
+    return { status: 200, body };
+  }],
   // ~/.kanban95/preferences.md, plain text in `value` both ways ('' when absent). Matched before the JSON config routes.
   ['GET', /^\/api\/config\/preferences$/, null, () => ({ status: 200, body: { path: preferencesPath(), value: readPreferences() } })],
   ['PUT', /^\/api\/config\/preferences$/, 'config.write', ({ body }) => ({ status: 200, body: { path: preferencesPath(), value: writePreferences(body.value) } })],
@@ -489,7 +509,10 @@ function templateName(s: string): TemplateName {
 }
 
 // The raw file, not loadTemplate: a copy with a bad variable must still show so the operator can fix it.
-const templateView = (board: Board, name: TemplateName) => ({ name, path: templatePath(board.repo, name), text: readFileSync(templatePath(board.repo, name), 'utf8') });
+const templateView = (board: Board, name: TemplateName) => {
+  const text = readFileSync(templatePath(board.repo, name), 'utf8');
+  return { name, path: templatePath(board.repo, name), text, stale: isStale(name, text) };
+};
 
 /** The whole body. One over `max` bytes is still read to the end (so the client gets the 413, not a reset), then refused. */
 async function readRaw(req: IncomingMessage, max: number, tooLarge: string): Promise<Buffer> {

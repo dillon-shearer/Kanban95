@@ -212,11 +212,14 @@ export function apply(b: Board, id: number, event: Event, x: { note?: Note; answ
     return Number(r.lastInsertRowid);
   });
 
+  // Resume, and Launch on a running ticket whose agent is gone (as recover does after a restart), continue the killed
+  // conversation when they can; every other spawn (a retry, a Restart) starts a fresh one.
+  const resume = (event === 'resume' || event === 'launch') && t.status !== 'backlog';
   const pending: Promise<void>[] = [];
   for (const e of effects) {
     switch (e) {
-      case 'spawn_execute': if (!hold) spawn(b, id, t.template as 'execute' | 'housekeeping'); break;
-      case 'spawn_test': spawn(b, id, 'test'); break;
+      case 'spawn_execute': if (!hold) spawn(b, id, t.template as 'execute' | 'housekeeping', resume); break;
+      case 'spawn_test': spawn(b, id, 'test', resume); break;
       case 'end_session':
         // The agent reported; its session is over. The grant expires now, the pty is killed, its exit is expected.
         for (const s of sessionsOf(id)) {
@@ -256,11 +259,11 @@ const held = new Set<number>();
 const oneLine = (s: string) => s.replace(/\s*[\r\n]+\s*/g, ' ').trim();
 
 /** Launches the phase's agent. A launch that fails is an agent that exited without reporting: the ticket is flagged. */
-function spawn(b: Board, id: number, template: 'execute' | 'housekeeping' | 'test') {
+function spawn(b: Board, id: number, template: 'execute' | 'housekeeping' | 'test', resume = false) {
   try {
     if (b.closing) throw new Error('the daemon is shutting down');
     const settings = runSettings(readTicket(b.db, id), template === 'test' ? 'test' : 'execute');
-    launch({ ...b, onExit: (s) => exited(b, s) }, { ticketId: id, template, ...settings });
+    launch({ ...b, onExit: (s) => exited(b, s) }, { ticketId: id, template, resume, ...settings });
   } catch (e) {
     apply(b, id, 'exit', { note: { role: TEMPLATES[template].role, kind: 'failure', body: `launch failed: ${(e as Error).message}` } });
   }
@@ -547,7 +550,8 @@ export const RESTARTED = 'agent exited without reporting (the daemon restarted)'
 
 /**
  * Daemon start: no agent survives a restart. The agent did nothing wrong, so a running, unflagged ticket is resumed once: the
- * note goes into the new prompt and the agent for its phase starts again in the same worktree. If that agent then exits
+ * agent for its phase starts again in the same worktree, continuing its Claude Code conversation (launcher `resumable`) or
+ * else fresh with the note in its prompt. If that agent then exits
  * without reporting, the ordinary exit row flags it. A done ticket that never merged and is not flagged was cut off mid-queue:
  * it is queued again.
  */
