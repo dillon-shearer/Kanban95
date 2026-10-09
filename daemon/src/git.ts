@@ -16,7 +16,8 @@ function excludeWorktrees(repo: string) {
 }
 
 /**
- * Creates the ticket's worktree, or returns the existing one (retries and the test phase reuse it).
+ * Creates the ticket's worktree, or returns the existing one (retries and the test phase reuse it). A rejected ticket whose
+ * worktree was removed on merge gets a fresh one from the base, which holds its merged work.
  * Refuses when the base branch has uncommitted changes to tracked files: the ticket would silently fork without them.
  * Untracked files do not count; they are not part of any commit either way.
  */
@@ -29,9 +30,22 @@ export function createWorktree(repo: string, ticketId: number): { path: string; 
   const dirty = git(repo, 'status', '--porcelain', '--untracked-files=no');
   if (dirty) throw new Error(`base branch ${base} has uncommitted changes; commit or stash them before launching:\n${dirty}`);
   excludeWorktrees(repo);
+  git(repo, 'worktree', 'prune'); // a worktree directory deleted by hand stays registered and blocks its branch
+  // A branch left from an earlier cycle is reused when it holds work the base lacks; one already merged (a rejected ticket
+  // whose branch survived cleanup) is reset to the base, which has that work and everything since.
   const exists = git(repo, 'branch', '--list', branch) !== '';
-  git(repo, 'worktree', 'add', ...(exists ? [path, branch] : ['-b', branch, path, base]));
+  const merged = exists && isAncestor(repo, branch, base);
+  git(repo, 'worktree', 'add', ...(exists && !merged ? [path, branch] : [exists ? '-B' : '-b', branch, path, base]));
   return { path, branch, base };
+}
+
+function isAncestor(repo: string, a: string, b: string): boolean {
+  try {
+    git(repo, 'merge-base', '--is-ancestor', a, b);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**

@@ -26,7 +26,7 @@ describe('transition table', () => {
     ['restart a live ticket in progress', { status: 'in_progress', retry: 2 }, 'restart', { to: 'in_progress', set: { needs_human: 0 }, effects: ['end_session', 'note', 'spawn_execute'] }],
     ['restart a flagged ticket in testing with no agent', { status: 'testing', live: false, needs_human: true }, 'restart', { to: 'testing', set: { needs_human: 0 }, effects: ['end_session', 'note', 'spawn_test'] }],
     ['worker submits', { status: 'in_progress' }, 'submit', { to: 'testing', set: {}, effects: ['end_session', 'spawn_test'] }],
-    ['tester passes after report_test(pass)', { status: 'testing', passReported: true }, 'pass', { to: 'done', set: {}, effects: ['end_session', 'enqueue_merge'] }],
+    ['tester passes after report_test(pass)', { status: 'testing', passReported: true }, 'pass', { to: 'done', set: { merged: false }, effects: ['end_session', 'enqueue_merge'] }],
     ['first failure', { status: 'testing', retry: 0 }, 'fail', { to: 'in_progress', set: { retry: '+1' }, effects: ['end_session', 'spawn_execute'] }],
     ['third failure is the last retry', { status: 'testing', retry: MAX_RETRY - 1 }, 'fail', { to: 'in_progress', set: { retry: '+1' }, effects: ['end_session', 'spawn_execute'] }],
     ['fourth failure stops', { status: 'testing', retry: MAX_RETRY }, 'fail', { to: 'in_progress', set: { retry: '+1', needs_human: 1 }, effects: ['end_session', 'note', 'chord'] }],
@@ -41,6 +41,8 @@ describe('transition table', () => {
     ['merge conflict goes back to the worker', { status: 'done', retry: MAX_RETRY - 1 }, 'conflict', { to: 'in_progress', set: { retry: '+1' }, effects: ['end_session', 'note', 'spawn_execute'] }],
     ['merge conflict at the retry cap stops', { status: 'done', retry: MAX_RETRY }, 'conflict', { to: 'done', set: { needs_human: 1 }, effects: ['note', 'chord'] }],
     ['base still dirty after the wait', { status: 'done' }, 'dirty', { to: 'done', set: { needs_human: 1 }, effects: ['note', 'chord'] }],
+    ['operator rejects a merged ticket', { status: 'done', merged: true, retry: 2, live: false }, 'reject', { to: 'in_progress', set: { needs_human: 0, retry: 0 }, effects: ['note', 'spawn_execute'] }],
+    ['operator rejects a flagged unmerged ticket', { status: 'done', needs_human: true, live: false }, 'reject', { to: 'in_progress', set: { needs_human: 0, retry: 0 }, effects: ['note', 'spawn_execute'] }],
     ['operator retries a failed merge', { status: 'done', needs_human: true }, 'merge', { to: 'done', set: {}, effects: ['enqueue_merge'] }],
   ];
   it.each(rows)('%s', (_, facts, event, want) => {
@@ -51,9 +53,9 @@ describe('transition table', () => {
     backlog: ['launch'],
     in_progress: ['launch', 'resume', 'restart', 'submit', 'ask', 'answer', 'exit', 'conflict'],
     testing: ['launch', 'resume', 'restart', 'pass', 'fail', 'ask', 'answer', 'exit'],
-    done: ['merged', 'conflict', 'merge', 'dirty'],
+    done: ['merged', 'conflict', 'merge', 'dirty', 'reject'],
   };
-  const EVENTS: Event[] = ['launch', 'submit', 'pass', 'fail', 'ask', 'answer', 'exit', 'merged', 'conflict', 'merge', 'dirty', 'resume', 'restart'];
+  const EVENTS: Event[] = ['launch', 'submit', 'pass', 'fail', 'ask', 'answer', 'exit', 'merged', 'conflict', 'merge', 'dirty', 'resume', 'restart', 'reject'];
   it('refuses every other event in every status', () => {
     let n = 0;
     for (const status of Object.keys(allowed) as Status[]) {
@@ -62,7 +64,7 @@ describe('transition table', () => {
         n++;
       }
     }
-    expect(n).toBe(4 * EVENTS.length - 21);
+    expect(n).toBe(4 * EVENTS.length - 22);
   });
 
   it('refuses a guarded row whose guard fails, saying why', () => {
@@ -70,6 +72,7 @@ describe('transition table', () => {
     expect(() => transition(f({ status: 'testing', needs_human: false }), 'answer')).toThrow(/no flagged question/);
     expect(() => transition(f({ status: 'testing', needs_human: true, live: false }), 'answer')).toThrow(/no flagged question/);
     expect(() => transition(f({ status: 'done', merged: true }), 'merge')).toThrow('cannot merge a ticket in done: already merged');
+    expect(() => transition(f({ status: 'done', live: true }), 'reject')).toThrow('cannot reject a ticket in done: it already has a running agent');
     const busy = 'it already has a running agent; open its terminal, or Reset to Backlog to stop it';
     expect(() => transition(f({ status: 'in_progress', needs_human: true }), 'launch')).toThrow(`cannot launch a ticket in in_progress: ${busy}`);
     expect(() => transition(f({ status: 'testing', needs_human: true }), 'resume')).toThrow(`cannot resume a ticket in testing: ${busy}`);
@@ -716,5 +719,83 @@ describe('restart', { timeout: 60_000 }, () => {
     expect(r.status).toBe(409);
     expect((await r.json()).error).toContain('cannot restart a ticket in backlog');
     expect(runs(id)).toEqual([]);
+  });
+});
+
+describe('reject', { timeout: 60_000 }, () => {
+  const REASON = 'The greeting is in English only.\nDone means it also greets in French.';
+  const failed = (prompt: string) => prompt.slice(prompt.indexOf('## What failed on the last attempt'), prompt.indexOf('Retry count:'));
+
+  it('needs a non-empty reason and a done ticket; a refusal changes nothing', async () => {
+    const done = ticket('Shipped', { status: 'done' });
+    for (const body of [undefined, {}, { reason: '' }, { reason: ' \n ' }, { reason: 3 }]) {
+      const r = await post(`/api/tickets/${done}/reject`, body);
+      expect(r.status, JSON.stringify(body)).toBe(400);
+      expect((await r.json()).error).toBe('reason must be a non-empty string');
+    }
+    const running = ticket('Running', { status: 'in_progress' });
+    const r = await post(`/api/tickets/${running}/reject`, { reason: 'no' });
+    expect(r.status).toBe(409);
+    expect((await r.json()).error).toContain('cannot reject a ticket in in_progress');
+    expect([t(done).status, t(running).status]).toEqual(['done', 'in_progress']);
+    expect(runs(done)).toEqual([]);
+    expect(db.prepare("SELECT outcome FROM audit WHERE tool = 'tickets.reject'").all()).toHaveLength(6);
+    expect(db.prepare("SELECT count(*) AS n FROM notes").get()).toEqual({ n: 0 });
+  });
+
+  it('on a merged ticket: a fresh worktree holding the merged commit, retry 0, the reason in the prompt; a pass merges it again', async () => {
+    const id = ticket('Add the greeting');
+    await post(`/api/tickets/${id}/launch`);
+    await landed(id);
+    const first = git('rev-parse', 'HEAD');
+    db.prepare('UPDATE tickets SET retry = 2 WHERE id = ?').run(id); // an earlier cycle's failed tests
+    git('branch', 'ticket/1', first); // a branch left from the earlier cycle must not stop the launch
+
+    models({ test: 'hang' });
+    const r = await post(`/api/tickets/${id}/reject`, { reason: REASON });
+    expect(r.status).toBe(200);
+    expect(await r.json()).toMatchObject({ status: 'in_progress', retry: 0, flags: { needs_human: false } });
+    expect(sessionsOf(id)).toHaveLength(1);
+    const wt = join(repo, '.worktrees', `t-${id}`);
+    expect(existsSync(wt)).toBe(true);
+    execFileSync('git', ['merge-base', '--is-ancestor', first, 'HEAD'], { cwd: wt }); // throws when the merged work is missing
+    const prompt = runs(id).at(-1)!.prompt_rendered;
+    expect(runs(id).map((x) => x.phase)).toEqual(['execute', 'test', 'execute']);
+    expect(failed(prompt)).toContain(`- [operator] ${REASON.replace('\n', '\n  ')}`);
+    expect(prompt).toContain('Retry count: 0 ');
+    expect(db.prepare("SELECT outcome FROM audit WHERE tool = 'tickets.reject' AND ticket_id = ?").all(id)).toEqual([{ outcome: 'ok' }]);
+    expect(sounds.filter((s) => s.sound === 'chord')).toEqual([]);
+
+    await until(() => t(id).status === 'testing' && sessionsOf(id).length, 'the worker submitted again');
+    models({ test: 'pass' });
+    expect((await post(`/api/tickets/${id}/restart`)).status).toBe(200);
+    await until(() => t(id).merged_at && !existsSync(wt) && git('rev-parse', 'HEAD') !== first, 'the second merge');
+    expect(git('log', '--merges', '--format=%s', 'main').split('\n')).toEqual(['Add the greeting', 'Add the greeting']);
+    expect(git('rev-parse', 'HEAD^1')).toBe(first);
+    expect(t(id)).toMatchObject({ status: 'done', retry: 0, flags: { needs_human: false } });
+  });
+
+  describe('on a ticket waiting in the merge queue', () => {
+    const wait0 = { ...DIRTY_WAIT };
+    afterEach(() => Object.assign(DIRTY_WAIT, wait0));
+
+    it('stops the merge from landing and sends it back to a worker in the same worktree', async () => {
+      Object.assign(DIRTY_WAIT, { every: 50, max: 60_000 });
+      const id = ticket('Add while dirty');
+      expect((await post(`/api/tickets/${id}/launch`)).status).toBe(200);
+      writeFileSync(join(repo, 'a.txt'), 'the operator is editing\n'); // the merge waits on the main checkout
+      await until(() => t(id).status === 'done' && !sessionsOf(id).length, 'done, waiting to merge');
+      const head = git('rev-parse', 'HEAD');
+
+      models({ execute: 'hang' });
+      expect((await post(`/api/tickets/${id}/reject`, { reason: REASON })).status).toBe(200);
+      git('checkout', 'a.txt');
+      await new Promise((r) => setTimeout(r, 500)); // several queue retries, each of which would merge a done ticket
+      expect(git('rev-parse', 'HEAD')).toBe(head);
+      expect(t(id)).toMatchObject({ status: 'in_progress', merged_at: null, retry: 0, flags: { needs_human: false } });
+      expect(sessionsOf(id)).toHaveLength(1);
+      expect(failed(runs(id).at(-1)!.prompt_rendered)).toContain('[operator] The greeting is in English only.');
+      expect(existsSync(join(repo, '.worktrees', `t-${id}`))).toBe(true);
+    });
   });
 });

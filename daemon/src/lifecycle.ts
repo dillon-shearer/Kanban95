@@ -30,7 +30,8 @@ export type Event =
   | 'dirty' // the merge queue gave up waiting for the main checkout to be clean (DIRTY_WAIT)
   | 'merge' // the operator retries a merge that failed
   | 'resume' // the operator restarts the agent of a flagged running ticket whose agent is gone
-  | 'restart'; // the operator replaces a running ticket's agent, live or not, with a fresh one in the same phase
+  | 'restart' // the operator replaces a running ticket's agent, live or not, with a fresh one in the same phase
+  | 'reject'; // the operator sends a done ticket, merged or not, back to a worker with a reason
 type Effect =
   | 'spawn_execute' | 'spawn_test' | 'end_session' | 'enqueue_merge' | 'note' | 'answer_pty'
   | 'chord' | 'ding' | 'remove_worktree' | 'release_dependents' | 'housekeeping';
@@ -53,7 +54,7 @@ interface Row {
   why?: string | ((f: Facts) => string);
   /** Omitted: the status does not change. */
   to?: Status;
-  set?: { needs_human?: 0 | 1; blocked_on_deps?: 0 | 1; retry?: '+1'; merged?: true };
+  set?: { needs_human?: 0 | 1; blocked_on_deps?: 0 | 1; retry?: '+1' | 0; merged?: boolean };
   effects: Effect[];
   /** The note this row writes when the event brings none of its own. */
   says?: string;
@@ -83,7 +84,8 @@ export const TABLE: Row[] = [
   { from: ['in_progress'], event: 'restart', set: { needs_human: 0 }, effects: ['end_session', 'note', 'spawn_execute'] },
   { from: ['testing'], event: 'restart', set: { needs_human: 0 }, effects: ['end_session', 'note', 'spawn_test'] },
   { from: ['in_progress'], event: 'submit', to: 'testing', effects: ['end_session', 'spawn_test'] },
-  { from: ['testing'], event: 'pass', when: (f) => f.passReported, why: 'call report_test with passed: true first', to: 'done', effects: ['end_session', 'enqueue_merge'] },
+  // merged: false clears the merged_at an earlier cycle left (a rejected ticket), so the queue merges this pass again.
+  { from: ['testing'], event: 'pass', when: (f) => f.passReported, why: 'call report_test with passed: true first', to: 'done', set: { merged: false }, effects: ['end_session', 'enqueue_merge'] },
   { from: ['testing'], event: 'fail', when: (f) => f.retry < MAX_RETRY, to: 'in_progress', set: { retry: '+1' }, effects: ['end_session', 'spawn_execute'] },
   { from: ['testing'], event: 'fail', when: (f) => f.retry >= MAX_RETRY, to: 'in_progress', set: { retry: '+1', needs_human: 1 }, effects: ['end_session', 'note', 'chord'],
     says: `stopped after ${MAX_RETRY + 1} failed tests`,
@@ -101,6 +103,9 @@ export const TABLE: Row[] = [
     resolve: (id) => `in .worktrees/t-${id} run git merge with the base branch, fix the conflicting files keeping both sides' intent, run the tests, commit, then Retry merge.` },
   { from: ['done'], event: 'dirty', set: { needs_human: 1 }, effects: ['note', 'chord'],
     resolve: (_, repo) => `commit or stash those changes in the main checkout (${repo}), then Retry merge. While the board runs, work in a worktree, never in the main checkout.` },
+  // A rejection is a new cycle, not a failed test. Unmerged, the queue drops it (status is no longer done); merged, its worktree
+  // is gone and the worker's launch forks a fresh one from the base, which holds the merged work. merged_at is kept until a pass.
+  { from: ['done'], event: 'reject', when: (f) => !f.live, why: busy, to: 'in_progress', set: { needs_human: 0, retry: 0 }, effects: ['note', 'spawn_execute'] },
   { from: ['done'], event: 'merge', when: (f) => !f.merged, why: 'already merged', effects: ['enqueue_merge'] },
 ];
 
@@ -183,8 +188,10 @@ export function apply(b: Board, id: number, event: Event, x: { note?: Note; answ
   const noteId = transaction(b.db, () => {
     b.db.prepare(`
       UPDATE tickets SET status = ?, needs_human = coalesce(?, needs_human), blocked_on_deps = coalesce(?, blocked_on_deps),
-        retry = retry + ?, merged_at = CASE WHEN ? THEN strftime('%Y-%m-%dT%H:%M:%fZ', 'now') ELSE merged_at END
-      WHERE id = ?`).run(to, set.needs_human ?? null, set.blocked_on_deps ?? null, set.retry ? 1 : 0, set.merged ? 1 : 0, id);
+        retry = CASE WHEN ? THEN 0 ELSE retry + ? END,
+        merged_at = CASE ? WHEN 1 THEN strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHEN 0 THEN NULL ELSE merged_at END
+      WHERE id = ?`).run(to, set.needs_human ?? null, set.blocked_on_deps ?? null, set.retry === 0 ? 1 : 0, set.retry === '+1' ? 1 : 0,
+      set.merged === undefined ? null : set.merged ? 1 : 0, id);
     if (!note) return undefined;
     const r = b.db.prepare('INSERT INTO notes (ticket_id, role, kind, body) VALUES (?, ?, ?, ?)').run(id, note.role, note.kind, note.body);
     return Number(r.lastInsertRowid);
@@ -262,16 +269,21 @@ function queueMerge(b: Board, id: number, since = Date.now()) {
   clearTimeout(waiting.get(id)); // the operator's Retry merge restarts a wait
   waiting.delete(id);
   void enqueue(async () => {
+    // A ticket rejected while it waited has a worker running now; waiting on that session would hold the whole queue.
+    if (readTicket(b.db, id).status !== 'done') return;
     await Promise.all(sessionsOf(id).map((s) => s.done)); // the tester's pty is still closing
     const t = readTicket(b.db, id);
-    if (t.status !== 'done' || t.merged_at) return; // reset or moved by hand while it waited
+    if (t.status !== 'done' || t.merged_at) return; // reset, rejected or moved by hand while it waited
     // Main is merged into the worktree first, so the merge into the main checkout is conflict-free by construction; merge.ts's
     // abort stays as a safety net.
     // ponytail: lands even when the sync brought in new commits (the worker merged and the tester tested at submit); upgrade is
     // to send it back to testing when the sync touched files the ticket also touched.
     const s = syncWorktree(b.repo, id);
     if (!s.ok) return void (await Promise.all(apply(b, id, 'conflict', { note: { role: 'tester', kind: 'failure', body: s.reason } }).pending));
-    const r = await merge(b.repo, id, t.title);
+    const r = await merge(b.repo, id, t.title, () => readTicket(b.db, id).status === 'done');
+    if (!r) return;
+    // Rejected while git merge ran: the work landed, but the ticket is a worker's again and its next pass merges again.
+    if (r.ok && readTicket(b.db, id).status !== 'done') return;
     let out;
     if (r.ok) out = apply(b, id, 'merged');
     else if (r.dirty && Date.now() - since < DIRTY_WAIT.max) {
