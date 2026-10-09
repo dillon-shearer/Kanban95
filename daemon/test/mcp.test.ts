@@ -123,13 +123,19 @@ describe('ticket scope', () => {
     expect(srv.db.prepare('SELECT count(*) AS n FROM notes WHERE ticket_id = 4').get()).toMatchObject({ n: 0 });
   });
 
-  it('a worker reads its own ticket and its dependencies, nothing else', async () => {
-    expect((await call(worker3, 'get_ticket')).json).toMatchObject({ id: 3, depends_on: [2], notes: [] });
-    expect((await call(worker3, 'get_ticket', { ticket_id: 2 })).json).toMatchObject({ id: 2 });
-    expect((await call(worker3, 'get_ticket', { ticket_id: 1 })).denied).toBe(true);
-    expect((await call(worker3, 'list_tickets')).json.map((t: { id: number }) => t.id)).toEqual([3, 2]);
-    expect((await call(tester3, 'get_ticket', { ticket_id: 2 })).denied).toBe(true);
-    expect((await call(tester3, 'list_tickets')).json.map((t: { id: number }) => t.id)).toEqual([3]);
+  for (const [role, c] of [['worker', () => worker3], ['tester', () => tester3]] as const) {
+    it(`a ${role} reads its own ticket and its dependencies, nothing else`, async () => {
+      expect((await call(c(), 'get_ticket')).json).toMatchObject({ id: 3, depends_on: [2], notes: [] });
+      expect((await call(c(), 'get_ticket', { ticket_id: 2 })).json).toMatchObject({ id: 2 });
+      const denied = await call(c(), 'get_ticket', { ticket_id: 1 });
+      expect(denied).toMatchObject({ denied: true, text: 'this grant is scoped to ticket 3 and its dependencies' });
+      expect(lastAudit()).toMatchObject({ grant_id: grantIds[`${role}3`], ticket_id: 1, tool: 'get_ticket', outcome: 'denied' });
+      expect((await call(c(), 'get_ticket', { ticket_id: 4 })).denied).toBe(true);
+      expect((await call(c(), 'list_tickets')).json.map((t: { id: number }) => t.id)).toEqual([3, 2]);
+    });
+  }
+
+  it('a planner lists the whole board', async () => {
     expect((await call(planner, 'list_tickets')).json.length).toBe(4);
   });
 

@@ -14,6 +14,7 @@ import { killAll, launch, sessions } from './launcher.js';
 import { events, recover, tick, type Board } from './lifecycle.js';
 import { handleMcp } from './mcp.js';
 import { idle } from './merge.js';
+import { addProject } from './settings.js';
 import { initTemplates } from './templates.js';
 import { voiceFile } from './voice.js';
 
@@ -138,6 +139,11 @@ export function start(config: Config = {}): Promise<{
   const secret = config.secret ?? randomBytes(32).toString('hex');
   const db = openDb(repo);
   initTemplates(repo);
+  try {
+    addProject(repo); // Settings → Projects lists every repo a board has run on
+  } catch (e) {
+    console.error(`projects.json not updated: ${(e as Error).message}`); // stderr: stdout's first line is the handshake
+  }
   let self = '';
   const board: Board = { db, repo, port: 0 };
   try {
