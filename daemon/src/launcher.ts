@@ -1,7 +1,8 @@
 // Launches an agent CLI on a ticket: worktree, run row, grant, session dir, argv, pty. Tears it all down on exit or revoke.
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
-import { userInfo } from 'node:os';
+import { randomUUID } from 'node:crypto';
+import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { homedir, userInfo } from 'node:os';
 import { join, relative, resolve } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import type { IPty } from 'node-pty';
@@ -27,6 +28,8 @@ const PLANNER_DENY = ['Edit', 'Write', 'NotebookEdit', 'Bash', 'PowerShell', 'Ag
 /** Workers and testers run without the operator at the keyboard; planner and operator sessions are interactive. */
 const unattended = (role: Role) => role === 'worker' || role === 'tester';
 const BOARD_SETTINGS = { attribution: { commit: '', pr: '' } };
+/** The initial message of a resumed Claude Code session, in place of the brief: the conversation already holds it. */
+export const RESUME_MESSAGE = 'The board restarted this session after it ended without reporting. Your board tools work again under a new grant; carry on where you left off.';
 
 export interface ArgvIn {
   cli: Cli;
@@ -43,6 +46,9 @@ export interface ArgvIn {
   /** Codex: the daemon's /mcp URL, passed as a per-process config override. */
   mcpUrl: string;
   cwd: string;
+  /** Claude Code: the conversation's id, chosen at launch (`--session-id`), or the killed one to continue when `resume` is set. */
+  sessionId?: string;
+  resume?: boolean;
 }
 
 /**
@@ -52,7 +58,7 @@ export interface ArgvIn {
  * Reach is limited by role, not by approvals: a planner cannot write files; workers, testers and the operator run with permissions off.
  */
 export function buildArgv(a: ArgvIn): string[] {
-  const message = `Read ${relative(a.cwd, a.promptPath).replaceAll('\\', '/')} in full and follow it. It is your brief for this session.`;
+  const brief = `Read ${relative(a.cwd, a.promptPath).replaceAll('\\', '/')} in full and follow it. It is your brief for this session.`;
   const planner = a.role === 'planner';
   switch (a.cli) {
     case 'claude':
@@ -60,10 +66,11 @@ export function buildArgv(a: ArgvIn): string[] {
       // An empty model (an operator terminal with no operator row in models.json) runs the CLI's own default model.
       // Workers and testers load no user settings, so none of the operator's plugin hooks, and no skills: none was invoked in
       // 113 measured runs, while the hooks and skill listing cost ~15k tokens on every call (ticket #43, operator approved).
-      return ['claude', '--mcp-config', a.mcpConfigPath, '--strict-mcp-config', ...(a.model ? ['--model', a.model] : []), '--effort', a.effort,
+      return ['claude', '--mcp-config', a.mcpConfigPath, '--strict-mcp-config',
+        ...(a.sessionId ? [a.resume ? '--resume' : '--session-id', a.sessionId] : []), ...(a.model ? ['--model', a.model] : []), '--effort', a.effort,
         ...(planner ? ['--disallowedTools', ...PLANNER_DENY] : []),
         ...(unattended(a.role) ? ['--setting-sources', 'project,local', '--settings', a.settingsPath, '--disable-slash-commands'] : []),
-        '--dangerously-skip-permissions', message];
+        '--dangerously-skip-permissions', a.resume ? RESUME_MESSAGE : brief];
     case 'codex': {
       // Unquoted -c values fail TOML parsing and are taken as literal strings, which keeps `"` out of the cmd.exe line.
       // The trust table is a TOML literal-string key, which cannot hold a single quote.
@@ -76,7 +83,7 @@ export function buildArgv(a: ArgvIn): string[] {
         // planner under -a never is refused every MCP call ("requires approval, but approval policy is never"; checked live).
         '-c', 'mcp_servers.kanban95.default_tools_approval_mode=approve',
         '-c', `projects={'${a.repo}'={trust_level='trusted'}}`,
-        ...(planner ? ['-s', 'read-only', '-a', 'never'] : ['--dangerously-bypass-approvals-and-sandbox']), message];
+        ...(planner ? ['-s', 'read-only', '-a', 'never'] : ['--dangerously-bypass-approvals-and-sandbox']), brief];
     }
   }
 }
@@ -118,10 +125,40 @@ type Daemon = { db: DatabaseSync; repo: string; port: number; onExit?: (s: Sessi
 /** `path`: the operator's configured executable for the CLI (Settings); the bare name, resolved through PATH, when unset. */
 type RunSettings = { cli: Cli; model: string; effort: Effort; path?: string };
 
-export function launch(d: Daemon, o: { ticketId: number; template: TicketTemplate } & RunSettings): Session {
+/**
+ * Claude Code keeps each conversation in `<config>/projects/<cwd, mangled>/<id>.jsonl`. Every project dir is searched rather than
+ * the mangling copied: the id is a UUID, so a match anywhere is this session's.
+ */
+function hasTranscript(id: string) {
+  const projects = join(process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.claude'), 'projects');
+  try {
+    return readdirSync(projects).some((p) => existsSync(join(projects, p, `${id}.jsonl`)));
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The Claude Code session to continue for `ticketId` in `phase`: the latest run's, when that run was Claude in the same phase,
+ * ended without reporting (killed by a restart, a crash or the operator's X) and its transcript is still on disk.
+ */
+function resumable(db: DatabaseSync, ticketId: number, phase: string): string | undefined {
+  const r = db.prepare('SELECT phase, cli, outcome, session_id FROM runs WHERE ticket_id = ? ORDER BY id DESC LIMIT 1').get(ticketId) as
+    { phase: string; cli: string; outcome: string | null; session_id: string | null } | undefined;
+  if (r?.phase !== phase || r.cli !== 'claude' || !r.session_id || !['exit', 'lost', 'closed'].includes(r.outcome ?? '')) return undefined;
+  return hasTranscript(r.session_id) ? r.session_id : undefined;
+}
+
+/** `resume`: continue the phase's killed Claude Code conversation when there is one (`resumable`); otherwise a fresh session. */
+export function launch(d: Daemon, o: { ticketId: number; template: TicketTemplate; resume?: boolean } & RunSettings): Session {
+  const { role, phase } = TEMPLATES[o.template];
   const wt = createWorktree(d.repo, o.ticketId);
-  const run = startRun(d.db, d.repo, { ...o, worktree: wt.path, base: wt.base });
-  return spawnSession(d, o, { runId: run.id, ticketId: o.ticketId, role: TEMPLATES[o.template].role, phase: TEMPLATES[o.template].phase, cwd: wt.path, prompt: run.prompt });
+  // ponytail: Codex always starts fresh with the failure notes in its brief; upgrade is to record the session id Codex prints
+  // and launch `codex resume <id>` (docs/CLIS.md → Resuming a killed session).
+  const prior = o.resume && o.cli === 'claude' ? resumable(d.db, o.ticketId, phase) : undefined;
+  const sessionId = o.cli === 'claude' ? prior ?? randomUUID() : undefined;
+  const run = startRun(d.db, d.repo, { ...o, worktree: wt.path, base: wt.base, sessionId });
+  return spawnSession(d, { ...o, sessionId, resume: prior !== undefined }, { runId: run.id, ticketId: o.ticketId, role, phase, cwd: wt.path, prompt: run.prompt });
 }
 
 /**
@@ -139,7 +176,7 @@ export function launchRoot(d: Daemon, o: RunSettings & { template: 'brainstorm' 
   return spawnSession(d, o, { runId: null, ticketId: null, role, phase: o.template, cwd: d.repo, prompt });
 }
 
-function spawnSession(d: Daemon, o: RunSettings, r: { runId: number | null; ticketId: number | null; role: Role; phase: string; cwd: string; prompt: string }): Session {
+function spawnSession(d: Daemon, o: RunSettings & { sessionId?: string; resume?: boolean }, r: { runId: number | null; ticketId: number | null; role: Role; phase: string; cwd: string; prompt: string }): Session {
   const { db, repo } = d;
   const grant = mint(db, { ticket: r.ticketId, role: r.role, ttlMs: GRANT_TTL_MS });
   const key = r.runId ?? -grant.id;
