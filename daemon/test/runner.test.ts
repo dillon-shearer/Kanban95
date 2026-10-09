@@ -131,7 +131,7 @@ describe('runner', { timeout: 60_000 }, () => {
     const a = ticket('First');
     const b = ticket('Second');
     await setMax(1);
-    expect(await setRun(true)).toEqual({ on: true, concurrency: 1, running: [a], left: 1, backlog: 1, waits: [] });
+    expect(await setRun(true)).toEqual({ on: true, concurrency: 1, running: [a], left: 1, backlog: 1, waits: [], stale: false });
     expect(t(b).status).toBe('backlog');
     expect(runs(b)).toEqual([]);
     await landed(a);
@@ -251,7 +251,7 @@ describe('runner', { timeout: 60_000 }, () => {
     const b = ticket('Waiting', { model: 'hang' });
     await setMax(1);
     await setRun(true);
-    expect(await setRun(false)).toEqual({ on: false, concurrency: 1, running: [a], left: 1, backlog: 1, waits: [] });
+    expect(await setRun(false)).toEqual({ on: false, concurrency: 1, running: [a], left: 1, backlog: 1, waits: [], stale: false });
     expect((await request('PUT', '/api/runner', { on: 'yes' })).status).toBe(400);
     await landed(a);
     expect(t(b).status).toBe('backlog');

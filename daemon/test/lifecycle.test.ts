@@ -101,8 +101,8 @@ describe('transition table', () => {
 const bin = mkdtempSync(join(tmpdir(), 'k95-bin-'));
 const FAKE = `
 import { execFileSync, spawn } from 'node:child_process';
-import { readFileSync, writeFileSync } from 'node:fs';
-import { basename } from 'node:path';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { basename, dirname } from 'node:path';
 const argv = process.argv.slice(2);
 const model = argv[argv.indexOf('--model') + 1];
 const mcp = JSON.parse(readFileSync(argv[argv.indexOf('--mcp-config') + 1], 'utf8')).mcpServers.kanban95;
@@ -119,6 +119,7 @@ async function call(tool, args = {}) {
   if (j.error || j.result.isError) console.log('REFUSED ' + tool + ' ' + JSON.stringify(j.error ?? j.result.content));
 }
 const commit = (file, text) => {
+  mkdirSync(dirname(file), { recursive: true });
   writeFileSync(file, text);
   execFileSync('git', ['add', file]);
   execFileSync('git', ['commit', '-q', '--allow-empty', '-m', 'Add ' + file]); // a retry may rewrite the same content
@@ -150,7 +151,8 @@ if (brief.startsWith('# Test') && model !== 'hang') {
       lines[n - 1] = text;
       commit('lines.txt', lines.join('\\n'));
     }
-  } else commit(name + '.txt', 'done\\n');
+  } else if (model.startsWith('touch-')) commit(model.slice(6) + '/' + name + '.txt', 'done\\n'); // touch-daemon: a change under daemon/
+  else commit(name + '.txt', 'done\\n');
   await call('move_ticket', { status: 'testing' });
 }
 process.stdin.resume();
@@ -585,6 +587,39 @@ ${TO_RESOLVE}`]);
     } finally {
       rmSync(settings, { force: true });
     }
+  });
+});
+
+describe('stale daemon after a merge', { timeout: 60_000 }, () => {
+  const stale = async () => (await (await fetch(`http://127.0.0.1:${srv.port}/api/runner`, { headers: { cookie: `k95=${srv.secret}` } })).json()).stale;
+  it.each([['daemon', 'daemon'], ['shell', 'shell'], ['ui', false], ['docs', false]])('a merge touching %s/ reports stale: %s', async (dir, want) => {
+    models({ execute: `touch-${dir}` });
+    const id = ticket(`Change ${dir}`);
+    expect(await stale()).toBe(false);
+    expect((await post(`/api/tickets/${id}/launch`)).status).toBe(200);
+    await landed(id);
+    expect(git('show', '--stat', '--format=', 'HEAD')).toContain(`${dir}/`);
+    expect(await stale()).toBe(want);
+  });
+  it('a daemon started on the merged commit is not stale', async () => {
+    models({ execute: 'touch-daemon' });
+    const id = ticket('Change daemon');
+    await post(`/api/tickets/${id}/launch`);
+    await landed(id);
+    expect(await stale()).toBe('daemon');
+    await srv.close();
+    srv = await start({ repo });
+    db = srv.db;
+    expect(await stale()).toBe(false);
+  });
+  it('a repo with no commits starts and is not stale', async () => {
+    await srv.close();
+    rmSync(join(repo, '.git'), { recursive: true, force: true, maxRetries: 5 });
+    execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: repo });
+    srv = await start({ repo });
+    db = srv.db;
+    expect(srv.board.startCommit).toBeUndefined();
+    expect(await stale()).toBe(false);
   });
 });
 
