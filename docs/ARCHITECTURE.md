@@ -210,10 +210,12 @@ Gotchas collected while the board was built. Each one cost a phase some time.
 - Imports between `src/` files use `.js` extensions; tests import `../src/x.ts`.
 - Node's `fetch` strips a caller-set `Host` header; a test that needs a foreign `Host` uses `node:http.request`.
 - An unclosed MCP SDK client keeps vitest alive; close every client in `afterAll`.
-- Every test file runs with a throwaway home (`daemon/test/home.ts`), and `daemon/test/real-home-guard.ts` fails the run if the real home was touched (`docs/SECURITY.md` → Operator files the board writes). Keep it that way.
+- Every test file runs with a throwaway home (`daemon/test/home.ts`), and `daemon/test/real-home-guard.ts` fails the run if the real home was touched by this run: it points `TEMP`/`TMP` at a fresh `k95-run-*` dir before the workers start and fails only on trust entries under it, so another worktree's run at the same time cannot fail yours (`docs/SECURITY.md` → Operator files the board writes). Keep it that way.
 - Headless Edge resizes its window to `--window-size` minus chrome; `cdp.ts` sets the viewport with `Emulation.setDeviceMetricsOverride` to get an exact size.
 - `/events` carries several frame shapes; anything listening must ignore frames it does not know.
-- The suite is load-sensitive (ptys, headless browsers, real git). Rerun a failing file alone before treating it as a regression.
+- `daemon/vitest.config.ts` sorts test files into projects by their imports: `browser` (imports `./cdp.ts`; `retry: 1`, and each retried test prints a `RETRIED x1:` line), `pty` (imports `../src/launcher.ts`; 30 s per test and hook), `unit` (no retry: a unit failure is real) and `restart` (alone, after the rest). A new file needs no config entry. `maxWorkers: 4`: `lifecycle.test.ts` (80 to 100 s) is the whole wall time, so more workers only add ptys and browsers fighting for the CPU. `tsc` is incremental (`dist/.tsbuildinfo`).
+- The suite still uses real ptys, headless browsers and git. A browser test that fails twice, or a pty or unit test that fails once, is a real failure; rerun the file alone only to tell your change from load.
+- Killing a pty before the fake agent printed its first line crashes the vitest worker natively on Windows (exit `0xC0000374`, heap corruption in node-pty): wait for the fake's first output, then `kill()` and await `done` (`end()` in `launcher.test.ts` and `operator.test.ts`).
 - `api.ts` and `mcp.ts` import each other. A value from `api.ts` read while `mcp.ts` loads (inside the `TOOLS` table, not inside a `run`) is in its temporal dead zone when the built daemon starts from `main.js`: `server.test.ts` times out with "Cannot access X before initialization" while the vitest files that import `api.ts` first pass. Put such constants in a leaf module (`db.ts` holds the brain ones).
 
 ## How the board was built
