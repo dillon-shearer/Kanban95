@@ -75,11 +75,13 @@ let cached: Limits | null = null;
 let running: Promise<Limits> | null = null;
 
 /**
- * The cached result while it is younger than REFRESH_MS, else a fresh one. The CLIs are asked one after the other, and a call
+ * The cached result while it is younger than the UI's poll interval, else a fresh one. The CLIs are asked one after the other, and a call
  * while a fetch runs shares it, so there is never more than one CLI start at a time.
  */
 export function limits(force = false): Promise<Limits> {
-  if (!force && cached && Date.now() - Date.parse(cached.fetched_at) < REFRESH_MS) return Promise.resolve(cached);
+  // fetched_at is stamped when the slowest CLI answers, so the UI's 5 min poll lands up to a fetch's length short of 5 min:
+  // count the cache fresh for 5 min less the longest fetch, or every other poll would get the old answer.
+  if (!force && cached && Date.now() - Date.parse(cached.fetched_at) < REFRESH_MS - CLIS.length * TIMEOUT_MS) return Promise.resolve(cached);
   running ??= (async () => {
     const out: Limits = { rows: [], errors: {}, fetched_at: '' };
     for (const cli of CLIS) {

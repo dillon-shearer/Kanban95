@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { limits, parseClaude, parseCodex, sources } from '../src/limits.ts';
 
 // `claude -p "/usage"` as Claude Code 2.1.294 prints it, breakdown included (its indented % lines must not become rows).
@@ -63,5 +63,21 @@ describe('limits', () => {
     expect(calls).toBe(2);
     expect(b.rows.map((r) => `${r.cli} ${r.used}`)).toEqual(['claude 84', 'claude 18', 'claude 9', 'codex 0', 'codex 41']);
     expect(b.errors).toEqual({});
+  });
+
+  it('answers a poll 5 minutes after the last fetch began with fresh numbers, even when that fetch took its full timeout', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      let calls = 0;
+      sources.claude = async () => { calls++; vi.advanceTimersByTime(60_000); return CLAUDE; }; // both CLIs at their 30 s timeout
+      sources.codex = async () => CODEX;
+      const start = Date.now();
+      await limits(true);
+      vi.setSystemTime(start + 5 * 60_000);
+      await limits();
+      expect(calls).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
