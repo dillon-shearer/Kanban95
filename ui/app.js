@@ -880,12 +880,53 @@ function grantTable(grants) {
   }));
 }
 
+// ---- projects ----
+
+// This board's project (GET /api/project): its folder name titles the window, its colour paints the wallpaper. A hue is
+// painted at the teal's own saturation and lightness (#008080 is hue 180).
+const cssColour = (c) => (typeof c === 'number' ? `hsl(${c} 100% 25%)` : c);
+async function paintProject() {
+  const p = await api('GET', '/project');
+  document.body.style.setProperty('--k95-wall', cssColour(p.colour));
+  document.title = `${p.name} — Kanban95`;
+  return p;
+}
+/** `<input type="color">` takes only #rrggbb; a canvas spells any CSS colour that way. */
+const hex = (c) => {
+  const g = document.createElement('canvas').getContext('2d');
+  g.fillStyle = cssColour(c);
+  return g.fillStyle;
+};
+
+/** Settings → Projects: every repo with a board. Each change saves the whole list at once. */
+async function projectsPanel(p) {
+  const [own, { path, value }] = await Promise.all([api('GET', '/project'), api('GET', '/projects')]);
+  let list = value;
+  const save = (next, ok) => act(async () => {
+    list = (await api('PUT', '/projects', { value: next })).value;
+    await paintProject();
+    draw();
+  }, ok);
+  const add = h('input', { type: 'text', id: 'project-add', placeholder: 'C:\\path\\to\\repo', style: 'flex: 1' });
+  const draw = () => p.replaceChildren(h('p', {}, `${path}. A board's own project cannot be removed.`),
+    table(['Project', 'Path', 'Colour', ''], list.map((x, i) => {
+      const self = x.path === own.path; // both spelled by the daemon
+      return h('tr', { 'data-project': x.path }, h('td', {}, x.path.split(/[\\/]/).pop() + (self ? ' (this board)' : '')), h('td', {}, x.path),
+        h('td', {}, h('input', { type: 'color', value: hex(x.colour),
+          onchange: (e) => save(list.map((y, j) => (j === i ? { ...y, colour: e.target.value } : y)), 'Colour saved.') })),
+        h('td', {}, h('button', { disabled: self, onclick: () => save(list.filter((_, j) => j !== i), 'Project removed.') }, 'Remove')));
+    })),
+    h('div', { class: 'field-row' }, h('label', { for: 'project-add' }, 'Repo path'), add,
+      h('button', { onclick: () => save([...list, { path: add.value.trim(), colour: '#008080' }], 'Project added.') }, 'Add')));
+  draw();
+}
+
 let settingsTabs = null;
 /** `tab`: the tab to show, also when the window is already open. */
 function openSettings(tab) {
   const w = open('settings', { title: 'Settings', w: 640, h: 440, persist: true, onClose: () => views.delete('settings') });
   if (w.body.firstChild) return tab && settingsTabs.show(tab);
-  const tb = settingsTabs = tabs(['Models', 'CLIs', 'Prompts', 'Grants', 'Limits', 'Voice', 'General'], async (tab, p, first) => {
+  const tb = settingsTabs = tabs(['Models', 'CLIs', 'Prompts', 'Grants', 'Limits', 'Voice', 'Projects', 'General'], async (tab, p, first) => {
     if (tab === 'Limits') return limitsPanel(p);
     if (tab === 'Grants') {
       const grants = (await api('GET', '/grants')).filter(liveGrant);
@@ -971,6 +1012,8 @@ function openSettings(tab) {
         h('fieldset', {}, h('legend', {}, 'Backend'), h('select', { disabled: true }, h('option', {}, 'local')),
           h('p', {}, 'Local: transcription runs inside this window. Audio is never sent anywhere.')),
         h('fieldset', {}, h('legend', {}, 'Mic button'), mode('push', 'Push to talk (hold the button)'), mode('toggle', 'Toggle (click to start, click to stop)')));
+    } else if (tab === 'Projects') {
+      await projectsPanel(p);
     } else if (tab === 'General') {
       const at = h('input', { type: 'number', id: 'concurrency', min: 1, max: 10, step: 1, value: runner.concurrency });
       const saveRunner = () => act(async () => {
@@ -1246,6 +1289,7 @@ async function boot() {
   refreshLimits(); // a CLI start each, ~10 s: not awaited
   setInterval(refreshLimits, 5 * 60_000); // the daemon's cache lives as long, so this reads fresh numbers
   listen();
+  paintProject().catch((e) => say(e.message));
   const [list, st, md] = await Promise.all([api('GET', '/tickets'), api('GET', '/config/settings'), api('GET', '/config/models').catch(() => ({ value: null }))]);
   for (const t of list) tickets.set(t.id, t);
   settings = { ...settings, terminals: { auto: ['plan', 'execute'] }, ...st.value, voice: { ...settings.voice, ...st.value?.voice }, housekeeping: { ...settings.housekeeping, ...st.value?.housekeeping } };

@@ -1,9 +1,9 @@
 /* Kanban95 desktop on top of 98.css. Compact; nothing here is decoration. */
 html, body { height: 100%; margin: 0; overflow: hidden; }
-/* Wallpaper: the Win95 teal under a faint blueprint grid that darkens toward the taskbar. Windows and cards are opaque. */
+/* Wallpaper: the project's colour (--k95-wall, set by app.js from /api/project; Win95 teal by default) under a faint blueprint grid that darkens toward the taskbar. Windows and cards are opaque. */
 body { background: linear-gradient(transparent 55%, rgb(0 0 0 / 0.22)),
   repeating-linear-gradient(0deg, rgb(0 0 0 / 0.07) 0 1px, transparent 1px 16px),
-  repeating-linear-gradient(90deg, rgb(0 0 0 / 0.07) 0 1px, transparent 1px 16px), #008080; font-family: "Pixelated MS Sans Serif", Tahoma, sans-serif; font-size: 11px; }
+  repeating-linear-gradient(90deg, rgb(0 0 0 / 0.07) 0 1px, transparent 1px 16px), var(--k95-wall, #008080); font-family: "Pixelated MS Sans Serif", Tahoma, sans-serif; font-size: 11px; }
 [hidden] { display: none !important; }
 
 /* Desktop and windows */

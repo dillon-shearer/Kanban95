@@ -237,15 +237,15 @@ export const TOOLS: Record<string, Tool<z.ZodRawShape>> = {
     description:
       'Read one ticket in full: title, body, acceptance criteria, status, flags, dependencies, model settings, the absolute paths of files the operator ' +
       'attached (screenshots and the like: open them with your file reader), and every note on it in order. ' +
-      'A worker may also read the tickets its own ticket depends on, to see what they delivered.',
-    access: { planner: 'yes', worker: 'own + its deps', tester: 'own', operator: 'yes' },
+      'A worker or tester may also read the tickets its own ticket depends on, to see what they delivered or decided.',
+    access: { planner: 'yes', worker: 'own + its deps', tester: 'own + its deps', operator: 'yes' },
     input: { ticket_id: ticketId },
     run(c, a) {
       const { grant } = c;
       const id = unbound(grant.role) ? own(c, a.ticket_id) : (a.ticket_id ?? grant.ticket_id!);
       c.ticket = id;
-      const visible = unbound(grant.role) || id === grant.ticket_id || (grant.role === 'worker' && depsOf(c.db, grant.ticket_id!).includes(id));
-      if (!visible) throw new Deny(`this grant is scoped to ticket ${grant.ticket_id}${grant.role === 'worker' ? ' and its dependencies' : ''}`);
+      const visible = unbound(grant.role) || id === grant.ticket_id || depsOf(c.db, grant.ticket_id!).includes(id);
+      if (!visible) throw new Deny(`this grant is scoped to ticket ${grant.ticket_id} and its dependencies`);
       const ticket = readTicket(c.db, id);
       const notes = c.db.prepare('SELECT id, role, kind, body, created_at FROM notes WHERE ticket_id = ? ORDER BY id').all(id);
       return { ...ticket, attachments: attachments(c.board.repo, id).map((f) => f.path), notes };
@@ -255,14 +255,14 @@ export const TOOLS: Record<string, Tool<z.ZodRawShape>> = {
   list_tickets: tool({
     description:
       'List tickets with id, title, status, tags, flags and dependencies, optionally filtered by status. A planner or operator sees the whole board; ' +
-      'a worker sees its own ticket and the ones it depends on; a tester sees its own. Use get_ticket for the body and notes.',
-    access: { planner: 'yes', worker: 'own + its deps', tester: 'own', operator: 'yes' },
+      'a worker or tester sees its own ticket and the ones it depends on. Use get_ticket for the body and notes.',
+    access: { planner: 'yes', worker: 'own + its deps', tester: 'own + its deps', operator: 'yes' },
     input: { status: z.enum(STATUS).optional() },
     run(c, a) {
       const { grant } = c;
       let ids: number[];
       if (unbound(grant.role)) ids = (c.db.prepare('SELECT id FROM tickets ORDER BY id').all() as { id: number }[]).map((r) => r.id);
-      else ids = [grant.ticket_id!, ...(grant.role === 'worker' ? depsOf(c.db, grant.ticket_id!) : [])];
+      else ids = [grant.ticket_id!, ...depsOf(c.db, grant.ticket_id!)];
       return ids
         .map((id) => readTicket(c.db, id))
         .filter((t) => a.status === undefined || t.status === a.status)
