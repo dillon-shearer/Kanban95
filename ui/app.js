@@ -32,7 +32,7 @@ let sessions = [];
 let inbox = [];
 let runner = { on: false, concurrency: 3, running: [], left: 0, backlog: 0, waits: [] }; // GET /api/runner: the Run button and its status-bar line
 let models = null; // ~/.kanban95/models.json as written, for the cards' default model and effort
-let settings = { paths: {}, sounds: true, voice: { backend: 'local', mode: 'push' } };
+let settings = { paths: {}, sounds: { merge: true, attention: true }, voice: { backend: 'local', mode: 'push' }, housekeeping: { auto: true, every: 10 } };
 let limits = null; // GET /api/limits: { rows, errors, fetched_at }, null until the first answer
 const views = new Map(); // open window id → redraw(ticketId | null)
 
@@ -57,12 +57,17 @@ async function refreshShared() {
 }
 const redraw = (ticket) => views.forEach((f) => f(ticket));
 
+const SOUND_SETTING = { ding: 'merge', chord: 'attention' };
+
 function listen() {
   const ws = new WebSocket(`ws://${location.host}/events`);
   ws.onmessage = async (m) => {
     const e = JSON.parse(m.data);
     if (e.sound) {
-      if (settings.sounds) new Audio(`sounds/${e.sound}.wav`).play().catch(() => {});
+      if (settings.sounds[SOUND_SETTING[e.sound]]) new Audio(`sounds/${e.sound}.wav`).play().catch(() => {});
+      // The chord's reason is said by refreshTicket when it first sees the flag, so the later change event does not repeat it.
+      if (e.sound === 'chord' && e.ticket != null) await refreshTicket(e.ticket);
+      else if (e.sound === 'ding' && e.ticket != null) say(`#${e.ticket} merged.`);
       return;
     }
     if (e.ticket != null) await refreshTicket(e.ticket);
@@ -407,12 +412,15 @@ const liveGrant = (g) => !g.revoked_at && g.expires_at > new Date().toISOString(
 /** 98.css tabs. `draw(name, panel, first)`: first is true when the tab is shown, false when an event asks for a refresh. */
 function tabs(names, draw, current = names[0]) {
   const bar = h('menu', { role: 'tablist' });
-  const panel = h('div', { class: 'window k95-panel', role: 'tabpanel' }, h('div', { class: 'window-body' }));
+  const panel = h('div', { class: 'window k95-panel', role: 'tabpanel' });
   const show = (n) => {
     current = n;
     bar.replaceChildren(...names.map((x) => h('li', { role: 'tab', 'aria-selected': x === n ? 'true' : 'false' },
       h('a', { href: '#', onclick: (e) => { e.preventDefault(); show(x); } }, x))));
-    draw(n, panel.firstChild, true);
+    // A fresh body per switch: a draw still awaiting the daemon for the tab left behind fills a detached node, not this one.
+    const body = h('div', { class: 'window-body' });
+    panel.replaceChildren(body);
+    draw(n, body, true);
   };
   show(current);
   return { el: [bar, panel], show: (n = current) => show(n), redraw: () => draw(current, panel.firstChild, false) };
@@ -588,7 +596,8 @@ function openTerminal(s, auto = false) {
       say(e.message);
     }
   };
-  const w = open(wid, { title, w: 760, h: 440, background: auto, onX, extra: [micButton((text) => send({ data: text }))],
+  // Placed per ticket, not per session: every later phase, retry and relaunch opens where the operator left the last one.
+  const w = open(wid, { title, w: 760, h: 440, persist: s.ticket_id !== null && `term-ticket-${s.ticket_id}`, background: auto, onX, extra: [micButton((text) => send({ data: text }))],
     items: s.ticket_id === null ? [] : [{ label: 'Open ticket', run: () => openTicket(s.ticket_id) }], onClose: () => { terms.delete(wid); ro.disconnect(); ws.close(); term.dispose(); } });
   terms.set(wid, s.ticket_id);
   w.body.classList.add('k95-term');
@@ -769,13 +778,29 @@ function openSettings(tab) {
           h('p', {}, 'Codex is told per launch that this repo is trusted; nothing is written to its config.'),
           h('button', { disabled: !trust.trusted, onclick: () => act(async () => { await api('DELETE', '/trust'); tb.show(); }, 'Claude trust entry cleared.') }, 'Clear Claude trust')));
     } else if (tab === 'Prompts') {
-      const { path, value } = await api('GET', '/config/preferences');
+      const [{ path, value }, tpls] = await Promise.all([api('GET', '/config/preferences'), api('GET', '/templates')]);
       const text = h('textarea', { id: 'preferences', rows: 10, placeholder: 'e.g. No em dashes or non-ASCII characters in output.' });
       text.value = value;
+      // One template at a time: the select picks it, Save and Reset replace its entry with what the daemon wrote.
+      const byName = Object.fromEntries(tpls.templates.map((t) => [t.name, t]));
+      const pick = h('select', { id: 'template' }, tpls.templates.map((t) => h('option', {}, t.name)));
+      const body = h('textarea', { id: 'template-text', rows: 14, spellcheck: 'false', 'data-mic': 'off' });
+      const where = h('p', {});
+      const show = (t) => { byName[t.name] = t; body.value = t.text; where.textContent = t.path; };
+      pick.onchange = () => show(byName[pick.value]);
+      show(tpls.templates[0]);
       p.replaceChildren(h('fieldset', {}, h('legend', {}, 'Preferences'),
         h('p', {}, `Standing instructions every agent prompt gets under "Operator preferences". Up to 16 KB. ${path}`),
         h('div', { class: 'field-row' }, text),
-        h('button', { onclick: () => act(() => api('PUT', '/config/preferences', { value: text.value }), `Saved ${path}.`) }, 'Save')));
+        h('button', { onclick: () => act(() => api('PUT', '/config/preferences', { value: text.value }), `Saved ${path}.`) }, 'Save')),
+        h('fieldset', {}, h('legend', {}, 'Templates'),
+          h('p', {}, 'The prompt each phase starts from; the next run uses what you save.'),
+          h('div', { class: 'field-row' }, h('label', { for: 'template' }, 'Template'), pick),
+          h('div', { class: 'field-row' }, body),
+          h('p', { id: 'template-vars' }, `Variables: ${tpls.vars.map((v) => `{{${v}}}`).join(' ')}`),
+          where,
+          h('button', { onclick: () => act(async () => show(await api('PUT', `/templates/${pick.value}`, { text: body.value })), `Saved ${pick.value}.md.`) }, 'Save'),
+          h('button', { onclick: () => act(async () => show(await api('POST', `/templates/${pick.value}/reset`)), `${pick.value}.md reset to default.`) }, 'Reset to default')));
     } else if (tab === 'Voice') {
       const s = await api('GET', '/voice');
       const mode = (v, label) => h('div', { class: 'field-row' }, h('input', { type: 'radio', id: `mode-${v}`, name: 'mode', checked: settings.voice.mode === v,
@@ -793,11 +818,18 @@ function openSettings(tab) {
         runner = await api('PUT', '/runner', { concurrency: Number(at.value) });
         drawBoard();
       }, 'Saved.');
-      p.replaceChildren(h('div', { class: 'field-row' }, h('input', { type: 'checkbox', id: 'sounds', checked: settings.sounds,
-        onchange: (e) => act(() => saveSettings({ sounds: e.target.checked }), 'Saved.') }), h('label', { for: 'sounds' }, 'Sounds: ding when a ticket merges, chord when the board needs you')),
+      const hkAuto = h('input', { type: 'checkbox', id: 'hk-auto', checked: settings.housekeeping.auto });
+      const hkEvery = h('input', { type: 'number', id: 'hk-every', min: 1, step: 1, value: settings.housekeeping.every });
+      p.replaceChildren(...[['merge', 'Ding when a ticket merges'], ['attention', 'Chord when the board needs you']].map(([k, label]) =>
+        h('div', { class: 'field-row' }, h('input', { type: 'checkbox', id: `sound-${k}`, checked: settings.sounds[k],
+          onchange: (e) => act(() => saveSettings({ sounds: { ...settings.sounds, [k]: e.target.checked } }), 'Saved.') }), h('label', { for: `sound-${k}` }, label))),
         h('fieldset', {}, h('legend', {}, 'Runner'),
           h('div', { class: 'field-row' }, h('label', { for: 'concurrency' }, 'Tickets running at once'), at),
-          h('button', { onclick: saveRunner }, 'Save')));
+          h('button', { onclick: saveRunner }, 'Save')),
+        h('fieldset', {}, h('legend', {}, 'Housekeeping'),
+          h('div', { class: 'field-row' }, hkAuto, h('label', { for: 'hk-auto' }, 'File a housekeeping ticket after merges')),
+          h('div', { class: 'field-row' }, h('label', { for: 'hk-every' }, 'Merged tickets between runs'), hkEvery),
+          h('button', { onclick: () => act(() => saveSettings({ housekeeping: { auto: hkAuto.checked, every: Number(hkEvery.value) } }), 'Saved.') }, 'Save')));
     }
   }, tab);
   w.body.append(...tb.el);
@@ -990,7 +1022,7 @@ async function boot() {
   listen();
   const [list, st, md] = await Promise.all([api('GET', '/tickets'), api('GET', '/config/settings'), api('GET', '/config/models').catch(() => ({ value: null }))]);
   for (const t of list) tickets.set(t.id, t);
-  settings = { ...settings, ...st.value, voice: { ...settings.voice, ...st.value?.voice } };
+  settings = { ...settings, ...st.value, voice: { ...settings.voice, ...st.value?.voice }, housekeeping: { ...settings.housekeeping, ...st.value?.housekeeping } };
   models = md.value;
   configure(settings.voice);
   micEverywhere();

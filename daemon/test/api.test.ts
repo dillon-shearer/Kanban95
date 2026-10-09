@@ -302,6 +302,35 @@ describe('operator preferences', () => {
   });
 });
 
+describe('prompt templates', () => {
+  const file = (n: string) => join(repo, '.kanban95', 'templates', `${n}.md`);
+  const shipped = (n: string) => readFileSync(join(import.meta.dirname, '../../templates', `${n}.md`), 'utf8');
+
+  it('lists every template with its allowed variables, refuses an unknown variable by name without touching the file, resets to the default', async () => {
+    const all = await (await call('GET', '/api/templates')).json();
+    expect(all.vars).toContain('ticket');
+    expect(all.templates.map((t: { name: string }) => t.name)).toEqual(expect.arrayContaining(['brainstorm', 'plan', 'execute', 'housekeeping', 'test']));
+    expect(all.templates.find((t: { name: string }) => t.name === 'test')).toEqual({ name: 'test', path: file('test'), text: shipped('test') });
+
+    const saved = await call('PUT', '/api/templates/execute', { text: 'mine {{ ticket }}' });
+    expect(saved.status).toBe(200);
+    expect(readFileSync(file('execute'), 'utf8')).toBe('mine {{ ticket }}');
+
+    const bad = await call('PUT', '/api/templates/execute', { text: '{{ticket}} {{nope}}' });
+    expect(bad.status).toBe(400);
+    expect((await bad.json()).error).toMatch(/\{\{nope\}\}/);
+    expect(readFileSync(file('execute'), 'utf8')).toBe('mine {{ ticket }}');
+    expect((await call('PUT', '/api/templates/execute', { text: 3 })).status).toBe(400);
+    expect((await call('PUT', '/api/templates/..', { text: 'x' })).status).toBe(404);
+    expect((await call('PUT', '/api/templates/board', { text: 'x' })).status).toBe(404);
+
+    const reset = await call('POST', '/api/templates/execute/reset');
+    expect(reset.status).toBe(200);
+    expect((await reset.json()).text).toBe(shipped('execute'));
+    expect(readFileSync(file('execute'), 'utf8')).toBe(shipped('execute'));
+  });
+});
+
 describe('notepad', () => {
   it('reads empty when absent, saves the whole text, refuses over 256 KB with 413 without touching the file', async () => {
     const file = join(repo, '.kanban95', 'notepad.md');

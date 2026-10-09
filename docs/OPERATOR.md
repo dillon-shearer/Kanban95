@@ -60,10 +60,9 @@ For anything else, open the ticket (double-click the card): the Notes tab has th
 
 ### 5. Done
 
-A merged ticket's worktree and branch are removed by the board.
+A merged ticket's worktree and branch are removed by the board. Every ten merged tickets the board files a housekeeping ticket in Backlog; the **Housekeeping** button files and launches one on demand. Settings → General → Housekeeping switches the automatic ticket off or changes the interval.
 
 If you review a Done ticket and it is not right, **Reject** it (card menu, or the button in its ticket window; only on Done tickets). The dialog has one box, "What is wrong and what done looks like", and will not submit empty. The ticket goes back to In Progress with its retry count at 0 and a worker starts at once, with your text in its brief under "What failed on the last attempt". If the ticket had not merged yet, its merge is cancelled and the worker continues in the same worktree; if it had, the worker gets a fresh worktree from the base branch, which already holds the merged work, and the next pass merges again. Reset to Backlog, by contrast, starts over and loses your reason.
- Every ten merged tickets the board files and launches a housekeeping ticket; the **Housekeeping** button does it on demand.
 
 ## The windows
 
@@ -74,13 +73,13 @@ If you review a Done ticket and it is not right, **Reject** it (card menu, or th
 | Terminal | opens by itself; Ticket → Runs → Terminal | one agent session, keyboard and mic |
 | Inbox | taskbar "Inbox n", Start → Inbox | every ticket that needs you: questions to answer, and failures with what resolves them |
 | Brain | Start → Brain | search what agents learned (no query lists the newest), add a note yourself. Each row shows when it was written and from which ticket, with that ticket's status, so a row written for work that never landed stands out. **Edit** changes a row in place, **Delete** removes it after a confirm; merge rows by editing the survivor and deleting the rest. Agents name rows to delete in their summary notes, since only you and the planner can delete |
-| Settings | Start → Settings | Models, CLI paths and trusted folders (**Clear Claude trust**), Prompts (preferences), Grants, Limits, Voice, sounds |
+| Settings | Start → Settings | Models, CLI paths and trusted folders (**Clear Claude trust**), Prompts (preferences, templates), Grants, Limits, Voice, sounds |
 | Notepad | Start → Notepad | your own scratch notes for this repo, saved as you type |
 | Limits | Start → Limits, taskbar limit | the same as Settings → Limits in a small window to keep open beside the board |
 
 The desktop has an icon for Board, Inbox, Brain, Settings, Notepad, Limits, New ticket and New brainstorm down its left edge: click selects, double-click or Enter does what the Start menu entry does. Icons sit under every window.
 
-Windows can be dragged by the title bar, resized from the corner, minimized to the taskbar and maximized to fill the desktop (Maximize button or double-click the title bar; Restore puts it back). Board, Brain, Inbox, Settings and Notepad remember where you left them, maximized or not. With more windows than fit, small arrows appear at the ends of the taskbar buttons; click them or turn the mouse wheel over the taskbar to scroll. Right-click a taskbar button (or focus it and press Shift+F10 or the Menu key) for Restore, Minimize, Maximize and Close, plus **Open ticket** on a ticket's terminal; Close there only closes the window, the agent keeps running. Ctrl+click buttons to select several, Shift+click to select a range; right-click a selected one to Restore, Minimize or Close them all. A plain click clears the selection. Drag a button sideways to reorder the taskbar (the order resets on reload).
+Windows can be dragged by the title bar, resized from the corner, minimized to the taskbar and maximized to fill the desktop (Maximize button or double-click the title bar; Restore puts it back). Board, Brain, Inbox, Settings and Notepad remember where you left them, maximized or not. So does a ticket's terminal, per ticket: the first one cascades like any new window, but once you move or resize it, every later terminal for that ticket (the test phase, a retry, a Restart or Resume, reopening it from Ticket → Runs) opens at the same place and size, also after the board is closed and reopened. Brainstorm and operator terminals always cascade. With more windows than fit, small arrows appear at the ends of the taskbar buttons; click them or turn the mouse wheel over the taskbar to scroll. Right-click a taskbar button (or focus it and press Shift+F10 or the Menu key) for Restore, Minimize, Maximize and Close, plus **Open ticket** on a ticket's terminal; Close there only closes the window, the agent keeps running. Ctrl+click buttons to select several, Shift+click to select a range; right-click a selected one to Restore, Minimize or Close them all. A plain click clears the selection. Drag a button sideways to reorder the taskbar (the order resets on reload).
 
 ## Notepad
 
@@ -118,6 +117,10 @@ Inside a terminal every key goes to the agent instead: Esc interrupts Claude Cod
 
 Standing instructions for every agent, for example "No em dashes or non-ASCII characters in output" or "Keep responses brief". Write them in **Settings → Prompts → Preferences** and press **Save**; that writes `~/.kanban95/preferences.md` (the path is shown on the tab), up to 16 KB. Every prompt rendered after that (brainstorm, operator, plan, execute, test, housekeeping) carries them under "Operator preferences"; sessions already running keep the prompt they started with. They are yours, not the repo's, so they apply to every project the board works on. Never put a key or token in them: they are copied into every session's prompt.
 
+## Prompt templates
+
+Every agent session starts from a markdown template: brainstorm, operator, plan, execute, housekeeping and test. The shipped defaults are in the board's `templates/`; on first start each repo gets its own copies in `<repo>/.kanban95/templates/`, and those are what agents read. Edit them in **Settings → Prompts → Templates**: pick one, change the text, **Save**. The next run of that phase uses it (its rendered prompt is in the ticket's **Runs** tab); sessions already running keep theirs. A template may only use the variables listed under the editor, such as `{{ticket}}`; Save refuses any other and names it in the status bar. **Reset to default** puts the shipped text back. The copies belong to the repo, not to you: commit them to share an edit.
+
 ## Limits
 
 How much of each account's usage limits is spent: the Claude Code account and the Codex account the CLIs are logged into. **Settings → Limits** (or the **Limits** desktop icon, a small window you can keep open) has one table per CLI: each window (Claude: current session, current week for all models and per model; Codex: the 5 hour and 7 day windows), the percent used with a bar, and when it resets. The taskbar tray, beside "Inbox n", shows the most constrained one, for example "Claude 62%" (bold red from 90%); hover it for every window, click it for Settings → Limits.
@@ -142,7 +145,10 @@ If the microphone is blocked, the board says how to allow it: Windows Settings �
 
 ## Sounds
 
-`ding` when a ticket merges, `chord` when the board needs you. **Settings → General** turns them off.
+- **Ding** (a soft two-tone chime): a ticket merged; the status bar says "#<id> merged." It also plays once, with no message, when the runner stops because nothing is left to launch.
+- **Chord** (a gentle three-note chord): the board needs you on a ticket (a question, a silent exit, the retry cap, a merge conflict, a dirty base); the status bar says why, and the Inbox has it too.
+
+**Settings → General** has one checkbox per sound; each silences only its own.
 
 ## Dogfood walkthrough
 

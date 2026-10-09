@@ -7,6 +7,8 @@ description: Ask the Kanban95 operator a question. Use when a decision is genuin
 
 `ask_operator` flags the ticket `needs_human` and alerts a person who is doing other work. Their answer is typed into your session as one line and kept as a note on the ticket. Every question costs them a context switch, so ask rarely and make it easy.
 
+It is for ticket agents only (worker, tester on their own running ticket). A planner or operator terminal is interactive: ask in the terminal instead.
+
 ## When to ask
 
 Ask only when all of these hold:

@@ -24,3 +24,17 @@ it('with KANBAN95_HOME set, config is read from and written to that directory', 
   expect(readFileSync(join(set, 'preferences.md'), 'utf8')).toBe('be brief');
   expect(readPreferences()).toBe('be brief');
 });
+
+it('the old single sounds boolean carries over to both sounds; a missing one keeps both on', () => {
+  expect(writeConfig('settings', { sounds: false }).sounds).toEqual({ merge: false, attention: false });
+  expect(writeConfig('settings', { sounds: true }).sounds).toEqual({ merge: true, attention: true });
+  expect(writeConfig('settings', {}).sounds).toEqual({ merge: true, attention: true });
+  expect(writeConfig('settings', { sounds: { merge: false } }).sounds).toEqual({ merge: false, attention: true });
+  expect(() => writeConfig('settings', { sounds: 'off' })).toThrow();
+});
+
+it('housekeeping defaults to on every 10 merges and refuses an interval under 1 or fractional', () => {
+  expect(writeConfig('settings', {}).housekeeping).toEqual({ auto: true, every: 10 });
+  expect(() => writeConfig('settings', { housekeeping: { every: 0 } })).toThrow(/every/);
+  expect(() => writeConfig('settings', { housekeeping: { every: 2.5 } })).toThrow(/every/);
+});

@@ -12,11 +12,11 @@ Status is one of **backlog → in_progress → testing → done**. Two flags sit
 |---|---|
 | `launch` | the operator (Launch), the runner, or the board when the last dependency of a held ticket merges |
 | `submit` | the worker's `move_ticket(testing)` |
-| `pass` | the tester's `move_ticket(done)` |
-| `fail` | the tester's `move_ticket(in_progress)` |
+| `pass` | the tester's `report_test(passed: true)` (an operator's `move_ticket(done)` after it) |
+| `fail` | the tester's `report_test(passed: false)`, or an operator's `move_ticket(in_progress)` on a ticket in testing |
 | `ask` | `ask_operator` from any agent |
 | `answer` | the operator, `POST /api/tickets/:id/answer` |
-| `exit` | the agent's terminal closed without a `move_ticket`, or its launch failed |
+| `exit` | the agent's terminal closed without a `move_ticket` or `report_test`, or its launch failed |
 | `merged` | the merge queue |
 | `conflict` | the board, when the base will not merge into the ticket's worktree (on submit or in the merge queue) or the worktree has uncommitted changes |
 | `dirty` | the merge queue, once the main checkout has had uncommitted changes for the whole wait (10 min) |
@@ -24,6 +24,8 @@ Status is one of **backlog → in_progress → testing → done**. Two flags sit
 | `resume` | the operator, Resume in the card menu or the Inbox, `POST /api/tickets/:id/resume` |
 | `restart` | the operator, Restart in the card menu, the ticket window (Ctrl+R) or the Inbox, `POST /api/tickets/:id/restart` |
 | `reject` | the operator, Reject on a Done card's menu or in its ticket window, `POST /api/tickets/:id/reject` |
+
+The tester's verdict is the move: `report_test` writes the PASS or FAIL note, then applies `pass` or `fail`, so a tester that stops after reporting cannot leave the ticket in Testing. It is refused, with no note written, on a ticket not in testing. A `move_ticket` to the column the ticket is already in returns the ticket unchanged and raises no event, so an agent following the old report-then-move script is not refused.
 
 ## The table
 
@@ -100,7 +102,7 @@ The ticket's `model` and `effort` override the execute phase only, so a retry ru
 
 ### Ending a session
 
-Both CLIs run interactive sessions that never exit by themselves. When an agent's `move_ticket` is accepted, the board revokes its grant and kills its terminal; that exit is expected (`runs.outcome` = the event: `submit`, `pass`, `fail`). The operator's X on a terminal (`DELETE /api/sessions/:id`) sets `runs.outcome` = `closed`, revokes the grant and kills the pty, then applies `exit` itself with the failure note "ended by the operator from the terminal window" (role `operator`), so the ticket is flagged with the usual "To resolve:" line and offers Resume; the exit handler sees `closed` and writes no second note. A brainstorm has no ticket, so ending one only stops it. Any other exit, including the operator revoking a grant and the daemon shutting down, is the `exit` event (`runs.outcome` = `exit`), so a ticket can never sit in a running column with no agent and no flag.
+Both CLIs run interactive sessions that never exit by themselves. When an agent's `move_ticket` or the tester's `report_test` is accepted, the board revokes its grant and kills its terminal; that exit is expected (`runs.outcome` = the event: `submit`, `pass`, `fail`). The operator's X on a terminal (`DELETE /api/sessions/:id`) sets `runs.outcome` = `closed`, revokes the grant and kills the pty, then applies `exit` itself with the failure note "ended by the operator from the terminal window" (role `operator`), so the ticket is flagged with the usual "To resolve:" line and offers Resume; the exit handler sees `closed` and writes no second note. A brainstorm has no ticket, so ending one only stops it. Any other exit, including the operator revoking a grant and the daemon shutting down, is the `exit` event (`runs.outcome` = `exit`), so a ticket can never sit in a running column with no agent and no flag.
 
 ### Restart
 
@@ -121,7 +123,7 @@ There is no Pause yet; when it exists, a paused board flags these tickets (`exit
 - **It stops itself** when nothing is running and no candidate is left: the flag goes off with `why: "nothing left to launch"`, a `ding` (`ticket: null`) plays and the status bar says "Runner stopped: nothing left to launch". A backlog ticket held only on a running ticket's merge is not "nothing left": the runner waits for that merge. Tickets that stay behind (flagged, or held on a flagged ticket) wait for the operator.
 - **Stop** turns the flag off. Running agents finish their current phase and their merges land, but nothing new starts. The operator's own Launch on a card works either way. A ticket that hits the retry cap and flags never stops the runner.
 - **A restart** keeps the flag (`<repo>/.kanban95/runner.json`, git-ignored); `recover` resumes the running tickets and the runner carries on from there.
-- **Housekeeping** tickets created after every `housekeeping_every` merges are candidates like any other and sort by their effort.
+- **Housekeeping** tickets created after every `housekeeping.every` merges are candidates like any other and sort by their effort.
 
 Tickets held with `blocked_on_deps` by a manual Launch keep their own path: the board launches them when their last dependency merges, runner or not. Dependency cycles cannot exist: `create_ticket`, `update_ticket` and `PATCH /api/tickets/:id` refuse a dependency list that would make a ticket depend on itself through any chain.
 
@@ -176,7 +178,7 @@ A repo's prompts come from its own `.kanban95/templates/`, copied from `template
 
 ## Sounds
 
-`ding.wav` when a ticket is merged, `chord.wav` whenever `needs_human` is raised by the table (question, silent exit, retry cap, conflict at the cap, dirty base). The daemon sends `{"sound": "ding" | "chord", "ticket": <id>}` on the `/events` websocket; the UI plays `ui/sounds/<sound>.wav` unless sounds are off in Settings → General. Every transition also sends `{"ticket": <id>}`, so the board redraws that card without a reload (`docs/ARCHITECTURE.md` → Events).
+`ding.wav` when a ticket is merged, `chord.wav` whenever `needs_human` is raised by the table (question, silent exit, retry cap, conflict at the cap, dirty base). The daemon sends `{"sound": "ding" | "chord", "ticket": <id>}` on the `/events` websocket; the UI plays `ui/sounds/<sound>.wav` unless that sound is off in Settings → General, and says the reason in the status bar ("#<id> merged.", or the needs-human reason). Every transition also sends `{"ticket": <id>}`, so the board redraws that card without a reload (`docs/ARCHITECTURE.md` → Events).
 
 ## Janitor
 
@@ -188,10 +190,10 @@ A repo's prompts come from its own `.kanban95/templates/`, copied from `template
 
 ## Housekeeping
 
-Every time the number of merged tickets (housekeeping tickets not counted) reaches a multiple of `housekeeping_every`, the board creates a ticket that runs the `housekeeping.md` template and leaves it in Backlog, where the runner picks it up like any other (or the operator launches it): same worktree, test, retry and merge path. The **Housekeeping** button creates one and launches it at once. The interval lives in `<repo>/.kanban95/config.json` and defaults to 10:
+Every time the number of merged tickets (housekeeping tickets not counted) reaches a multiple of `housekeeping.every`, the board creates a ticket that runs the `housekeeping.md` template and leaves it in Backlog, where the runner picks it up like any other (or the operator launches it): same worktree, test, retry and merge path. The **Housekeeping** button creates one and launches it at once. Settings → General → Housekeeping switches the automatic ticket off and sets the interval; both live in `~/.kanban95/settings.json` and default to on, every 10:
 
 ```json
-{ "housekeeping_every": 10 }
+{ "housekeeping": { "auto": true, "every": 10 } }
 ```
 
 The count is derived from the database (`template = 'execute' AND merged_at IS NOT NULL`), not stored: a counter in the committed `config.json` would leave the base branch dirty after every merge, and a dirty base refuses launches and merges.

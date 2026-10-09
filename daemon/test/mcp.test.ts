@@ -5,6 +5,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { mint, revoke } from '../src/grants.ts';
+import { MAX_RETRY } from '../src/lifecycle.ts';
 import { MCP_DOC, renderMcpDoc } from '../src/mcp-doc.ts';
 import { TOOLS } from '../src/mcp.ts';
 import { start } from '../src/server.ts';
@@ -83,6 +84,7 @@ describe('role matrix: every "no" cell is refused and audited as denied', () => 
     ['planner', () => planner, 'move_ticket', { ticket_id: 1, status: 'testing' }],
     ['planner', () => planner, 'report_test', { ticket_id: 1, passed: true, summary: 'x' }],
     ['planner', () => planner, 'report_cleanup', { ticket_id: 1, items: [{ path: 'a', action: 'deleted', reason: 'r' }] }],
+    ['planner', () => planner, 'ask_operator', { ticket_id: 1, question: 'x' }],
     ['worker', () => worker3, 'create_ticket', { title: 'x' }],
     ['worker', () => worker3, 'report_test', { passed: true, summary: 'x' }],
     ['worker', () => worker3, 'set_model', { effort: 'high' }],
@@ -215,13 +217,28 @@ describe('tools', () => {
     expect((await call(worker4, 'get_ticket')).json.flags.needs_human).toBe(true);
   });
 
-  it('report_test stores PASS as a summary note and FAIL as a failure note with evidence', async () => {
+  it('report_test(false) writes the failure note and moves the ticket back to in_progress, retry + 1; a following move_ticket there is accepted', async () => {
+    // Ticket 3 is in testing from the move_ticket tests. The pass path, with its merge, is in lifecycle.test.ts.
     const fail = (await call(tester3, 'report_test', { passed: false, summary: 'criterion 2 fails', evidence: ['npm test: 1 failed'] })).json;
     expect(srv.db.prepare('SELECT role, kind, body FROM notes WHERE id = ?').get(fail.note_id)).toEqual({
       role: 'tester', kind: 'failure', body: 'FAIL: criterion 2 fails\n- npm test: 1 failed',
     });
-    const pass = (await call(tester3, 'report_test', { passed: true, summary: 'all green' })).json;
-    expect(srv.db.prepare('SELECT kind, body FROM notes WHERE id = ?').get(pass.note_id)).toEqual({ kind: 'summary', body: 'PASS: all green' });
+    expect(fail.ticket).toMatchObject({ status: 'in_progress', retry: 1 });
+    expect(await call(tester3, 'move_ticket', { status: 'in_progress' })).toMatchObject({ denied: false, json: { status: 'in_progress', retry: 1 } });
+    expect(lastAudit()).toMatchObject({ tool: 'move_ticket', outcome: 'ok' });
+    // A verdict on a ticket not in testing is refused before any note is written.
+    const notes = () => (srv.db.prepare('SELECT count(*) AS n FROM notes WHERE ticket_id = 3').get() as { n: number }).n;
+    const before = notes();
+    expect(await call(tester3, 'report_test', { passed: true, summary: 'late' })).toMatchObject({ denied: true, text: 'cannot report a test on a ticket in in_progress' });
+    expect(notes()).toBe(before);
+  });
+
+  it('report_test(false) at the retry cap flags needs_human and keeps the FAIL note before the stop note', async () => {
+    srv.db.prepare(`UPDATE tickets SET status = 'testing', retry = ${MAX_RETRY}, needs_human = 0 WHERE id = 3`).run();
+    const r = (await call(tester3, 'report_test', { passed: false, summary: 'still broken' })).json;
+    expect(r.ticket).toMatchObject({ status: 'in_progress', retry: MAX_RETRY + 1, flags: { needs_human: true } });
+    const last = srv.db.prepare("SELECT body FROM notes WHERE ticket_id = 3 AND kind = 'failure' AND id >= ? ORDER BY id").all(r.note_id) as { body: string }[];
+    expect(last.map((n) => n.body.split('\n')[0])).toEqual(['FAIL: still broken', `stopped after ${MAX_RETRY + 1} failed tests`]);
   });
 
   it('report_cleanup and add_note write notes under the grant role; notes come back in get_ticket order', async () => {

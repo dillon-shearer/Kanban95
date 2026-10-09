@@ -148,7 +148,8 @@ export const TOOLS: Record<string, Tool<z.ZodRawShape>> = {
   move_ticket: tool({
     description:
       'Move a ticket to another column. A worker moves its ticket to testing when the work is committed in the worktree and ready to be checked. ' +
-      'A tester moves it to done after report_test with passed true (the board then merges the branch), or back to in_progress after report_test with the failure so the worker retries. ' +
+      'A tester does not need it: report_test moves the ticket (to done or back to in_progress) and ends the session. ' +
+      'A move to the column the ticket is already in returns the ticket unchanged. ' +
       'Once the move is accepted your session is over: the board ends it and starts the next agent. ' +
       'An operator grant may move any ticket the same ways, which ends that ticket\x27s agent, not its own session, and may launch a backlog ticket by moving it to in_progress; ' +
       'it still cannot finish a ticket the tester has not passed. Returns the ticket.',
@@ -164,6 +165,8 @@ export const TOOLS: Record<string, Tool<z.ZodRawShape>> = {
       if (!allowed.includes(a.status)) throw new Deny(`${an(c.grant.role)} may only move ${c.grant.role === 'operator' ? 'a' : 'its'} ticket to: ${allowed.join(', ')}`);
       // Into in_progress: from backlog it is a launch (only an operator reaches a backlog ticket), from testing a failed test.
       const from = readTicket(c.db, id).status;
+      // Already there (a tester whose report_test moved it, then followed the old two-step script): nothing to do.
+      if (from === a.status) return readTicket(c.db, id);
       return apply(c.board, id, a.status === 'testing' ? 'submit' : a.status === 'done' ? 'pass' : from === 'backlog' ? 'launch' : 'fail').ticket;
     },
   }),
@@ -286,7 +289,7 @@ export const TOOLS: Record<string, Tool<z.ZodRawShape>> = {
     description:
       'Ask the human operator a question you cannot resolve from the ticket, the brain or the code. The ticket is flagged needs_human and the operator is alerted; ' +
       'the answer is typed into your session as one line and kept as a note on the ticket. Ask once with full context and the options you see, rather than many small questions. Returns the question id.',
-    access: { planner: 'yes', worker: 'own', tester: 'own', operator: 'yes' },
+    access: { worker: 'own', tester: 'own' },
     input: { ticket_id: ticketId, question: z.string().min(1) },
     run(c, a) {
       const id = (c.ticket = own(c, a.ticket_id));
@@ -298,7 +301,8 @@ export const TOOLS: Record<string, Tool<z.ZodRawShape>> = {
   report_test: tool({
     description:
       'Record the structured result of testing a ticket against its acceptance criteria. passed is the overall verdict; summary says which criteria passed or failed and why; ' +
-      'evidence lists what proves it (test output, screenshot paths kept as run evidence, commands run). Call this before move_ticket. A failed report becomes the failure note the worker sees on retry.',
+      'evidence lists what proves it (test output, screenshot paths kept as run evidence, commands run). The report is the verdict: it moves the ticket to done (the board merges the branch) ' +
+      'or back to in_progress (the worker retries, and a failed report becomes the failure note it sees), and ends your session. No move_ticket is needed. Returns the note id and the ticket.',
     access: { tester: 'own' },
     input: {
       ticket_id: ticketId,
@@ -308,9 +312,13 @@ export const TOOLS: Record<string, Tool<z.ZodRawShape>> = {
     },
     run(c, a) {
       const id = (c.ticket = own(c, a.ticket_id));
-      readTicket(c.db, id);
+      const { status } = readTicket(c.db, id);
+      // Checked before the note is written, so a refused verdict leaves nothing behind.
+      if (status !== 'testing') throw new Refused(`cannot report a test on a ticket in ${status}`);
       const body = [`${a.passed ? 'PASS' : 'FAIL'}: ${a.summary}`, ...a.evidence.map((e) => `- ${e}`)].join('\n');
-      return addNote(c, id, a.passed ? 'summary' : 'failure', body);
+      const { note_id } = addNote(c, id, a.passed ? 'summary' : 'failure', body);
+      // The report is the verdict: it drives the move, so a tester that stops after reporting cannot strand the ticket in Testing.
+      return { note_id, ticket: apply(c.board, id, a.passed ? 'pass' : 'fail').ticket };
     },
   }),
 

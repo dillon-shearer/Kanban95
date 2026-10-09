@@ -130,7 +130,6 @@ if (brief.startsWith('# Test') && model !== 'hang') {
   const passed = model === 'pass';
   const tested = execFileSync('git', ['log', '-1', '--format=%s'], { encoding: 'utf8' }).trim();
   await call('report_test', { passed, summary: (passed ? 'every criterion passes' : 'criterion 1 fails') + ' (tested: ' + tested + ')' });
-  await call('move_ticket', { status: passed ? 'done' : 'in_progress' });
 } else if (model === 'silent') {
   process.exit(0);
 } else if (model !== 'hang') {
@@ -286,6 +285,8 @@ describe('lifecycle', { timeout: 60_000 }, () => {
     await until(() => t(id).flags.needs_human && sessionsOf(id).length === 0, 'the retry cap');
     await new Promise((r) => setTimeout(r, 500));
     expect(runs(id).map((x) => x.phase)).toEqual(['execute', 'test', 'execute', 'test', 'execute', 'test', 'execute', 'test']);
+    // The fake tester only calls report_test(false): the report alone ends each test run and sends the ticket back.
+    expect(runs(id).filter((x) => x.phase === 'test').map((x) => x.outcome)).toEqual(['fail', 'fail', 'fail', 'fail']);
     expect(t(id)).toMatchObject({ status: 'in_progress', retry: MAX_RETRY + 1, flags: { needs_human: true } });
     expect(sounds).toEqual([{ sound: 'chord', ticket: id }]);
     expect(notes(id, 'failure').at(-1)).toMatch(/^stopped after 4 failed tests\nTo resolve: .*Reset to Backlog and Launch/);
@@ -551,6 +552,25 @@ ${TO_RESOLVE}`]);
     await post(`/api/tickets/${eleventh}/launch`);
     await landed(eleventh);
     expect(hk()).toHaveLength(1);
+  });
+
+  it('settings.json housekeeping: switched off files none; `every` sets the interval', async () => {
+    const settings = join(process.env.KANBAN95_HOME!, 'settings.json');
+    const hk = () => db.prepare("SELECT count(*) AS n FROM tickets WHERE template = 'housekeeping'").get() as { n: number };
+    try {
+      writeFileSync(settings, JSON.stringify({ housekeeping: { auto: false, every: 1 } }));
+      const off = ticket('Off');
+      await post(`/api/tickets/${off}/launch`);
+      await landed(off);
+      expect(hk().n).toBe(0);
+      writeFileSync(settings, JSON.stringify({ housekeeping: { every: 2 } }));
+      const second = ticket('Second');
+      await post(`/api/tickets/${second}/launch`);
+      await landed(second);
+      expect(hk().n).toBe(1);
+    } finally {
+      rmSync(settings, { force: true });
+    }
   });
 });
 
