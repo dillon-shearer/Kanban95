@@ -984,10 +984,17 @@ function openSettings(tab) {
       text.value = value;
       // One template at a time: the select picks it, Save and Reset replace its entry with what the daemon wrote.
       const byName = Object.fromEntries(tpls.templates.map((t) => [t.name, t]));
-      const pick = h('select', { id: 'template' }, tpls.templates.map((t) => h('option', {}, t.name)));
+      // A stale copy differs from the shipped default (edited, or from an older default the board would not overwrite): its option and Reset say so.
+      const label = (t) => (t.stale ? `${t.name} (differs from default)` : t.name);
+      const pick = h('select', { id: 'template' }, tpls.templates.map((t) => h('option', { value: t.name }, label(t))));
       const body = h('textarea', { id: 'template-text', rows: 14, spellcheck: 'false', 'data-mic': 'off' });
       const where = h('p', {});
-      const show = (t) => { byName[t.name] = t; body.value = t.text; where.textContent = t.path; };
+      const stale = h('span', { id: 'template-stale' }, 'Differs from the shipped default.');
+      const show = (t) => {
+        byName[t.name] = t; body.value = t.text; where.textContent = t.path;
+        stale.hidden = !t.stale;
+        [...pick.options].find((o) => o.value === t.name).textContent = label(t);
+      };
       pick.onchange = () => show(byName[pick.value]);
       show(tpls.templates[0]);
       p.replaceChildren(h('fieldset', {}, h('legend', {}, 'Preferences'),
@@ -1001,7 +1008,8 @@ function openSettings(tab) {
           h('p', { id: 'template-vars' }, `Variables: ${tpls.vars.map((v) => `{{${v}}}`).join(' ')}`),
           where,
           h('button', { onclick: () => act(async () => show(await api('PUT', `/templates/${pick.value}`, { text: body.value })), `Saved ${pick.value}.md.`) }, 'Save'),
-          h('button', { onclick: () => act(async () => show(await api('POST', `/templates/${pick.value}/reset`)), `${pick.value}.md reset to default.`) }, 'Reset to default')));
+          h('button', { onclick: () => act(async () => show(await api('POST', `/templates/${pick.value}/reset`)), `${pick.value}.md reset to default.`) }, 'Reset to default'),
+          ' ', stale));
     } else if (tab === 'Voice') {
       const s = await api('GET', '/voice');
       const mode = (v, label) => h('div', { class: 'field-row' }, h('input', { type: 'radio', id: `mode-${v}`, name: 'mode', checked: settings.voice.mode === v,

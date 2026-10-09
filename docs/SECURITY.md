@@ -100,6 +100,8 @@ In an agent CLI's config, one file, only for Claude Code launches: `~/.claude.js
 - audited: `trust.write` with the file and the key, attributed to the launching ticket;
 - removable from Settings → CLIs (`trust.clear`), which deletes only that key, by the same write path.
 
+To resume a killed Claude Code session the board only checks that `<uuid>.jsonl` exists under `~/.claude/projects/*/` (or `$CLAUDE_CONFIG_DIR/projects/*/`): it lists those dirs and never opens a transcript (`docs/CLIS.md` → Resuming a killed session).
+
 Codex is trusted per process with `-c`, so `~/.codex/config.toml` is never written. Claude Code's one-time bypass-permissions warning (`skipDangerousModePermissionPrompt` in `~/.claude/settings.json`) is not written by the board: the operator accepts it once by hand.
 
 Tests run against a throwaway home directory (`daemon/test/home.ts`, loaded as a `setupFiles` entry by `daemon/vitest.config.ts`, which the repo-root `vitest.config.mts` re-exports so a run from either directory is the same; it also sets `KANBAN95_HOME`, and the daemon throws on any `~/.kanban95` path under vitest without it; which refuses to run if `os.homedir()` did not follow it), so the suite cannot write the operator's files. `daemon/test/real-home-guard.ts` checks the real home after every run and fails `npm test` if a test left a trust entry for one of this run's temp repos (every temp dir of the run is under one fresh `k95-run-*` dir, so a concurrent run in another worktree does not count), a `~/.claude.json.kanban95.bak` or a `~/.kanban95` that was not there before (proven by running the launcher tests with the redirect switched off against a fake home: exit 1, every entry named).

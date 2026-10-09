@@ -320,10 +320,11 @@ describe('prompt templates', () => {
     const all = await (await call('GET', '/api/templates')).json();
     expect(all.vars).toContain('ticket');
     expect(all.templates.map((t: { name: string }) => t.name)).toEqual(expect.arrayContaining(['brainstorm', 'plan', 'execute', 'housekeeping', 'test']));
-    expect(all.templates.find((t: { name: string }) => t.name === 'test')).toEqual({ name: 'test', path: file('test'), text: shipped('test') });
+    expect(all.templates.find((t: { name: string }) => t.name === 'test')).toEqual({ name: 'test', path: file('test'), text: shipped('test'), stale: false });
 
     const saved = await call('PUT', '/api/templates/execute', { text: 'mine {{ ticket }}' });
     expect(saved.status).toBe(200);
+    expect((await saved.json()).stale).toBe(true);
     expect(readFileSync(file('execute'), 'utf8')).toBe('mine {{ ticket }}');
 
     const bad = await call('PUT', '/api/templates/execute', { text: '{{ticket}} {{nope}}' });
@@ -336,7 +337,7 @@ describe('prompt templates', () => {
 
     const reset = await call('POST', '/api/templates/execute/reset');
     expect(reset.status).toBe(200);
-    expect((await reset.json()).text).toBe(shipped('execute'));
+    expect(await reset.json()).toMatchObject({ text: shipped('execute'), stale: false });
     expect(readFileSync(file('execute'), 'utf8')).toBe(shipped('execute'));
   });
 });

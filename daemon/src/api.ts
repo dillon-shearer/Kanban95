@@ -11,7 +11,7 @@ import { audit, revoke } from './grants.js';
 import { killGrantSession, sessions, sessionsOf, type Session } from './launcher.js';
 import { apply, brainstorm, changed, housekeeping, operator, Refused, runner, runnerState, setRunner, type Board } from './lifecycle.js';
 import { BadConfig, CONFIGS, configPath, knownModels, preferencesPath, project, projectsPath, readPreferences, readProjects, uncatalogued, writeConfig, writePreferences, writeProjects, type ConfigName } from './settings.js';
-import { resetTemplate, templatePath, TEMPLATES, unknownVar, VARS, writeTemplate, type TemplateName } from './templates.js';
+import { isStale, resetTemplate, templatePath, TEMPLATES, unknownVar, VARS, writeTemplate, type TemplateName } from './templates.js';
 import { trustStatus, untrustClaude } from './trust.js';
 import { download, status as voiceStatus } from './voice.js';
 import { limits } from './limits.js';
@@ -503,7 +503,10 @@ function templateName(s: string): TemplateName {
 }
 
 // The raw file, not loadTemplate: a copy with a bad variable must still show so the operator can fix it.
-const templateView = (board: Board, name: TemplateName) => ({ name, path: templatePath(board.repo, name), text: readFileSync(templatePath(board.repo, name), 'utf8') });
+const templateView = (board: Board, name: TemplateName) => {
+  const text = readFileSync(templatePath(board.repo, name), 'utf8');
+  return { name, path: templatePath(board.repo, name), text, stale: isStale(name, text) };
+};
 
 /** The whole body. One over `max` bytes is still read to the end (so the client gets the 413, not a reset), then refused. */
 async function readRaw(req: IncomingMessage, max: number, tooLarge: string): Promise<Buffer> {

@@ -46,6 +46,9 @@ describe('ui-settings', { timeout: 60_000 }, () => {
     await page.evaluate(`document.querySelector('#template-text').value = 'mine {{ticket}}'`);
     await click('Save');
     await until(() => readFileSync(file, 'utf8') === 'mine {{ticket}}', 'test.md saved');
+    const marked = () => page.evaluate<[boolean, string]>(`[document.querySelector('#template-stale').hidden, document.querySelector('#template').selectedOptions[0].textContent]`);
+    await until(async () => (await marked())[0] === false, 'the differs-from-default mark');
+    expect(await marked()).toEqual([false, 'test (differs from default)']);
     await page.evaluate(`document.querySelector('#template-text').value = 'bad {{nope}}'`);
     await click('Save');
     await until(async () => (await statusBar()).includes('{{nope}}'), 'the refusal in the status bar');
@@ -54,6 +57,7 @@ describe('ui-settings', { timeout: 60_000 }, () => {
     await click('Reset to default');
     await until(async () => (await text()) === shipped, 'the default in the editor');
     expect(readFileSync(file, 'utf8')).toBe(shipped);
+    expect(await marked()).toEqual([true, 'test']);
   });
 
   it('Settings > General sets the runner concurrency; the status line shows the limit and who waits on shared files', async () => {
