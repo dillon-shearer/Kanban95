@@ -40,7 +40,7 @@ Retry count: {{retry}} (after 3 failed retries the ticket stops and goes to the 
 1. Run the full test suite (`npm test`) and the build, once. A failure is a failed ticket.
 2. Review the diff against each acceptance criterion, one by one. Note which pass and which fail, and why.
 3. Where the diff adds behaviour that no test covers, write the missing tests and commit them. Each test must be able to fail for a real reason.
-4. `brain_search` the subsystems the diff changes. Name every row the diff made false, with its id, in your `report_test` summary.
+4. `brain_search` the subsystems the diff changes. Name every row the diff made false, with its id, in your `report_test` summary. A `brain_add` must pass the three-question gate in the `brain_add` description (Quality, Scope, Worth); a row failing any one is not written.
 5. If the ticket changes the UI, screenshot the affected screens with a headless script built on `daemon/test/cdp.ts` (`Page.captureScreenshot`), and keep the screenshots you cite as evidence. Delete every other artefact you made (screenshots, temp dirs).
 
 ## Operator preferences

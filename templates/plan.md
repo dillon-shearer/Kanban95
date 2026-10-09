@@ -24,7 +24,7 @@ Retry count: {{retry}} (0 means first attempt).
 
 ## How to work
 
-1. Read the code the ticket touches. Use `brain_search` and `get_ticket` for anything above that is not enough.
+1. Read the code the ticket touches. Use `brain_search` and `get_ticket` for anything above that is not enough. A `brain_add` must pass the three-question gate in the `brain_add` description (Quality, Scope, Worth); a row failing any one is not written.
 2. Decide the approach: which files change, what is added, what is removed, how each acceptance criterion will be proven, and the risks.
 3. If a decision belongs to the operator, ask with `ask_operator` instead of guessing.
 4. If the criteria are vague or not measurable, sharpen them with `update_ticket` and say why in the plan.
