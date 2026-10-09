@@ -15,7 +15,8 @@ The board makes no model calls of its own: being provider-agnostic means it only
 3. A grant is minted for the template's role.
 4. `<repo>/.kanban95/sessions/<run-id>/` is created (for Claude Code owner-only, Windows: `icacls /inheritance:r /grant:r <user>:(OI)(CI)F`, POSIX: mode 0700; for Codex not, see Reach by role) and gets `prompt.md` and, for Claude Code, `mcp.json` (plus `settings.json` for a worker or tester).
 5. The CLI starts in a pty with `cwd` = the worktree. The **initial message** is one line:
-   `Read ../../.kanban95/sessions/<run-id>/prompt.md in full and follow it. It is your brief for this session.`
+   `Read C:/path/to/repo/.kanban95/sessions/<run-id>/prompt.md in full and follow it. It is your brief for this session.`
+   The path is absolute, with forward slashes: given the relative form, agents resolved it against the home directory, got "File does not exist" and had to retry. If the absolute path holds a character `cmd.exe` cannot carry (below), the message falls back to the relative form `../../.kanban95/sessions/<run-id>/prompt.md`, since the worktree and the session dir share the repo prefix where that character sits.
    The prompt is not put on the command line: Windows caps a command line at 32 767 characters (a test prompt carries the whole diff) and `cmd.exe` cannot pass a newline inside an argument.
 
 On Windows the pty runs `cmd.exe /d /s /c "<cli> <args>"` so that `PATHEXT` resolves `claude.exe` and the `codex.cmd` npm shim. Arguments containing `"`, `%`, a newline, or ending in `\` are refused rather than escaped. `NoDefaultCurrentDirectoryInExePath=1` stops `cmd.exe` from running a `claude.cmd` that happens to sit in the worktree.

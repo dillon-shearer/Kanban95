@@ -22,13 +22,16 @@ export function childEnv(extra: Record<string, string> = {}): Record<string, str
   return { ...env, ...extra };
 }
 
+/** Whether an argument can pass through cmd.exe unescaped: `"`, `%` and newlines cannot, and a trailing `\` would escape the closing quote. */
+export const cmdSafe = (a: string) => !/["%\r\n]/.test(a) && !a.endsWith('\\');
+
 /**
  * Windows: cmd.exe resolves `claude` (.exe) and `codex` (an npm .cmd shim) through PATHEXT, which conpty alone does not.
  * The command line is built here because node-pty's own quoting is MSVCRT-style, which cmd.exe does not read.
  */
 function windowsCommandLine(cmd: string, args: string[]): string {
   const quoted = [cmd, ...args].map((a) => {
-    if (/["%\r\n]/.test(a) || a.endsWith('\\')) throw new Error(`argument not safe to pass through cmd.exe: ${a}`);
+    if (!cmdSafe(a)) throw new Error(`argument not safe to pass through cmd.exe: ${a}`);
     return /^[\w\-.:/=\\]+$/.test(a) ? a : `"${a}"`;
   });
   return `/d /s /c "${quoted.join(' ')}"`;

@@ -1,6 +1,6 @@
 // UI state the board keeps across restarts: <repo>/.kanban95/ui.json through GET/PUT /api/ui, not browser storage: the daemon binds
 // a new port each start, and per-origin storage started empty every time. Keys: `k95.win.<id>` (wm.js window places),
-// `k95.layout` (the startup layout) and `k95.collapsed` (folded Board columns), in app.js.
+// `k95.layout` (the startup layout), `k95.collapsed` (folded Board columns) and `k95.view` (the Board's filter, sort and group), in app.js.
 // One cache, loaded once before any window opens; each change is written whole 500 ms after the last one, and on pagehide.
 let cache = {};
 let timer = null;
