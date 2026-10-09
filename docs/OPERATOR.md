@@ -143,7 +143,10 @@ If the microphone is blocked, the board says how to allow it: Windows Settings �
 
 ## Sounds
 
-`ding` when a ticket merges, `chord` when the board needs you. **Settings → General** turns them off.
+- **Ding** (a soft two-tone chime): a ticket merged; the status bar says "#<id> merged." It also plays once, with no message, when the runner stops because nothing is left to launch.
+- **Chord** (a gentle three-note chord): the board needs you on a ticket (a question, a silent exit, the retry cap, a merge conflict, a dirty base); the status bar says why, and the Inbox has it too.
+
+**Settings → General** has one checkbox per sound; each silences only its own.
 
 ## Dogfood walkthrough
 
