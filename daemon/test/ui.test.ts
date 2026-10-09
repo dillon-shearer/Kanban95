@@ -8,6 +8,7 @@ import { delimiter, join, resolve } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { sessions } from '../src/launcher.ts';
+import { sources } from '../src/limits.ts';
 import { start } from '../src/server.ts';
 import { MANIFEST, modelDir, status } from '../src/voice.ts';
 import { browser, until, type Page } from './cdp.ts';
@@ -51,6 +52,7 @@ let db: DatabaseSync;
 let page: Page;
 let base: string;
 const PATH0 = process.env.PATH;
+let limitCalls = 0;
 const git = (...a: string[]) => execFileSync('git', a, { cwd: repo, encoding: 'utf8' }).trim();
 const ticket = (title: string, cols: Record<string, unknown> = {}) => {
   const keys = ['title', ...Object.keys(cols)];
@@ -82,6 +84,9 @@ beforeAll(async () => {
   writeFileSync(join(process.env.USERPROFILE!, '.kanban95', 'models.json'), JSON.stringify({
     cli: 'claude', claude: { execute: { model: 'work', effort: 'low' }, test: { model: 'pass', effort: 'low' } },
   }));
+  // The tray asks for limits on load: canned answers, never the real CLIs. Claude's count says how often it was asked.
+  sources.claude = async () => `Current session: ${62 + limitCalls++}% used · resets Oct 8, 7:59pm (America/New_York)`;
+  sources.codex = async () => { throw new Error('codex app-server could not start: ENOENT'); };
   srv = await start({ repo });
   db = srv.db;
   base = `http://127.0.0.1:${srv.port}/`;
@@ -521,7 +526,7 @@ describe('ui', { timeout: 60_000 }, () => {
     await page.goto(base);
     await until(() => page.evaluate(`!!document.querySelector('[data-win="board"]')`), 'the board');
     expect(await page.evaluate(`[...document.querySelectorAll('#icons .k95-icon')].map((e) => e.textContent)`))
-      .toEqual(['Board', 'Inbox', 'Brain', 'Settings', 'Notepad', 'New ticket', 'New brainstorm']);
+      .toEqual(['Board', 'Inbox', 'Brain', 'Settings', 'Notepad', 'Limits', 'New ticket', 'New brainstorm']);
     await page.evaluate(`document.querySelector('[data-win="board"] [aria-label="Close"]').click()`); // the board may sit over the icons
     // Every image loaded from our origin: a CSP block or a missing file leaves naturalWidth at 0.
     await until(() => page.evaluate(`[...document.querySelectorAll('#icons img')].every((i) => i.complete && i.naturalWidth === 32)`), 'the icon images');
@@ -563,6 +568,21 @@ describe('ui', { timeout: 60_000 }, () => {
     await until(async () => (await statusBar()).includes('over 16 KB'), 'the refusal in the status bar');
     expect(readFileSync(file, 'utf8')).toBe('no em dashes');
     rmSync(file);
+  });
+
+  it('shows the most constrained limit in the tray; a click opens Settings > Limits, whose Refresh asks the CLIs again', async () => {
+    await page.goto(base);
+    const tray = () => page.evaluate<string>(`document.querySelector('#limits').textContent`);
+    await until(async () => /^Claude \d+%$/.test(await tray()), 'the tray limit');
+    const before = limitCalls;
+    await page.evaluate(`document.querySelector('#limits').click()`);
+    const panel = `document.querySelector('[data-win="settings"] [role=tabpanel]')`;
+    await until(() => page.evaluate(`${panel}?.textContent.includes('Current session')`), 'Settings > Limits');
+    expect(await page.evaluate(`document.querySelector('[data-win="settings"] [aria-selected=true]').textContent`)).toBe('Limits');
+    expect(await page.evaluate(`${panel}.querySelector('[data-cli="codex"]').textContent`)).toContain('Not available: codex app-server could not start: ENOENT');
+    await page.evaluate(`[...${panel}.querySelectorAll('button')].find((b) => b.textContent === 'Refresh').click()`);
+    await until(async () => limitCalls === before + 1 && (await tray()) === `Claude ${62 + before}%`, 'the refreshed limit');
+    expect(await page.evaluate(`${panel}.querySelector('[data-cli="claude"] td:nth-child(2)').textContent`)).toBe(`${62 + before}%`);
   });
 
   it('edits and deletes a brain row from the Brain window; the next search shows the change', async () => {

@@ -142,3 +142,5 @@ fieldset { margin: 0; }
 .field-row-stacked > .k95-mic::before { top: 2px; }
 .field-row-stacked > .k95-mic::after { top: 7px; }
 .k95-panel .window-body > button, .k95-form button, fieldset > button { align-self: flex-start; }
+.k95-meter { width: 80px; height: 12px; padding: 2px; }
+.k95-limits { display: flex; flex-direction: column; gap: 6px; }
