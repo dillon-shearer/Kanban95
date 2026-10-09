@@ -8,6 +8,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import { WebSocketServer } from 'ws';
 import { handleApi } from './api.js';
 import { openDb } from './db.js';
+import { git } from './git.js';
 import { sweep, SWEEP_MS } from './janitor.js';
 import { killAll, launch, sessions } from './launcher.js';
 import { events, recover, tick, type Board } from './lifecycle.js';
@@ -139,6 +140,9 @@ export function start(config: Config = {}): Promise<{
   initTemplates(repo);
   let self = '';
   const board: Board = { db, repo, port: 0 };
+  try {
+    board.startCommit = git(repo, 'rev-parse', '--verify', '-q', 'HEAD');
+  } catch { /* no commits yet: nothing can be stale */ }
   const server = createServer((req, res) => {
     handle(board, self, secret, req, res).catch(() => send(res, 500, 'internal error'));
   });

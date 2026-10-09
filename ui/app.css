@@ -87,6 +87,7 @@ body { background: linear-gradient(transparent 55%, rgb(0 0 0 / 0.22)),
 .badge.flag { background: #a00; color: #fff; border-color: #600; }
 .badge.hold { background: #ffffc0; }
 .badge.run { background: navy; color: #fff; }
+.badge.tag { background: #c0e0ff; }
 .status-bar { flex: none; }
 .status-bar-field { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .k95-count { flex: 0 0 140px; }

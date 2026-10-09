@@ -33,6 +33,7 @@ let inbox = [];
 let runner = { on: false, concurrency: 3, running: [], left: 0, backlog: 0, waits: [] }; // GET /api/runner: the Run button and its status-bar line
 let models = null; // ~/.kanban95/models.json as written, for the cards' default model and effort
 // Sounds stay off until /config/settings loads: listen() starts first, and a ding in that gap ignored the operator's choice.
+// `terminals` is absent until then too, so no session is opened or passed over before the operator's phases are known.
 let settings = { paths: {}, sounds: { merge: false, attention: false }, voice: { backend: 'local', mode: 'push' }, housekeeping: { auto: true, every: 10 } };
 let limits = null; // GET /api/limits: { rows, errors, fetched_at }, null until the first answer
 const views = new Map(); // open window id → redraw(ticketId | null)
@@ -129,6 +130,7 @@ function card(t) {
     badge(t.model ?? d.model ?? 'no model', t.model ? '' : 'default'),
     badge(t.effort ?? d.effort ?? 'medium', t.effort ? '' : 'default'),
     badge(t.cli ?? models?.cli ?? 'cli?', t.cli ? '' : 'default'),
+    ...(t.tags ? t.tags.split(' ').map((g) => badge(g, 'tag')) : []),
     t.template === 'housekeeping' && badge('housekeeping'),
     live(t.id).length > 0 && badge('running', 'run'),
     t.flags.needs_human && badge('needs human', 'flag'),
@@ -284,13 +286,15 @@ async function newOperator() {
   await act(async () => openTerminal(await api('POST', '/operator', { mission: mission.value })), 'Operator terminal started.');
 }
 /** Start → Restart board: the daemon rebuilds, exits 75, and the shell starts it again (docs/OPERATOR.md → Restart board). */
+const STALE = 'Restart the board to use the merged changes.'; // runner.stale: a merge changed daemon/, shell/ or package.json since start
 async function restartBoard() {
   const agents = sessions.filter((s) => s.ticket_id !== null).length;
   const terminals = sessions.length - agents;
   const body = h('div', {},
     h('p', {}, agents ? `${agents} agent${agents === 1 ? ' is' : 's are'} running; they are resumed after the restart.` : 'No agents are running.'),
     terminals > 0 && h('p', {}, `${terminals} brainstorm or operator terminal${terminals === 1 ? '' : 's'} will close.`),
-    h('p', {}, 'The daemon is rebuilt and the UI reloads. Shell changes need a full relaunch (close Kanban95 and start it again).'));
+    h('p', {}, 'The daemon is rebuilt and the UI reloads. Shell changes need a full relaunch (close Kanban95 and start it again).'),
+    runner.stale === 'shell' && h('p', { class: 'k95-shell-stale' }, 'A merge changed the shell itself: after this restart, close Kanban95 and start it again to pick up its change.'));
   if ((await dialog('Restart board', body, ['Restart', 'Cancel'])) !== 'Restart') return;
   say('Building…');
   try {
@@ -327,6 +331,8 @@ function cardMenu(ts, x, y) {
       ts.slice(0, 8).forEach((t) => openTicket(t.id));
       if (ts.length > 8) say(`Opened 8 of ${ts.length} tickets; at most 8 open at once.`);
     } },
+    // A live session's terminal, also one that did not open on its own (Settings → General).
+    ...(ts.length === 1 && live(ts[0].id).length ? [{ label: 'Terminal', items: live(ts[0].id).map((s) => ({ label: `${s.phase} · ${s.model}`, run: () => openTerminal(s) })) }] : []),
     { label: 'Launch', disabled: !ts.some(launchable), run: () => launch(ts) },
     { label: 'Resume', disabled: !ts.some(resumable), run: () => launch(ts, 'resume') },
     ...(ts.length === 1 && restartable(ts[0]) ? [{ label: 'Restart', run: () => restart(ts[0].id) }] : []),
@@ -406,7 +412,7 @@ function openBoard() {
     if (focus) cols.querySelector(`.col[data-status="${focus[0]}"] .card[data-id="${focus[1]}"]`)?.focus();
     count.textContent = `${all.length} tickets · ${sessions.length} agents`;
     run.textContent = runner.on ? 'Stop' : 'Run';
-    runField.textContent = runField.title = runnerLine(runner);
+    runField.textContent = runField.title = runner.stale ? STALE : runnerLine(runner);
     runField.hidden = !runField.textContent;
   });
   drawBoard();
@@ -542,9 +548,10 @@ function ticketForm(w, t) {
   const title = h('input', { type: 'text', value: t?.title ?? '' });
   const body = h('textarea', { rows: 6, 'data-field': 'body' }, t?.body ?? '');
   const criteria = h('textarea', { rows: 5 }, t?.criteria ?? '');
+  const tags = h('input', { type: 'text', 'data-mic': 'off', value: t?.tags.split(' ').join(', ') ?? '', placeholder: 'e.g. ui, daemon' });
   const deps = h('input', { type: 'text', 'data-mic': 'off', value: t?.depends_on.join(', ') ?? '', placeholder: 'e.g. 3, 4' });
   const save = async () => {
-    const fields = { title: title.value, body: body.value, criteria: criteria.value, depends_on: deps.value.split(/[\s,]+/).filter(Boolean).map(Number) };
+    const fields = { title: title.value, body: body.value, criteria: criteria.value, tags: tags.value, depends_on: deps.value.split(/[\s,]+/).filter(Boolean).map(Number) };
     try {
       if (t) {
         await api('PATCH', `/tickets/${t.id}`, fields);
@@ -563,6 +570,7 @@ function ticketForm(w, t) {
     h('div', { class: 'field-row-stacked' }, h('label', {}, 'Title'), title),
     h('div', { class: 'field-row-stacked' }, h('label', {}, 'Body'), body),
     h('div', { class: 'field-row-stacked' }, h('label', {}, 'Acceptance criteria, one per line'), criteria),
+    h('div', { class: 'field-row-stacked' }, h('label', {}, 'Tags, comma or space separated'), tags),
     h('div', { class: 'field-row-stacked' }, h('label', {}, 'Depends on'), deps),
     h('div', { class: 'field-row' }, h('button', { onclick: save }, t ? 'Save' : 'Create'),
       t && h('button', { disabled: t.status !== 'backlog', onclick: () => launch([t]) }, 'Launch'),
@@ -583,8 +591,17 @@ function termState(s, ended) {
   if (s.phase === 'execute' || s.phase === 'test') return s.phase;
   return null;
 }
+/**
+ * Opens a terminal for each new session of a phase in Settings → General (`terminals.auto`); brainstorms and operator
+ * terminals always. The rest are marked seen, so they never pop up later; card → Terminal opens one.
+ */
 function openNewTerminals() {
-  for (const s of sessions) if (!seen.has(s.id)) openTerminal(s, true);
+  if (!settings.terminals) return;
+  for (const s of sessions) {
+    if (seen.has(s.id)) continue;
+    if (s.ticket_id === null || settings.terminals.auto.includes(s.phase)) openTerminal(s, true);
+    else seen.add(s.id);
+  }
 }
 
 /**
@@ -849,6 +866,11 @@ function openSettings(tab) {
       p.replaceChildren(...[['merge', 'Ding when a ticket merges'], ['attention', 'Chord when the board needs you']].map(([k, label]) =>
         h('div', { class: 'field-row' }, h('input', { type: 'checkbox', id: `sound-${k}`, checked: settings.sounds[k],
           onchange: (e) => act(() => saveSettings({ sounds: { ...settings.sounds, [k]: e.target.checked } }), 'Saved.') }), h('label', { for: `sound-${k}` }, label))),
+        h('fieldset', {}, h('legend', {}, 'Open a terminal automatically for'),
+          ...['plan', 'execute', 'test'].map((ph) => h('div', { class: 'field-row' }, h('input', { type: 'checkbox', id: `term-auto-${ph}`, checked: settings.terminals.auto.includes(ph),
+            onchange: (e) => act(() => saveSettings({ terminals: { auto: [...settings.terminals.auto.filter((x) => x !== ph), ...(e.target.checked ? [ph] : [])] } }), 'Saved.') }),
+          h('label', { for: `term-auto-${ph}` }, ph))),
+          h('p', {}, 'Brainstorms always open. A hidden session still runs: right-click its card → Terminal.')),
         h('fieldset', {}, h('legend', {}, 'Runner'),
           h('div', { class: 'field-row' }, h('label', { for: 'concurrency' }, 'Tickets running at once'), at),
           h('button', { onclick: saveRunner }, 'Save')),
@@ -982,6 +1004,7 @@ function taskbar() {
   const q = document.getElementById('inbox-count');
   q.textContent = `Inbox ${inbox.length}`;
   q.classList.toggle('flag', inbox.length > 0);
+  document.getElementById('restart-badge').hidden = !runner.stale;
   // The most constrained window of any CLI, e.g. "Claude 62%"; the tooltip lists them all.
   const l = document.getElementById('limits'), r = worst();
   l.textContent = r ? `${NAME[r.cli]} ${pct(r)}%` : limits ? 'Limits ?' : 'Limits';
@@ -1039,6 +1062,7 @@ async function boot() {
     Object.assign(m.style, { left: `${r.left}px`, top: `${r.top - m.offsetHeight}px` });
   });
   document.getElementById('inbox-count').addEventListener('click', openInbox);
+  document.getElementById('restart-badge').addEventListener('click', restartBoard);
   document.getElementById('limits').addEventListener('click', () => openSettings('Limits'));
   desktopIcons();
   clock();
@@ -1048,7 +1072,7 @@ async function boot() {
   listen();
   const [list, st, md] = await Promise.all([api('GET', '/tickets'), api('GET', '/config/settings'), api('GET', '/config/models').catch(() => ({ value: null }))]);
   for (const t of list) tickets.set(t.id, t);
-  settings = { ...settings, ...st.value, voice: { ...settings.voice, ...st.value?.voice }, housekeeping: { ...settings.housekeeping, ...st.value?.housekeeping } };
+  settings = { ...settings, terminals: { auto: ['plan', 'execute'] }, ...st.value, voice: { ...settings.voice, ...st.value?.voice }, housekeeping: { ...settings.housekeeping, ...st.value?.housekeeping } };
   models = md.value;
   configure(settings.voice);
   micEverywhere();
