@@ -12,7 +12,7 @@ import { openDb } from './db.js';
 import { git } from './git.js';
 import { sweep, SWEEP_MS } from './janitor.js';
 import { killAll, launch, sessions } from './launcher.js';
-import { events, recover, tick, type Board } from './lifecycle.js';
+import { events, recover, tick, watchSilence, type Board } from './lifecycle.js';
 import { handleMcp } from './mcp.js';
 import { idle } from './merge.js';
 import { addProject } from './settings.js';
@@ -216,6 +216,7 @@ export function start(config: Config = {}): Promise<{
       recover(board);
       tick(board); // the runner picks up where it was
       const daily = setInterval(() => sweep(board), SWEEP_MS).unref();
+      const unwatch = watchSilence(board);
       ok({
         port: addr.port,
         db,
@@ -225,6 +226,7 @@ export function start(config: Config = {}): Promise<{
         close: async () => {
           board.closing = true; // nothing new is spawned from here on
           clearInterval(daily);
+          unwatch();
           await killAll(); // run rows and exit flags are written before the db closes
           await idle(); // and every queued merge has finished
           for (const c of wss.clients) c.terminate();

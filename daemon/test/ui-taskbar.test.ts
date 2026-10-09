@@ -28,30 +28,30 @@ describe('ui-taskbar', { timeout: 60_000 }, () => {
     expect(m.overflow).toBe(0);
   });
 
-  it('scrolls an overflowing taskbar with its arrows, the wheel and focus; buttons stay at least 60px', async () => {
+  it('scrolls an overflowing taskbar with its arrows, the wheel and focus; buttons keep their icon size', async () => {
     await page.goto(base);
     await until(() => page.evaluate(`!!document.querySelector('[data-win="board"]')`), 'the board');
     const wm = (js: string) => page.evaluate(`import('/wm.js').then((wm) => { ${js} })`);
     const arrowsShown = () => page.evaluate<boolean>(`!document.getElementById('tasks-right').hidden && !document.getElementById('tasks-left').hidden`);
     const shown = (id: string) => page.evaluate<boolean>(`(() => {
       const t = document.getElementById('tasks').getBoundingClientRect();
-      const b = [...document.querySelectorAll('#tasks .task')].find((e) => e.textContent === '${id}').getBoundingClientRect();
+      const b = document.querySelector('#tasks [data-task="${id}"]').getBoundingClientRect();
       return b.left >= t.left - 0.5 && b.right <= t.right + 0.5;
     })()`);
-    const ids = Array.from({ length: 20 }, (_, i) => `scroll-${i}`);
+    const ids = Array.from({ length: 60 }, (_, i) => `scroll-${i}`); // icon buttons: it takes many to fill the bar
     expect(await arrowsShown()).toBe(false);
     await wm(`${JSON.stringify(ids)}.forEach((id) => wm.open(id, { title: id }));`);
     try {
       expect(await arrowsShown()).toBe(true);
-      expect(await page.evaluate<number>(`Math.min(...[...document.querySelectorAll('#tasks .task')].map((b) => b.getBoundingClientRect().width))`)).toBeGreaterThanOrEqual(60);
-      expect(await shown('scroll-19')).toBe(true); // the newest window is focused, so its button scrolled into view
+      expect(await page.evaluate<number>(`Math.min(...[...document.querySelectorAll('#tasks .task')].map((b) => b.getBoundingClientRect().width))`)).toBe(34);
+      expect(await shown('scroll-59')).toBe(true); // the newest window is focused, so its button scrolled into view
 
       await page.evaluate(`document.getElementById('tasks').scrollLeft = 0`);
-      expect(await shown('scroll-19')).toBe(false);
-      for (let i = 0; i < 30 && !(await shown('scroll-19')); i++) await click('#tasks-right');
-      expect(await shown('scroll-19')).toBe(true);
+      expect(await shown('scroll-59')).toBe(false);
+      for (let i = 0; i < 90 && !(await shown('scroll-59')); i++) await click('#tasks-right');
+      expect(await shown('scroll-59')).toBe(true);
       await click('#tasks-left');
-      expect(await shown('scroll-19')).toBe(false);
+      expect(await shown('scroll-59')).toBe(false);
 
       await page.evaluate(`document.getElementById('tasks').scrollLeft = 0`);
       const { x, y } = await page.center('#tasks');
@@ -59,8 +59,8 @@ describe('ui-taskbar', { timeout: 60_000 }, () => {
       await until(() => page.evaluate<boolean>(`document.getElementById('tasks').scrollLeft > 0`), 'the wheel to scroll the taskbar');
 
       await page.evaluate(`document.getElementById('tasks').scrollLeft = 0`);
-      await wm(`wm.focus('scroll-19');`);
-      expect(await shown('scroll-19')).toBe(true);
+      await wm(`wm.focus('scroll-59');`);
+      expect(await shown('scroll-59')).toBe(true);
     } finally {
       await wm(`${JSON.stringify(ids)}.forEach((id) => wm.close(id));`);
     }
@@ -111,6 +111,28 @@ describe('ui-taskbar', { timeout: 60_000 }, () => {
     for (const id of ['sel-1', 'sel-0', 'sel-3']) expect(await isOpen(id)).toBe(false);
     expect(await order()).toEqual(['sel-2']);
     await page.evaluate(`import('/wm.js').then((wm) => wm.close('sel-2'))`);
+  });
+
+  it("pins the desktop items after Start as one-click icons; each window's button is its kind's icon with the title as tooltip", async () => {
+    await page.goto(base);
+    await until(() => page.evaluate(`!!document.querySelector('[data-win="board"]')`), 'the board');
+    const pins = await page.evaluate<string[]>(`[...document.querySelectorAll('#pinned button')].map((b) => b.title)`);
+    expect(pins).toEqual(await page.evaluate(`[...document.querySelectorAll('#icons .k95-icon')].map((e) => e.textContent)`));
+    await until(() => page.evaluate(`[...document.querySelectorAll('#pinned img')].every((i) => i.complete && i.naturalWidth > 0)`), 'the pinned icons');
+    const order = await page.evaluate<number[]>(`['#start', '#pinned', '#tasks'].map((s) => document.querySelector(s).getBoundingClientRect().left)`);
+    expect([...order].sort((a, b) => a - b)).toEqual(order);
+
+    await page.evaluate(`document.querySelector('[data-win="brain"] [aria-label="Close"]')?.click()`);
+    await click('#pinned [data-pin="Brain"]');
+    await until(() => page.evaluate(`!!document.querySelector('[data-win="brain"]')`), 'the Brain window');
+    const task = (id: string) => page.evaluate<{ text: string; title: string; icon: string; loaded: boolean }>(`(() => {
+      const b = document.querySelector('[data-task="${id}"]'), i = b.querySelector('img');
+      return { text: b.textContent, title: b.title, icon: i.getAttribute('src'), loaded: i.complete && i.naturalWidth > 0 };
+    })()`);
+    await until(async () => (await task('brain')).loaded, 'the Brain button icon');
+    expect(await task('brain')).toEqual({ text: '', title: 'Brain', icon: 'icons/brain.svg', loaded: true });
+    expect((await task('board')).icon).toBe('icons/board.svg');
+    await page.evaluate(`document.querySelector('[data-win="brain"] [aria-label="Close"]').click()`);
   });
 
   it('opens Settings from a double-clicked desktop icon and Inbox from Enter; icons stay under windows', async () => {
