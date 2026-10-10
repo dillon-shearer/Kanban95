@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { readTicket } from '../src/api.ts';
-import { FIRST_COMMIT } from '../src/git.ts';
+import { FIRST_COMMIT, worktreePath, worktreesRoot } from '../src/git.ts';
 import { sessionsOf } from '../src/launcher.ts';
 import { start } from '../src/server.ts';
 
@@ -93,7 +93,7 @@ describe('git init', { timeout: 60_000 }, () => {
   it('an empty folder becomes a repo with one commit by the operator; a second start adds none', async () => {
     await restart();
     expect(existsSync(join(dir, '.git'))).toBe(true);
-    expect(readFileSync(join(dir, '.gitignore'), 'utf8').split('\n')).toEqual(expect.arrayContaining(['node_modules/', 'dist/', 'build/', '.worktrees/', '.kanban95/board.db']));
+    expect(readFileSync(join(dir, '.gitignore'), 'utf8').split('\n')).toEqual(expect.arrayContaining(['node_modules/', 'dist/', 'build/', '.kanban95/board.db']));
     expect(commits()).toBe(1);
     expect(git('log', '-1', '--format=%an <%ae>%n%B')).toBe(`Op Erator <op@example.com>\n${FIRST_COMMIT}`); // no trailer
     expect(files()).toEqual(expect.arrayContaining(['.gitignore', '.kanban95/.gitignore']));
@@ -104,7 +104,7 @@ describe('git init', { timeout: 60_000 }, () => {
     expect(commits()).toBe(1);
   });
 
-  it('a folder with files: one commit holds them but not node_modules, then tickets run in .worktrees/t-<id> two at a time and merge', async () => {
+  it('a folder with files: one commit holds them but not node_modules, then tickets run in worktrees under the board home two at a time and merge', async () => {
     writeFileSync(join(dir, 'a.txt'), 'a\n');
     mkdirSync(join(dir, 'src'));
     writeFileSync(join(dir, 'src', 'b.ts'), 'b\n');
@@ -120,11 +120,12 @@ describe('git init', { timeout: 60_000 }, () => {
     expect((await request('PUT', '/api/runner', { concurrency: 2 })).status).toBe(200);
     expect(await (await request('PUT', '/api/runner', { on: true })).json()).toMatchObject({ on: true, running: ids });
     for (const id of ids) {
-      await until(() => readTicket(srv!.db, id).merged_at && !sessionsOf(id).length && !existsSync(join(dir, '.worktrees', `t-${id}`)), `ticket ${id} merged`);
+      await until(() => readTicket(srv!.db, id).merged_at && !sessionsOf(id).length && !existsSync(worktreePath(dir, id)), `ticket ${id} merged`);
       // The agent's working directory, as it wrote it into the file it committed.
-      expect(readFileSync(join(dir, `t-${id}.txt`), 'utf8').toLowerCase()).toBe(join(dir, '.worktrees', `t-${id}`).toLowerCase());
+      expect(readFileSync(join(dir, `t-${id}.txt`), 'utf8').toLowerCase()).toBe(worktreePath(dir, id).toLowerCase());
     }
     expect(git('log', '--merges', '--format=%s').split('\n')).toEqual(expect.arrayContaining(['One', 'Two']));
+    expect(existsSync(join(dir, '.worktrees'))).toBe(false); // the old place, under the repo
   });
 
   it('a repo with no commit gets the first commit and keeps its own .gitignore', async () => {
@@ -169,6 +170,6 @@ describe('git init', { timeout: 60_000 }, () => {
     expect(readTicket(srv!.db, id).flags.needs_human).toBe(true);
     const note = srv!.db.prepare("SELECT body FROM notes WHERE ticket_id = ? AND kind = 'failure'").get(id) as { body: string };
     expect(note.body.split('\n')[0]).toBe(`launch failed: ${gitError}`);
-    expect(existsSync(join(dir, '.worktrees'))).toBe(false);
+    expect(existsSync(worktreesRoot(dir))).toBe(false);
   });
 });

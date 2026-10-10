@@ -6,7 +6,7 @@ import { delimiter, dirname, join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { readTicket } from '../src/api.ts';
-import { createWorktree } from '../src/git.ts';
+import { createWorktree, worktreePath } from '../src/git.ts';
 import { sessionsOf } from '../src/launcher.ts';
 import { candidates, events, runner } from '../src/lifecycle.ts';
 import { start } from '../src/server.ts';
@@ -88,7 +88,7 @@ const until = async (f: () => unknown, what: string, ms = 30_000) => {
     await new Promise((r) => setTimeout(r, 25));
   }
 };
-const landed = (id: number) => until(() => t(id).merged_at && !existsSync(join(repo, '.worktrees', `t-${id}`)), `ticket ${id} merged and cleaned`);
+const landed = (id: number) => until(() => t(id).merged_at && !existsSync(worktreePath(repo, id)), `ticket ${id} merged and cleaned`);
 const STOPPED = { on: false, why: 'nothing left to launch' };
 
 beforeEach(async () => {
@@ -199,7 +199,7 @@ describe('runner', { timeout: 60_000 }, () => {
     await setMax(1);
     await setRun(true);
     // a's branch changes src/x.ts without naming it: b overlaps through the diff and waits; c shares only docs and launches.
-    const wt = join(repo, '.worktrees', `t-${a}`);
+    const wt = worktreePath(repo, a);
     writeFileSync(join(wt, 'src', 'x.ts'), 'changed\n');
     execFileSync('git', ['commit', '-qam', 'x'], { cwd: wt });
     expect(await (await setMax(2)).json()).toMatchObject({ running: [a, c], waits: [{ id: b, on: a }] });

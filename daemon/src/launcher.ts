@@ -7,7 +7,7 @@ import { join, relative, resolve } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import type { IPty } from 'node-pty';
 import { buildContext, startRun } from './context.js';
-import { createWorktree, git } from './git.js';
+import { createWorktree, git, worktreesRoot } from './git.js';
 import { mint, revoke, type Role } from './grants.js';
 import { childEnv, cmdSafe, spawnPty } from './pty.js';
 import { fill, loadTemplate, TEMPLATES, type TicketTemplate } from './templates.js';
@@ -34,8 +34,9 @@ export const RESUME_MESSAGE = 'The board restarted this session after it ended w
 export interface ArgvIn {
   cli: Cli;
   role: Role;
-  /** The main repo root: Codex is told per process that it is trusted, which covers every worktree under it. */
+  /** The main repo root and its worktrees root (`worktreesRoot`): Codex is told per process that both are trusted (docs/CLIS.md). */
   repo: string;
+  wtRoot: string;
   model: string;
   effort: Effort;
   promptPath: string;
@@ -59,7 +60,8 @@ export interface ArgvIn {
  */
 export function buildArgv(a: ArgvIn): string[] {
   // Absolute: given the relative form, agents resolved it against the home directory and had to retry (12 sessions, ticket #81).
-  // A path cmd.exe cannot carry (docs/CLIS.md) keeps the relative form, which drops the repo part where such a character would sit.
+  // A path cmd.exe cannot carry (docs/CLIS.md) keeps the relative form, which drops the folders the worktree and the repo share,
+  // where such a character may sit.
   const abs = resolve(a.promptPath);
   const brief = `Read ${(cmdSafe(abs) ? abs : relative(a.cwd, abs)).replaceAll('\\', '/')} in full and follow it. It is your brief for this session.`;
   const planner = a.role === 'planner';
@@ -76,8 +78,9 @@ export function buildArgv(a: ArgvIn): string[] {
         '--dangerously-skip-permissions', a.resume ? RESUME_MESSAGE : brief];
     case 'codex': {
       // Unquoted -c values fail TOML parsing and are taken as literal strings, which keeps `"` out of the cmd.exe line.
-      // The trust table is a TOML literal-string key, which cannot hold a single quote.
-      if (a.repo.includes("'")) throw new Error(`cannot pre-trust a repo path containing ' for Codex: ${a.repo}`);
+      // The trust table's keys are TOML literal strings, which cannot hold a single quote.
+      const quote = [a.wtRoot, a.repo].find((p) => p.includes("'"));
+      if (quote) throw new Error(`cannot pre-trust a path containing ' for Codex: ${quote}`);
       // Workers and testers keep the bypass: under -s workspace-write Codex on Windows runs commands as a sandbox account
       // and git refuses the worktree ("dubious ownership"), so an agent could not commit (docs/CLIS.md).
       return ['codex', ...(a.model ? ['--model', a.model] : []), '-c', `model_reasoning_effort=${a.effort}`,
@@ -85,7 +88,7 @@ export function buildArgv(a: ArgvIn): string[] {
         // The board's own tools are pre-approved (`approve`; `auto` still asks); the grant already scopes them. Without this a
         // planner under -a never is refused every MCP call ("requires approval, but approval policy is never"; checked live).
         '-c', 'mcp_servers.kanban95.default_tools_approval_mode=approve',
-        '-c', `projects={'${a.repo}'={trust_level='trusted'}}`,
+        '-c', `projects={'${a.wtRoot}'={trust_level='trusted'},'${a.repo}'={trust_level='trusted'}}`,
         ...(planner ? ['-s', 'read-only', '-a', 'never'] : ['--dangerously-bypass-approvals-and-sandbox']), brief];
     }
   }
@@ -294,8 +297,9 @@ function spawnSession(d: Daemon, o: RunSettings & { sessionId?: string; resume?:
       // No commit or PR trailer (CLAUDE.md), held by the board now that the operator's own attribution setting is not loaded.
       if (unattended(r.role)) writeFileSync(settingsPath, JSON.stringify(BOARD_SETTINGS), { mode: 0o600 });
     }
-    const [cmd, ...args] = buildArgv({ ...o, role: r.role, repo: resolve(repo), promptPath, mcpConfigPath, settingsPath, mcpUrl, cwd: r.cwd });
-    if (o.cli === 'claude') preTrustClaude(db, r.ticketId, repo);
+    const wtRoot = worktreesRoot(repo);
+    const [cmd, ...args] = buildArgv({ ...o, role: r.role, repo: resolve(repo), wtRoot, promptPath, mcpConfigPath, settingsPath, mcpUrl, cwd: r.cwd });
+    if (o.cli === 'claude') preTrustClaude(db, r.ticketId, r.ticketId === null ? repo : wtRoot);
     // KANBAN95_AGENT makes `npm run dev` and Kanban95.cmd refuse to start: an agent must not open the board on the operator's desktop.
     // A 5 min cache TTL writes at 1.25x instead of the subscription's 1 h at 2x; an unattended session rarely idles 5 min
     // (8 of 2,161 measured call gaps). Interactive sessions keep the 1 h TTL, since they wait on the operator.

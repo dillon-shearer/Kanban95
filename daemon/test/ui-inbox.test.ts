@@ -27,7 +27,7 @@ describe('ui-inbox', { timeout: 60_000 }, () => {
 
   it('lists a failed merge in the Inbox with its note and the buttons that fix it, and counts it in the taskbar', async () => {
     const id = ticket('Stuck merge', { status: 'done', needs_human: 1 });
-    const body = `merge conflict with main: CONFLICT (add/add) in shared.txt\nTo resolve: in .worktrees/t-${id} run git merge with the base branch, then Retry merge.`;
+    const body = `merge conflict with main: CONFLICT (add/add) in shared.txt\nTo resolve: in C:/Users/op/.kanban95/worktrees/repo-0011aabb/t-${id} run git merge with the base branch, then Retry merge.`;
     db.prepare("INSERT INTO notes (ticket_id, role, kind, body) VALUES (?, 'tester', 'failure', ?)").run(id, body);
     try {
       await page.goto(base);
