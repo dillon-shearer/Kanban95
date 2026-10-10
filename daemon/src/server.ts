@@ -280,8 +280,9 @@ if (import.meta.main) {
     setTimeout(() => process.exit(code), 15_000).unref();
     close().finally(() => process.exit(code));
   };
-  // The parent (Tauri shell) holds our stdin. When it dies the pipe closes and we leave with it.
-  process.stdin.on('end', () => process.exit(0));
+  // The parent (Tauri shell) holds our stdin. When it dies the pipe closes and we leave with it, agents' process trees first:
+  // on Windows the shell's job object would end them too, on macOS nothing would.
+  process.stdin.on('end', () => board.shutdown!(0));
   process.on('exit', () => rmSync(entryPath(process.pid), { force: true })); // the running entry, also without close()
   process.stdin.resume();
 }
