@@ -1,16 +1,34 @@
-// One git worktree per ticket: <repo>/.worktrees/t-<id> on branch ticket/<id>, forked from the repo's current branch.
+// One git worktree per ticket: <board home>/worktrees/<repo key>/t-<id> on branch ticket/<id>, forked from the repo's current branch.
 import { execFileSync } from 'node:child_process';
-import { appendFileSync, existsSync, lstatSync, readdirSync, readFileSync, readlinkSync, realpathSync, unlinkSync, writeFileSync } from 'node:fs';
-import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { existsSync, lstatSync, mkdirSync, readdirSync, readlinkSync, realpathSync, unlinkSync, writeFileSync } from 'node:fs';
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { INNER_GITIGNORE } from './db.js';
+import { boardHome, normal } from './settings.js';
 
 export const git = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: 'pipe' }).trim();
 
-export const worktreePath = (repo: string, ticketId: number) => join(repo, '.worktrees', `t-${ticketId}`);
+/** FNV-1a, 32 bit, as hex: stable across Node releases, like the shell's per-repo WebView2 profile name. */
+const fnv1a = (s: string) => {
+  let h = 0x811c9dc5;
+  for (const b of Buffer.from(s, 'utf8')) h = Math.imul(h ^ b, 0x01000193) >>> 0;
+  return h.toString(16).padStart(8, '0');
+};
+
+/**
+ * Where a repo's ticket worktrees live: `<board home>/worktrees/<basename>-<hash of the canonical path>`, never under the
+ * repo. A repo in a synced folder (OneDrive) would otherwise upload every worktree's `npm ci`, get throttled, and lock files
+ * so a worktree could not be removed. The hash keeps two repos with the same folder name apart; Windows paths are hashed
+ * lower-cased, as one folder has one key whatever case it is typed in.
+ */
+export function worktreesRoot(repo: string): string {
+  const path = normal(repo);
+  return join(boardHome(), 'worktrees', `${basename(path)}-${fnv1a(process.platform === 'win32' ? path.toLowerCase() : path)}`);
+}
+export const worktreePath = (repo: string, ticketId: number) => join(worktreesRoot(repo), `t-${ticketId}`);
 export const branchName = (ticketId: number) => `ticket/${ticketId}`;
 
-/** A plain folder's first `.gitignore`: the usual build output, the ticket worktrees and the board's own state. */
-const FIRST_GITIGNORE = ['node_modules/', 'dist/', 'build/', '.worktrees/', ...INNER_GITIGNORE.split('\n').filter(Boolean).map((l) => `.kanban95/${l}`)].join('\n') + '\n';
+/** A plain folder's first `.gitignore`: the usual build output and the board's own state. */
+const FIRST_GITIGNORE = ['node_modules/', 'dist/', 'build/', ...INNER_GITIGNORE.split('\n').filter(Boolean).map((l) => `.kanban95/${l}`)].join('\n') + '\n';
 export const FIRST_COMMIT = 'Start the Kanban95 board';
 
 /**
@@ -46,13 +64,6 @@ export function initRepo(repo: string): void {
   }
 }
 
-/** Keeps .worktrees/ out of the operator's `git status` and out of any `git add -A` without touching a tracked file. */
-function excludeWorktrees(repo: string) {
-  const exclude = resolve(repo, git(repo, 'rev-parse', '--git-path', 'info/exclude'));
-  const text = existsSync(exclude) ? readFileSync(exclude, 'utf8') : '';
-  if (!text.split(/\r?\n/).includes('/.worktrees/')) appendFileSync(exclude, `${text && !text.endsWith('\n') ? '\n' : ''}/.worktrees/\n`);
-}
-
 /**
  * Creates the ticket's worktree, or returns the existing one (retries and the test phase reuse it). A rejected ticket whose
  * worktree was removed on merge gets a fresh one from the base, which holds its merged work.
@@ -65,16 +76,29 @@ export function createWorktree(repo: string, ticketId: number): { path: string; 
   const base = git(repo, 'rev-parse', '--abbrev-ref', 'HEAD');
   if (existsSync(path)) return { path, branch, base };
 
+  git(repo, 'worktree', 'prune'); // a worktree directory deleted by hand stays registered and blocks its branch
+  // A ticket launched before worktrees left the repo has its branch checked out at the old place: move it, work and all.
+  const old = checkedOut(repo, branch);
+  if (old) {
+    mkdirSync(dirname(path), { recursive: true });
+    git(repo, 'worktree', 'move', old, path);
+    return { path, branch, base };
+  }
   const dirty = git(repo, 'status', '--porcelain', '--untracked-files=no');
   if (dirty) throw new Error(`base branch ${base} has uncommitted changes; commit or stash them before launching:\n${dirty}`);
-  excludeWorktrees(repo);
-  git(repo, 'worktree', 'prune'); // a worktree directory deleted by hand stays registered and blocks its branch
   // A branch left from an earlier cycle is reused when it holds work the base lacks; one already merged (a rejected ticket
   // whose branch survived cleanup) is reset to the base, which has that work and everything since.
   const exists = git(repo, 'branch', '--list', branch) !== '';
   const merged = exists && isAncestor(repo, branch, base);
   git(repo, 'worktree', 'add', ...(exists && !merged ? [path, branch] : [exists ? '-B' : '-b', branch, path, base]));
   return { path, branch, base };
+}
+
+/** The linked worktree `branch` is checked out in, if any. The first entry git lists is the main checkout. */
+function checkedOut(repo: string, branch: string): string | undefined {
+  const entry = git(repo, 'worktree', 'list', '--porcelain').split(/\r?\n\r?\n/).slice(1)
+    .map((e) => e.split(/\r?\n/)).find((lines) => lines.includes(`branch refs/heads/${branch}`));
+  return entry?.[0].replace(/^worktree /, '');
 }
 
 export function isAncestor(repo: string, a: string, b: string): boolean {
@@ -112,8 +136,7 @@ export function syncWorktree(repo: string, ticketId: number): { ok: true } | { o
  * Removes the worktree and deletes the branch only if it is merged. Without `force` git refuses a worktree holding uncommitted
  * or untracked files; the janitor forces only once the branch has landed, when what is left is build output and test leftovers.
  */
-export function removeWorktree(repo: string, ticketId: number, force = false): { branchDeleted: boolean } {
-  const path = worktreePath(repo, ticketId);
+export function removeWorktree(repo: string, ticketId: number, force = false, path = worktreePath(repo, ticketId)): { branchDeleted: boolean } {
   if (existsSync(path)) {
     unlinkLinks(repo, path);
     git(repo, 'worktree', 'remove', ...(force ? ['--force'] : []), path);
@@ -128,10 +151,10 @@ export function removeWorktree(repo: string, ticketId: number, force = false): {
 
 /**
  * Unlinks every junction and symlink under `dir` (and `dir` itself if it is one) without following it. Call it before deleting
- * anything under `.worktrees/`: `git worktree remove --force` followed a worktree's `node_modules` junction to the main
- * checkout's and emptied main's `daemon/`, and `rmSync` is not trusted to stop at a junction either. Node's lstat reports a
- * Windows junction as a symbolic link and `unlinkSync` removes the junction, not its target. Throws, deleting nothing more,
- * when a link that resolves into the main checkout outside `.worktrees/` could not be unlinked.
+ * a worktree: `git worktree remove --force` followed a worktree's `node_modules` junction to the main checkout's and
+ * emptied main's `daemon/`, and `rmSync` is not trusted to stop at a junction either. Node's lstat reports a Windows junction
+ * as a symbolic link and `unlinkSync` removes the junction, not its target. Throws, deleting nothing more, when a link that
+ * resolves into the main checkout could not be unlinked.
  */
 export function unlinkLinks(repo: string, dir: string): void {
   const stuck: string[] = [];
@@ -151,7 +174,7 @@ export function unlinkLinks(repo: string, dir: string): void {
   if (stuck.length) throw new Error(`refusing to remove ${dir}: a link into the main checkout could not be unlinked\n${stuck.join('\n')}`);
 }
 
-/** Whether `link` resolves into `repo` outside `.worktrees/`. A link whose target cannot be read counts as in. */
+/** Whether `link` resolves into `repo`. A link whose target cannot be read counts as in. */
 function intoMain(repo: string, link: string): boolean {
   const within = (root: string, p: string) => {
     const rel = relative(root, p);
@@ -164,8 +187,7 @@ function intoMain(repo: string, link: string): boolean {
     } catch {
       target = resolve(dirname(link), readlinkSync(link)); // a dangling link: where it would point
     }
-    const root = realpathSync.native(repo);
-    return within(root, target) && !within(join(root, '.worktrees'), target);
+    return within(realpathSync.native(repo), target);
   } catch {
     return true;
   }

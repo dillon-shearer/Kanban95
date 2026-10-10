@@ -7,11 +7,14 @@ import type { DatabaseSync } from 'node:sqlite';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import WebSocket from 'ws';
 import { readTicket } from '../src/api.ts';
-import { createWorktree } from '../src/git.ts';
+import { createWorktree, worktreePath, worktreesRoot } from '../src/git.ts';
 import { mint } from '../src/grants.ts';
 import { RESUME_MESSAGE, sessions, sessionsOf } from '../src/launcher.ts';
 import { DIRTY_WAIT, events, SILENCE, MAX_RETRY, Refused, RESTART_NOTE, RESTARTED, TABLE, TO_RESOLVE, transition, type Event, type Facts, type Status } from '../src/lifecycle.ts';
 import { start } from '../src/server.ts';
+
+/** A path as a literal inside a RegExp. */
+const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 describe('transition table', () => {
   const f = (o: Partial<Facts>): Facts => ({ status: 'backlog', needs_human: false, retry: 0, merged: false, depsMerged: true, passReported: false, live: true, ...o });
@@ -96,8 +99,8 @@ describe('transition table', () => {
       expect(r.resolve === undefined, r.event).toBe(r.event === 'ask');
     }
     const fix = (e: Event, from: Status = 'done') => flagged.find((r) => r.event === e && r.from.includes(from))!.resolve!(7, 'C:/repo');
-    expect(fix('conflict')).toMatch(/\.worktrees\/t-7 .*Retry merge/);
-    expect(fix('conflict', 'in_progress')).toMatch(/\.worktrees\/t-7 .*uncommitted .*git merge .*Resume/);
+    expect(fix('conflict')).toMatch(new RegExp(`^in ${esc(worktreePath('C:/repo', 7))} .*Retry merge`));
+    expect(fix('conflict', 'in_progress')).toMatch(new RegExp(`^in ${esc(worktreePath('C:/repo', 7))} .*uncommitted .*git merge .*Resume`));
     expect(fix('dirty')).toMatch(/main checkout \(C:\/repo\).*Retry merge/);
     expect(fix('unpushed')).toMatch(/main checkout \(C:\/repo\).*pull .*sign in .*Retry merge/);
     expect(`To resolve: ${fix('exit', 'in_progress')}`).toBe(TO_RESOLVE);
@@ -237,7 +240,7 @@ const mergeInProgress = (dir: string) => {
     return false;
   }
 };
-const landed = (id: number) => until(() => t(id).merged_at && !existsSync(join(repo, '.worktrees', `t-${id}`)), `ticket ${id} merged and cleaned`);
+const landed = (id: number) => until(() => t(id).merged_at && !existsSync(worktreePath(repo, id)), `ticket ${id} merged and cleaned`);
 
 beforeEach(async () => {
   repo = mkdtempSync(join(tmpdir(), 'k95-'));
@@ -285,7 +288,7 @@ describe('lifecycle', { timeout: 60_000 }, () => {
     expect(git('show', 'HEAD:t-1.txt')).toBe('done');
 
     // Janitor: no worktree, no branch, no session dir, no live grant for the ticket.
-    expect(existsSync(join(repo, '.worktrees', 't-1'))).toBe(false);
+    expect(existsSync(worktreePath(repo, 1))).toBe(false);
     expect(git('branch', '--list', 'ticket/1')).toBe('');
     expect(readdirSync(join(repo, '.kanban95', 'sessions'))).toEqual([]);
     expect(db.prepare('SELECT count(*) AS n FROM grants WHERE ticket_id = ? AND revoked_at IS NULL').get(id)).toEqual({ n: 0 });
@@ -471,18 +474,18 @@ ${TO_RESOLVE}`]);
     const [won, lost] = t(one).merged_at ? [one, two] : [two, one];
     await landed(won);
     expect(t(lost)).toMatchObject({ status: 'done', merged_at: null, retry: MAX_RETRY, flags: { needs_human: true } });
-    expect(notes(lost, 'failure')).toEqual([expect.stringMatching(new RegExp(`^merge conflict with main: [^]*\\nTo resolve: in \\.worktrees/t-${lost} .*Retry merge\\.$`))]);
+    expect(notes(lost, 'failure')).toEqual([expect.stringMatching(new RegExp(`^merge conflict with main: [^]*\\nTo resolve: in ${esc(worktreePath(repo, lost))} .*Retry merge\\.$`))]);
     const inbox = await (await fetch(`http://127.0.0.1:${srv.port}/api/inbox`, { headers: { cookie: `k95=${srv.secret}` } })).json();
     expect(inbox).toEqual([expect.objectContaining({ ticket_id: lost, kind: 'failure', status: 'done', merged_at: null, body: notes(lost, 'failure')[0] })]);
-    expect(existsSync(join(repo, '.worktrees', `t-${lost}`))).toBe(true);
+    expect(existsSync(worktreePath(repo, lost))).toBe(true);
     expect(git('status', '--porcelain', '--untracked-files=no')).toBe('');
     expect(existsSync(join(repo, '.git', 'MERGE_HEAD'))).toBe(false);
-    expect(mergeInProgress(join(repo, '.worktrees', `t-${lost}`))).toBe(false); // the conflict was met and aborted there
+    expect(mergeInProgress(worktreePath(repo, lost))).toBe(false); // the conflict was met and aborted there
     expect(git('show', 'HEAD:shared.txt')).toBe(`t-${won}`);
     expect(sounds.filter((s) => s.sound === 'chord')).toEqual([{ sound: 'chord', ticket: lost }]);
 
     // The operator resolves it in the worktree, then retries the merge.
-    const wt = join(repo, '.worktrees', `t-${lost}`);
+    const wt = worktreePath(repo, lost);
     try {
       execFileSync('git', ['merge', '-q', 'main'], { cwd: wt, stdio: 'ignore' });
     } catch {
@@ -538,7 +541,7 @@ ${TO_RESOLVE}`]);
       await aLandsWhileBWorks(a, b);
       await answer(b, '1 uno');
       await sentBack(b);
-      const wt = join(repo, '.worktrees', `t-${b}`);
+      const wt = worktreePath(repo, b);
       expect(t(b)).toMatchObject({ status: 'in_progress', retry: 1, flags: { needs_human: false } });
       expect(notes(b, 'failure')).toEqual([expect.stringMatching(/^merge conflict with main: [^]*CONFLICT[^]*lines\.txt/)]);
       expect(runs(b).map((x) => x.phase)).toEqual(['execute', 'execute']);
@@ -556,7 +559,7 @@ ${TO_RESOLVE}`]);
       await sentBack(id);
       expect(t(id)).toMatchObject({ status: 'in_progress', retry: 1, flags: { needs_human: false } });
       expect(notes(id, 'failure')).toEqual(['worktree has uncommitted changes; commit or discard them, then submit again:\n M a.txt']);
-      expect(readFileSync(join(repo, '.worktrees', `t-${id}`, 'a.txt'), 'utf8')).toBe('half done\n');
+      expect(readFileSync(join(worktreePath(repo, id), 'a.txt'), 'utf8')).toBe('half done\n');
       expect(runs(id).map((x) => x.phase)).toEqual(['execute', 'execute']);
     });
 
@@ -633,7 +636,7 @@ ${TO_RESOLVE}`]);
     expect(ids.map((id) => t(id).flags.needs_human)).toEqual([false, false, false, false, false]);
     expect(git('log', '--first-parent', '--merges', '--format=%s').split('\n').sort()).toEqual(ids.map((i) => `Add file ${i}`));
     expect(git('ls-tree', '--name-only', 'HEAD').split('\n').sort()).toEqual(['a.txt', 't-1.txt', 't-2.txt', 't-3.txt', 't-4.txt', 't-5.txt']);
-    expect(readdirSync(join(repo, '.worktrees'))).toEqual([]);
+    expect(readdirSync(worktreesRoot(repo))).toEqual([]);
   });
 
   it('the 10th merged ticket creates exactly one housekeeping ticket, left in Backlog while the runner is off; the 11th does not', async () => {
@@ -722,7 +725,7 @@ describe('push after merge', { timeout: 60_000 }, () => {
     expect(t(id)).toMatchObject({ status: 'done', merged_at: null });
     expect(git('log', '-1', '--format=%s', 'HEAD')).toBe('Add, push refused'); // the merge stays in the base
     expect(remote('rev-parse', 'main')).toBe(before);
-    expect(existsSync(join(repo, '.worktrees', `t-${id}`))).toBe(true);
+    expect(existsSync(worktreePath(repo, id))).toBe(true);
     expect(notes(id, 'failure')).toEqual([expect.stringMatching(/^merged into main, but git push to origin failed, so the ticket is not closed:\n[^]*denied by the remote[^]*\nTo resolve: .*Retry merge; it pushes again\.$/)]);
     expect(sounds).toEqual([{ sound: 'done', ticket: id }, { sound: 'chord', ticket: id }]);
 
@@ -824,8 +827,8 @@ describe('janitor on daemon start', () => {
     writeFileSync(join(keptWt, 'wip.txt'), 'uncommitted work');
     createWorktree(repo, merged);
     createWorktree(repo, 99); // no such ticket
-    mkdirSync(join(repo, '.worktrees', 't-98'));
-    writeFileSync(join(repo, '.worktrees', 't-98', 'junk'), 'x');
+    mkdirSync(worktreePath(repo, 98));
+    writeFileSync(join(worktreePath(repo, 98), 'junk'), 'x');
     mkdirSync(join(repo, '.kanban95', 'sessions', '4242'), { recursive: true });
     const grant = mint(db, { ticket: kept, role: 'worker', ttlMs: 60_000 });
     const old = new Date(Date.now() - 40 * 86_400_000).toISOString();
@@ -838,7 +841,7 @@ describe('janitor on daemon start', () => {
     models({ execute: 'hang' });
     srv = await start({ repo });
     db = srv.db;
-    expect(readdirSync(join(repo, '.worktrees'))).toEqual([`t-${kept}`]);
+    expect(readdirSync(worktreesRoot(repo))).toEqual([`t-${kept}`]);
     expect(readFileSync(join(keptWt, 'wip.txt'), 'utf8')).toBe('uncommitted work');
     expect(git('branch', '--list', 'ticket/99', `ticket/${merged}`)).toBe('');
     expect(readdirSync(join(repo, '.kanban95', 'sessions'))).not.toContain('4242'); // the resumed run has its own
@@ -859,7 +862,7 @@ describe('janitor on daemon start', () => {
 
 describe('janitor on a locked leftover', () => {
   it('audits the failure and the daemon still starts', async () => {
-    const dir = join(repo, '.worktrees', 't-97', 'target');
+    const dir = join(worktreePath(repo, 97), 'target');
     mkdirSync(dir, { recursive: true });
     await srv.close();
     // A live process sitting in the directory is what Windows refuses to delete.
@@ -936,7 +939,7 @@ describe('resume', { timeout: 60_000 }, () => {
   });
 
   // The fake keeps a transcript per --session-id; resumed.json is what a session started with --resume saw.
-  const resumed = (id: number) => join(repo, '.worktrees', `t-${id}`, 'resumed.json');
+  const resumed = (id: number) => join(worktreePath(repo, id), 'resumed.json');
   const launchedClaude = async (id: number) => {
     expect((await post(`/api/tickets/${id}/launch`)).status).toBe(200);
     const [s] = sessionsOf(id);
@@ -1095,7 +1098,7 @@ while (!existsSync('go')) await new Promise((r) => setTimeout(r, 25));
     git('commit', '-qm', 'Add setup scripts');
   });
   const setup = (command: string) => writeFileSync(join(repo, '.kanban95', 'config.json'), JSON.stringify({ worktree_setup: command }));
-  const wt = (id: number, file: string) => join(repo, '.worktrees', `t-${id}`, file);
+  const wt = (id: number, file: string) => join(worktreePath(repo, id), file);
 
   it('runs once in a new worktree before the first agent, with the agent PATH; a resumed run in that worktree does not rerun it', async () => {
     models({ execute: 'silent' });
@@ -1210,7 +1213,7 @@ describe('reject', { timeout: 60_000 }, () => {
     expect(r.status).toBe(200);
     expect(await r.json()).toMatchObject({ status: 'in_progress', retry: 0, flags: { needs_human: false } });
     expect(sessionsOf(id)).toHaveLength(1);
-    const wt = join(repo, '.worktrees', `t-${id}`);
+    const wt = worktreePath(repo, id);
     expect(existsSync(wt)).toBe(true);
     execFileSync('git', ['merge-base', '--is-ancestor', first, 'HEAD'], { cwd: wt }); // throws when the merged work is missing
     const prompt = runs(id).at(-1)!.prompt_rendered;
@@ -1249,7 +1252,7 @@ describe('reject', { timeout: 60_000 }, () => {
       expect(t(id)).toMatchObject({ status: 'in_progress', merged_at: null, retry: 0, flags: { needs_human: false } });
       expect(sessionsOf(id)).toHaveLength(1);
       expect(failed(runs(id).at(-1)!.prompt_rendered)).toContain('[operator] The greeting is in English only.');
-      expect(existsSync(join(repo, '.worktrees', `t-${id}`))).toBe(true);
+      expect(existsSync(worktreePath(repo, id))).toBe(true);
     });
   });
 });

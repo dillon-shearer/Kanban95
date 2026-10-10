@@ -14,7 +14,7 @@ beforeAll(() => {
     'board-widgets.test.ts': cdp,                          // a browser test whose name says nothing about ui
     'ui-mentions-cdp.test.ts': '// uses cdp.ts? no: it only names it\nimport { x } from \'./ui-helpers.ts\';\n',
     'ui.ts': cdp,                                          // imports cdp.ts but is not a test file
-    'templates.test.ts': '', 'mcp.test.ts': '', 'lifecycle.test.ts': '', 'db.test.ts': '',
+    'templates.test.ts': '', 'mcp.test.ts': '', 'lifecycle.test.ts': '', 'db.test.ts': '', 'operator.test.ts': '',
   };
   for (const [f, text] of Object.entries(files)) writeFileSync(join(dir, f), text);
 });
@@ -29,6 +29,8 @@ describe('test:changed path mapping', () => {
   it('a templates/ or skills/ change runs templates.test.ts', () => {
     expect(mapped(['templates/execute.md'], dir)).toEqual(['templates.test.ts']);
     expect(mapped(['skills/kanban95-ticket-start/SKILL.md'], dir)).toEqual(['templates.test.ts']);
+    // operator.test.ts renders these two and checks the worktrees root they name.
+    expect(mapped(['templates/operator.md', 'templates/housekeeping.md'], dir)).toEqual(['operator.test.ts', 'templates.test.ts']);
   });
 
   it('a drift-tested doc runs its drift test, and the cases union', () => {

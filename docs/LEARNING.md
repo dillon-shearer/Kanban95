@@ -15,9 +15,9 @@ Three ideas make it safe to let several agents loose on one repository at the sa
 **What it is.** A git repository normally has one working folder: the files you edit. `git worktree add` creates a second working folder for the same repository, on its own branch. Both folders share one history (one `.git`), so a commit in either is visible to the other, but the files on disk are separate. Editing `app.js` in one folder does not touch `app.js` in the other.
 
 ```
-my-project/                  main checkout, branch main (yours)
-my-project/.worktrees/t-12/  ticket 12's worktree, branch ticket/12
-my-project/.worktrees/t-13/  ticket 13's worktree, branch ticket/13
+my-project/                                    main checkout, branch main (yours)
+~/.kanban95/worktrees/my-project-1a2b3c4d/t-12/  ticket 12's worktree, branch ticket/12
+~/.kanban95/worktrees/my-project-1a2b3c4d/t-13/  ticket 13's worktree, branch ticket/13
 ```
 
 **Why the board uses it.** Five agents editing one folder would overwrite each other's half-finished files and commit each other's changes. With one worktree each, every agent has a quiet copy of the project, its own branch, and a clean `git diff` that shows exactly what it changed, which is what the tester reviews. When the ticket passes, the board merges `ticket/12` into your branch and deletes the worktree. Your own main checkout is never edited by an agent; the only thing that lands there is a merge commit.
@@ -64,7 +64,7 @@ A grant is also **revocable** and **short-lived**. It is revoked the moment the 
 ## 4. How the pieces meet: one ticket, start to finish
 
 1. You press **Launch** on ticket 12.
-2. The daemon creates `.worktrees/t-12` on branch `ticket/12` (stop 1).
+2. The daemon creates `~/.kanban95/worktrees/my-project-<hash>/t-12` on branch `ticket/12` (stop 1).
 3. It renders the `execute` prompt template for ticket 12 (the ticket, its acceptance criteria, relevant brain notes, failure notes from an earlier attempt) and saves it as the run's brief.
 4. It mints a worker grant for ticket 12 (stop 3) and starts the agent CLI in the worktree, in a terminal you can watch, connected to the board's MCP server with that grant (stop 2).
 5. The agent builds the ticket, commits on `ticket/12`, posts a summary note and calls `move_ticket(testing)`. The board ends the session, which revokes the grant.

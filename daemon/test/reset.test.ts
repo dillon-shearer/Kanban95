@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { readTicket } from '../src/api.ts';
+import { worktreePath } from '../src/git.ts';
 import { sessions } from '../src/launcher.ts';
 import { start } from '../src/server.ts';
 
@@ -73,7 +74,7 @@ describe('reset to backlog', { timeout: 60_000 }, () => {
     expect(db.prepare('SELECT outcome FROM runs WHERE id = ?').get(s.run_id)).toEqual({ outcome: 'reset' });
     expect(db.prepare('SELECT revoked_at IS NOT NULL AS r FROM grants WHERE id = ?').get(s.grant_id)).toEqual({ r: 1 });
     expect(readTicket(db, id)).toMatchObject({ status: 'backlog', flags: { needs_human: false } });
-    expect(existsSync(join(repo, '.worktrees', `t-${id}`))).toBe(true);
+    expect(existsSync(worktreePath(repo, id))).toBe(true);
   });
 
   it('a PATCH that does not set backlog stops nothing', async () => {

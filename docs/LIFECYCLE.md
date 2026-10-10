@@ -91,7 +91,7 @@ The `merge` row is not in the original spec: it is how the operator finishes a f
 
 ### Needs human
 
-Every row that turns `needs_human` on writes exactly one note in the same transaction (`Row.says` when the event brings none). Except for a question, that note is what happened, then a last line starting `To resolve:` with the operator's concrete next step: the worktree path (`.worktrees/t-<id>`) and the button (Retry merge, Resume, Reset to Backlog). A question needs no such line: the Inbox's Answer box is its fix. `GET /api/inbox` lists every unanswered question of a flagged ticket, and its newest `failure` when no newer question is open, with `kind` and `status`; the Inbox window shows it with the buttons the line names. `daemon/test/lifecycle.test.ts` checks every such row.
+Every row that turns `needs_human` on writes exactly one note in the same transaction (`Row.says` when the event brings none). Except for a question, that note is what happened, then a last line starting `To resolve:` with the operator's concrete next step: the worktree path (`<board home>/worktrees/<repo key>/t-<id>`, written out in full) and the button (Retry merge, Resume, Reset to Backlog). A question needs no such line: the Inbox's Answer box is its fix. `GET /api/inbox` lists every unanswered question of a flagged ticket, and its newest `failure` when no newer question is open, with `kind` and `status`; the Inbox window shows it with the buttons the line names. `daemon/test/lifecycle.test.ts` checks every such row.
 
 | row | note | To resolve |
 |---|---|---|
@@ -99,8 +99,8 @@ Every row that turns `needs_human` on writes exactly one note in the same transa
 | ask | the question | (the Answer box) |
 | exit | `agent exited without reporting` / `launch failed: …` / `ended by the operator from the terminal window` | Resume (the agent starts again in the same worktree), or Reset to Backlog to start over |
 | silent | `agent silent for N min: its transcript has had no new line since <time>. Last lines of its terminal:` and up to 10 lines | open its terminal; fix what it waits on there, or Restart if it is hung. The flag clears by itself if the agent writes again |
-| conflict at the cap, on submit | `merge conflict with <base>: …` / `worktree has uncommitted changes; …` | in `.worktrees/t-<id>` commit or discard, merge the base, fix, test, commit, Resume |
-| conflict at the cap, in the queue | `merge conflict with <base>: …` | in `.worktrees/t-<id>` merge the base, fix, test, commit, Retry merge |
+| conflict at the cap, on submit | `merge conflict with <base>: …` / `worktree has uncommitted changes; …` | in the ticket's worktree (its full path) commit or discard, merge the base, fix, test, commit, Resume |
+| conflict at the cap, in the queue | `merge conflict with <base>: …` | in the ticket's worktree (its full path) merge the base, fix, test, commit, Retry merge |
 | dirty | the `git status` lines | commit or stash in the main checkout, Retry merge |
 | unpushed | `merged into <base>, but git push to <remote> failed, so the ticket is not closed:` and git's message | in the main checkout pull and merge what the remote has, or reconnect or sign in to the remote, then Retry merge (it pushes again) |
 
@@ -241,11 +241,12 @@ A repo's prompts come from its own `.kanban95/templates/`, copied from `template
 
 `daemon/src/janitor.ts`. Every deletion writes an audit row (`janitor.worktree`, `janitor.session`, `janitor.grant`, `janitor.run`, `janitor.scrollback`; no grant). A directory that cannot be deleted (Windows refuses while a process still holds a file or sits in it) is audited as `error` and left for the next sweep; it never stops the daemon.
 
-No removal deletes through a link. Before a worktree, a leftover directory under `.worktrees/` or a session dir is deleted, every junction and symlink inside it is unlinked without being followed (`unlinkLinks` in `daemon/src/git.ts`): `git worktree remove --force` once followed a worktree's `node_modules` junction into the main checkout and emptied its `daemon/`. If a link that resolves into the main checkout (outside `.worktrees/`) cannot be unlinked, the removal is refused, nothing more is deleted, and the refusal is audited as `error`.
+No removal deletes through a link. Before a worktree, a leftover directory among the worktrees or a session dir is deleted, every junction and symlink inside it is unlinked without being followed (`unlinkLinks` in `daemon/src/git.ts`): `git worktree remove --force` once followed a worktree's `node_modules` junction into the main checkout and emptied its `daemon/`. If a link that resolves into the main checkout cannot be unlinked, the removal is refused, nothing more is deleted, and the refusal is audited as `error`.
 
 - **After a merge**: the ticket's worktree is removed (forced: the committed work is on the base; what is left is build output and test leftovers) and its branch deleted. Windows holds a directory for a moment after the agent in it exits, seconds on a loaded machine, so removal is retried for about ten seconds. Session dirs are already gone: each is removed when its terminal closes.
 - **When a ticket is deleted**: each of its live sessions has its grant revoked and its pty killed before the row goes (its runs, notes and grants cascade away with it); the UI closes the ticket's window and its terminals. The worktree is left to the next sweep.
-- **On start and once a day**: worktrees under `.worktrees/` whose ticket is gone or merged (a deleted ticket's worktree only if clean; a branch is deleted only if merged), session dirs and live grants with no live session, runs with no end and no live session (`outcome` = `lost`), and `runs.scrollback` of runs that ended more than 30 days ago (the row, its outcome and the ticket's notes stay). Then `VACUUM`. A worktree of an unmerged ticket is never touched: it may hold the only copy of the work.
+- **On start and once a day**: worktrees under the repo's worktrees root (`<board home>/worktrees/<repo key>/`) whose ticket is gone or merged (a deleted ticket's worktree only if clean; a branch is deleted only if merged), session dirs and live grants with no live session, runs with no end and no live session (`outcome` = `lost`), and `runs.scrollback` of runs that ended more than 30 days ago (the row, its outcome and the ticket's notes stay). Then `VACUUM`. A worktree of an unmerged ticket is never touched: it may hold the only copy of the work.
+- **Once, the old layout**: an older board kept worktrees in `<repo>/.worktrees/`. The sweep handles each `t-<id>` there by the same rules, then removes the directory once it is empty. An unmerged ticket's worktree there stays until the ticket's next launch moves it to the worktrees root. A file OneDrive still holds leaves it for the next sweep.
 
 ## Housekeeping
 
