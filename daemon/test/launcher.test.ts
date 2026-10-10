@@ -39,7 +39,7 @@ const alive = (pid: number) => {
     return false;
   }
 };
-const waitFor = async (f: () => boolean, ms = 5000) => {
+const waitFor = async (f: () => boolean, ms = 20_000) => { // a fake's first output took over 5 s in a loaded full run
   const end = Date.now() + ms;
   while (!f()) {
     if (Date.now() > end) throw new Error('timed out');
@@ -73,7 +73,7 @@ beforeEach(async () => {
 });
 afterEach(async () => {
   await srv.close();
-  rmSync(repo, { recursive: true, force: true, maxRetries: 5 });
+  rmSync(repo, { recursive: true, force: true, maxRetries: 8, retryDelay: 400 }); // a killed agent can hold it for seconds under load
 });
 
 const launch = (cli: Cli, model = 'hang') => srv.launch({ ticketId: 7, template: 'execute', cli, model, effort: 'high' });

@@ -257,7 +257,9 @@ beforeEach(async () => {
 afterEach(async () => {
   events.off('event', onEvent);
   await srv.close();
-  rmSync(repo, { recursive: true, force: true, maxRetries: 5 });
+  // A killed agent's process can hold the repo for seconds after its pty exits when the full suite loads the machine: EPERM
+  // with the default 5 x 100 ms. Up to about 14 s here, inside the pty project's 30 s hook limit.
+  rmSync(repo, { recursive: true, force: true, maxRetries: 8, retryDelay: 400 });
 });
 
 describe('lifecycle', { timeout: 60_000 }, () => {
