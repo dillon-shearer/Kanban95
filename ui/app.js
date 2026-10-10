@@ -960,6 +960,15 @@ async function projectsPanel(p) {
     h('div', { class: 'field-row' }, h('label', { for: 'project-add' }, 'Folder'), add,
       h('button', { onclick: () => save([...list, { path: add.value.trim(), colour: '#008080' }], 'Project added.') }, 'Add')));
   draw();
+  if (focusProjectAdd) add.focus();
+  focusProjectAdd = false;
+}
+
+/** Start → Projects → Add project board…: Settings on Projects with Folder focused. The tab redraws on every show, so the flag reaches its draw. */
+let focusProjectAdd = false;
+function addProjectBoard() {
+  focusProjectAdd = true;
+  openSettings('Projects');
 }
 
 /**
@@ -1267,7 +1276,7 @@ const START = [
   { label: 'Settings', run: () => openSettings() },
   { label: 'Notepad', run: openNotepad },
   { label: 'Limits', run: openLimits },
-  { label: 'Projects', get items() { return projectItems; } },
+  { label: 'Projects', get items() { return [...projectItems, '-', { label: 'Add project board…', run: addProjectBoard }]; } },
   '-',
   { label: 'New ticket', run: () => openTicket(null) },
   { label: 'New brainstorm', run: newBrainstorm },
