@@ -87,7 +87,7 @@ describe('ui-projects', { timeout: 60_000 }, () => {
     try {
       await page.goto(base); // the list is read at boot
       await board();
-      const want = [[`${basename(own)} (this board)`, true], [`${basename(other)} (running)`, false], [basename(idle), false]];
+      const want = [[`${basename(own)} (this board)`, true], [`${basename(other)} (running)`, false], [basename(idle), false], ['', false], ['Add project board…', false]];
       await until(async () => {
         await page.evaluate(`document.getElementById('start').click()`);
         return JSON.stringify(await projects()) === JSON.stringify(want);
@@ -108,5 +108,20 @@ describe('ui-projects', { timeout: 60_000 }, () => {
       srv.board.root = undefined;
       for (const d of [idle, root]) rmSync(d, { recursive: true, force: true, maxRetries: 5 });
     }
+  });
+
+  it('Start → Projects → Add project board… opens Settings on Projects with Folder focused, also from another tab', async () => {
+    await page.goto(base);
+    await board();
+    const choose = async () => {
+      await page.evaluate(`document.getElementById('start').click()`);
+      await page.evaluate(`[...document.querySelectorAll('.k95-menu li.sub li')].find((li) => li.textContent === 'Add project board…').click()`);
+      await until(() => page.evaluate(`document.activeElement?.id === 'project-add'`), 'the Folder input focused');
+    };
+    await choose();
+    await page.evaluate(`[...document.querySelectorAll('[data-win="settings"] [role=tab] a')].find((t) => t.textContent === 'Agents').click()`);
+    await until(() => page.evaluate(`!document.querySelector('#project-add')`), 'the Agents tab');
+    await choose();
+    expect(await page.evaluate(`document.querySelector('[data-win="settings"] [aria-selected=true]').textContent`)).toBe('Projects');
   });
 });
