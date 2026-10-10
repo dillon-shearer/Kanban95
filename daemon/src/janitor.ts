@@ -27,7 +27,8 @@ const remove = (repo: string, path: string): string | undefined => {
 /**
  * After a ticket's branch has landed: its worktree (forced, the committed work is on the base now; what is left is build
  * output and test leftovers) and its branch. Windows keeps a directory locked for a moment after the agent that sat in it
- * exits, so the removal is retried for about two seconds before it is given up and audited as an error.
+ * exits, longer on a loaded machine (over 2 s seen in a full test run beside other agents), so the removal is retried for about
+ * ten seconds before it is given up and audited as an error.
  */
 export async function cleanTicket(b: Board, id: number): Promise<void> {
   const path = worktreePath(b.repo, id);
@@ -37,8 +38,8 @@ export async function cleanTicket(b: Board, id: number): Promise<void> {
       log(b.db, id, 'janitor.worktree', { path, branchDeleted });
       return;
     } catch (e) {
-      if (attempt === 10) return log(b.db, id, 'janitor.worktree', { path, error: message(e) }, 'error');
-      await new Promise((r) => setTimeout(r, 200));
+      if (attempt === 25) return log(b.db, id, 'janitor.worktree', { path, error: message(e) }, 'error');
+      await new Promise((r) => setTimeout(r, 400));
     }
   }
 }
@@ -53,7 +54,9 @@ export function sweep(b: Board): void {
 
   const wtRoot = join(repo, '.worktrees');
   if (existsSync(wtRoot)) {
-    git(repo, 'worktree', 'prune'); // forget registrations whose directory is already gone
+    // Forget registrations whose directory is already gone. A failure here (git itself refused to start with EPERM once, in a
+    // loaded full test run) is audited and the sweep goes on: inside start() a throw left the daemon never listening.
+    try { git(repo, 'worktree', 'prune'); } catch (e) { log(db, null, 'janitor.worktree', { prune: true, error: message(e) }, 'error'); }
     for (const name of readdirSync(wtRoot)) {
       const id = Number(/^t-(\d+)$/.exec(name)?.[1]);
       if (!id || live.some((s) => s.ticketId === id)) continue;

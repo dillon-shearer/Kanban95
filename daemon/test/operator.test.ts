@@ -24,11 +24,12 @@ const ticket = (title: string, status = 'backlog') => Number(srv.db.prepare('INS
 const row = (id: number) => srv.db.prepare('SELECT * FROM tickets WHERE id = ?').get(id) as Record<string, unknown>;
 const post = (path: string, body: unknown) =>
   fetch(`http://127.0.0.1:${srv.port}/api${path}`, { method: 'POST', headers: { 'content-type': 'application/json', cookie: `k95=${srv.secret}` }, body: JSON.stringify(body) });
-/** Killing a pty before its process is up can leave the exit unreported on Windows, so wait for the fake first. */
+/** Killing a pty before its process is up can leave the exit unreported on Windows, so wait for the fake first. Up to 20 s:
+ *  cmd.exe and a cold node took over 5 s in a full run beside the other pty files. */
 async function end(s: Session) {
   const t0 = Date.now();
   while (!s.scrollback().includes('FAKE UP')) {
-    if (Date.now() - t0 > 5000) throw new Error('fake never came up');
+    if (Date.now() - t0 > 20_000) throw new Error(`fake never came up; scrollback: ${JSON.stringify(s.scrollback().slice(-500))}`);
     await new Promise((r) => setTimeout(r, 25));
   }
   s.pty.kill();
@@ -56,7 +57,7 @@ afterAll(async () => {
   await op.close();
   await srv.close();
   process.env.PATH = PATH0;
-  rmSync(repo, { recursive: true, force: true, maxRetries: 5 });
+  rmSync(repo, { recursive: true, force: true, maxRetries: 8, retryDelay: 400 }); // a killed agent can hold it for seconds under load
   rmSync(bin, { recursive: true, force: true });
 });
 
