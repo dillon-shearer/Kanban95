@@ -107,7 +107,7 @@ beforeEach(async () => {
 afterEach(async () => {
   events.off('event', onEvent);
   await srv.close();
-  rmSync(repo, { recursive: true, force: true, maxRetries: 5 });
+  rmSync(repo, { recursive: true, force: true, maxRetries: 8, retryDelay: 400 }); // a killed agent can hold it for seconds under load
 });
 
 describe('runner', { timeout: 60_000 }, () => {

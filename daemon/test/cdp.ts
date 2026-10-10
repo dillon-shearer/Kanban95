@@ -1,7 +1,7 @@
 // Drives a headless Edge or Chrome over the DevTools protocol for the UI tests, with Node's own WebSocket: no dependency.
 import { spawn } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 const CANDIDATES = [
@@ -35,6 +35,9 @@ export async function browser(args: string[] = []) {
     '--no-default-browser-check', '--window-size=1280,720', '--mute-audio', ...args, 'about:blank'];
   // A headed browser opens a window on the operator's desktop while they work; never allow one.
   if (!argv.some((a) => a.startsWith('--headless'))) throw new Error('cdp.ts must start the browser with --headless');
+  // Edge 155 (2026-10) never opens its DevTools port when %USERPROFILE%\AppData\Local is missing, as it is in the test home
+  // (home.ts); it then writes its Microsoft\ caches there, inside the throwaway home.
+  if (process.platform === 'win32') mkdirSync(join(homedir(), 'AppData', 'Local'), { recursive: true });
   const proc = spawn(exe, argv, { stdio: 'ignore' });
   const portFile = join(profile, 'DevToolsActivePort');
   const port = await until(() => existsSync(portFile) && readFileSync(portFile, 'utf8').split('\n')[0], 'the DevTools port', 60_000); // slow when several ui-*.test.ts files start browsers at once

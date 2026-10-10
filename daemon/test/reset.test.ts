@@ -47,7 +47,7 @@ beforeAll(async () => {
 afterAll(async () => {
   await srv.close();
   process.env.PATH = PATH0;
-  rmSync(repo, { recursive: true, force: true, maxRetries: 5 });
+  rmSync(repo, { recursive: true, force: true, maxRetries: 8, retryDelay: 400 }); // a killed agent can hold it for seconds under load
   rmSync(bin, { recursive: true, force: true });
 });
 

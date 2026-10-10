@@ -4,7 +4,7 @@
 // the rest of the UI is checked by the dogfood cycle, not by DOM tests.
 import './home.ts'; // also here, not only in vitest.config.ts: a run from the repo root skips that config and wrote the real home
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, join, resolve } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
@@ -72,10 +72,20 @@ export const rightClick = async (selector: string) => {
   await page.send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'right', buttons: 2, clickCount: 1 });
   await page.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'right', buttons: 0, clickCount: 1 });
 };
-/** Sets one key of the open page's UI state (ui/state.js, so the page sees it at once; undefined removes it). It reaches
- *  ui.json on the page's debounced write or its pagehide flush, so a reload right after keeps it. */
-export const setUi = (key: string, value: unknown) =>
-  page.evaluate(`import('/state.js').then((s) => s.set(${JSON.stringify(key)}, ${value === undefined ? 'undefined' : JSON.stringify(value)}))`);
+/** Waits until ui.json holds the open page's value of `key`. The page writes 500 ms after a change, or on pagehide with a
+ *  keepalive PUT that the next page's GET /api/ui can beat under load: a test that reloads to see saved UI state waits for this. */
+export const uiSaved = (key: string) => until(async () => {
+  let file: Record<string, unknown> = {};
+  try { file = JSON.parse(readFileSync(join(repo, '.kanban95', 'ui.json'), 'utf8')); } catch { /* not written yet */ }
+  const live = await page.evaluate<unknown>(`import('/state.js').then((s) => s.get(${JSON.stringify(key)}))`);
+  return JSON.stringify(file[key] ?? null) === JSON.stringify(live);
+}, `${key} in ui.json`);
+/** Sets one key of the open page's UI state (ui/state.js, so the page sees it at once; undefined removes it) and waits until
+ *  it is in ui.json, so a reload right after keeps it. */
+export const setUi = async (key: string, value: unknown) => {
+  await page.evaluate(`import('/state.js').then((s) => s.set(${JSON.stringify(key)}, ${value === undefined ? 'undefined' : JSON.stringify(value)}))`);
+  await uiSaved(key);
+};
 export const menuItems = () => page.evaluate<string[]>(`[...document.querySelectorAll('.k95-menu > li[role="menuitem"]')].map((li) => li.textContent)`);
 export const menuPick = (label: string) => page.evaluate(`[...document.querySelectorAll('.k95-menu > li')].find((li) => li.textContent === ${JSON.stringify(label)}).click()`);
 
@@ -111,5 +121,5 @@ afterAll(async () => {
   await srv?.close();
   process.env.PATH = PATH0;
   rmSync(bin, { recursive: true, force: true });
-  rmSync(repo, { recursive: true, force: true, maxRetries: 5 });
+  rmSync(repo, { recursive: true, force: true, maxRetries: 8, retryDelay: 400 }); // a killed agent can hold it for seconds under load
 }, 60_000);

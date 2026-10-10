@@ -86,7 +86,7 @@ beforeEach(() => {
 afterEach(async () => {
   await srv?.close();
   srv = undefined;
-  rmSync(dir, { recursive: true, force: true, maxRetries: 5 });
+  rmSync(dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 400 }); // a killed agent can hold it for seconds under load
 });
 
 describe('git init', { timeout: 60_000 }, () => {
