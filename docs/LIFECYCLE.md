@@ -165,6 +165,7 @@ There is no Pause yet; when it exists, a paused board flags these tickets (`exit
 - **A restart** keeps the flag (`<repo>/.kanban95/runner.json`, git-ignored); `recover` resumes the running tickets and the runner carries on from there.
 - **Housekeeping** tickets created after every `housekeeping.every` merges are candidates like any other and sort by their effort.
 - **A stale board** (a merge changed the daemon's own code) launches no candidate until it has restarted: Restart after a merge, below.
+- **Memory hold**: before each launch it makes (a candidate or a held conflict retry; workers and testers alike), `tick` compares free memory (`os.freemem()`, which on Windows is available physical memory, free plus standby, as Task Manager's Available) with a floor: the larger of 2 GiB and 10 percent of total RAM, hardcoded for now (a Settings → Board field would replace it). Under the floor nothing more starts this tick and a 30 s timer ticks again; `GET /api/runner` adds `lowMemory: {free, floor}` and the status bar says "waiting for memory (N GB free)". Running tickets are not touched and the runner stays on. The operator's own Launch is not held.
 
 Tickets held with `blocked_on_deps` by a manual Launch keep their own path: the board launches them when their last dependency merges, while the runner is on. Dependency cycles cannot exist: `create_ticket`, `update_ticket` and `PATCH /api/tickets/:id` refuse a dependency list that would make a ticket depend on itself through any chain.
 
@@ -303,4 +304,4 @@ The count is derived from the database (`template = 'execute' AND merged_at IS N
 
 Each returns the ticket (`200`), `409` with the refusal when the table has no row, and is audited like every REST mutation (`tickets.launch`, `tickets.answer`, `tickets.merge`, `tickets.resume`, `tickets.restart`, `tickets.reject`).
 
-`GET /api/runner` returns `{on, why?, running: [ids], left, backlog}`: the flag, why it last stopped itself, the tickets it waits on, the candidates left and the number of backlog tickets. `PUT /api/runner` with `{"on": true | false}` turns it on (and launches at once) or off and returns the same, plus `cleared` (holds cleared) on off; audited as `runner.set`.
+`GET /api/runner` returns `{on, why?, running: [ids], left, backlog, lowMemory?}`: the flag, why it last stopped itself, the tickets it waits on, the candidates left, the number of backlog tickets and, during a memory hold, free memory and the floor in bytes. `PUT /api/runner` with `{"on": true | false}` turns it on (and launches at once) or off and returns the same, plus `cleared` (holds cleared) on off; audited as `runner.set`.
