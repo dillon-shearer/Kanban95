@@ -3,6 +3,7 @@
 import { exec } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { freemem, totalmem } from 'node:os';
 import { join, resolve } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { readTicket, transaction, type Ticket } from './api.js';
@@ -166,6 +167,10 @@ export interface Board {
   restart?: 'running' | 'failed';
   /** Commits on the base its upstream lacks, counted on start (push_after_merge on) and zeroed by a push; the status bar's Push button. */
   unpushed?: number;
+  /** Set while tick() holds launches because free memory is under the floor (The runner → Memory hold); runnerState reports it. */
+  lowMemory?: { free: number; floor: number };
+  /** The 30 s timer that ticks again during a memory hold. */
+  memoryWait?: NodeJS.Timeout;
 }
 
 /**
@@ -732,8 +737,33 @@ export function runnerState(b: Board) {
   const cs = candidates(b);
   const waits = [...overlaps(b, cs)].map(([id, on]) => ({ id, on }));
   const restart = b.stale === 'shell' ? 'relaunch' : b.restart === 'failed' ? 'failed' : b.shell && b.shutdown ? 'self' : 'manual';
-  return { ...runner(b), concurrency: limit(b), running: running(b), left: cs.length, backlog: n, waits, stale: b.stale ?? false, unpushed: b.unpushed ?? 0,
-    ...(b.stale && { hold: { finish: toFinish(b), restart } }), ...(b.gitError && { gitError: b.gitError }) };
+  const r = runner(b);
+  return { ...r, concurrency: limit(b), running: running(b), left: cs.length, backlog: n, waits, stale: b.stale ?? false, unpushed: b.unpushed ?? 0,
+    ...(b.stale && { hold: { finish: toFinish(b), restart } }), ...(b.gitError && { gitError: b.gitError }), ...(r.on && b.lowMemory && { lowMemory: b.lowMemory }) };
+}
+
+/**
+ * Free physical memory in bytes. On Windows libuv reads GlobalMemoryStatusEx's ullAvailPhys: available memory (free plus standby
+ * cache the system hands back on demand), not only the zeroed free list, so it is the figure Task Manager shows as Available.
+ * Tests swap it for a stub.
+ */
+export const memory = { free: freemem };
+/** ponytail: hardcoded at the larger of 2 GiB and 10% of RAM; upgrade to a Settings → Board field when an operator needs another value. */
+const memoryFloor = () => Math.max(2 * 1024 ** 3, totalmem() / 10);
+const MEMORY_RECHECK = 30_000;
+
+/** Whether free memory allows the runner another launch; when not, records the hold and arms a timer that ticks again. */
+function roomFor(b: Board) {
+  const free = memory.free();
+  const floor = memoryFloor();
+  if (free >= floor) return true;
+  b.lowMemory = { free, floor };
+  b.memoryWait ??= setTimeout(() => {
+    b.memoryWait = undefined;
+    tick(b);
+  }, MEMORY_RECHECK).unref();
+  changed(null);
+  return false;
 }
 
 // ---- restart after a merge (docs/LIFECYCLE.md → Restart after a merge) ----
@@ -791,6 +821,8 @@ let ticking = false;
  * tickets are running, launch the next candidate that shares no file with a running ticket, or the first candidate when all
  * do (the merge sync resolves it; waiting forever would be worse). Nothing running and nothing to launch: it turns itself off.
  * A ticket held on a running one is not "nothing": the runner waits for that merge. A stale board launches no candidate.
+ * Before each launch free memory is checked against a floor (roomFor): under it, nothing more starts this tick and a timer
+ * ticks again in 30 s.
  */
 export function tick(b: Board) {
   if (ticking || b.closing) return;
@@ -799,19 +831,24 @@ export function tick(b: Board) {
   ticking = true; // its own launches call apply, which calls tick
   try {
     const max = limit(b);
+    const wasLow = b.lowMemory;
+    b.lowMemory = undefined;
     // A conflict sent back to its worker while the runner was off (apply's hold): that worker starts first, unless the
     // operator has moved the ticket on since.
     for (const id of held) {
-      held.delete(id);
       const t = b.db.prepare('SELECT status, needs_human FROM tickets WHERE id = ?').get(id) as { status: string; needs_human: number } | undefined;
-      if (t?.status === 'in_progress' && !t.needs_human && !sessionsOf(id).length) apply(b, id, 'launch');
+      const go = t?.status === 'in_progress' && !t.needs_human && !sessionsOf(id).length;
+      if (go && !roomFor(b)) break; // kept in `held` for the next tick
+      held.delete(id);
+      if (go) apply(b, id, 'launch');
     }
-    while (!b.stale && running(b).length < max) {
+    while (!b.stale && !b.lowMemory && running(b).length < max) {
       const cs = candidates(b);
-      if (!cs.length) break;
+      if (!cs.length || !roomFor(b)) break;
       const busy = overlaps(b, cs);
       apply(b, cs.find((c) => !busy.has(c)) ?? cs[0], 'launch');
     }
+    if (wasLow && !b.lowMemory) changed(null);
     if (running(b).length === 0 && candidates(b).length === 0) {
       setRunner(b, false, 'nothing left to launch');
       events.emit('event', { sound: 'ding', ticket: null });
