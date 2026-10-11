@@ -65,7 +65,7 @@ The tester's verdict is the move: `report_test` writes the PASS or FAIL note, th
 | done | merge | not merged yet | done | | merge queued again |
 | done | reject | no live agent session | in_progress | `needs_human` off, `retry` 0, `merged_at` kept | the operator's reason as an `operator` failure note, execute agent (see Reject below) |
 
-Resume and launch on a running ticket are not in the original spec. Before them, the only way past a silent exit was Reset to Backlog and Launch, which threw away `retry` and the phase. The new prompt carries the exit's failure note like any retry (`failureNotes` in `daemon/src/context.ts`: failure notes since the latest execute run). Resume is the strict form (only a flagged ticket); Launch on a running ticket also starts an unflagged one with no agent, such as one dragged by hand into a running column.
+Resume and launch on a running ticket are not in the original spec. Before them, the only way past a silent exit was Reset to Backlog and Launch, which threw away `retry` and the phase. The new prompt carries the exit's failure note like any retry (`attemptNotes` in `daemon/src/context.ts`: failure notes since the latest execute run). Resume is the strict form (only a flagged ticket); Launch on a running ticket also starts an unflagged one with no agent, such as one dragged by hand into a running column.
 
 Both continue the killed conversation when they can, instead of starting over. When the ticket's latest run was a Claude Code session in the same phase that ended without reporting (`runs.outcome` `exit`, `lost` or `closed`) and its transcript is still on disk, the new run launches `claude --resume <runs.session_id>` in the same worktree, with a fresh grant and `mcp.json`, and the one-line message "The board restarted this session after it ended without reporting. Your board tools work again under a new grant; carry on where you left off." in place of the brief; the agent keeps everything it had read and done. Otherwise (a Codex run, a missing transcript, a run that reported, a phase change) it is a fresh session with the brief and its failure notes, as before (`resumable` in `daemon/src/launcher.ts`, docs/CLIS.md → Resuming a killed session). Restart, a retry and Reject always start fresh: Restart is for an agent that is stuck, and the others bring news the old conversation lacks.
 
@@ -114,6 +114,10 @@ Every row that turns `needs_human` on writes exactly one note in the same transa
 ### Retries
 
 The first execute run is attempt 0. Each failed test adds one to `retry` and runs execute again, up to `retry` = 3: the first attempt plus exactly three retries. The fourth failed test stops the ticket with `needs_human`. A merge conflict counts against the same `retry`: below the cap it sends the ticket back to the worker, at the cap it flags it. Each retry's prompt carries the failure notes of the attempt before it (`docs/AGENTS.md`).
+
+### Work already on the base
+
+A ticket can be filed or launched after another ticket already landed its work (ticket #122: filed the same second the fix merged, then failed twice for "no change"). Nothing checks a new ticket against the base, so the worker does: it makes no change, proves each criterion against the code, posts a `decision` note naming the base commits and the evidence, and submits the empty branch with `move_ticket(testing)` as usual (`templates/execute.md`). The tester gets that note in `{{notes}}` and `(none)` as the diff; `templates/test.md` tells it to judge each criterion against the code on the base and pass when all hold. A pass takes the ordinary `pass` row: the merge queue finds nothing to merge, closes the ticket (`merged_at` set, worktree removed) and the base does not move. No operator action and no retry is spent (`daemon/test/lifecycle-done-on-main.test.ts`).
 
 ### Escalation
 
