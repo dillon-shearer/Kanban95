@@ -35,7 +35,7 @@ Living document. Update it in the same change that alters the shape described he
   - `merge.ts` is the one serialized merge queue.
   - `pty.ts` spawns the CLI in a pseudo-terminal with an env allowlist and keeps a 2000-line scrollback.
   - `server.ts` is the HTTP plumbing (bind, origin guard, static files, `/health`, routes `/api/*` to `api.ts`).
-  - `settings.ts` reads and writes the operator's `~/.kanban95/models.json`, `settings.json` (schema-checked), `projects.json` (adds the served repo on start) and `preferences.md`, lists the models the installed CLIs know (`knownModels`, for the Settings dropdowns), and resolves a run's CLI, model, effort and executable.
+  - `settings.ts` reads and writes the operator's `~/.kanban95/models.json`, `settings.json` (schema-checked), `projects.json` (adds the served repo on start) and `preferences.md`, resolves a repo's own copy of models.json, settings.json and preferences.md (`<board home>/projects/<repo key>/`, used whole when it exists, else the global file; `repoKey` is shared with the worktrees root), lists the models the installed CLIs know (`knownModels`, for the Settings dropdowns), and resolves a run's CLI, model, effort and executable.
   - `templates.ts` copies the default prompt templates from `templates/` into `<repo>/.kanban95/templates/`, keeps unedited copies in step with the defaults on start (see Prompts below) and renders them.
   - `trust.ts` pre-trusts the repo root for Claude Code before a launch.
   - `voice.ts` downloads, verifies and serves the speech model (see Voice below).
@@ -115,7 +115,7 @@ Every `/api/*` request needs the `k95` cookie holding the shell secret, or gets 
 | DELETE | `/api/sessions/:id` | the operator's X on a terminal: ends the session (`runs.outcome` = `closed`, grant revoked, pty killed); a ticket session also flags its ticket (`exit` with an operator note). 404 when not live. Audited as `sessions.end` |
 | POST | `/api/brainstorm` | starts a brainstorm session (planner, repo root); optional `{ mission }`, the operator's draft, goes into its brief as `{{mission}}`; returns it in the `/api/sessions` shape |
 | POST | `/api/operator` | `{ mission }` (non-empty): starts an operator terminal (operator grant, repo root, the mission in its brief); returns it in the `/api/sessions` shape |
-| GET, PUT | `/api/config/models` `/api/config/settings` | `~/.kanban95/models.json` / `settings.json`: GET returns `{path, value}` as written (`null` when absent), PUT checks the whole file against its schema (`400` naming the field) and writes it |
+| GET, PUT | `/api/config/models` `/api/config/settings` | `~/.kanban95/models.json` / `settings.json`: GET returns `{path, value}` as written (`null` when absent), PUT checks the whole file against its schema (`400` naming the field) and writes it. `?scope=global\|project` (default `global`): with a scope GET also returns `scope` and `overridden` (this repo has a project copy) and, for `project`, the copy's path and value once one exists, else the global file's; PUT with `project` writes (and starts) the copy only |
 | GET, PUT | `/api/ui` | `<repo>/.kanban95/ui.json`, the UI's state (`ui/state.js`) as one object, `{}` when absent; PUT replaces it whole and refuses a non-object or more than 64 KB with `400`. Not audited |
 | GET, PUT | `/api/notepad` | `<repo>/.kanban95/notepad.md` as plain text: `{value}`, `''` when absent; PUT refuses a non-string with `400` and more than 256 KB with `413`. Not audited |
 | POST | `/api/push` | the status bar's Push: the base to its upstream, run in the merge queue, audited `board.push`; answers the runner state, or `502` with git's message (`docs/LIFECYCLE.md` → Push) |
@@ -124,7 +124,8 @@ Every `/api/*` request needs the `k95` cookie holding the shell secret, or gets 
 | GET, PUT | `/api/projects` | `~/.kanban95/projects.json`: `{path, value}`, `value` the whole `[{path, colour}]` list both ways; GET adds `running`, `{<path>: true \| false}` for every listed path from the running registry, apart from `value` so a PUT can send `value` back unchanged. PUT refuses (`400`, file unchanged) a path that is not an existing folder (a plain one becomes a repo when a board starts on it), one listed twice, a colour that is not `#rgb`/`#rrggbb` or a hue 0 to 360, and a list without this board's own repo. Audited as `config.write` |
 | POST | `/api/projects/open` | `{path}`: start a board on that project (Daemon lifetime → Another project's board). `202 {name}`; `400` for a path not in `projects.json`; `409` when it is already running or nothing could be started. Audited as `projects.open` |
 | POST | `/api/projects/focus` | `{path}`: bring that running board's window to the front. `200 {name, focused}`, `focused: false` when no window was found (or on macOS); `400` for a path not in `projects.json`; `409` when it is not running |
-| GET, PUT | `/api/config/preferences` | `~/.kanban95/preferences.md` as plain text: `{path, value}`, `value` is `''` when absent; PUT refuses a non-string or more than 16 KB with `400` |
+| GET, PUT | `/api/config/preferences` | `~/.kanban95/preferences.md` as plain text: `{path, value}`, `value` is `''` when absent; PUT refuses a non-string or more than 16 KB with `400`. Takes `?scope=` like the two above |
+| POST, DELETE | `/api/config/<models\|settings\|preferences>/override` | POST copies the global file to this repo's project copy (`409` when one exists; `400` for models with no global file); DELETE removes the copy, and the project dir once empty (`404` when none). Both return the project-scope GET view. Audited as `config.write` |
 | GET | `/api/templates` | `{vars, templates: [{name, path, text, stale}]}`: every prompt template's current text in `<repo>/.kanban95/templates/` and the allowed `{{variables}}` (`VARS`), for Settings → Prompts. `stale` is true when the copy differs from the current shipped default |
 | PUT | `/api/templates/:name` | `{text}` replaces that template whole; a `{{var}}` outside `VARS` is refused with `400` naming it, an unknown name with `404`. Returns `{name, path, text, stale}` |
 | POST | `/api/templates/:name/reset` | Overwrites the repo's copy with the shipped `templates/<name>.md` and records its sha256 in `.shipped.json`. Returns `{name, path, text, stale}` |
@@ -195,6 +196,7 @@ docs/             this file, LEARNING.md (guided tour for newcomers), OPERATOR.m
                     models.json (model catalog, read at each launch)
                     models/ (the downloaded speech model)
                     preferences.md (operator's standing instructions for agents)
+                    projects/<repo key>/ (a repo's own models.json, settings.json, preferences.md, each used whole instead of the global one)
                     projects.json (every repo with a board and its wallpaper colour; the daemon adds its own repo on start)
                     running/ (one <pid>.json per live daemon: its repo and port)
                     settings.json (CLI paths, sounds, voice)

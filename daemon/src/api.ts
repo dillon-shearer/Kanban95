@@ -10,7 +10,7 @@ import { hasBranch, ticketDiff } from './git.js';
 import { audit, revoke } from './grants.js';
 import { killGrantSession, killSession, sessions, sessionsOf, type Session } from './launcher.js';
 import { apply, brainstorm, changed, housekeeping, operator, pushBase, Refused, restartBoard, runner, runnerState, setRunner, type Board } from './lifecycle.js';
-import { BadConfig, CONFIGS, configPath, knownModels, preferencesPath, project, projectsPath, readPreferences, readProjects, uncatalogued, writeConfig, writePreferences, writeProjects, type ConfigName } from './settings.js';
+import { addOverride, BadConfig, dropOverride, globalPath, isOverridable, knownModels, project, projectPath, projectsPath, readProjects, uncatalogued, writeConfig, writePreferences, writeProjects, type OverridableName } from './settings.js';
 import { isStale, resetTemplate, templatePath, TEMPLATES, unknownVar, VARS, writeTemplate, type TemplateName } from './templates.js';
 import { trustStatus, untrustClaude } from './trust.js';
 import { download, status as voiceStatus } from './voice.js';
@@ -248,10 +248,10 @@ const routes: [method: string, path: RegExp, mutation: string | null, handler: (
     status: 200,
     body: (db.prepare('SELECT id FROM tickets ORDER BY id').all() as { id: number }[]).map((r) => readTicket(db, r.id)),
   })],
-  ['POST', /^\/api\/tickets$/, 'tickets.create', ({ db, body }) => {
+  ['POST', /^\/api\/tickets$/, 'tickets.create', ({ board, db, body }) => {
     const { cols, vals, deps } = ticketColumns(body);
     if (!cols.includes('title')) throw new HttpError(400, 'title is required');
-    const bad = typeof body.model === 'string' && uncatalogued(body.model, typeof body.cli === 'string' ? body.cli : null);
+    const bad = typeof body.model === 'string' && uncatalogued(body.model, typeof body.cli === 'string' ? body.cli : null, board.repo);
     if (bad) throw new HttpError(400, bad);
     const id = transaction(db, () => {
       const r = db.prepare(`INSERT INTO tickets (${cols.join(',')}) VALUES (${cols.map(() => '?').join(',')})`).run(...(vals as never[]));
@@ -268,7 +268,7 @@ const routes: [method: string, path: RegExp, mutation: string | null, handler: (
     const { cols, vals, deps } = ticketColumns(body);
     if (cols.length === 0 && !deps) throw new HttpError(400, 'nothing to update');
     if (typeof body.model === 'string') {
-      const bad = uncatalogued(body.model, typeof body.cli === 'string' ? body.cli : readTicket(db, id).cli);
+      const bad = uncatalogued(body.model, typeof body.cli === 'string' ? body.cli : readTicket(db, id).cli, board.repo);
       if (bad) throw new HttpError(400, bad);
     }
     // A move by hand (docs/LIFECYCLE.md → Moves by hand) stops the ticket's agents, whoever sent it, and clears its flag unless the
@@ -492,23 +492,26 @@ const routes: [method: string, path: RegExp, mutation: string | null, handler: (
     renameSync(`${file}.tmp`, file);
     return { status: 200, body };
   }],
-  // ~/.kanban95/preferences.md, plain text in `value` both ways ('' when absent). Matched before the JSON config routes.
-  ['GET', /^\/api\/config\/preferences$/, null, () => ({ status: 200, body: { path: preferencesPath(), value: readPreferences() } })],
-  ['PUT', /^\/api\/config\/preferences$/, 'config.write', ({ body }) => ({ status: 200, body: { path: preferencesPath(), value: writePreferences(body.value) } })],
-  // ~/.kanban95/models.json and settings.json. GET shows the file as it is (null when absent); PUT checks it whole, then writes.
-  ['GET', /^\/api\/config\/(\w+)$/, null, ({ params }) => {
+  // ~/.kanban95/models.json, settings.json and preferences.md, or this repo's copy (?scope=project) in projects/<repo key>/.
+  // GET shows the file as it is (null when absent; preferences is text, '' when absent); scope=project shows the global file
+  // until a copy exists. PUT checks it whole, then writes; scope=project writes (and starts) the copy. See configView.
+  ['GET', /^\/api\/config\/(\w+)$/, null, ({ board, params, url }) => ({ status: 200, body: configView(board, configName(params[0]), url) })],
+  ['PUT', /^\/api\/config\/(\w+)$/, 'config.write', ({ board, params, body, url }) => {
     const name = configName(params[0]);
-    let value = null;
-    try {
-      value = JSON.parse(readFileSync(configPath(name), 'utf8'));
-    } catch (e) {
-      if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw new HttpError(400, `${configPath(name)}: ${(e as Error).message}`);
-    }
-    return { status: 200, body: { path: configPath(name), value } };
+    const repo = configScope(url) === 'project' ? board.repo : undefined;
+    const value = name === 'preferences' ? writePreferences(body.value, repo) : writeConfig(name, body, repo);
+    return { status: 200, body: { path: repo ? projectPath(name, repo) : globalPath(name), value } };
   }],
-  ['PUT', /^\/api\/config\/(\w+)$/, 'config.write', ({ params, body }) => {
+  // Starts this repo's copy as a copy of the global file (409 when one exists), or removes it (404 when none).
+  ['POST', /^\/api\/config\/(\w+)\/override$/, 'config.write', ({ board, params, url }) => {
     const name = configName(params[0]);
-    return { status: 200, body: { path: configPath(name), value: writeConfig(name, body) } };
+    if (!addOverride(name, board.repo)) throw new HttpError(409, `${name} already has a project copy`);
+    return { status: 200, body: configView(board, name, url, 'project') };
+  }],
+  ['DELETE', /^\/api\/config\/(\w+)\/override$/, 'config.write', ({ board, params, url }) => {
+    const name = configName(params[0]);
+    if (!dropOverride(name, board.repo)) throw new HttpError(404, `${name} has no project copy`);
+    return { status: 200, body: configView(board, name, url, 'project') };
   }],
   // ~/.kanban95/projects.json (Settings → Projects): the whole list in `value` both ways. /api/project is this board's entry,
   // with its folder name, for the wallpaper and the window title. A PUT that drops this board's own project is refused.
@@ -537,7 +540,7 @@ const routes: [method: string, path: RegExp, mutation: string | null, handler: (
     resetTemplate(board.repo, name);
     return { status: 200, body: templateView(board, name) };
   }],
-  ['GET', /^\/api\/models$/, null, async () => ({ status: 200, body: await knownModels() })],
+  ['GET', /^\/api\/models$/, null, async ({ board }) => ({ status: 200, body: await knownModels(board.repo) })],
   ['GET', /^\/api\/trust$/, null, ({ board }) => ({ status: 200, body: trustStatus(board.db, board.repo) })],
   ['DELETE', /^\/api\/trust$/, 'trust.clear', ({ board }) => {
     untrustClaude(board.db, board.repo);
@@ -578,9 +581,34 @@ function sessionView(s: Session) {
   return { id: s.key, ticket_id: s.ticketId, run_id: s.runId, grant_id: s.grantId, role: s.role, phase: s.phase, model: s.model };
 }
 
-function configName(s: string): ConfigName {
-  if (!(CONFIGS as string[]).includes(s)) throw new HttpError(404, 'not found');
-  return s as ConfigName;
+function configName(s: string): OverridableName {
+  if (!isOverridable(s)) throw new HttpError(404, 'not found');
+  return s;
+}
+
+/** `?scope=` of a config route: global when absent. */
+function configScope(url: URL): 'global' | 'project' {
+  const v = url.searchParams.get('scope') ?? 'global';
+  if (v !== 'global' && v !== 'project') throw new HttpError(400, 'scope must be global or project');
+  return v;
+}
+
+/**
+ * `{ path, value }` of the file a scope reads. Asked with a scope, also `scope` and `overridden` (a project copy exists), so a
+ * reply to an unscoped GET keeps its old shape.
+ */
+function configView(board: Board, name: OverridableName, url: URL, scope = configScope(url)) {
+  const own = projectPath(name, board.repo);
+  const overridden = existsSync(own);
+  const path = scope === 'project' && overridden ? own : globalPath(name);
+  let value: unknown = name === 'preferences' ? '' : null;
+  try {
+    const text = readFileSync(path, 'utf8');
+    value = name === 'preferences' ? text : JSON.parse(text);
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw new HttpError(400, `${path}: ${(e as Error).message}`);
+  }
+  return url.searchParams.has('scope') || url.pathname.endsWith('/override') ? { path, value, scope, overridden } : { path, value };
 }
 
 function templateName(s: string): TemplateName {

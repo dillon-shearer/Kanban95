@@ -96,7 +96,7 @@ export function buildContext(db: DatabaseSync, repo: string, ticketId: number | 
     .filter(([, t]) => role in t.access)
     .map(([name, t]) => `- ${name} (${t.access[role]})`)
     .join('\n');
-  const preferences = orNone(readPreferences());
+  const preferences = orNone(readPreferences(repo));
   const worktrees = worktreesRoot(repo);
   if (ticketId === null) return { ticket: '(none)', criteria: '(none)', brain: '(none)', notes: '(none)', retry: '0', diff: '', tools, base: '(none)', preferences, mission: '(none)', worktrees };
 

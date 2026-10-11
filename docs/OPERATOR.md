@@ -161,6 +161,10 @@ The zoom scales everything together: windows, cards, menus, dialogs, the taskbar
 
 At 100% and 200% the UI text is 98.css's pixel font. That font is drawn for whole pixels, so at any other zoom its strokes were resampled unevenly and showed stray horizontal lines through the text (status bar, buttons, cards). At those zooms the board now draws all UI text in Tahoma: `setZoom` in `ui/wm.js` sets the `k95-vector` class on body, and `ui/app.css` switches the `--k95-font` variable that body and every 98.css control take their font from. Terminals draw their own text and are unaffected.
 
+## Settings
+
+Models (`models.json`), board settings (`settings.json`) and preferences (`preferences.md`) live in `~/.kanban95/` and apply to every project. A project can have its own copy of any of them in `~/.kanban95/projects/<repo key>/`, outside the repo so nothing is committed. A copy starts as a copy of the global file and, while it exists, replaces that file whole for that project's board: keys are never mixed between the two. Delete the copy and the project follows the global file again. Runner concurrency is already per repo (`<repo>/.kanban95/runner.json`).
+
 ## Projects
 
 Each board works on one repo, so with several boards open they are told apart by name and colour. The window title and its taskbar entry read `<repo folder> — Kanban95`, and each project has its own wallpaper colour under the same blueprint grid.

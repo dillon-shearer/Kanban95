@@ -298,7 +298,7 @@ function spawn(b: Board, id: number, template: 'execute' | 'housekeeping' | 'tes
   try {
     if (b.closing) throw new Error('the daemon is shutting down');
     if (b.gitError) throw new Error(b.gitError);
-    const settings = runSettings(readTicket(b.db, id), template === 'test' ? 'test' : 'execute');
+    const settings = runSettings(readTicket(b.db, id), template === 'test' ? 'test' : 'execute', b.repo);
     const go = () => void launch({ ...b, onExit: (s) => exited(b, s) }, { ticketId: id, template, resume, ...settings });
     const setup = prepareWorktree(b.repo, id, worktreeSetup(b.repo));
     if (!setup) return go();
@@ -443,7 +443,7 @@ function listen(b: Board) {
   if (b.closing) return;
   let limit = 20;
   try {
-    limit = readConfig('settings').idle_minutes;
+    limit = readConfig('settings', b.repo).idle_minutes;
   } catch { /* a broken settings.json: the default */ }
   const now = Date.now();
   for (const s of sessions.values()) {
@@ -534,7 +534,7 @@ async function mergeJob(b: Board, id: number, since: number) {
   if (r.ok) {
     if (!inBase) markStale(b);
     // Published before it counts as merged: a failed push flags the ticket and leaves the merge in the base.
-    const p = readConfig('settings').push_after_merge ? await push(b.repo) : { ok: true as const, pushed: false };
+    const p = readConfig('settings', b.repo).push_after_merge ? await push(b.repo) : { ok: true as const, pushed: false };
     if (!p.ok) {
       const body = `merged into ${p.base}, but git push to ${p.remote} failed, so the ticket is not closed:
 ${p.reason}`;
@@ -557,7 +557,7 @@ ${p.reason}`;
 export function countUnpushed(b: Board) {
   // In the queue, so a push recover() queued cannot finish between the count and its write.
   return enqueue(async () => {
-    if (!readConfig('settings').push_after_merge) return;
+    if (!readConfig('settings', b.repo).push_after_merge) return;
     b.unpushed = await ahead(b.repo);
     if (b.unpushed) changed(null);
   });
@@ -615,7 +615,7 @@ function worktreeSetup(repo: string): string | undefined {
 /** settings.json `housekeeping: { auto, every }` (on, 10). Merged execute tickets are counted; housekeeping ones are not. The ticket waits in Backlog for the runner. */
 function maybeHousekeeping(b: Board, t: Ticket) {
   if (t.template !== 'execute') return;
-  const { auto, every } = readConfig('settings').housekeeping;
+  const { auto, every } = readConfig('settings', b.repo).housekeeping;
   if (!auto) return;
   const { n } = b.db.prepare("SELECT count(*) AS n FROM tickets WHERE template = 'execute' AND merged_at IS NOT NULL").get() as { n: number };
   if (n % every !== 0) return;
@@ -644,7 +644,7 @@ function rootSession(b: Board, o: Parameters<typeof launchRoot>[1]): Session {
 }
 
 /** A brainstorm session: a planner with plan-phase settings, optionally seeded with the operator's text (Notepad). */
-export const brainstorm = (b: Board, mission?: string) => rootSession(b, { ...runSettings(null, 'plan'), template: 'brainstorm', mission });
+export const brainstorm = (b: Board, mission?: string) => rootSession(b, { ...runSettings(null, 'plan', b.repo), template: 'brainstorm', mission });
 
 /** An operator terminal: the operator phase (Settings → Agents; the CLI's default model when unset) unless `.kanban95/config.json` has `operator: { model, effort }` (either or both). */
 export function operator(b: Board, mission: string): Session {
@@ -653,7 +653,7 @@ export function operator(b: Board, mission: string): Session {
   if (typeof o !== 'object' || Array.isArray(o)) throw new BadConfig(`${where} must be an object`);
   if (o.model !== undefined && (typeof o.model !== 'string' || !o.model)) throw new BadConfig(`${where}.model must be a non-empty string`);
   if (o.effort !== undefined && !EFFORT.includes(o.effort)) throw new BadConfig(`${where}.effort must be one of ${EFFORT.join(', ')}`);
-  const plan = runSettings(null, 'operator');
+  const plan = runSettings(null, 'operator', b.repo);
   return rootSession(b, { ...plan, model: o.model ?? plan.model, effort: (o.effort as Effort) ?? plan.effort, template: 'operator', mission });
 }
 
