@@ -356,16 +356,20 @@ const killing = new Set<Promise<void>>();
  * running. Windows: `taskkill /T /F` on the pid walks the tree by parent pid, so it starts while the root is still alive; it
  * runs asynchronously so a slow taskkill under load does not stall the daemon. POSIX: node-pty starts the child with setsid
  * (forkpty on Linux, POSIX_SPAWN_SETSID on macOS), so its pid is a process group, killed whole. Then `kill()` itself, so
- * node-pty still reports the exit (it ignores a process already gone). Not on Windows once the root is dead: node-pty reports
- * that exit by itself, and its `kill()` lists the console of the root's pid in a helper it forks after releasing the process,
- * then kills every process on that console. By then the pid may belong to another process, and on that one's console are its
- * siblings: twice in three full test runs it killed vitest (node-pty 1.1.0, 2026-10-11).
+ * node-pty still reports the exit (it ignores a process already gone). On Windows `kill()` follows only a taskkill that timed
+ * out, while the root is still alive: once the root is dead node-pty reports that exit by itself, and its `kill()` lists the
+ * console of the root's pid in a helper it forks after releasing the process, then kills every process on that console. By
+ * then the pid may belong to another process, and on that one's console are its siblings. It killed vitest, and, with the suite
+ * run from an agent's terminal, the agent itself, even behind a check that the pid was still alive: a reused pid is alive
+ * (node-pty 1.1.0, 2026-10-11).
  */
 export function killTree(p: { pid?: number; kill(): unknown }) {
   if (!p.pid) return void p.kill();
   if (process.platform === 'win32') {
-    const done = new Promise<void>((ok) => execFile('taskkill', ['/T', '/F', '/PID', String(p.pid)], { windowsHide: true, timeout: 10_000 }, () => ok()))
-      .then(() => void (alive(p.pid!) && p.kill()))
+    const done = new Promise<void>((ok) => execFile('taskkill', ['/T', '/F', '/PID', String(p.pid)], { windowsHide: true, timeout: 10_000 }, (e) => {
+      if (e?.killed) p.kill();
+      ok();
+    }))
       .finally(() => killing.delete(done));
     killing.add(done);
     return;
@@ -393,10 +397,13 @@ export function killSession(s: Session) {
 /**
  * An orphan keeps its dead parent's pid as ParentProcessId, so once the root is gone it can no longer start anything, and every
  * process it started while it lived is found and its tree killed. The creation window skips children of another process that
- * held or holds that pid. A root still alive after 5 s is left to node-pty. Never rejects: `done` waits for it.
+ * held that pid; one that holds it now (a reused pid) ends the window where it was created, so its own children are left alone.
+ * A root still alive after 5 s is left to node-pty. Never rejects: `done` waits for it.
  */
 const REAP_PS = `$from = [DateTimeOffset]::FromUnixTimeMilliseconds([long]$env:K95_FROM).LocalDateTime
 $to = [DateTimeOffset]::FromUnixTimeMilliseconds([long]$env:K95_TO).LocalDateTime
+$owner = Get-CimInstance Win32_Process -Filter "ProcessId=$([int]$env:K95_PID)"
+if ($owner -and $owner.CreationDate -lt $to) { $to = $owner.CreationDate }
 Get-CimInstance Win32_Process -Filter "ParentProcessId=$([int]$env:K95_PID)" | Where-Object { $_.CreationDate -ge $from -and $_.CreationDate -le $to } |
   ForEach-Object { taskkill /T /F /PID $_.ProcessId *> $null }`;
 async function reapOrphans(pid: number, since: number) {
