@@ -1,5 +1,5 @@
 // Launches an agent CLI on a ticket: worktree, run row, grant, session dir, argv, pty. Tears it all down on exit or revoke.
-import { execFileSync, spawn } from 'node:child_process';
+import { execFile, execFileSync, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir, userInfo } from 'node:os';
@@ -348,17 +348,20 @@ function spawnSession(d: Daemon, o: RunSettings & { sessionId?: string; resume?:
  * Ends a process and everything it started; every session the board ends, and a worktree_setup that overruns, comes here.
  * `pty.kill()` alone is not enough: on Windows it ends the cmd.exe that spawnPty wraps around the CLI and the processes still
  * attached to its console, and a grandchild with no console (headless Edge, a detached vitest worker or MCP server) keeps
- * running. Windows: `taskkill /T /F` on the pid walks the tree by parent pid, so it runs while the root is still alive.
- * POSIX: node-pty starts the child with setsid (forkpty on Linux, POSIX_SPAWN_SETSID on macOS), so its pid is a process
- * group, killed whole. Then `kill()` itself, so node-pty still reports the exit (it ignores a process already gone).
+ * running. Windows: `taskkill /T /F` on the pid walks the tree by parent pid, so it starts while the root is still alive; it
+ * runs asynchronously so a slow taskkill under load does not stall the daemon, and `kill()` follows once it is done. POSIX:
+ * node-pty starts the child with setsid (forkpty on Linux, POSIX_SPAWN_SETSID on macOS), so its pid is a process group,
+ * killed whole. Then `kill()` itself, so node-pty still reports the exit (it ignores a process already gone).
  */
 export function killTree(p: { pid?: number; kill(): unknown }) {
-  if (p.pid) {
-    try {
-      if (process.platform === 'win32') execFileSync('taskkill', ['/T', '/F', '/PID', String(p.pid)], { stdio: 'ignore', windowsHide: true, timeout: 10_000 });
-      else process.kill(-p.pid, 'SIGKILL');
-    } catch { /* already gone, or not a group leader: kill() below still ends the root */ }
+  if (!p.pid) return void p.kill();
+  if (process.platform === 'win32') {
+    execFile('taskkill', ['/T', '/F', '/PID', String(p.pid)], { windowsHide: true, timeout: 10_000 }, () => p.kill());
+    return;
   }
+  try {
+    process.kill(-p.pid, 'SIGKILL');
+  } catch { /* already gone, or not a group leader: kill() below still ends the root */ }
   p.kill();
 }
 
