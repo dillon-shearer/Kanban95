@@ -10,7 +10,7 @@ import { buildContext } from '../src/context.ts';
 import { MIGRATIONS_DIR, migrate } from '../src/db.ts';
 import { worktreesRoot } from '../src/git.ts';
 import { mint, verify } from '../src/grants.ts';
-import { buildArgv, sessions, type ArgvIn, type Session } from '../src/launcher.ts';
+import { buildArgv, killTree, sessions, type ArgvIn, type Session } from '../src/launcher.ts';
 import { start } from '../src/server.ts';
 import { fill, loadTemplate, render, VARS, type Ctx } from '../src/templates.ts';
 
@@ -33,7 +33,7 @@ async function end(s: Session) {
     if (Date.now() - t0 > 20_000) throw new Error(`fake never came up; scrollback: ${JSON.stringify(s.scrollback().slice(-500))}`);
     await new Promise((r) => setTimeout(r, 25));
   }
-  s.pty.kill();
+  killTree(s.pty);
   await s.done;
 }
 async function call(name: string, args: Record<string, unknown> = {}) {
