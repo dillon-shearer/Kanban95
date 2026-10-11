@@ -344,6 +344,9 @@ function spawnSession(d: Daemon, o: RunSettings & { sessionId?: string; resume?:
   }
 }
 
+/** Tree kills still running (Windows): killAll waits for these too, so nothing an agent started outlives the daemon's close. */
+const killing = new Set<Promise<void>>();
+
 /**
  * Ends a process and everything it started; every session the board ends, and a worktree_setup that overruns, comes here.
  * `pty.kill()` alone is not enough: on Windows it ends the cmd.exe that spawnPty wraps around the CLI and the processes still
@@ -356,7 +359,10 @@ function spawnSession(d: Daemon, o: RunSettings & { sessionId?: string; resume?:
 export function killTree(p: { pid?: number; kill(): unknown }) {
   if (!p.pid) return void p.kill();
   if (process.platform === 'win32') {
-    execFile('taskkill', ['/T', '/F', '/PID', String(p.pid)], { windowsHide: true, timeout: 10_000 }, () => p.kill());
+    const done = new Promise<void>((ok) => execFile('taskkill', ['/T', '/F', '/PID', String(p.pid)], { windowsHide: true, timeout: 10_000 }, () => ok()))
+      .then(() => void p.kill())
+      .finally(() => killing.delete(done));
+    killing.add(done);
     return;
   }
   try {
@@ -374,5 +380,5 @@ export function killGrantSession(grantId: number) {
 export async function killAll() {
   const live = [...sessions.values()];
   for (const s of live) killTree(s.pty);
-  await Promise.all(live.map((s) => s.done));
+  await Promise.all([...live.map((s) => s.done), ...killing]); // a pty reports its exit before taskkill is done with the rest of its tree
 }
