@@ -1,5 +1,5 @@
 // Launches an agent CLI on a ticket: worktree, run row, grant, session dir, argv, pty. Tears it all down on exit or revoke.
-import { execFileSync, spawn } from 'node:child_process';
+import { execFile, execFileSync, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir, userInfo } from 'node:os';
@@ -139,7 +139,6 @@ type RunSettings = { cli: Cli; model: string; effort: Effort; path?: string };
 
 /** How many of the setup command's last output lines a failure note quotes. */
 const SETUP_TAIL = 20;
-// ponytail: on Windows the timeout kills cmd.exe, not what it started (npm keeps running); upgrade is `taskkill /T`.
 const SETUP_TIMEOUT_MS = 15 * 60 * 1000;
 
 /**
@@ -148,25 +147,35 @@ const SETUP_TIMEOUT_MS = 15 * 60 * 1000;
  * marker in the worktree's git dir, gone with the worktree). Asynchronous so a minute of `npm ci` does not stall the daemon.
  * Rejects with the command and its last output lines.
  */
-export function prepareWorktree(repo: string, ticketId: number, command?: string): Promise<void> | null {
+export function prepareWorktree(repo: string, ticketId: number, command?: string, timeoutMs = SETUP_TIMEOUT_MS): Promise<void> | null {
   const wt = createWorktree(repo, ticketId);
   if (!command) return null;
   const marker = resolve(wt.path, git(wt.path, 'rev-parse', '--git-path', 'kanban95-setup-done'));
   if (existsSync(marker)) return null;
   return new Promise((ok, fail) => {
-    const child = spawn(command, { cwd: wt.path, env: childEnv({ KANBAN95_AGENT: '1' }), shell: true, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, timeout: SETUP_TIMEOUT_MS });
+    // Detached on POSIX so the shell leads its own process group, which killTree ends whole.
+    const child = spawn(command, { cwd: wt.path, env: childEnv({ KANBAN95_AGENT: '1' }), shell: true, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, detached: process.platform !== 'win32' });
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      killTree(child);
+    }, timeoutMs);
     let out = '';
     const take = (d: Buffer) => (out = (out + d).slice(-65536));
     child.stdout.on('data', take);
     child.stderr.on('data', take);
-    child.on('error', (e) => fail(new Error(`worktree_setup "${command}" did not start: ${e.message}`)));
+    child.on('error', (e) => {
+      clearTimeout(timer);
+      fail(new Error(`worktree_setup "${command}" did not start: ${e.message}`));
+    });
     child.on('close', (code, signal) => {
-      if (code === 0) {
+      clearTimeout(timer);
+      if (code === 0 && !timedOut) {
         writeFileSync(marker, command);
         return ok();
       }
       const tail = out.split(/\r?\n/).filter((l) => l.trim()).slice(-SETUP_TAIL).join('\n');
-      fail(new Error(`worktree_setup "${command}" failed (${code ?? signal}) in ${wt.path}; last output:\n${tail || '(none)'}`));
+      fail(new Error(`worktree_setup "${command}" failed (${timedOut ? `timed out after ${timeoutMs / 1000} s` : code ?? signal}) in ${wt.path}; last output:\n${tail || '(none)'}`));
     });
   });
 }
@@ -335,14 +344,41 @@ function spawnSession(d: Daemon, o: RunSettings & { sessionId?: string; resume?:
   }
 }
 
-/** Revoking a grant ends its session: the pty is killed and its exit handler tears the rest down. */
-export function killGrantSession(grantId: number) {
-  for (const s of sessions.values()) if (s.grantId === grantId) s.pty.kill();
+/** Tree kills still running (Windows): killAll waits for these too, so nothing an agent started outlives the daemon's close. */
+const killing = new Set<Promise<void>>();
+
+/**
+ * Ends a process and everything it started; every session the board ends, and a worktree_setup that overruns, comes here.
+ * `pty.kill()` alone is not enough: on Windows it ends the cmd.exe that spawnPty wraps around the CLI and the processes still
+ * attached to its console, and a grandchild with no console (headless Edge, a detached vitest worker or MCP server) keeps
+ * running. Windows: `taskkill /T /F` on the pid walks the tree by parent pid, so it starts while the root is still alive; it
+ * runs asynchronously so a slow taskkill under load does not stall the daemon, and `kill()` follows once it is done. POSIX:
+ * node-pty starts the child with setsid (forkpty on Linux, POSIX_SPAWN_SETSID on macOS), so its pid is a process group,
+ * killed whole. Then `kill()` itself, so node-pty still reports the exit (it ignores a process already gone).
+ */
+export function killTree(p: { pid?: number; kill(): unknown }) {
+  if (!p.pid) return void p.kill();
+  if (process.platform === 'win32') {
+    const done = new Promise<void>((ok) => execFile('taskkill', ['/T', '/F', '/PID', String(p.pid)], { windowsHide: true, timeout: 10_000 }, () => ok()))
+      .then(() => void p.kill())
+      .finally(() => killing.delete(done));
+    killing.add(done);
+    return;
+  }
+  try {
+    process.kill(-p.pid, 'SIGKILL');
+  } catch { /* already gone, or not a group leader: kill() below still ends the root */ }
+  p.kill();
 }
 
-/** Daemon shutdown: kill every pty and wait until each session has written its run row and removed its dir. */
+/** Revoking a grant ends its session: the process tree is killed and its exit handler tears the rest down. */
+export function killGrantSession(grantId: number) {
+  for (const s of sessions.values()) if (s.grantId === grantId) killTree(s.pty);
+}
+
+/** Daemon shutdown: kill every session's process tree and wait until each session has written its run row and removed its dir. */
 export async function killAll() {
   const live = [...sessions.values()];
-  for (const s of live) s.pty.kill();
-  await Promise.all(live.map((s) => s.done));
+  for (const s of live) killTree(s.pty);
+  await Promise.all([...live.map((s) => s.done), ...killing]); // a pty reports its exit before taskkill is done with the rest of its tree
 }
