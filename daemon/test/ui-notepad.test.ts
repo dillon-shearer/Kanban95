@@ -3,7 +3,7 @@ import './home.ts'; // also here, not only in vitest.config.ts: a run from the r
 import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { sessions } from '../src/launcher.ts';
+import { killSession, sessions } from '../src/launcher.ts';
 import { until } from './cdp.ts';
 import { repo, page, base, ticket, click } from './ui.ts';
 
@@ -35,7 +35,7 @@ describe('ui-notepad', { timeout: 60_000 }, () => {
     await page.evaluate(`${button}.click()`);
     await until(() => seeded('fix the login bug'), 'the seeded brainstorm');
     expect(await page.evaluate(`!!document.querySelector('dialog')`)).toBe(false);
-    for (const s of sessions.values()) s.pty.kill();
+    for (const s of sessions.values()) killSession(s); // as the board ends it: before the fake printed, a bare kill can orphan it
     await until(() => sessions.size === 0, 'the brainstorm ended');
 
     // A repo copy from before {{mission}}: the board asks; Reset and start puts the shipped default back and sends the whole page.
@@ -51,7 +51,7 @@ describe('ui-notepad', { timeout: 60_000 }, () => {
     expect(readFileSync(tpl, 'utf8')).toBe(readFileSync(resolve(import.meta.dirname, '..', '..', 'templates', 'brainstorm.md'), 'utf8'));
     const listed = await page.evaluate<{ ticket_id: number | null; role: string }[]>(`fetch('/api/sessions').then((r) => r.json())`);
     expect(listed.some((s) => s.ticket_id === null && s.role === 'planner')).toBe(true);
-    for (const s of sessions.values()) s.pty.kill();
+    for (const s of sessions.values()) killSession(s);
 
     // Over 256 KB: the daemon answers 413 and the window says so; the file keeps the last good text.
     await page.evaluate(`(() => { const t = document.querySelector('${area}'); t.value = 'x'.repeat(256 * 1024 + 1); t.dispatchEvent(new Event('input')); })()`);

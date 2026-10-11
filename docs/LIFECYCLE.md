@@ -160,8 +160,19 @@ There is no Pause yet; when it exists, a paused board flags these tickets (`exit
 - **Stop** turns the flag off. Running agents finish their current phase and their merges land, but nothing new starts, not even by the board's own triggers (Stop holds every automatic launch, below). `PUT /api/runner {"on": false}` also clears `blocked_on_deps` on every Backlog ticket (Cancel wait, below, for all of them), so nothing staged starts later by itself, and its reply adds `cleared`, the number of holds cleared; the status bar says "Runner stopped, n holds cleared." The runner turning itself off clears nothing. The operator's own Launch on a card works either way. A ticket that hits the retry cap and flags never stops the runner.
 - **A restart** keeps the flag (`<repo>/.kanban95/runner.json`, git-ignored); `recover` resumes the running tickets and the runner carries on from there.
 - **Housekeeping** tickets created after every `housekeeping.every` merges are candidates like any other and sort by their effort.
+- **A stale board** (a merge changed the daemon's own code) launches no candidate until it has restarted: Restart after a merge, below.
 
 Tickets held with `blocked_on_deps` by a manual Launch keep their own path: the board launches them when their last dependency merges, while the runner is on. Dependency cycles cannot exist: `create_ticket`, `update_ticket` and `PATCH /api/tickets/:id` refuse a dependency list that would make a ticket depend on itself through any chain.
+
+### Restart after a merge
+
+A merge that changes `daemon/`, `templates/`, `shell/`, `package.json` or `package-lock.json` is not live until the daemon restarts (`board.stale`, `docs/ARCHITECTURE.md` → Stale daemon). Agents launched before the restart would run on the old code and the old templates, so a stale board finishes what it has and then restarts itself (`restartWhenIdle` in `daemon/src/lifecycle.ts`).
+
+- **Hold**: while `stale` is set, `tick` launches no candidate and `apply` holds a released dependent in Backlog (`blocked_on_deps` stays on). Tickets already running carry on to the end: worker, tester, conflict retries and the merge. The operator's own Launch is not held.
+- **To finish**: the running tickets (as the runner counts them, so a done ticket waiting to merge counts), except a conflict retry held while the runner is off, plus any ticket with a live agent (a flagged one asking a question, say). Brainstorm and operator terminals are not waited for: the restart closes them.
+- **Self-restart** (`stale: 'daemon'`, the daemon run by the shell): once nothing is left to finish, checked after every `apply` and every agent exit, the board restarts through `restartBoard`, the same path as Start → Restart board (build, then exit 75). It runs once; `recover` and `tick` on the next start carry on. `runner.json` is untouched, so a runner that was on launches the backlog again and one that was off stays off. A failed build keeps the hold, logs `[restart] ...` with the compiler output, and waits for the operator's Restart board (which shows the output) or the next merge, which tries again.
+- **`stale: 'shell'`** holds the same way but never restarts by itself: the shell needs a full relaunch (close Kanban95 and start it again). A daemon started by hand, without the shell, does not restart itself either; the operator uses Restart board.
+- **`GET /api/runner`** adds `hold: {finish, restart}` while stale: `finish` is the count above, `restart` is `self`, `manual` (no shell), `failed` (the build failed) or `relaunch` (shell). The Board status bar shows it in place of the runner line: "restart pending, N tickets to finish", plus what the operator has to do when the board cannot restart by itself.
 
 ### Stop holds every automatic launch
 

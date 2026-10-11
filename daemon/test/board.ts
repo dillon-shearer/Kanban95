@@ -2,9 +2,9 @@
 // daemon on it. Importing this file registers the hooks for the importing test file. Exports are live bindings (as in
 // ui.ts), so `srv`, `db` and `repo` are the current test's; a test that restarts the daemon calls `boot()` after `srv.close()`.
 // The scenarios are split over several files so they run in parallel: one file of them was the suite's critical path.
-import './home.ts'; // also here, not only in vitest.config.ts: a run from the repo root skips that config and wrote the real home
+import { removeTemp } from './home.ts'; // also here, not only in vitest.config.ts: a run from the repo root skips that config and wrote the real home
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
@@ -108,7 +108,7 @@ beforeAll(() => {
 });
 afterAll(() => {
   process.env.PATH = PATH0;
-  rmSync(bin, { recursive: true, force: true });
+  removeTemp(bin);
 });
 
 export let repo: string;
@@ -136,7 +136,8 @@ export const send = (method: string) => (path: string, body?: unknown) =>
 export const post = send('POST');
 export const patch = send('PATCH');
 export const setRun = (on: boolean) => send('PUT')('/api/runner', { on });
-export const until = async (f: () => unknown, what: string, ms = 30_000) => {
+// 60 s: lifecycle-merge.test.ts's merges took twice as long while the board ran other agents (55 s alone, up to 118 s).
+export const until = async (f: () => unknown, what: string, ms = 60_000) => {
   const end = Date.now() + ms;
   while (!f()) {
     if (Date.now() > end) throw new Error(`timed out waiting for ${what}`);
@@ -177,11 +178,9 @@ beforeEach(async () => {
 });
 afterEach(async () => {
   events.off('event', onEvent);
-  // close() kills every pty. Killed before its fake printed, the pty's cmd.exe dies but the node it was starting lives on,
-  // orphaned, holding its worktree under the test home: the home's removal then fails the file with EPERM.
+  // close() kills every pty. Killed before its fake printed, a pty can crash node-pty natively (0xC0000374) or never exit,
+  // and its kill waits for killSession's sweep (1-5 s).
   await until(() => [...sessions.values()].every((s) => s.scrollback().includes('FAKE')), 'every agent to print before the kill', 20_000);
   await srv.close();
-  // A killed agent's process can hold the repo for seconds after its pty exits when the full suite loads the machine: EPERM
-  // with the default 5 x 100 ms. Up to about 14 s here, inside the pty project's 30 s hook limit.
-  rmSync(repo, { recursive: true, force: true, maxRetries: 8, retryDelay: 400 });
+  removeTemp(repo);
 });

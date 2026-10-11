@@ -168,7 +168,7 @@ describe('lifecycle', { timeout: 60_000 }, () => {
     expect((await del(9999)).status).toBe(404);
     const id = ticket('Long one', { model: 'hang' });
     await post(`/api/tickets/${id}/launch`);
-    // Printed first: a pty killed before its fake printed leaves the fake running (board.ts).
+    // Printed first: a pty killed before its fake printed can crash node-pty or never exit (board.ts).
     await until(() => sessionsOf(id).length === 1 && sessionsOf(id)[0].scrollback().includes('FAKE'), 'the agent');
     expect((await del(sessionsOf(id)[0].key)).status).toBe(204);
     await until(() => sessionsOf(id).length === 0 && runs(id)[0].outcome, 'the session gone');

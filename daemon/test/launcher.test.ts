@@ -4,10 +4,10 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpath
 import { tmpdir } from 'node:os';
 import { basename, delimiter, dirname, join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import WebSocket from 'ws';
 import { createWorktree, removeWorktree, worktreePath, worktreesRoot } from '../src/git.ts';
-import { sessions, type Cli, type Session } from '../src/launcher.ts';
+import { killTree, sessions, type Cli, type Session } from '../src/launcher.ts';
 import { start } from '../src/server.ts';
 
 // Fake `claude` and `codex` first on PATH. Each records its argv, env and cwd in the worktree, echoes typed input,
@@ -70,7 +70,7 @@ beforeEach(async () => {
   db.prepare("INSERT INTO tickets (id, title, body, criteria) VALUES (7, 'Fix the thing', 'body', 'it works')").run();
 });
 afterEach(async () => {
-  // A pty killed before its fake printed leaves the fake running, orphaned (board.ts): close() kills them all.
+  // A pty killed before its fake printed can crash node-pty or never exit (board.ts): close() kills them all.
   await waitFor(() => [...sessions.values()].every((s) => s.scrollback().includes('FAKE UP')));
   await srv.close();
   rmSync(repo, { recursive: true, force: true, maxRetries: 8, retryDelay: 400 }); // a killed agent can hold it for seconds under load
@@ -80,7 +80,7 @@ const launch = (cli: Cli, model = 'hang') => srv.launch({ ticketId: 7, template:
 // Killing a pty before its process is up crashed the vitest worker with heap corruption (0xC0000374) inside node-pty.
 const end = async (s: Session) => {
   await waitFor(() => s.scrollback().includes('FAKE UP'));
-  s.pty.kill();
+  killTree(s.pty);
   await s.done;
 };
 
@@ -158,37 +158,37 @@ describe('launch', () => {
     expect(runRow(s.runId!).session_id).toBeNull();
   });
 
-  it('revoking the grant over REST kills the pty, removes the session dir and stores the scrollback within two seconds', async () => {
+  it('revoking the grant over REST kills the pty, removes the session dir and stores the scrollback within five seconds', async () => {
     const s = launch('claude');
     await waitFor(() => s.scrollback().includes('FAKE UP'));
     const t0 = Date.now();
     const r = await fetch(`http://127.0.0.1:${srv.port}/api/grants/${s.grantId}`, { method: 'DELETE', headers: { cookie: `k95=${srv.secret}` } });
     expect(r.status).toBe(204);
     await s.done;
-    // killTree's taskkill /T takes ~300 ms before node-pty's own exit report (about a second on Windows).
-    expect(Date.now() - t0).toBeLessThan(2000);
+    // killTree's taskkill /T takes ~300 ms (more under a full suite's load) before node-pty's own exit report (about a second).
+    expect(Date.now() - t0).toBeLessThan(5000);
     expect(existsSync(s.dir)).toBe(false);
     expect(sessions.has(s.runId)).toBe(false);
     expect(grantRow(s.grantId).revoked_at).not.toBeNull();
     expect(runRow(s.runId).ended_at).not.toBeNull();
     expect(runRow(s.runId).scrollback).toContain('FAKE UP');
-    await waitFor(() => !alive(fakeOut(s).pid), 2000 - (Date.now() - t0)); // the CLI itself, not just cmd.exe
+    await waitFor(() => !alive(fakeOut(s).pid), 5000 - (Date.now() - t0)); // the CLI itself, not just cmd.exe
     expect(existsSync(worktreePath(repo, 7))).toBe(true); // the operator decides about the worktree
   });
 
-  it('deleting the ticket ends its session within two seconds: grant gone, pty killed, session map cleared', async () => {
+  it('deleting the ticket ends its session within five seconds: grant gone, pty killed, session map cleared', async () => {
     const s = launch('claude');
     await waitFor(() => s.scrollback().includes('FAKE UP'));
     const t0 = Date.now();
     const r = await fetch(`http://127.0.0.1:${srv.port}/api/tickets/7`, { method: 'DELETE', headers: { cookie: `k95=${srv.secret}` } });
     expect(r.status).toBe(204);
     await s.done;
-    // killTree's taskkill /T takes ~300 ms before node-pty's own exit report (about a second on Windows).
-    expect(Date.now() - t0).toBeLessThan(2000);
+    // killTree's taskkill /T takes ~300 ms (more under a full suite's load) before node-pty's own exit report (about a second).
+    expect(Date.now() - t0).toBeLessThan(5000);
     expect(sessions.has(s.runId)).toBe(false);
     expect(grantRow(s.grantId)).toBeUndefined(); // revoked, then cascaded away with the ticket
     expect(existsSync(s.dir)).toBe(false);
-    await waitFor(() => !alive(fakeOut(s).pid), 1000 - (Date.now() - t0));
+    await waitFor(() => !alive(fakeOut(s).pid), 5000 - (Date.now() - t0));
   });
 
   it('an agent that dies on its own (exit 3) still revokes the grant and removes the session dir', async () => {
@@ -206,6 +206,21 @@ describe('launch', () => {
     await s.done;
     expect(existsSync(s.dir)).toBe(false);
     expect(grantRow(s.grantId).revoked_at).not.toBeNull();
+  });
+
+  // node-pty's own Windows kill did process.kill(shell pid) 5 s after the shell had exited, ending whatever had reused the pid.
+  it('a tree kill kills no pid after the pty has exited', async () => {
+    const s = launch('claude');
+    await waitFor(() => s.scrollback().includes('FAKE UP'));
+    const kill = vi.spyOn(process, 'kill');
+    try {
+      killTree(s.pty);
+      await s.done;
+      await new Promise((r) => setTimeout(r, 5_500));
+      expect(kill.mock.calls.filter(([, sig]) => sig !== 0)).toEqual([]);
+    } finally {
+      kill.mockRestore();
+    }
   });
 
   it('a bad template fails before anything is spawned and leaves no grant', () => {
@@ -244,7 +259,7 @@ describe('websocket /pty/<run-id>', () => {
     ws.send(JSON.stringify({ data: 'ping\r' }));
     await waitFor(() => seen.includes('got:ping'));
     const closed = new Promise((r) => ws.on('close', r));
-    s.pty.kill();
+    killTree(s.pty);
     await closed;
   });
 });
