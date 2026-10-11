@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os';
 import { delimiter, dirname, join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { readTicket } from '../src/api.ts';
 import { createWorktree, worktreePath } from '../src/git.ts';
 import { sessions, sessionsOf } from '../src/launcher.ts';
@@ -38,6 +38,31 @@ if (brief.startsWith('# Test')) {
 }
 process.stdin.resume();
 `;
+// A `hang` agent only has to count as running, so it gets an in-process stand-in, not a ConPTY with cmd.exe, claude.cmd and node
+// under it. The pty path itself is covered by launcher.test.ts and the lifecycle-*.test.ts files.
+vi.mock('../src/pty.ts', async (orig) => {
+  const real = await orig<typeof import('../src/pty.ts')>();
+  const standIn = () => {
+    const exits = new Set<(e: { exitCode: number }) => void>();
+    let ended = false;
+    const pty = {
+      pid: 0,
+      onData: () => ({ dispose() {} }),
+      onExit: (f: (e: { exitCode: number }) => void) => (exits.add(f), { dispose: () => exits.delete(f) }),
+      write() {},
+      resize() {},
+      kill() {
+        if (ended) return;
+        ended = true;
+        setImmediate(() => { for (const f of exits) f({ exitCode: 1 }); }); // node-pty reports an exit asynchronously too
+      },
+    };
+    return { pty: pty as unknown as import('node-pty').IPty, scrollback: () => 'FAKE hang\r\n' };
+  };
+  const hang = (args: string[]) => args.includes('--model') && args[args.indexOf('--model') + 1] === 'hang';
+  return { ...real, spawnPty: (cmd: string, args: string[], o: Parameters<typeof real.spawnPty>[2]) => (hang(args) ? standIn() : real.spawnPty(cmd, args, o)) };
+});
+
 const bin = mkdtempSync(join(tmpdir(), 'k95-bin-'));
 const PATH0 = process.env.PATH;
 beforeAll(() => {
