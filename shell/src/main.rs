@@ -1,20 +1,17 @@
-// Kanban95 shell: spawns the daemon, reads its port, opens one window on it, restarts the daemon once if it dies,
-// shows an error dialog when it cannot run, and takes the daemon and WebView2 down with it on every exit path.
+// Kanban95 shell: hosts one daemon per open project, shows one in the main window and popped-out ones in their own
+// windows, restarts a daemon once if it dies, shows an error dialog when one cannot run, and takes every daemon and
+// WebView2 down with it on every exit path.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::{BufRead, BufReader};
-use std::process::{Child, Command, Stdio};
-use std::sync::Mutex;
-use std::sync::atomic::{AtomicU16, Ordering};
-use std::sync::Arc;
-use std::time::Duration;
+use std::process::{Child, ChildStdout, Command, Stdio};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
+use std::time::{Duration, Instant};
 use tauri::webview::{PermissionKind, PermissionResponse};
-use tauri::{Manager, RunEvent, Runtime, Url, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
+use tauri::{AppHandle, Manager, RunEvent, Runtime, Url, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent};
 
 const NODE_DOWNLOAD: &str = "https://nodejs.org/en/download";
-
-/// The live daemon. `None` once the shell is exiting, which tells the supervisor to stop.
-struct Daemon(Mutex<Option<Child>>);
 
 /// Says what is wrong with the Node on PATH, given the output of `node --version` (`None`: not found).
 fn node_problem(version: Option<&str>) -> Option<String> {
@@ -32,7 +29,7 @@ fn check_node() -> Result<(), String> {
     node_problem(version.as_deref()).map_or(Ok(()), Err)
 }
 
-/// 32 random bytes from the OS, hex: the shell-to-daemon secret for this run (docs/SECURITY.md).
+/// 32 random bytes from the OS, hex: the shell-to-daemon secret for one daemon run (docs/SECURITY.md).
 fn mint_secret() -> String {
     let mut b = [0u8; 32];
     getrandom::fill(&mut b).expect("OS random source");
@@ -45,17 +42,42 @@ fn daemon_script() -> std::path::PathBuf {
     installed.filter(|p| p.is_file()).unwrap_or_else(|| concat!(env!("CARGO_MANIFEST_DIR"), "/../daemon/dist/server.js").into())
 }
 
-/// Starts `node daemon/dist/server.js` and returns the child plus the port from its first stdout line.
-/// The child's stdin stays piped and open for as long as this process lives: the daemon exits on stdin EOF.
-/// The secret goes in the child's environment, never on its command line, which other processes can read.
-fn spawn_daemon(secret: &str) -> Result<(Child, u16), String> {
+/// `node daemon/dist/server.js <repo>`.
+fn node(repo: &str) -> Command {
     // ponytail: runs `node` from PATH; shipping Node itself is open (docs/ARCHITECTURE.md -> Packaging).
-    // The shell's first argument, if any, is the repo the board works on; the daemon defaults to the cwd.
-    let mut child = Command::new("node")
-        .arg(daemon_script())
-        .args(std::env::args().nth(1))
-        .env("KANBAN95_SECRET", secret)
+    let mut cmd = Command::new("node");
+    cmd.arg(daemon_script()).arg(repo);
+    cmd
+}
+
+/// The canonical repo path a hosted daemon is keyed by, without Windows' `\\?\` prefix so it matches the daemon's
+/// own spelling. A path that does not exist is kept as given.
+fn key(repo: &str) -> String {
+    let dir = std::fs::canonicalize(repo).map_or_else(|_| repo.to_string(), |d| d.to_string_lossy().into_owned());
+    match dir.strip_prefix(r"\\?\") {
+        Some(rest) if rest.starts_with(r"UNC\") => format!(r"\\{}", &rest[4..]),
+        Some(rest) => rest.to_string(),
+        None => dir,
+    }
+}
+
+type Lines = std::io::Lines<BufReader<ChildStdout>>;
+
+struct Started {
+    child: Child,
+    port: u16,
+    secret: String,
+    lines: Lines,
+}
+
+/// Starts a daemon and reads the port from its first stdout line. Its stdin stays piped and open: the daemon exits on
+/// stdin EOF. The secret goes in the child's environment, never on its command line, which other processes can read.
+fn start(mut cmd: Command) -> Result<Started, String> {
+    let secret = mint_secret();
+    let mut child = cmd
+        .env("KANBAN95_SECRET", &secret)
         .env("KANBAN95_SHELL", "1")
+        .env("KANBAN95_SHELL_ID", std::process::id().to_string())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .spawn()
@@ -70,46 +92,332 @@ fn spawn_daemon(secret: &str) -> Result<(Child, u16), String> {
             "The Kanban95 daemon did not start (it said {first:?}).\n\nRun `npm run build` and check the console for the daemon's error."
         ));
     };
-    // Drain the rest so the daemon never blocks on a full stdout pipe.
-    std::thread::spawn(move || {
-        for line in lines.map_while(Result::ok) {
-            eprintln!("[daemon] {line}");
-        }
-    });
-    Ok((child, port))
+    Ok(Started { child, port, secret, lines })
 }
 
 /// The daemon's exit code for Start -> Restart board (daemon/src/api.ts): restart it, it did not crash.
 const RESTART_REQUESTED: i32 = 75;
 
-/// Watches the daemon in `slot`. Exit code 75 always calls `restart`. The first other exit also calls it; the second
-/// other exit, or any failed restart, returns the reason to show the operator. Returns `None` when the shell empties
-/// the slot to exit.
-fn supervise(slot: &Mutex<Option<Child>>, mut restart: impl FnMut() -> Result<Child, String>) -> Option<String> {
-    let mut restarted = false;
-    loop {
-        // ponytail: 250 ms poll so `Exit` can take the child without waiting on a blocked `wait()`.
-        std::thread::sleep(Duration::from_millis(250));
-        let mut guard = slot.lock().unwrap_or_else(|e| e.into_inner());
-        let Some(child) = guard.as_mut() else { return None };
-        let Ok(Some(status)) = child.try_wait() else { continue };
-        if status.code() == Some(RESTART_REQUESTED) {
-            eprintln!("[shell] daemon asked to be restarted");
-            match restart() {
-                Ok(c) => *guard = Some(c),
-                Err(e) => return Some(e),
+/// How long a closed daemon gets to shut down after stdin EOF, as the daemon's own cap, before it is killed.
+const STOP_WAIT: Duration = Duration::from_secs(15);
+
+const MAIN: &str = "main";
+
+/// A command a daemon prints on stdout after its port line (docs/ARCHITECTURE.md -> Hosted boards).
+#[derive(Debug, PartialEq, Clone, Copy)]
+enum Verb {
+    Open,
+    Switch,
+    Popout,
+    Dock,
+    Close,
+}
+
+fn parse(line: &str) -> Option<(Verb, &str)> {
+    let (verb, path) = line.strip_prefix("KANBAN95 ")?.split_once('=')?;
+    let verb = match verb {
+        "open" => Verb::Open,
+        "switch" => Verb::Switch,
+        "popout" => Verb::Popout,
+        "dock" => Verb::Dock,
+        "close" => Verb::Close,
+        _ => return None,
+    };
+    (!path.is_empty()).then_some((verb, path))
+}
+
+/// What the host asks of the windows, applied by `apply` in the app and recorded in tests.
+#[derive(Debug, PartialEq)]
+enum Effect {
+    Show { label: String, url: Url, title: String },
+    Open { label: String, url: Url, title: String },
+    Focus(String),
+    Close(String),
+    Error(String),
+    Exit(i32),
+}
+
+#[derive(Debug, PartialEq, Clone, Copy)]
+enum Place {
+    Docked,
+    Own,
+}
+
+struct Board {
+    child: Child,
+    port: u16,
+    secret: String,
+    place: Place,
+    crashed: bool,
+}
+
+#[derive(Default)]
+struct Table {
+    boards: BTreeMap<String, Board>,
+    main: String,
+    opening: BTreeSet<String>,
+    closing: Vec<(Child, Instant)>,
+    done: bool,
+}
+
+/// The ports the navigation lock allows: every hosted daemon's. Kept apart from the table so the lock, which runs on
+/// the main thread, never waits on a daemon starting.
+type Ports = Arc<Mutex<Vec<u16>>>;
+
+/// The hosted daemons, keyed by canonical repo path. `done` once the shell is exiting: nothing new starts and the
+/// supervisor stops.
+struct Host {
+    table: Mutex<Table>,
+    ports: Ports,
+    launch: Box<dyn Fn(&str) -> Command + Send + Sync>,
+    ui: OnceLock<Box<dyn Fn(Effect) + Send + Sync>>,
+}
+
+fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// A popped-out window's label, from the repo path.
+fn label(repo: &str) -> String {
+    format!("board-{}", fnv(repo))
+}
+
+fn show(label: &str, repo: &str, b: &Board) -> Effect {
+    Effect::Show { label: label.into(), url: url(b.port, &b.secret), title: title(Some(repo.into())) }
+}
+
+impl Host {
+    fn new(launch: impl Fn(&str) -> Command + Send + Sync + 'static) -> Arc<Self> {
+        Arc::new(Host { table: Mutex::default(), ports: Ports::default(), launch: Box::new(launch), ui: OnceLock::new() })
+    }
+
+    fn start(&self, repo: &str) -> Result<Started, String> {
+        start((self.launch)(repo))
+    }
+
+    fn emit(&self, fx: Vec<Effect>) {
+        if let Some(ui) = self.ui.get() {
+            fx.into_iter().for_each(ui);
+        }
+    }
+
+    fn sync(&self, t: &Table) {
+        *lock(&self.ports) = t.boards.values().map(|b| b.port).collect();
+    }
+
+    /// Reads the daemon's stdout to EOF, which also keeps the pipe from filling, and acts on its commands.
+    fn board(self: &Arc<Self>, s: Started, place: Place, crashed: bool) -> Board {
+        let host = self.clone();
+        let lines = s.lines;
+        std::thread::spawn(move || {
+            for line in lines.map_while(Result::ok) {
+                eprintln!("[daemon] {line}");
+                if let Some((verb, path)) = parse(&line) {
+                    host.command(verb, path);
+                }
             }
-            continue;
+        });
+        Board { child: s.child, port: s.port, secret: s.secret, place, crashed }
+    }
+
+    fn first(self: &Arc<Self>, repo: &str, s: Started) {
+        let mut t = lock(&self.table);
+        let b = self.board(s, Place::Docked, false);
+        t.boards.insert(repo.into(), b);
+        t.main = repo.into();
+        self.sync(&t);
+    }
+
+    fn command(self: &Arc<Self>, verb: Verb, path: &str) {
+        let repo = key(path);
+        let mut fx = vec![];
+        let mut t = lock(&self.table);
+        if t.done {
+            return;
         }
-        if restarted {
-            return Some(format!("The Kanban95 daemon stopped again ({status}) after one restart.\n\nThe board will close."));
+        let place = t.boards.get(&repo).map(|b| b.place);
+        match (verb, place) {
+            (Verb::Open | Verb::Popout, Some(Place::Own)) => fx.push(Effect::Focus(label(&repo))),
+            (Verb::Open | Verb::Switch, Some(Place::Docked)) => {
+                fx.push(show(MAIN, &repo, &t.boards[&repo]));
+                t.main = repo;
+            }
+            (Verb::Open, None) => {
+                if t.opening.insert(repo.clone()) {
+                    let host = self.clone();
+                    std::thread::spawn(move || host.open(repo));
+                }
+            }
+            (Verb::Popout, Some(Place::Docked)) => {
+                if t.main == repo {
+                    let Some(other) = t.boards.iter().find(|(r, b)| **r != repo && b.place == Place::Docked).map(|(r, _)| r.clone()) else {
+                        eprintln!("[shell] {repo} is the only board in the main window; it stays there");
+                        return;
+                    };
+                    fx.push(show(MAIN, &other, &t.boards[&other]));
+                    t.main = other;
+                }
+                let b = t.boards.get_mut(&repo).expect("hosted");
+                b.place = Place::Own;
+                fx.push(Effect::Open { label: label(&repo), url: url(b.port, &b.secret), title: title(Some(repo.clone())) });
+            }
+            (Verb::Dock, Some(Place::Own)) => {
+                let b = t.boards.get_mut(&repo).expect("hosted");
+                b.place = Place::Docked;
+                fx.push(Effect::Close(label(&repo)));
+                fx.push(show(MAIN, &repo, b));
+                t.main = repo;
+            }
+            (Verb::Close, Some(_)) => self.close(&mut t, &repo, &mut fx),
+            (verb, _) => eprintln!("[shell] ignored {verb:?} for {repo}: not a board in that state"),
         }
-        restarted = true;
-        eprintln!("[shell] daemon stopped ({status}); restarting it once");
-        match restart() {
-            Ok(c) => *guard = Some(c),
-            Err(e) => return Some(e),
+        drop(t);
+        self.emit(fx);
+    }
+
+    fn open(self: &Arc<Self>, repo: String) {
+        let started = self.start(&repo);
+        let mut fx = vec![];
+        let mut t = lock(&self.table);
+        t.opening.remove(&repo);
+        match started {
+            Ok(mut s) if t.done => {
+                let _ = s.child.kill();
+                let _ = s.child.wait();
+            }
+            Ok(s) => {
+                let b = self.board(s, Place::Docked, false);
+                fx.push(show(MAIN, &repo, &b));
+                t.boards.insert(repo.clone(), b);
+                t.main = repo;
+                self.sync(&t);
+            }
+            Err(e) => fx.push(Effect::Error(e)),
         }
+        drop(t);
+        self.emit(fx);
+    }
+
+    /// Drops a board from the table, closes its own window, and moves the main window off it if it showed it.
+    fn remove(&self, t: &mut Table, repo: &str, fx: &mut Vec<Effect>) -> Option<Board> {
+        let b = t.boards.remove(repo)?;
+        if b.place == Place::Own {
+            fx.push(Effect::Close(label(repo)));
+        }
+        if t.main == repo {
+            let next = t.boards.iter().find(|(_, b)| b.place == Place::Docked).or_else(|| t.boards.iter().next());
+            if let Some(next) = next.map(|(r, _)| r.clone()) {
+                let nb = t.boards.get_mut(&next).expect("hosted");
+                if nb.place == Place::Own {
+                    nb.place = Place::Docked;
+                    fx.push(Effect::Close(label(&next)));
+                }
+                fx.push(show(MAIN, &next, nb));
+                t.main = next;
+            }
+        }
+        self.sync(t);
+        Some(b)
+    }
+
+    /// Closes the daemon's stdin so it shuts down as on Stdin EOF; the supervisor kills it after `STOP_WAIT`.
+    fn close(&self, t: &mut Table, repo: &str, fx: &mut Vec<Effect>) {
+        if let Some(mut b) = self.remove(t, repo, fx) {
+            drop(b.child.stdin.take());
+            t.closing.push((b.child, Instant::now() + STOP_WAIT));
+        }
+    }
+
+    fn window_closed(&self, window: &str) {
+        let mut fx = vec![];
+        let mut t = lock(&self.table);
+        if t.done {
+            return;
+        }
+        let repo = t.boards.iter().find(|(r, b)| b.place == Place::Own && label(r) == window).map(|(r, _)| r.clone());
+        if let Some(repo) = repo {
+            t.boards.get_mut(&repo).expect("hosted").place = Place::Docked;
+            self.close(&mut t, &repo, &mut fx);
+        }
+        drop(t);
+        self.emit(fx);
+    }
+
+    /// One supervisor pass. Exit code 75 always restarts that daemon. Its first other exit also restarts it; the second
+    /// other exit, or a failed restart, shows the reason and drops that daemon only. Returns false once the shell is
+    /// done: on exit, or when no daemon is left, which also exits the app.
+    fn tick(self: &Arc<Self>) -> bool {
+        let mut fx = vec![];
+        let mut t = lock(&self.table);
+        if t.done {
+            return false;
+        }
+        let now = Instant::now();
+        t.closing.retain_mut(|(child, until)| match child.try_wait() {
+            Ok(None) if now < *until => true,
+            Ok(None) => {
+                eprintln!("[shell] a closed daemon did not stop in {STOP_WAIT:?}; killing it");
+                let _ = child.kill();
+                let _ = child.wait();
+                false
+            }
+            _ => false,
+        });
+        let exited: Vec<_> = t.boards.iter_mut().filter_map(|(r, b)| Some((r.clone(), b.child.try_wait().ok()??))).collect();
+        for (repo, status) in exited {
+            let requested = status.code() == Some(RESTART_REQUESTED);
+            let (place, crashed) = (t.boards[&repo].place, t.boards[&repo].crashed);
+            if requested {
+                eprintln!("[shell] {repo}: daemon asked to be restarted");
+            } else if crashed {
+                fx.push(Effect::Error(format!("The Kanban95 daemon for {repo} stopped again ({status}) after one restart.\n\nThat board will close.")));
+                self.remove(&mut t, &repo, &mut fx);
+                continue;
+            } else {
+                eprintln!("[shell] {repo}: daemon stopped ({status}); restarting it once");
+            }
+            // A secret dies with its daemon (docs/SECURITY.md), so the new one gets its own.
+            match self.start(&repo) {
+                Ok(s) => {
+                    let b = self.board(s, place, crashed || !requested);
+                    match place {
+                        Place::Own => fx.push(show(&label(&repo), &repo, &b)),
+                        Place::Docked if t.main == repo => fx.push(show(MAIN, &repo, &b)),
+                        Place::Docked => {}
+                    }
+                    t.boards.insert(repo, b);
+                }
+                Err(e) => {
+                    fx.push(Effect::Error(e));
+                    self.remove(&mut t, &repo, &mut fx);
+                }
+            }
+        }
+        self.sync(&t);
+        if t.boards.is_empty() && t.opening.is_empty() && t.closing.is_empty() {
+            t.done = true;
+            let failed = fx.iter().any(|f| matches!(f, Effect::Error(_)));
+            fx.push(Effect::Exit(if failed { 1 } else { 0 }));
+        }
+        let done = t.done;
+        drop(t);
+        self.emit(fx);
+        !done
+    }
+
+    /// On exit: kills and waits on every daemon, hosted or closing, and stops the supervisor.
+    fn shutdown(&self) {
+        let mut t = lock(&self.table);
+        t.done = true;
+        let mut children: Vec<Child> = std::mem::take(&mut t.boards).into_values().map(|b| b.child).collect();
+        children.extend(std::mem::take(&mut t.closing).into_iter().map(|(c, _)| c));
+        for c in &mut children {
+            let _ = c.kill();
+        }
+        for c in &mut children {
+            let _ = c.wait();
+        }
+        self.sync(&t);
     }
 }
 
@@ -155,13 +463,13 @@ fn url(port: u16, secret: &str) -> Url {
     format!("http://127.0.0.1:{port}/?k95={secret}").parse().expect("daemon url")
 }
 
-/// Whether `to` is on the daemon's origin, `http://127.0.0.1:<port>`.
-fn on_daemon(to: &Url, port: u16) -> bool {
-    to.scheme() == "http" && to.host_str() == Some("127.0.0.1") && to.port() == Some(port)
+/// Whether `to` is on a hosted daemon's origin, `http://127.0.0.1:<port>`.
+fn on_daemon(to: &Url, ports: &[u16]) -> bool {
+    to.scheme() == "http" && to.host_str() == Some("127.0.0.1") && to.port().is_some_and(|p| ports.contains(&p))
 }
 
 /// "<repo folder> — Kanban95", as the UI titles itself, so the taskbar tells boards apart before the page loads.
-/// Tauri 2 does not copy `document.title` to the window. The repo is the shell's first argument, else the cwd, as for the daemon.
+/// Tauri 2 does not copy `document.title` to the window.
 fn title(repo: Option<String>) -> String {
     let dir = std::fs::canonicalize(repo.unwrap_or_else(|| ".".into())).ok();
     match dir.as_deref().and_then(std::path::Path::file_name) {
@@ -170,34 +478,38 @@ fn title(repo: Option<String>) -> String {
     }
 }
 
-/// The board's own WebView2 profile folder name: FNV-1a of the canonical repo path (the shell's first argument, else
-/// the cwd). A profile has one `msedgewebview2.exe` browser process, started by the first shell to use it and so held
-/// in that shell's kill-on-close job: a shared profile would die with whichever board started first, blanking the rest.
-/// FNV, not `DefaultHasher`, because the name must stay the same across Rust releases.
-fn profile(repo: Option<String>) -> String {
-    let repo = repo.unwrap_or_else(|| ".".into());
-    let dir = std::fs::canonicalize(&repo).map_or(repo, |d| d.to_string_lossy().into_owned());
-    let hash = dir.bytes().fold(0xcbf29ce484222325u64, |h, b| (h ^ b as u64).wrapping_mul(0x100000001b3));
+/// FNV-1a, hex. Not `DefaultHasher`, because names built from it must stay the same across Rust releases.
+fn fnv(s: &str) -> String {
+    let hash = s.bytes().fold(0xcbf29ce484222325u64, |h, b| (h ^ b as u64).wrapping_mul(0x100000001b3));
     format!("{hash:016x}")
 }
 
-/// The board's only window, locked to the daemon's origin. It holds no Tauri capability (there is no `capabilities/`
+/// The shell's WebView2 profile folder name: FNV-1a of the canonical path of the repo it started with (its first
+/// argument, else the cwd). A profile has one `msedgewebview2.exe` browser process, started by the first shell to use
+/// it and so held in that shell's kill-on-close job: a profile shared across shells would die with whichever started
+/// first, blanking the rest. Every board this shell hosts shares it.
+fn profile(repo: Option<String>) -> String {
+    let repo = repo.unwrap_or_else(|| ".".into());
+    fnv(&std::fs::canonicalize(&repo).map_or(repo, |d| d.to_string_lossy().into_owned()))
+}
+
+/// A board window, locked to the hosted daemons' origins. It holds no Tauri capability (there is no `capabilities/`
 /// dir), so every IPC command is refused for it: the UI talks to the daemon over HTTP and never calls Tauri.
-fn window<R: Runtime, M: Manager<R>>(app: &M, url: Url, live: Arc<AtomicU16>) -> tauri::Result<WebviewWindow<R>> {
+fn window<R: Runtime, M: Manager<R>>(app: &M, label: &str, url: Url, title: String, ports: Ports) -> tauri::Result<WebviewWindow<R>> {
     // WebView2 prefers `WEBVIEW2_USER_DATA_FOLDER` to the folder passed here; passing it too keeps Tauri from
     // creating an unused profile folder.
     let data = match std::env::var_os("WEBVIEW2_USER_DATA_FOLDER") {
         Some(dir) => dir.into(),
         None => app.path().app_local_data_dir()?.join("boards").join(profile(std::env::args().nth(1))),
     };
-    WebviewWindowBuilder::new(app, "main", WebviewUrl::External(url))
-        .title(title(std::env::args().nth(1)))
+    WebviewWindowBuilder::new(app, label, WebviewUrl::External(url))
+        .title(title)
         .data_directory(data)
         .inner_size(1280.0, 720.0)
-        // Any top-level navigation off the live daemon's origin (`http://127.0.0.1:<live port>`) is cancelled. New
-        // windows are already refused by wry when no handler is set, and the CSP keeps frames and fetches on the origin.
-        .on_navigation(move |to| on_daemon(to, live.load(Ordering::SeqCst)))
-        // Navigation is pinned to the daemon's origin, so every request here comes from it. Answering in code
+        // Any top-level navigation off a hosted daemon's origin is cancelled. New windows are already refused by wry
+        // when no handler is set, and the CSP keeps frames and fetches on the origin.
+        .on_navigation(move |to| on_daemon(to, &lock(&ports)))
+        // Navigation is pinned to the daemons' origins, so every request here comes from one. Answering in code
         // means no prompt, though the random port gives a new origin each start. Everything but the mic is denied.
         .on_permission_request(|_, kind| match kind {
             PermissionKind::Microphone => PermissionResponse::Allow,
@@ -232,6 +544,34 @@ fn follow_page_fullscreen<R: Runtime>(w: &WebviewWindow<R>) {
 #[cfg(not(windows))]
 fn follow_page_fullscreen<R: Runtime>(_: &WebviewWindow<R>) {}
 
+fn apply<R: Runtime>(app: &AppHandle<R>, ports: &Ports, fx: Effect) {
+    match fx {
+        Effect::Show { label, url, title } => {
+            if let Some(w) = app.get_webview_window(&label) {
+                let _ = w.set_title(&title);
+                let _ = w.navigate(url);
+            }
+        }
+        Effect::Open { label, url, title } => match window(app, &label, url, title, ports.clone()) {
+            Ok(w) => follow_page_fullscreen(&w),
+            Err(e) => eprintln!("[shell] could not open a window: {e}"),
+        },
+        Effect::Focus(label) => {
+            if let Some(w) = app.get_webview_window(&label) {
+                let _ = w.unminimize();
+                let _ = w.set_focus();
+            }
+        }
+        Effect::Close(label) => {
+            if let Some(w) = app.get_webview_window(&label) {
+                let _ = w.close();
+            }
+        }
+        Effect::Error(e) => error_dialog(&e),
+        Effect::Exit(code) => app.exit(code),
+    }
+}
+
 /// A missing or old Node is the one first-run problem the operator fixes outside the board, so offer the page.
 #[cfg(windows)]
 fn node_dialog(text: &str) {
@@ -259,49 +599,49 @@ fn main() {
         node_dialog(&e);
         std::process::exit(1);
     }
-    let secret = mint_secret();
-    let (child, port) = match spawn_daemon(&secret) {
+    // The shell's first argument, if any, is the repo of its first board; else the cwd, as for the daemon.
+    let repo = key(&std::env::args().nth(1).unwrap_or_else(|| ".".into()));
+    let host = Host::new(node);
+    let first = match host.start(&repo) {
         Ok(started) => started,
         Err(e) => {
             error_dialog(&e);
             std::process::exit(1);
         }
     };
-    // The port the window may be on. A restarted daemon has a new one, and the navigation lock follows it.
-    let live = Arc::new(AtomicU16::new(port));
+    let setup = host.clone();
 
     tauri::Builder::default()
-        .manage(Daemon(Mutex::new(Some(child))))
+        .manage(host)
         .setup(move |app| {
-            follow_page_fullscreen(&window(app, url(port, &secret), live.clone())?);
-            let app = app.handle().clone();
+            let host = setup;
+            let (handle, ports) = (app.handle().clone(), host.ports.clone());
+            let _ = host.ui.set(Box::new(move |fx| apply(&handle, &ports, fx)));
+            let main = url(first.port, &first.secret);
+            host.first(&repo, first);
+            follow_page_fullscreen(&window(app, MAIN, main, title(Some(repo)), host.ports.clone())?);
             std::thread::spawn(move || {
-                let restart = || {
-                    // A secret dies with its daemon (docs/SECURITY.md), so the new one gets its own.
-                    let secret = mint_secret();
-                    let (child, port) = spawn_daemon(&secret)?;
-                    live.store(port, Ordering::SeqCst); // before navigating, or the lock cancels the move
-                    if let Some(w) = app.get_webview_window("main") {
-                        let _ = w.navigate(url(port, &secret));
-                    }
-                    Ok(child)
-                };
-                if let Some(e) = supervise(&app.state::<Daemon>().0, restart) {
-                    error_dialog(&e);
-                    app.exit(1);
+                // ponytail: 250 ms poll so `Exit` can take every child without waiting on a blocked `wait()`.
+                while host.tick() {
+                    std::thread::sleep(Duration::from_millis(250));
                 }
             });
             Ok(())
+        })
+        .on_window_event(|w, event| {
+            if let WindowEvent::Destroyed = event {
+                if w.label() == MAIN {
+                    w.app_handle().exit(0);
+                } else {
+                    w.state::<Arc<Host>>().window_closed(w.label());
+                }
+            }
         })
         .build(tauri::generate_context!())
         .expect("tauri build")
         .run(|app, event| {
             if let RunEvent::Exit = event {
-                let taken = app.state::<Daemon>().0.lock().ok().and_then(|mut g| g.take());
-                if let Some(mut child) = taken {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                }
+                app.state::<Arc<Host>>().shutdown();
             }
         });
 }
@@ -309,59 +649,201 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::windows::process::CommandExt;
     use tauri::test::{get_ipc_response, mock_builder, INVOKE_KEY};
     use tauri::webview::InvokeRequest;
 
-    /// A stand-in daemon that crashes at once.
-    fn crashing() -> Child {
-        Command::new("cmd").args(["/c", "exit", "3"]).spawn().unwrap()
-    }
-
-    #[test]
-    fn restarts_a_crashed_daemon_once_then_gives_up() {
-        let slot = Mutex::new(Some(crashing()));
-        let mut restarts = 0;
-        let reason = supervise(&slot, || {
-            restarts += 1;
-            Ok(crashing())
+    /// A host whose daemons are `cmd` stand-ins: `script(repo, n)` is the n-th start's command line for that repo.
+    fn host(script: impl Fn(&str, usize) -> String + Send + Sync + 'static) -> (Arc<Host>, Arc<Mutex<Vec<Effect>>>) {
+        let starts = Mutex::new(BTreeMap::<String, usize>::new());
+        let host = Host::new(move |repo| {
+            let n = {
+                let mut s = lock(&starts);
+                let n = s.entry(repo.into()).or_default();
+                *n += 1;
+                *n
+            };
+            let mut c = Command::new("cmd");
+            c.raw_arg(format!("/d /c {}", script(repo, n)));
+            c
         });
-        assert_eq!(restarts, 1);
-        assert!(reason.unwrap().contains("stopped again"));
+        let seen = Arc::new(Mutex::new(vec![]));
+        let rec = seen.clone();
+        let _ = host.ui.set(Box::new(move |fx| lock(&rec).push(fx)));
+        (host, seen)
     }
 
-    /// A stand-in daemon that exits 75, as after Start -> Restart board.
-    fn restart_requested() -> Child {
-        Command::new("cmd").args(["/c", "exit", "75"]).spawn().unwrap()
+    /// Prints the port line and `then` lines, then waits for stdin EOF.
+    fn up(port: u16, then: &str) -> String {
+        format!("echo KANBAN95 port={port}&{then}findstr x")
+    }
+
+    fn until(what: &str, mut ok: impl FnMut() -> bool) {
+        let end = Instant::now() + Duration::from_secs(10);
+        while !ok() {
+            assert!(Instant::now() < end, "timed out waiting for {what}");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    fn shown(seen: &Mutex<Vec<Effect>>) -> Vec<(String, u16)> {
+        lock(seen)
+            .iter()
+            .filter_map(|f| match f {
+                Effect::Show { label, url, .. } => Some((label.clone(), url.port()?)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn pid(host: &Host, repo: &str) -> u32 {
+        lock(&host.table).boards[repo].child.id()
+    }
+
+    fn alive(pid: u32) -> bool {
+        let out = Command::new("tasklist").args(["/FI", &format!("PID eq {pid}"), "/NH"]).output().unwrap();
+        String::from_utf8_lossy(&out.stdout).contains(&format!(" {pid} "))
+    }
+
+    fn hosted(host: &Host) -> Vec<(String, Place)> {
+        lock(&host.table).boards.iter().map(|(r, b)| (r.clone(), b.place)).collect()
     }
 
     #[test]
-    fn a_requested_restart_does_not_spend_the_crash_budget() {
-        let slot = Mutex::new(Some(restart_requested()));
-        let mut restarts = 0;
-        let reason = supervise(&slot, || {
-            restarts += 1;
-            // Three requested restarts, then a crash that is restarted once, then a second crash that gives up.
-            Ok(if restarts < 3 { restart_requested() } else { crashing() })
+    fn parses_every_command_and_nothing_else() {
+        assert_eq!(parse("KANBAN95 open=C:\\a b\\c"), Some((Verb::Open, "C:\\a b\\c")));
+        assert_eq!(parse("KANBAN95 switch=x"), Some((Verb::Switch, "x")));
+        assert_eq!(parse("KANBAN95 popout=x"), Some((Verb::Popout, "x")));
+        assert_eq!(parse("KANBAN95 dock=x"), Some((Verb::Dock, "x")));
+        assert_eq!(parse("KANBAN95 close=x=y"), Some((Verb::Close, "x=y")));
+        for bad in ["KANBAN95 open=", "KANBAN95 port=41234", "KANBAN95 fly=x", "KANBAN95 open", "kanban95 open=x", " KANBAN95 open=x", "listening"] {
+            assert_eq!(parse(bad), None, "{bad}");
+        }
+    }
+
+    #[test]
+    fn open_from_a_daemon_hosts_a_second_one_with_the_shell_id_and_shows_it() {
+        let id_file = std::env::temp_dir().join(format!("k95-shell-id-{}", std::process::id()));
+        let file = id_file.display().to_string();
+        let (host, seen) = host(move |repo, _| match repo {
+            "k95-a" => up(41001, "echo KANBAN95 open=k95-b&echo KANBAN95 open=k95-b&"),
+            _ => format!(">\"{file}\" echo %KANBAN95_SHELL_ID%&{}", up(41002, "")),
         });
-        assert_eq!(restarts, 4);
-        assert!(reason.unwrap().contains("stopped again"));
+        host.first("k95-a", host.start("k95-a").unwrap());
+        until("the second board", || shown(&seen).contains(&(MAIN.into(), 41002)));
+        assert_eq!(std::fs::read_to_string(&id_file).unwrap().trim(), std::process::id().to_string());
+        assert_eq!(hosted(&host), [("k95-a".into(), Place::Docked), ("k95-b".into(), Place::Docked)]);
+        assert_eq!(lock(&host.table).main, "k95-b");
+        assert_eq!(*lock(&host.ports), [41001, 41002]);
+        host.shutdown();
+        std::fs::remove_file(&id_file).unwrap();
     }
 
     #[test]
-    fn a_failed_restart_is_reported_not_retried() {
-        let slot = Mutex::new(Some(crashing()));
-        let mut restarts = 0;
-        let reason = supervise(&slot, || {
-            restarts += 1;
-            Err("no node".into())
+    fn switch_popout_and_dock_move_boards_between_the_windows() {
+        let (host, seen) = host(|repo, _| up(if repo == "k95-a" { 41001 } else { 41002 }, ""));
+        host.first("k95-a", host.start("k95-a").unwrap());
+        host.command(Verb::Open, "k95-b");
+        until("the second board", || hosted(&host).len() == 2);
+        let b_pid = pid(&host, "k95-b");
+        let effects = |seen: &Mutex<Vec<Effect>>| std::mem::take(&mut *lock(seen));
+        effects(&seen);
+
+        host.command(Verb::Switch, "k95-a");
+        assert_eq!(shown(&seen), [(MAIN.into(), 41001)]);
+        effects(&seen);
+
+        host.command(Verb::Popout, "k95-a");
+        let fx = effects(&seen);
+        assert!(matches!(&fx[..], [Effect::Show { label: main, .. }, Effect::Open { label: own, url, .. }] if main == MAIN && *own == label("k95-a") && url.port() == Some(41001)), "{fx:?}");
+        assert_eq!(lock(&host.table).main, "k95-b");
+
+        host.command(Verb::Popout, "k95-b");
+        assert!(effects(&seen).is_empty(), "the only docked board stays in the main window");
+        assert_eq!(hosted(&host), [("k95-a".into(), Place::Own), ("k95-b".into(), Place::Docked)]);
+
+        host.command(Verb::Dock, "k95-a");
+        let fx = effects(&seen);
+        assert!(matches!(&fx[..], [Effect::Close(own), Effect::Show { label: main, url, .. }] if *own == label("k95-a") && main == MAIN && url.port() == Some(41001)), "{fx:?}");
+        assert_eq!(hosted(&host), [("k95-a".into(), Place::Docked), ("k95-b".into(), Place::Docked)]);
+
+        host.command(Verb::Popout, "k95-b");
+        assert!(matches!(&effects(&seen)[..], [Effect::Open { .. }]));
+        host.window_closed(&label("k95-b"));
+        assert_eq!(hosted(&host), [("k95-a".into(), Place::Docked)]);
+        until("the popped-out board's daemon to stop", || {
+            host.tick();
+            !alive(b_pid)
         });
-        assert_eq!((restarts, reason.as_deref()), (1, Some("no node")));
+        assert!(effects(&seen).is_empty(), "the main window stays on its board");
+        host.shutdown();
     }
 
     #[test]
-    fn stops_quietly_when_the_shell_takes_the_daemon() {
-        let slot = Mutex::new(None);
-        assert_eq!(supervise(&slot, || panic!("must not restart")), None);
+    fn close_ends_the_last_daemon_through_stdin_eof_and_exits() {
+        let (host, seen) = host(|_, _| up(41001, ""));
+        host.first("k95-a", host.start("k95-a").unwrap());
+        let a = pid(&host, "k95-a");
+        let began = Instant::now();
+        host.command(Verb::Close, "k95-a");
+        until("the shell to finish", || !host.tick());
+        assert!(began.elapsed() < Duration::from_secs(10), "stopped by EOF, not by the 15 s kill");
+        assert!(!alive(a));
+        assert_eq!(lock(&seen).last(), Some(&Effect::Exit(0)));
+        assert!(lock(&host.table).closing.is_empty());
+    }
+
+    #[test]
+    fn each_daemon_is_restarted_on_75_and_once_on_a_crash() {
+        let (host, seen) = host(|repo, n| match (repo, n) {
+            ("k95-a", _) => up(41001, ""),
+            (_, 1) => "echo KANBAN95 port=41002&exit 75".into(),
+            (_, 2) => "echo KANBAN95 port=41003&exit 3".into(),
+            (_, 3) => "echo KANBAN95 port=41004&exit 3".into(),
+            _ => panic!("restarted after the second crash"),
+        });
+        host.first("k95-a", host.start("k95-a").unwrap());
+        let a = pid(&host, "k95-a");
+        host.command(Verb::Open, "k95-b");
+        until("the crashing board to be dropped", || {
+            host.tick();
+            lock(&seen).iter().any(|f| matches!(f, Effect::Error(_)))
+        });
+        let fx = lock(&seen);
+        assert!(matches!(fx.iter().find(|f| matches!(f, Effect::Error(_))), Some(Effect::Error(e)) if e.contains("stopped again")));
+        assert!(!fx.iter().any(|f| matches!(f, Effect::Exit(_))));
+        drop(fx);
+        let main = |p| (MAIN.to_string(), p);
+        assert_eq!(shown(&seen), [main(41002), main(41003), main(41004), main(41001)]);
+        assert_eq!(hosted(&host), [("k95-a".into(), Place::Docked)]);
+        assert_eq!(pid(&host, "k95-a"), a);
+        assert!(host.tick());
+        host.shutdown();
+    }
+
+    #[test]
+    fn a_failed_restart_of_the_last_board_is_reported_and_exits() {
+        let (host, seen) = host(|_, n| if n == 1 { "echo KANBAN95 port=41001&exit 3".into() } else { "echo nope".into() });
+        host.first("k95-a", host.start("k95-a").unwrap());
+        until("the shell to finish", || !host.tick());
+        let fx = lock(&seen);
+        assert!(matches!(&fx[..], [Effect::Error(e), Effect::Exit(1)] if e.contains("nope")), "{fx:?}");
+    }
+
+    #[test]
+    fn shutdown_kills_every_daemon_and_stops_the_supervisor() {
+        let (host, _) = host(|repo, _| up(if repo == "k95-a" { 41001 } else { 41002 }, ""));
+        host.first("k95-a", host.start("k95-a").unwrap());
+        host.command(Verb::Open, "k95-b");
+        until("the second board", || hosted(&host).len() == 2);
+        let pids = [pid(&host, "k95-a"), pid(&host, "k95-b")];
+        host.command(Verb::Popout, "k95-b");
+        host.shutdown();
+        assert!(pids.iter().all(|p| !alive(*p)));
+        assert!(hosted(&host).is_empty() && lock(&host.ports).is_empty());
+        assert!(!host.tick());
+        host.command(Verb::Open, "k95-c");
+        assert!(lock(&host.table).opening.is_empty(), "nothing starts once the shell is exiting");
     }
 
     #[test]
@@ -374,16 +856,21 @@ mod tests {
         assert!(node_problem(None).unwrap().contains("not found"));
     }
 
+    #[test]
+    fn the_navigation_lock_allows_every_hosted_daemon_and_nothing_else() {
+        let at = |u: &str, ports: &[u16]| on_daemon(&u.parse().unwrap(), ports);
+        assert!(at("http://127.0.0.1:41234/?k95=x", &[41234]));
+        assert!(!at("http://127.0.0.1:41235/", &[41234]) && !at("http://localhost:41234/", &[41234]) && !at("https://127.0.0.1:41234/", &[41234]));
+        assert!(at("http://127.0.0.1:41235/?k95=y", &[41234, 41235]) && at("http://127.0.0.1:41234/", &[41234, 41235]));
+        assert!(!at("http://127.0.0.1/", &[80]) && !at("http://127.0.0.1:41234/", &[]));
+    }
 
     #[test]
-    fn the_navigation_lock_follows_a_restarted_daemon_to_its_new_port() {
-        let live = AtomicU16::new(41234);
-        let at = |u: &str| on_daemon(&u.parse().unwrap(), live.load(Ordering::SeqCst));
-        assert!(at("http://127.0.0.1:41234/?k95=x"));
-        assert!(!at("http://127.0.0.1:41235/") && !at("http://localhost:41234/") && !at("https://127.0.0.1:41234/"));
-        live.store(41235, Ordering::SeqCst); // what the restart does before it navigates
-        assert!(at("http://127.0.0.1:41235/?k95=y"));
-        assert!(!at("http://127.0.0.1:41234/"));
+    fn keys_drop_the_verbatim_prefix_and_keep_a_missing_path() {
+        let cwd = std::env::current_dir().unwrap().display().to_string();
+        assert_eq!(key("."), cwd.strip_prefix(r"\\?\").unwrap_or(&cwd));
+        assert!(!key(".").starts_with(r"\\?\"));
+        assert_eq!(key("k95-no-such-repo"), "k95-no-such-repo");
     }
 
     #[test]
@@ -416,7 +903,7 @@ mod tests {
     fn webview_cannot_call_any_tauri_command() {
         let app = mock_builder().build(tauri::generate_context!()).unwrap();
         let origin: tauri::Url = "http://127.0.0.1:41234/".parse().unwrap();
-        let w = window(&app, origin.clone(), Arc::new(AtomicU16::new(41234))).unwrap();
+        let w = window(&app, MAIN, origin.clone(), "Kanban95".into(), Arc::new(Mutex::new(vec![41234]))).unwrap();
         for cmd in [
             "plugin:app|version",
             "plugin:window|close",
