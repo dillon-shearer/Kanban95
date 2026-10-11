@@ -1,8 +1,9 @@
 // The ticket state machine, documented row by row in docs/LIFECYCLE.md. TABLE is every transition there is: transition()
 // picks a row or refuses, apply() writes the row and runs its effects. Nothing else changes a ticket's status or flags.
+import { exec } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { readTicket, transaction, type Ticket } from './api.js';
 import { branchName, git, isAncestor, syncWorktree, worktreePath } from './git.js';
@@ -158,6 +159,8 @@ export interface Board {
   startCommit?: string;
   /** A merge since start changed what the running daemon was built from: 'shell' when shell/ changed too (docs/OPERATOR.md → Restart board). */
   stale?: false | 'daemon' | 'shell';
+  /** The board's own restart after a merge (restartWhenIdle): under way, or its build failed and it waits for the operator or the next merge. */
+  restart?: 'running' | 'failed';
   /** Commits on the base its upstream lacks, counted on start (push_after_merge on) and zeroed by a push; the status bar's Push button. */
   unpushed?: number;
 }
@@ -197,9 +200,11 @@ export function apply(b: Board, id: number, event: Event, x: { note?: Note; answ
   const row = pick(facts(b, t), event);
   // The one gate on the board starting an agent by itself (`auto`: a released dependent, a conflict sent back): while the
   // runner is off it starts nothing. A backlog launch is not applied at all, so the ticket stays held; any other row is
-  // written without its spawn and kept in `held`, and tick() starts that agent when Run is turned on.
-  const hold = x.auto === true && !runner(b).on && row.effects.includes('spawn_execute');
-  if (hold && t.status === 'backlog') return { ticket: t, noteId: undefined, pending: [] as Promise<void>[] };
+  // written without its spawn and kept in `held`, and tick() starts that agent when Run is turned on. A stale board starts
+  // no backlog ticket either (restartWhenIdle); a running ticket's conflict retry still goes ahead.
+  const spawns = x.auto === true && row.effects.includes('spawn_execute');
+  if (spawns && t.status === 'backlog' && (b.stale || !runner(b).on)) return { ticket: t, noteId: undefined, pending: [] as Promise<void>[] };
+  const hold = spawns && !runner(b).on;
   if (hold) held.add(id);
   if (event === 'submit') {
     // The tester tests the branch with the base merged in, so stale code never spends a tester round.
@@ -313,6 +318,7 @@ function spawn(b: Board, id: number, template: 'execute' | 'housekeeping' | 'tes
 function exited(b: Board, s: Session) {
   b.db.prepare('UPDATE runs SET outcome = ? WHERE id = ?').run(s.outcome ?? 'exit', s.runId);
   changed(s.ticketId);
+  restartWhenIdle(b); // a session's end can be the last thing a restart after a merge waits for
   if (s.outcome || b.closing) return;
   try {
     apply(b, s.ticketId!, 'exit', { note: { role: s.role, kind: 'failure', body: 'agent exited without reporting' } });
@@ -523,12 +529,16 @@ ${p.reason}`;
   return failed;
 }
 
-/** After a merge: did it change the daemon's own code since start? The UI reads `stale` from GET /api/runner. */
+/**
+ * After a merge: did it change what the running daemon was built or started from (templates/ is copied into the repo on
+ * start)? The UI reads `stale` from GET /api/runner. A new merge lets a restart whose build failed try again.
+ */
 function markStale(b: Board) {
+  if (b.restart === 'failed') b.restart = undefined;
   if (!b.startCommit || b.stale === 'shell') return;
   let files: string[];
   try {
-    files = git(b.repo, 'diff', '--name-only', b.startCommit, 'HEAD', '--', 'daemon/', 'shell/', 'package.json', 'package-lock.json').split('\n').filter(Boolean);
+    files = git(b.repo, 'diff', '--name-only', b.startCommit, 'HEAD', '--', 'daemon/', 'templates/', 'shell/', 'package.json', 'package-lock.json').split('\n').filter(Boolean);
   } catch {
     return; // start commit gone (history rewritten): nothing to compare against
   }
@@ -674,13 +684,65 @@ function overlaps(b: Board, cs: number[]): Map<number, number> {
   return out;
 }
 
-/** What the status bar shows: the flag, the limit, the tickets it waits on, candidates left of everything in Backlog, deferrals. */
+/**
+ * What the status bar shows: the flag, the limit, the tickets it waits on, candidates left of everything in Backlog, deferrals.
+ * While stale, `hold`: how many tickets the restart waits for, and who restarts (docs/LIFECYCLE.md → Restart after a merge).
+ */
 export function runnerState(b: Board) {
   const { n } = b.db.prepare("SELECT count(*) AS n FROM tickets WHERE status = 'backlog'").get() as { n: number };
   const cs = candidates(b);
   const waits = [...overlaps(b, cs)].map(([id, on]) => ({ id, on }));
+  const restart = b.stale === 'shell' ? 'relaunch' : b.restart === 'failed' ? 'failed' : b.shell && b.shutdown ? 'self' : 'manual';
   return { ...runner(b), concurrency: limit(b), running: running(b), left: cs.length, backlog: n, waits, stale: b.stale ?? false, unpushed: b.unpushed ?? 0,
-    ...(b.gitError && { gitError: b.gitError }) };
+    ...(b.stale && { hold: { finish: toFinish(b), restart } }), ...(b.gitError && { gitError: b.gitError }) };
+}
+
+// ---- restart after a merge (docs/LIFECYCLE.md → Restart after a merge) ----
+
+/** Tickets a stale board finishes before it restarts: running ones (held retries aside: they wait for Run) and any with a live agent. */
+function toFinish(b: Board) {
+  const ids = new Set(running(b).filter((id) => !held.has(id)));
+  for (const s of sessions.values()) if (s.ticketId !== null) ids.add(s.ticketId);
+  return ids.size;
+}
+
+const BUILD_TIMEOUT = 120_000;
+
+/**
+ * Start → Restart board, and the board's own restart after a merge: rebuild (from a repo checkout; an installed app/ has no
+ * daemon/src and nothing to build), then close and exit 75. The shell restarts the daemon on 75 and the window follows it to
+ * the new port (docs/ARCHITECTURE.md -> Restart board). Resolves to why it did not restart (the compiler output), or null.
+ */
+export async function restartBoard(b: Board): Promise<string | null> {
+  const root = b.root ?? resolve(import.meta.dirname, '../..');
+  if (existsSync(join(root, 'daemon', 'src'))) {
+    const failed = await new Promise<string | null>((ok) => {
+      // Through a shell, since npm is npm.cmd on Windows. The command is fixed; nothing from a request reaches it.
+      exec('npm run build', { cwd: root, timeout: BUILD_TIMEOUT, windowsHide: true }, (e, out, err) =>
+        ok(e ? `${out}${err}`.trim() || e.message : null));
+    });
+    if (failed !== null) return failed;
+  }
+  if (b.closing || !b.shutdown) return 'the board is already shutting down';
+  const shutdown = b.shutdown;
+  setTimeout(() => shutdown(75), 50); // after a reply is on its way
+  return null;
+}
+
+/**
+ * A stale board (b.stale 'daemon') under the shell restarts itself once no ticket is left to finish, the same way as Restart
+ * board; runner.json survives it, so the runner carries on as it was. Brainstorm and operator terminals are not waited for. A
+ * failed build keeps the hold and logs the compiler output; Restart board shows it to the operator.
+ */
+function restartWhenIdle(b: Board) {
+  if (b.stale !== 'daemon' || !b.shell || !b.shutdown || b.closing || b.restart || toFinish(b)) return;
+  b.restart = 'running';
+  void restartBoard(b).then((failed) => {
+    if (failed === null) return;
+    b.restart = 'failed';
+    console.error(`[restart] the board did not restart itself after a merge: ${failed}`);
+    changed(null);
+  });
 }
 
 let ticking = false;
@@ -689,10 +751,12 @@ let ticking = false;
  * Runs after every apply and on daemon start: while the runner is on and fewer than `concurrency` (runner.json, default 3)
  * tickets are running, launch the next candidate that shares no file with a running ticket, or the first candidate when all
  * do (the merge sync resolves it; waiting forever would be worse). Nothing running and nothing to launch: it turns itself off.
- * A ticket held on a running one is not "nothing": the runner waits for that merge.
+ * A ticket held on a running one is not "nothing": the runner waits for that merge. A stale board launches no candidate.
  */
 export function tick(b: Board) {
-  if (ticking || b.closing || !runner(b).on) return;
+  if (ticking || b.closing) return;
+  restartWhenIdle(b);
+  if (!runner(b).on) return;
   ticking = true; // its own launches call apply, which calls tick
   try {
     const max = limit(b);
@@ -703,7 +767,7 @@ export function tick(b: Board) {
       const t = b.db.prepare('SELECT status, needs_human FROM tickets WHERE id = ?').get(id) as { status: string; needs_human: number } | undefined;
       if (t?.status === 'in_progress' && !t.needs_human && !sessionsOf(id).length) apply(b, id, 'launch');
     }
-    while (running(b).length < max) {
+    while (!b.stale && running(b).length < max) {
       const cs = candidates(b);
       if (!cs.length) break;
       const busy = overlaps(b, cs);
