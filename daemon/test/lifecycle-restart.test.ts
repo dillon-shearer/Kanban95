@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createWorktree, worktreePath, worktreesRoot } from '../src/git.ts';
 import { mint } from '../src/grants.ts';
-import { RESUME_MESSAGE, sessionsOf } from '../src/launcher.ts';
+import { killTree, RESUME_MESSAGE, sessionsOf } from '../src/launcher.ts';
 import { DIRTY_WAIT, RESTART_NOTE, RESTARTED, TO_RESOLVE, type Status } from '../src/lifecycle.ts';
 import { boot, db, git, landed, models, notes, post, repo, runs, sounds, srv, t, ticket, until } from './board.ts';
 
@@ -202,7 +202,7 @@ describe('resume', { timeout: 60_000 }, () => {
     const id = ticket('Crashed');
     const old = await launchedClaude(id);
     const sessionId = runs(id)[0].session_id!;
-    old.pty.kill(); // the agent died: exit flags the ticket
+    killTree(old.pty); // the agent died: exit flags the ticket
     await until(() => t(id).flags.needs_human, 'the flag');
     expect((await post(`/api/tickets/${id}/resume`)).status).toBe(200);
     await until(() => existsSync(resumed(id)), 'the resumed session');

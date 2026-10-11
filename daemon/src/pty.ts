@@ -45,6 +45,14 @@ export function spawnPty(cmd: string, args: string[], o: { cwd: string; env: Rec
   const pty: IPty = process.platform === 'win32'
     ? spawn(o.env.ComSpec ?? 'cmd.exe', windowsCommandLine(cmd, args), opts)
     : spawn(cmd, args, opts);
+  // node-pty 1.1's Windows kill() closes the pseudoconsole, then forks a helper to list the processes on the shell's console and
+  // kills each; when the helper fails (always, once the console is closed: "AttachConsole failed") it kills the shell's pid 5 s
+  // later. By then (a bare kill, or killTree after a taskkill that timed out) Windows may have handed that pid to another
+  // process, which node-pty would end (under a full npm test, other tickets' agents and git mid-merge). killTree ends the tree
+  // itself, so the list is dropped.
+  // ponytail: reaches into node-pty internals; drop it once node-pty lists the processes before it closes the console.
+  const agent = (pty as unknown as { _agent?: { _getConsoleProcessList?: () => Promise<number[]> } })._agent;
+  if (agent?._getConsoleProcessList) agent._getConsoleProcessList = () => Promise.resolve([]);
 
   // Raw terminal output, trimmed to the last SCROLLBACK_LINES lines whenever it grows to twice that.
   let buf = '';
