@@ -7,7 +7,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import { focusProject, NotListed, openProject, runningMap } from './boards.js';
 import { attachmentDir, attachments, MAX_ATTACHMENT, safeName, saveAttachment } from './attachments.js';
 import { BRAIN_BODY_MAX, BRAIN_RANK, isConstraintError, SCOPES, type Brains, type Scope } from './db.js';
-import { ticketDiff } from './git.js';
+import { hasBranch, ticketDiff } from './git.js';
 import { audit, revoke } from './grants.js';
 import { killGrantSession, sessions, sessionsOf, type Session } from './launcher.js';
 import { apply, brainstorm, changed, housekeeping, operator, pushBase, Refused, runner, runnerState, setRunner, type Board } from './lifecycle.js';
@@ -260,7 +260,7 @@ const routes: [method: string, path: RegExp, mutation: string | null, handler: (
     return { status: 201, body: readTicket(db, id) };
   }],
   ['GET', /^\/api\/tickets\/(\d+)$/, null, ({ db, params }) => ({ status: 200, body: readTicket(db, Number(params[0])) })],
-  ['PATCH', /^\/api\/tickets\/(\d+)$/, 'tickets.update', ({ db, params, body }) => {
+  ['PATCH', /^\/api\/tickets\/(\d+)$/, 'tickets.update', ({ board, db, params, body }) => {
     const id = Number(params[0]);
     readTicket(db, id);
     const { cols, vals, deps } = ticketColumns(body);
@@ -269,12 +269,21 @@ const routes: [method: string, path: RegExp, mutation: string | null, handler: (
       const bad = uncatalogued(body.model, typeof body.cli === 'string' ? body.cli : readTicket(db, id).cli);
       if (bad) throw new HttpError(400, bad);
     }
-    // A reset to Backlog stops the ticket's agents, whoever sent it; the UI closes their terminals when it sees the ticket in backlog.
-    if (body.status === 'backlog' && readTicket(db, id).status !== 'backlog') endSessions(db, id, 'reset');
+    // A move by hand (docs/LIFECYCLE.md → Moves by hand) stops the ticket's agents, whoever sent it, and clears its flag unless the
+    // body sets one. The UI closes the terminals of a ticket it sees in backlog.
+    const was = readTicket(db, id);
+    const moved = typeof body.status === 'string' && body.status !== was.status;
+    if (moved) endSessions(db, id, body.status === 'backlog' ? 'reset' : 'moved');
     transaction(db, () => {
+      if (moved) db.prepare('UPDATE tickets SET needs_human = 0 WHERE id = ?').run(id);
       if (cols.length) db.prepare(`UPDATE tickets SET ${cols.map((c) => `${c} = ?`).join(', ')} WHERE id = ?`).run(...(vals as never[]), id);
       if (deps) setDeps(db, id, deps);
     });
+    // Into Done unmerged: a branch goes to the merge queue, as a pass would; no branch means nothing to land, so it is closed.
+    if (moved && body.status === 'done' && !was.merged_at) {
+      if (hasBranch(board.repo, id)) apply(board, id, 'merge');
+      else db.prepare("UPDATE tickets SET merged_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?").run(id);
+    }
     return { status: 200, body: readTicket(db, id) };
   }],
   ['DELETE', /^\/api\/tickets\/(\d+)$/, 'tickets.delete', ({ board, params }) => {

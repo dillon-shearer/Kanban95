@@ -131,12 +131,11 @@ Right-click a card for its menu: Open, Launch, Resume (a red running card whose 
 
 ![Card menu](img/card-menu.png)
 
-Dragging is for the two things an operator may do by hand; everything else is the agents' job:
+Drag a card to any column to put it there by hand (docs/LIFECYCLE.md → Moves by hand):
 
-- **Backlog → In Progress**: mark a ticket as being worked on by hand. No agent is started.
 - **Any column → Backlog**: reset. Flags and the retry count are cleared, a running agent is stopped. Launch it again when ready; its worktree and branch are reused.
-
-Any other drop snaps back, and the status bar names where that card may go.
+- **Any other move**: the ticket goes to that column as is. A running agent is stopped (you are asked first), the needs-human flag is cleared, and no agent is started; Launch starts one for the new column.
+- **Into Done**: work on an unmerged branch goes to the merge queue. A ticket with no branch is closed as it is.
 
 ## Keyboard
 
