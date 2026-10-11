@@ -1,5 +1,5 @@
 // Launches an agent CLI on a ticket: worktree, run row, grant, session dir, argv, pty. Tears it all down on exit or revoke.
-import { execFileSync, spawn } from 'node:child_process';
+import { execFile, execFileSync, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir, userInfo } from 'node:os';
@@ -9,7 +9,7 @@ import type { IPty } from 'node-pty';
 import { buildContext, startRun } from './context.js';
 import { createWorktree, git, worktreesRoot } from './git.js';
 import { mint, revoke, type Role } from './grants.js';
-import { childEnv, cmdSafe, spawnPty } from './pty.js';
+import { childEnv, cmdSafe, lastLines, spawnPty } from './pty.js';
 import { fill, loadTemplate, TEMPLATES, type TicketTemplate } from './templates.js';
 import { BadConfig, type Cli, type Effort } from './settings.js';
 import { preTrustClaude } from './trust.js';
@@ -112,10 +112,14 @@ export interface Session {
   started: number;
   /** Set by the lifecycle when it ends the session after the agent reported (a move_ticket); its exit is then expected. */
   outcome?: string;
+  /** The pty's exit code, once it has exited. */
+  exitCode?: number;
   dir: string;
   pty: IPty;
   scrollback: () => string;
-  /** Resolves once the run row is written, the grant revoked and the session dir gone. */
+  /** Set by killSession when the kill may have missed a CLI still starting (reapOrphans); `done` waits for it. */
+  reaped?: Promise<void>;
+  /** Resolves once the run row is written, the grant revoked, the session dir gone and any orphan reaped. */
   done: Promise<void>;
 }
 
@@ -139,7 +143,6 @@ type RunSettings = { cli: Cli; model: string; effort: Effort; path?: string };
 
 /** How many of the setup command's last output lines a failure note quotes. */
 const SETUP_TAIL = 20;
-// ponytail: on Windows the timeout kills cmd.exe, not what it started (npm keeps running); upgrade is `taskkill /T`.
 const SETUP_TIMEOUT_MS = 15 * 60 * 1000;
 
 /**
@@ -148,25 +151,35 @@ const SETUP_TIMEOUT_MS = 15 * 60 * 1000;
  * marker in the worktree's git dir, gone with the worktree). Asynchronous so a minute of `npm ci` does not stall the daemon.
  * Rejects with the command and its last output lines.
  */
-export function prepareWorktree(repo: string, ticketId: number, command?: string): Promise<void> | null {
+export function prepareWorktree(repo: string, ticketId: number, command?: string, timeoutMs = SETUP_TIMEOUT_MS): Promise<void> | null {
   const wt = createWorktree(repo, ticketId);
   if (!command) return null;
   const marker = resolve(wt.path, git(wt.path, 'rev-parse', '--git-path', 'kanban95-setup-done'));
   if (existsSync(marker)) return null;
   return new Promise((ok, fail) => {
-    const child = spawn(command, { cwd: wt.path, env: childEnv({ KANBAN95_AGENT: '1' }), shell: true, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, timeout: SETUP_TIMEOUT_MS });
+    // Detached on POSIX so the shell leads its own process group, which killTree ends whole.
+    const child = spawn(command, { cwd: wt.path, env: childEnv({ KANBAN95_AGENT: '1' }), shell: true, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, detached: process.platform !== 'win32' });
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      killTree(child);
+    }, timeoutMs);
     let out = '';
     const take = (d: Buffer) => (out = (out + d).slice(-65536));
     child.stdout.on('data', take);
     child.stderr.on('data', take);
-    child.on('error', (e) => fail(new Error(`worktree_setup "${command}" did not start: ${e.message}`)));
+    child.on('error', (e) => {
+      clearTimeout(timer);
+      fail(new Error(`worktree_setup "${command}" did not start: ${e.message}`));
+    });
     child.on('close', (code, signal) => {
-      if (code === 0) {
+      clearTimeout(timer);
+      if (code === 0 && !timedOut) {
         writeFileSync(marker, command);
         return ok();
       }
       const tail = out.split(/\r?\n/).filter((l) => l.trim()).slice(-SETUP_TAIL).join('\n');
-      fail(new Error(`worktree_setup "${command}" failed (${code ?? signal}) in ${wt.path}; last output:\n${tail || '(none)'}`));
+      fail(new Error(`worktree_setup "${command}" failed (${timedOut ? `timed out after ${timeoutMs / 1000} s` : code ?? signal}) in ${wt.path}; last output:\n${tail || '(none)'}`));
     });
   });
 }
@@ -234,7 +247,8 @@ export function transcriptSize(s: Pick<Session, 'cli' | 'cwd' | 'sessionId' | 's
  * ended without reporting (killed by a restart, a crash or the operator's X) and its transcript is still on disk.
  */
 function resumable(db: DatabaseSync, ticketId: number, phase: string): string | undefined {
-  const r = db.prepare('SELECT phase, cli, outcome, session_id FROM runs WHERE ticket_id = ? ORDER BY id DESC LIMIT 1').get(ticketId) as
+  // A run whose process never started (`unstarted`) is skipped: its relaunch continues what that run was resuming.
+  const r = db.prepare("SELECT phase, cli, outcome, session_id FROM runs WHERE ticket_id = ? AND outcome IS NOT 'unstarted' ORDER BY id DESC LIMIT 1").get(ticketId) as
     { phase: string; cli: string; outcome: string | null; session_id: string | null } | undefined;
   if (r?.phase !== phase || r.cli !== 'claude' || !r.session_id || !['exit', 'lost', 'closed'].includes(r.outcome ?? '')) return undefined;
   return hasTranscript(r.session_id) ? r.session_id : undefined;
@@ -308,16 +322,18 @@ function spawnSession(d: Daemon, o: RunSettings & { sessionId?: string; resume?:
       ...(o.cli === 'codex' ? { [TOKEN_ENV]: grant.token } : {}),
       ...(o.cli === 'claude' && unattended(r.role) ? { CLAUDE_CODE_PROMPT_CACHE_TTL: '5m' } : {}),
     });
+    const started = Date.now(); // before the spawn: reapOrphans takes it as the earliest the CLI can have been created
     const { pty, scrollback } = spawnPty(o.path || cmd, args, { cwd: r.cwd, env });
 
     let finished!: () => void;
     const s: Session = {
       key, runId: r.runId, grantId: grant.id, ticketId: r.ticketId, role: r.role, phase: r.phase, model: o.model, dir, pty, scrollback,
-      cli: o.cli, cwd: r.cwd, sessionId: o.sessionId, started: Date.now(),
+      cli: o.cli, cwd: r.cwd, sessionId: o.sessionId, started,
       done: new Promise((ok) => (finished = ok)),
     };
     sessions.set(key, s);
-    pty.onExit(() => {
+    pty.onExit(({ exitCode }) => {
+      s.exitCode = exitCode;
       sessions.delete(key);
       try {
         teardown(scrollback());
@@ -325,7 +341,7 @@ function spawnSession(d: Daemon, o: RunSettings & { sessionId?: string; resume?:
       } catch (e) {
         console.error('[launcher]', e); // an exit handler that throws must not leave `done` pending
       } finally {
-        finished();
+        void Promise.resolve(s.reaped).finally(finished);
       }
     });
     return s;
@@ -335,14 +351,81 @@ function spawnSession(d: Daemon, o: RunSettings & { sessionId?: string; resume?:
   }
 }
 
-/** Revoking a grant ends its session: the pty is killed and its exit handler tears the rest down. */
-export function killGrantSession(grantId: number) {
-  for (const s of sessions.values()) if (s.grantId === grantId) s.pty.kill();
+/** Tree kills still running (Windows): killAll waits for these too, so nothing an agent started outlives the daemon's close. */
+const killing = new Set<Promise<void>>();
+
+/**
+ * Ends a process and everything it started; every session the board ends, and a worktree_setup that overruns, comes here.
+ * `pty.kill()` alone is not enough: on Windows it ends the cmd.exe that spawnPty wraps around the CLI and the processes still
+ * attached to its console, and a grandchild with no console (headless Edge, a detached vitest worker or MCP server) keeps
+ * running. Windows: `taskkill /T /F` on the pid walks the tree by parent pid, so it starts while the root is still alive; it
+ * runs asynchronously so a slow taskkill under load does not stall the daemon. POSIX: node-pty starts the child with setsid
+ * (forkpty on Linux, POSIX_SPAWN_SETSID on macOS), so its pid is a process group, killed whole. Then `kill()` itself, so
+ * node-pty still reports the exit (it ignores a process already gone). On Windows `kill()` follows only a taskkill that timed
+ * out, while the root is still alive: once the root is dead node-pty reports that exit by itself, and its `kill()` lists the
+ * console of the root's pid in a helper it forks after releasing the process, then kills every process on that console. By
+ * then the pid may belong to another process, and on that one's console are its siblings. It killed vitest, and, with the suite
+ * run from an agent's terminal, the agent itself, even behind a check that the pid was still alive: a reused pid is alive
+ * (node-pty 1.1.0, 2026-10-11).
+ */
+export function killTree(p: { pid?: number; kill(): unknown }) {
+  if (!p.pid) return void p.kill();
+  if (process.platform === 'win32') {
+    const done = new Promise<void>((ok) => execFile('taskkill', ['/T', '/F', '/PID', String(p.pid)], { windowsHide: true, timeout: 10_000 }, (e) => {
+      if (e?.killed) p.kill();
+      ok();
+    }))
+      .finally(() => killing.delete(done));
+    killing.add(done);
+    return;
+  }
+  try {
+    process.kill(-p.pid, 'SIGKILL');
+  } catch { /* already gone, or not a group leader: kill() below still ends the root */ }
+  p.kill();
 }
 
-/** Daemon shutdown: kill every pty and wait until each session has written its run row and removed its dir. */
+/**
+ * Ends a session: its process tree (killTree), then on Windows, if the CLI had not printed yet, anything the tree walk missed.
+ * A kill that lands while cmd.exe is still starting the CLI can miss it: taskkill /T walks a snapshot, and the CLI created
+ * after it runs on, orphaned, holding its worktree (6 of 150 kills in the first 120 ms under load, with or without taskkill;
+ * node-pty 1.1.0, Windows 11, 2026-10-11). Once the CLI has printed visible text it was in that snapshot (cmd.exe /c prints
+ * none of its own), so only an earlier kill pays for the sweep, 1-5 s of PowerShell.
+ */
+export function killSession(s: Session) {
+  if (process.platform === 'win32' && lastLines(s.scrollback(), 1).length === 0) s.reaped ??= reapOrphans(s.pty, s.started);
+  killTree(s.pty);
+}
+
+/**
+ * An orphan keeps its dead parent's pid as ParentProcessId, so once the root is gone it can no longer start anything, and every
+ * process it started while it lived is found and its tree killed. The creation window skips children of another process that
+ * held that pid; one that holds it now (a reused pid) ends the window where it was created, so its own children are left alone.
+ * The sweep waits for node-pty to report the root's exit, however late. Under load each taskkill /T takes seconds and several
+ * queue up, which is when the CLI most often starts after the snapshot; an earlier 5 s cap on that wait skipped the sweep
+ * exactly then. Never rejects: `done` waits for it.
+ */
+const REAP_PS = `$from = [DateTimeOffset]::FromUnixTimeMilliseconds([long]$env:K95_FROM).LocalDateTime
+$to = [DateTimeOffset]::FromUnixTimeMilliseconds([long]$env:K95_TO).LocalDateTime
+$owner = Get-CimInstance Win32_Process -Filter "ProcessId=$([int]$env:K95_PID)"
+if ($owner -and $owner.CreationDate -lt $to) { $to = $owner.CreationDate }
+Get-CimInstance Win32_Process -Filter "ParentProcessId=$([int]$env:K95_PID)" | Where-Object { $_.CreationDate -ge $from -and $_.CreationDate -le $to } |
+  ForEach-Object { taskkill /T /F /PID $_.ProcessId *> $null }`;
+async function reapOrphans(pty: IPty, since: number) {
+  const pid = pty.pid;
+  await new Promise<void>((ok) => pty.onExit(() => ok()));
+  const env = { ...process.env, K95_PID: String(pid), K95_FROM: String(since), K95_TO: String(Date.now()) };
+  await new Promise((ok) => execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', REAP_PS], { env, windowsHide: true, timeout: 60_000 }, ok));
+}
+
+/** Revoking a grant ends its session: the process tree is killed and its exit handler tears the rest down. */
+export function killGrantSession(grantId: number) {
+  for (const s of sessions.values()) if (s.grantId === grantId) killSession(s);
+}
+
+/** Daemon shutdown: kill every session's process tree and wait until each session has written its run row and removed its dir. */
 export async function killAll() {
   const live = [...sessions.values()];
-  for (const s of live) s.pty.kill();
-  await Promise.all(live.map((s) => s.done));
+  for (const s of live) killSession(s);
+  await Promise.all([...live.map((s) => s.done), ...killing]); // a pty reports its exit before taskkill is done with the rest of its tree
 }

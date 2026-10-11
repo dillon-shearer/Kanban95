@@ -25,8 +25,6 @@ const LABEL = Object.fromEntries(COLUMNS);
 const EFFORTS = ['low', 'medium', 'high', 'max'];
 const PHASES = ['plan', 'execute', 'test', 'operator'];
 const CLIS = ['claude', 'codex'];
-/** Where the operator may drag a ticket. Everything onward is the agents' job; anything may go back to Backlog (reset). */
-const MOVES = { backlog: ['in_progress'], in_progress: ['backlog'], testing: ['backlog'], done: ['backlog'] };
 
 const tickets = new Map();
 let sessions = [];
@@ -177,11 +175,9 @@ function dragCard(el, t) {
 
 async function drop(t, to) {
   if (to === t.status) return;
-  const allowed = MOVES[t.status];
-  if (!allowed.includes(to)) {
-    return say(`#${t.id} cannot be dragged from ${LABEL[t.status]} to ${LABEL[to]}. Allowed: ${allowed.map((s) => LABEL[s]).join(', ')}.`);
-  }
   if (to === 'backlog') return reset([t]);
+  // Any other column: the daemon stops a running agent and clears the flag (docs/LIFECYCLE.md → Moves by hand).
+  if (live(t.id).length && (await dialog('Move', `#${t.id} has a running agent. Stop it and move the ticket to ${LABEL[to]}?`, ['Move', 'Cancel'])) !== 'Move') return;
   await act(() => api('PATCH', `/tickets/${t.id}`, { status: to }), `#${t.id} moved to ${LABEL[to]} by hand; no agent was started.`);
 }
 
@@ -309,8 +305,16 @@ async function newOperator() {
   if ((await dialog('New operator terminal', body, ['Start', 'Cancel'])) !== 'Start') return;
   await act(async () => openTerminal(await api('POST', '/operator', { mission: mission.value })), 'Operator terminal started.');
 }
+// runner.hold: a merge changed daemon/, templates/, shell/ or package.json since start, so the runner starts nothing new and the
+// board restarts once its running tickets finish (docs/OPERATOR.md → Restart after a merge). `restart` says who restarts it.
+const HOLD_THEN = {
+  self: '',
+  manual: '; then Start → Restart board',
+  failed: '; the board could not rebuild itself: Start → Restart board shows why',
+  relaunch: '; then close Kanban95 and start it again',
+};
+const holdLine = (h) => `restart pending, ${h.finish} ticket${h.finish === 1 ? '' : 's'} to finish${HOLD_THEN[h.restart]}`;
 /** Start → Restart board: the daemon rebuilds, exits 75, and the shell starts it again (docs/OPERATOR.md → Restart board). */
-const STALE = 'Restart the board to use the merged changes.'; // runner.stale: a merge changed daemon/, shell/ or package.json since start
 async function restartBoard() {
   const agents = sessions.filter((s) => s.ticket_id !== null).length;
   const terminals = sessions.length - agents;
@@ -447,8 +451,7 @@ function loadView(saved) {
 function openBoard() {
   const w = open('board', { title: 'Board', w: 1000, h: 560, persist: true, icon: 'board', onClose: () => { views.delete('board'); say = console.log; } });
   if (w.body.firstChild) return;
-  const status = h('p', { class: 'status-bar-field', role: 'status' }, 'Ready');
-  const count = h('p', { class: 'status-bar-field k95-count' });
+  const status = h('p', { class: 'status-bar-field k95-status', role: 'status' }, 'Ready');
   const run = h('button', { onclick: toggleRunner, title: 'Ctrl+L' });
   const runField = h('p', { class: 'status-bar-field k95-runner' });
   const filter = h('input', { type: 'text', class: 'k95-filter', 'data-mic': 'off', placeholder: 'Filter', value: view.filter,
@@ -487,7 +490,7 @@ function openBoard() {
       h('button', { onclick: newBrainstorm, title: 'Ctrl+N' }, 'New brainstorm'),
       h('button', { onclick: housekeeping }, 'Housekeeping')),
     cols,
-    h('div', { class: 'status-bar' }, status, runField, unpushedField, heldField, h('p', { class: 'status-bar-field k95-filter-field' }, filter), count));
+    h('div', { class: 'status-bar' }, status, runField, unpushedField, heldField, h('p', { class: 'status-bar-field k95-filter-field' }, filter)));
   say = (msg) => { status.textContent = msg; status.title = msg; };
   views.set('board', () => {
     const all = [...tickets.values()];
@@ -508,9 +511,8 @@ function openBoard() {
     cols.style.gridTemplateColumns = COLUMNS.map(([s]) => (collapsed.has(s) ? '24px' : 'minmax(0, 1fr)')).join(' ');
     for (const c of cols.querySelectorAll('.col')) c.querySelector('.cards').scrollTop = scroll[c.dataset.status] ?? 0;
     if (focus) cols.querySelector(`.col[data-status="${focus[0]}"] .card[data-id="${focus[1]}"]`)?.focus();
-    count.textContent = `${all.length} tickets · ${sessions.length} agents`;
     run.textContent = runner.on ? 'Stop' : 'Run';
-    runField.textContent = runField.title = runner.gitError ?? (runner.stale ? STALE : runnerLine(runner)); // gitError: GET /api/runner, set at start
+    runField.textContent = runField.title = runner.gitError ?? (runner.hold ? holdLine(runner.hold) : runnerLine(runner)); // gitError: GET /api/runner, set at start
     runField.hidden = !runField.textContent;
     const held = heldTickets().length;
     heldField.textContent = held ? `${held} waiting to launch by themselves` : '';

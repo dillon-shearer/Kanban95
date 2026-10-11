@@ -4,7 +4,7 @@ Living document. How a ticket moves itself from Launch to merged, and what the b
 
 ## Columns and flags
 
-Status is one of **backlog → in_progress → testing → done**. Two flags sit beside it: `needs_human` (the operator is needed: a question, a silent exit, an agent silent for `idle_minutes`, the retry cap, a merge conflict (on submit or in the merge queue) at the retry cap, a main checkout still dirty after the merge queue's wait, a merge that landed but could not be pushed) and `blocked_on_deps` (launched, but waiting for a dependency to merge). A ticket also records `retry` (failed tests and merge conflicts so far) and `merged_at` (when its branch landed and, with `push_after_merge` on, was pushed).
+Status is one of **backlog → in_progress → testing → done**. Two flags sit beside it: `needs_human` (the operator is needed: a question, a silent exit, an agent silent for `idle_minutes`, the retry cap, a merge conflict (on submit or in the merge queue) at the retry cap, a main checkout still dirty after the merge queue's wait, a merge whose git never ran, a merge that landed but could not be pushed) and `blocked_on_deps` (launched, but waiting for a dependency to merge). A ticket also records `retry` (failed tests and merge conflicts so far) and `merged_at` (when its branch landed and, with `push_after_merge` on, was pushed).
 
 ## Events
 
@@ -16,12 +16,13 @@ Status is one of **backlog → in_progress → testing → done**. Two flags sit
 | `fail` | the tester's `report_test(passed: false)`, or an operator's `move_ticket(in_progress)` on a ticket in testing |
 | `ask` | `ask_operator` from any agent, or the silence watch when a Claude Code agent sits on its own prompt (Claude Code prompts below) |
 | `answer` | the operator, `POST /api/tickets/:id/answer` |
-| `exit` | the agent's terminal closed without a `move_ticket` or `report_test`, or its launch failed |
+| `exit` | the agent's terminal closed without a `move_ticket` or `report_test`, or its launch failed, or Windows failed to start its CLI more than `START_RETRY.max` times in a row (Processes that never started below) |
 | `silent` | the silence watch, when a live agent's transcript has gained no line for `idle_minutes` (Silent agents below) |
 | `woke` | the silence watch, when a flagged silent agent's transcript grows again, or a Claude Code prompt it raised is gone and the transcript grows |
 | `merged` | the merge queue |
 | `conflict` | the board, when the base will not merge into the ticket's worktree (on submit or in the merge queue) or the worktree has uncommitted changes |
 | `dirty` | the merge queue, once the main checkout has had uncommitted changes for the whole wait (10 min) |
+| `unmerged` | the merge queue, when its git did not run on the first try nor on `START_RETRY.max` more (Processes that never started below) |
 | `unpushed` | the merge queue, when the branch landed in the base but `git push` of the base to its upstream failed |
 | `merge` | the operator retrying a failed merge, `POST /api/tickets/:id/merge` |
 | `resume` | the operator, Resume in the card menu or the Inbox, `POST /api/tickets/:id/resume` |
@@ -59,6 +60,7 @@ The tester's verdict is the move: `report_test` writes the PASS or FAIL note, th
 | done | conflict | `retry` < 3 | in_progress | `retry` + 1 | failure note as above, execute agent again in the kept worktree. It merges the base in, resolves, and submits; the tester runs and the merge is queued again |
 | done | conflict | `retry` = 3 | done | `needs_human` on | the same failure note, chord. Worktree kept |
 | done | dirty | | done | `needs_human` on | failure note naming the uncommitted files, chord |
+| done | unmerged | | done | `needs_human` on | failure note with the last git error, chord. Worktree kept, `merged_at` unset |
 | done | unpushed | | done | `needs_human` on | failure note with git's message, chord. The merge stays in the base; worktree kept, `merged_at` unset |
 | done | merge | not merged yet | done | | merge queued again |
 | done | reject | no live agent session | in_progress | `needs_human` off, `retry` 0, `merged_at` kept | the operator's reason as an `operator` failure note, execute agent (see Reject below) |
@@ -80,6 +82,10 @@ Restart is for an agent that is live but stuck: idle, hung, or its CLI died with
 
 Reset to Backlog is not a lifecycle event: it is `PATCH /api/tickets/:id` with `status: backlog`, from any UI path (drag, card menu, Ticket window, Inbox) or a REST client. When the ticket was not already in Backlog, the handler ends the ticket's live sessions before the update the way a delete does (`endSessions` in `daemon/src/api.ts`: outcome `reset` first, then revoke the grant, then kill the pty), so the exit flags nothing. The UI closes every terminal window of a ticket it refreshes in Backlog.
 
+### Moves by hand
+
+A drag into any other column is the same PATCH with that `status`, and is not a lifecycle event either: the operator overrides the table. A PATCH that changes the status ends the ticket's live sessions (outcome `moved`), clears `needs_human` unless the body sets it, and starts no agent. Into Done when the ticket has no `merged_at`: if its branch exists, the merge queue takes it as after a pass (the `merge` row); with no branch there is nothing to land, so `merged_at` is set and the ticket is closed. A ticket moved by hand into In Progress or Testing has no agent; Launch starts the one for that column.
+
 ### Reject
 
 Reject is how the operator sends a Done ticket they do not accept back to a worker, with a reason, instead of Reset to Backlog, which loses both the reason and the work. The reason is required (the REST route refuses a missing or blank one with `400`, the dialog will not submit it) and is written as a `failure` note with role `operator`, so the worker sees it under "What failed on the last attempt" as `- [operator] …`. `retry` goes back to 0: a rejection starts a new cycle, it is not a failed test. No chord, nothing in the Inbox: the ticket is simply running again.
@@ -97,11 +103,12 @@ Every row that turns `needs_human` on writes exactly one note in the same transa
 |---|---|---|
 | fail at the cap | `stopped after 4 failed tests` | read the tester's notes, fix the ticket if it asks for the wrong thing, Reset to Backlog and Launch |
 | ask | the question | (the Answer box) |
-| exit | `agent exited without reporting` / `launch failed: …` / `ended by the operator from the terminal window` | Resume (the agent starts again in the same worktree), or Reset to Backlog to start over |
+| exit | `agent exited without reporting` / `launch failed: …` / `ended by the operator from the terminal window` / `agent could not start: Windows failed to start its process N times (0xC0000142)` | Resume (the agent starts again in the same worktree), or Reset to Backlog to start over |
 | silent | `agent silent for N min: its transcript has had no new line since <time>. Last lines of its terminal:` and up to 10 lines | open its terminal; fix what it waits on there, or Restart if it is hung. The flag clears by itself if the agent writes again |
 | conflict at the cap, on submit | `merge conflict with <base>: …` / `worktree has uncommitted changes; …` | in the ticket's worktree (its full path) commit or discard, merge the base, fix, test, commit, Resume |
 | conflict at the cap, in the queue | `merge conflict with <base>: …` | in the ticket's worktree (its full path) merge the base, fix, test, commit, Retry merge |
 | dirty | the `git status` lines | commit or stash in the main checkout, Retry merge |
+| unmerged | `merge did not run: git failed to run N times:` and the error | check that git runs in the main checkout, then Retry merge |
 | unpushed | `merged into <base>, but git push to <remote> failed, so the ticket is not closed:` and git's message | in the main checkout pull and merge what the remote has, or reconnect or sign in to the remote, then Retry merge (it pushes again) |
 
 ### Retries
@@ -114,7 +121,14 @@ The ticket's `model` and `effort` override the execute phase only, so a retry ru
 
 ### Ending a session
 
-Both CLIs run interactive sessions that never exit by themselves. When an agent's `move_ticket` or the tester's `report_test` is accepted, the board revokes its grant and kills its terminal; that exit is expected (`runs.outcome` = the event: `submit`, `pass`, `fail`). The operator's X on a terminal (`DELETE /api/sessions/:id`) sets `runs.outcome` = `closed`, revokes the grant and kills the pty, then applies `exit` itself with the failure note "ended by the operator from the terminal window" (role `operator`), so the ticket is flagged with the usual "To resolve:" line and offers Resume; the exit handler sees `closed` and writes no second note. A brainstorm has no ticket, so ending one only stops it. A reset to Backlog ends the ticket's sessions with `runs.outcome` = `reset` and flags nothing (Resume, Restart and Reset). Any other exit, including the operator revoking a grant and the daemon shutting down, is the `exit` event (`runs.outcome` = `exit`), so a ticket can never sit in a running column with no agent and no flag.
+Both CLIs run interactive sessions that never exit by themselves. When an agent's `move_ticket` or the tester's `report_test` is accepted, the board revokes its grant and kills its terminal; that exit is expected (`runs.outcome` = the event: `submit`, `pass`, `fail`). The operator's X on a terminal (`DELETE /api/sessions/:id`) sets `runs.outcome` = `closed`, revokes the grant and kills the pty, then applies `exit` itself with the failure note "ended by the operator from the terminal window" (role `operator`), so the ticket is flagged with the usual "To resolve:" line and offers Resume; the exit handler sees `closed` and writes no second note. A brainstorm has no ticket, so ending one only stops it. A reset to Backlog ends the ticket's sessions with `runs.outcome` = `reset` and flags nothing (Resume, Restart and Reset). Any other exit, including the operator revoking a grant and the daemon shutting down, is the `exit` event (`runs.outcome` = `exit`), so a ticket can never sit in a running column with no agent and no flag. The one exception is an agent that never started (`runs.outcome` = `unstarted`, next section).
+
+### Processes that never started
+
+On a loaded Windows machine (hundreds of processes) Windows sometimes refuses to start a process: it exits at once with `0xC0000142` (STATUS_DLL_INIT_FAILED) before running a line of its own. The agent's terminal then shows nothing but ConPTY's opening escape codes, and a git the daemon runs exits with no output. Nothing is wrong with the ticket, so the board starts the same thing again (`START_RETRY` in `daemon/src/lifecycle.ts`: every 2 s, up to 3 more times) before anyone is asked:
+
+- **An agent** whose terminal exits with that code, before any `move_ticket` (`notStarted` in `daemon/src/git.ts`), gets `runs.outcome` = `unstarted` and no note. Two seconds later, if the ticket is still in its phase's column, unflagged and with no agent, the running-ticket `launch` row starts its phase again. A Claude Code launch that was resuming a killed conversation resumes it again: `unstarted` runs are skipped when looking for the conversation to resume. After the fourth failed start in a row the `exit` row flags it with "agent could not start: …".
+- **A merge job** whose git did not run (`gitNotRun`: that exit code, a spawn error, or a failure with no output at all, which git never gives for a verdict such as a conflict) is queued again rather than reported as a conflict. After four tries the `unmerged` row flags the ticket, its worktree kept, and Retry merge queues it again.
 
 ### Silent agents
 
@@ -146,9 +160,20 @@ There is no Pause yet; when it exists, a paused board flags these tickets (`exit
 - **Stop** turns the flag off. Running agents finish their current phase and their merges land, but nothing new starts, not even by the board's own triggers (Stop holds every automatic launch, below). `PUT /api/runner {"on": false}` also clears `blocked_on_deps` on every Backlog ticket (Cancel wait, below, for all of them), so nothing staged starts later by itself, and its reply adds `cleared`, the number of holds cleared; the status bar says "Runner stopped, n holds cleared." The runner turning itself off clears nothing. The operator's own Launch on a card works either way. A ticket that hits the retry cap and flags never stops the runner.
 - **A restart** keeps the flag (`<repo>/.kanban95/runner.json`, git-ignored); `recover` resumes the running tickets and the runner carries on from there.
 - **Housekeeping** tickets created after every `housekeeping.every` merges are candidates like any other and sort by their effort.
+- **A stale board** (a merge changed the daemon's own code) launches no candidate until it has restarted: Restart after a merge, below.
 - **Memory hold**: before each launch it makes (a candidate or a held conflict retry; workers and testers alike), `tick` compares free memory (`os.freemem()`, which on Windows is available physical memory, free plus standby, as Task Manager's Available) with a floor: the larger of 2 GiB and 10 percent of total RAM, hardcoded for now (a Settings → Board field would replace it). Under the floor nothing more starts this tick and a 30 s timer ticks again; `GET /api/runner` adds `lowMemory: {free, floor}` and the status bar says "waiting for memory (N GB free)". Running tickets are not touched and the runner stays on. The operator's own Launch is not held.
 
 Tickets held with `blocked_on_deps` by a manual Launch keep their own path: the board launches them when their last dependency merges, while the runner is on. Dependency cycles cannot exist: `create_ticket`, `update_ticket` and `PATCH /api/tickets/:id` refuse a dependency list that would make a ticket depend on itself through any chain.
+
+### Restart after a merge
+
+A merge that changes `daemon/`, `templates/`, `shell/`, `package.json` or `package-lock.json` is not live until the daemon restarts (`board.stale`, `docs/ARCHITECTURE.md` → Stale daemon). Agents launched before the restart would run on the old code and the old templates, so a stale board finishes what it has and then restarts itself (`restartWhenIdle` in `daemon/src/lifecycle.ts`).
+
+- **Hold**: while `stale` is set, `tick` launches no candidate and `apply` holds a released dependent in Backlog (`blocked_on_deps` stays on). Tickets already running carry on to the end: worker, tester, conflict retries and the merge. The operator's own Launch is not held.
+- **To finish**: the running tickets (as the runner counts them, so a done ticket waiting to merge counts), except a conflict retry held while the runner is off, plus any ticket with a live agent (a flagged one asking a question, say). Brainstorm and operator terminals are not waited for: the restart closes them.
+- **Self-restart** (`stale: 'daemon'`, the daemon run by the shell): once nothing is left to finish, checked after every `apply` and every agent exit, the board restarts through `restartBoard`, the same path as Start → Restart board (build, then exit 75). It runs once; `recover` and `tick` on the next start carry on. `runner.json` is untouched, so a runner that was on launches the backlog again and one that was off stays off. A failed build keeps the hold, logs `[restart] ...` with the compiler output, and waits for the operator's Restart board (which shows the output) or the next merge, which tries again.
+- **`stale: 'shell'`** holds the same way but never restarts by itself: the shell needs a full relaunch (close Kanban95 and start it again). A daemon started by hand, without the shell, does not restart itself either; the operator uses Restart board.
+- **`GET /api/runner`** adds `hold: {finish, restart}` while stale: `finish` is the count above, `restart` is `self`, `manual` (no shell), `failed` (the build failed) or `relaunch` (shell). The Board status bar shows it in place of the runner line: "restart pending, N tickets to finish", plus what the operator has to do when the board cannot restart by itself.
 
 ### Stop holds every automatic launch
 
@@ -191,6 +216,8 @@ When the queue's sync brings in new commits the ticket lands anyway, without ano
 4. runs `git merge --no-ff --no-edit -m "<ticket title>" ticket/<id>` in the main working tree, into whatever branch it has checked out. The commit is authored by the repo's own git identity (the operator), with the title as its only line: no ticket id, no trailer. After the sync this cannot conflict; on any failure anyway it runs `git merge --abort` (a safety net), so the base is left exactly as it was, and raises `conflict`. A queue job never ends with the main checkout mid-merge;
 5. pushes the base to its upstream (Push, below). A failed push raises `unpushed` and the job ends there;
 6. on success raises `merged`, whose effects remove the worktree and branch before the next job starts.
+
+A git in any step that did not run at all (Processes that never started, above) is no conflict: the job is queued again 2 s later, and the ticket is flagged `unmerged` only after the fourth try.
 
 A job whose branch is already in the base (`git merge-base --is-ancestor ticket/<id> HEAD`) skips steps 3 and 4 and only pushes. That is Retry merge after a failed push, and also a daemon that stopped between the merge and the push: `recover` queues the unflagged, unmerged done ticket again and it is pushed then.
 
@@ -236,7 +263,7 @@ A repo's prompts come from its own `.kanban95/templates/`, copied from `template
 
 ## Sounds
 
-`done.wav` when a tester's pass moves a ticket to Done, `ding.wav` when a ticket is merged, `chord.wav` whenever `needs_human` is raised by the table (question, silent exit, silent agent, retry cap, conflict at the cap, dirty base, failed push). The daemon sends `{"sound": "done" | "ding" | "chord", "ticket": <id>}` on the `/events` websocket; the UI plays `ui/sounds/<sound>.wav` unless that sound is off in Settings → Board → Sounds, and says the reason in the status bar ("#<id> passed, in Done.", "#<id> merged.", or the needs-human reason). Every transition also sends `{"ticket": <id>}`, so the board redraws that card without a reload (`docs/ARCHITECTURE.md` → Events).
+`done.wav` when a tester's pass moves a ticket to Done, `ding.wav` when a ticket is merged, `chord.wav` whenever `needs_human` is raised by the table (question, silent exit, silent agent, retry cap, conflict at the cap, dirty base, merge git never ran, failed push). The daemon sends `{"sound": "done" | "ding" | "chord", "ticket": <id>}` on the `/events` websocket; the UI plays `ui/sounds/<sound>.wav` unless that sound is off in Settings → Board → Sounds, and says the reason in the status bar ("#<id> passed, in Done.", "#<id> merged.", or the needs-human reason). Every transition also sends `{"ticket": <id>}`, so the board redraws that card without a reload (`docs/ARCHITECTURE.md` → Events).
 
 ## Janitor
 

@@ -10,17 +10,15 @@ import { until } from './cdp.ts';
 import { repo, srv, db, page, base, git, ticket, statusOf, column, statusBar, click, setUi, menuItems, menuPick } from './ui.ts';
 
 describe('ui-board', { timeout: 60_000 }, () => {
-  it('snaps an illegal drop back and names the allowed targets; a legal drop moves the card without a reload', async () => {
+  it('a drop on any column moves the card there without a reload', async () => {
     const id = ticket('Drag me');
     await page.goto(base);
     await until(() => column(id), 'the card');
     await page.evaluate('window.__noReload = true');
 
     await page.drag(await page.center(`.card[data-id="${id}"]`), await page.center('[data-status="testing"] .cards'));
-    await until(async () => (await statusBar()).includes('cannot be dragged'), 'the status-bar message');
-    expect(await statusBar()).toBe(`#${id} cannot be dragged from Backlog to Testing. Allowed: In Progress.`);
-    expect(await column(id)).toBe('backlog');
-    expect(statusOf(id)).toBe('backlog');
+    await until(async () => (await column(id)) === 'testing', 'the card in Testing');
+    expect(statusOf(id)).toBe('testing');
 
     await page.drag(await page.center(`.card[data-id="${id}"]`), await page.center('[data-status="in_progress"] .cards'));
     await until(async () => (await column(id)) === 'in_progress', 'the card in In Progress');

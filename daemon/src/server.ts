@@ -244,7 +244,11 @@ export function start(config: Config = {}): Promise<{
           await killAll(); // run rows and exit flags are written before the db closes
           await idle(); // and every queued merge has finished
           for (const c of wss.clients) c.terminate();
-          await new Promise<void>((r) => server.close(() => r()));
+          const closed = new Promise<void>((r) => server.close(() => r()));
+          // A keep-alive or preconnected socket the browser still holds would keep close() waiting for the server's own timeouts
+          // (30 s and more, seen with the UI tests in parallel).
+          server.closeAllConnections();
+          await closed;
           db.close();
           unregister();
           brain.close();
@@ -280,8 +284,9 @@ if (import.meta.main) {
     setTimeout(() => process.exit(code), 15_000).unref();
     close().finally(() => process.exit(code));
   };
-  // The parent (Tauri shell) holds our stdin. When it dies the pipe closes and we leave with it.
-  process.stdin.on('end', () => process.exit(0));
+  // The parent (Tauri shell) holds our stdin. When it dies the pipe closes and we leave with it, agents' process trees first:
+  // on Windows the shell's job object would end them too, on macOS nothing would.
+  process.stdin.on('end', () => board.shutdown!(0));
   process.on('exit', () => rmSync(entryPath(process.pid), { force: true })); // the running entry, also without close()
   process.stdin.resume();
 }

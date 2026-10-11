@@ -7,6 +7,25 @@ import { boardHome, normal } from './settings.js';
 
 export const git = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: 'pipe' }).trim();
 
+/**
+ * Windows' STATUS_DLL_INIT_FAILED (0xC0000142) as an exit code: the process never ran its first line. On a loaded machine
+ * (2026-10-11, Windows 11, ~500-700 processes) git children of the daemon, vitest workers and an agent's cmd.exe or CLI in its
+ * pty each failed to start this way now and then; starting the same thing again a moment later worked.
+ */
+export const notStarted = (code: unknown) => typeof code === 'number' && code >>> 0 === 0xc0000142;
+
+/**
+ * A failed git (execFile or execFileSync error) that never ran: it could not be spawned, did not start, or died before a word.
+ * Git explains every failure it reaches, a conflict included, so an exit with no output at all is no verdict on the repo (under
+ * the same load a merge-queue git once exited 1 with empty stdout and stderr): run it again.
+ */
+export function gitNotRun(e: unknown): boolean {
+  const x = e as { status?: unknown; code?: unknown; stdout?: unknown; stderr?: unknown; syscall?: unknown; cmd?: unknown; output?: unknown };
+  if (String(x.syscall ?? '').startsWith('spawn')) return true;
+  if (x.cmd === undefined && x.output === undefined) return false; // not a child process's exit
+  return notStarted(x.status ?? x.code) || !`${x.stdout ?? ''}${x.stderr ?? ''}`.trim();
+}
+
 /** FNV-1a, 32 bit, as hex: stable across Node releases, like the shell's per-repo WebView2 profile name. */
 const fnv1a = (s: string) => {
   let h = 0x811c9dc5;
@@ -101,6 +120,15 @@ function checkedOut(repo: string, branch: string): string | undefined {
   return entry?.[0].replace(/^worktree /, '');
 }
 
+export function hasBranch(repo: string, ticketId: number): boolean {
+  try {
+    git(repo, 'rev-parse', '--verify', '-q', `refs/heads/${branchName(ticketId)}`);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function isAncestor(repo: string, a: string, b: string): boolean {
   try {
     git(repo, 'merge-base', '--is-ancestor', a, b);
@@ -127,6 +155,7 @@ export function syncWorktree(repo: string, ticketId: number): { ok: true } | { o
     return { ok: true };
   } catch (e) {
     try { git(path, 'merge', '--abort'); } catch { /* nothing to abort when the merge never started */ }
+    if (gitNotRun(e)) throw e; // no conflict: the merge queue runs the job again
     const { stdout, stderr } = e as { stdout?: string; stderr?: string };
     return { ok: false, reason: `merge conflict with ${base}: ${`${stdout ?? ''}${stderr ?? ''}`.trim() || (e as Error).message}` };
   }

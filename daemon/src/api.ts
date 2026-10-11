@@ -1,5 +1,4 @@
 // UI-facing REST under /api. Operator-only (no grant); every mutation writes an audit row.
-import { exec } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { dirname, extname, join, resolve } from 'node:path';
@@ -7,10 +6,10 @@ import type { DatabaseSync } from 'node:sqlite';
 import { focusProject, NotListed, openProject, runningMap } from './boards.js';
 import { attachmentDir, attachments, MAX_ATTACHMENT, safeName, saveAttachment } from './attachments.js';
 import { BRAIN_BODY_MAX, BRAIN_RANK, isConstraintError, SCOPES, type Brains, type Scope } from './db.js';
-import { ticketDiff } from './git.js';
+import { hasBranch, ticketDiff } from './git.js';
 import { audit, revoke } from './grants.js';
-import { killGrantSession, sessions, sessionsOf, type Session } from './launcher.js';
-import { apply, brainstorm, changed, housekeeping, operator, pushBase, Refused, runner, runnerState, setRunner, type Board } from './lifecycle.js';
+import { killGrantSession, killSession, sessions, sessionsOf, type Session } from './launcher.js';
+import { apply, brainstorm, changed, housekeeping, operator, pushBase, Refused, restartBoard, runner, runnerState, setRunner, type Board } from './lifecycle.js';
 import { BadConfig, CONFIGS, configPath, knownModels, preferencesPath, project, projectsPath, readPreferences, readProjects, uncatalogued, writeConfig, writePreferences, writeProjects, type ConfigName } from './settings.js';
 import { isStale, resetTemplate, templatePath, TEMPLATES, unknownVar, VARS, writeTemplate, type TemplateName } from './templates.js';
 import { trustStatus, untrustClaude } from './trust.js';
@@ -113,12 +112,16 @@ export function setDeps(db: DatabaseSync, id: number, deps: number[]) {
   if (cycle) throw new HttpError(400, `dependency cycle: ticket ${id} would end up depending on itself`);
 }
 
-/** Ends every live session of a ticket. The outcome is set before the kill, so exited() records it and flags nothing. */
+/**
+ * Ends every live session of a ticket. The outcome is set before the kill, so exited() records it and flags nothing. A session
+ * that already has one is already dying and keeps it.
+ */
 function endSessions(db: DatabaseSync, id: number, outcome: string) {
   for (const s of sessionsOf(id)) {
+    if (s.outcome) continue;
     s.outcome = outcome;
     revoke(db, s.grantId);
-    s.pty.kill();
+    killSession(s);
   }
 }
 
@@ -233,7 +236,6 @@ function ftsQuery(q: string): string {
 }
 
 const NOTEPAD_MAX = 256 * 1024;
-const BUILD_TIMEOUT = 120_000;
 const notepadPath = (board: Board) => join(board.repo, '.kanban95', 'notepad.md');
 const UI_MAX = 64 * 1024;
 const uiPath = (board: Board) => join(board.repo, '.kanban95', 'ui.json');
@@ -260,7 +262,7 @@ const routes: [method: string, path: RegExp, mutation: string | null, handler: (
     return { status: 201, body: readTicket(db, id) };
   }],
   ['GET', /^\/api\/tickets\/(\d+)$/, null, ({ db, params }) => ({ status: 200, body: readTicket(db, Number(params[0])) })],
-  ['PATCH', /^\/api\/tickets\/(\d+)$/, 'tickets.update', ({ db, params, body }) => {
+  ['PATCH', /^\/api\/tickets\/(\d+)$/, 'tickets.update', ({ board, db, params, body }) => {
     const id = Number(params[0]);
     readTicket(db, id);
     const { cols, vals, deps } = ticketColumns(body);
@@ -269,12 +271,21 @@ const routes: [method: string, path: RegExp, mutation: string | null, handler: (
       const bad = uncatalogued(body.model, typeof body.cli === 'string' ? body.cli : readTicket(db, id).cli);
       if (bad) throw new HttpError(400, bad);
     }
-    // A reset to Backlog stops the ticket's agents, whoever sent it; the UI closes their terminals when it sees the ticket in backlog.
-    if (body.status === 'backlog' && readTicket(db, id).status !== 'backlog') endSessions(db, id, 'reset');
+    // A move by hand (docs/LIFECYCLE.md → Moves by hand) stops the ticket's agents, whoever sent it, and clears its flag unless the
+    // body sets one. The UI closes the terminals of a ticket it sees in backlog.
+    const was = readTicket(db, id);
+    const moved = typeof body.status === 'string' && body.status !== was.status;
+    if (moved) endSessions(db, id, body.status === 'backlog' ? 'reset' : 'moved');
     transaction(db, () => {
+      if (moved) db.prepare('UPDATE tickets SET needs_human = 0 WHERE id = ?').run(id);
       if (cols.length) db.prepare(`UPDATE tickets SET ${cols.map((c) => `${c} = ?`).join(', ')} WHERE id = ?`).run(...(vals as never[]), id);
       if (deps) setDeps(db, id, deps);
     });
+    // Into Done unmerged: a branch goes to the merge queue, as a pass would; no branch means nothing to land, so it is closed.
+    if (moved && body.status === 'done' && !was.merged_at) {
+      if (hasBranch(board.repo, id)) apply(board, id, 'merge');
+      else db.prepare("UPDATE tickets SET merged_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?").run(id);
+    }
     return { status: 200, body: readTicket(db, id) };
   }],
   ['DELETE', /^\/api\/tickets\/(\d+)$/, 'tickets.delete', ({ board, params }) => {
@@ -415,7 +426,7 @@ const routes: [method: string, path: RegExp, mutation: string | null, handler: (
     if (!s) throw new HttpError(404, 'no such session');
     s.outcome = 'closed';
     revoke(db, s.grantId);
-    s.pty.kill();
+    killSession(s);
     if (s.ticketId !== null) {
       try {
         apply(board, s.ticketId, 'exit', { note: { role: 'operator', kind: 'failure', body: 'ended by the operator from the terminal window' } });
@@ -436,22 +447,12 @@ const routes: [method: string, path: RegExp, mutation: string | null, handler: (
     if (typeof body.mission !== 'string' || !body.mission.trim()) throw new HttpError(400, 'mission must be a non-empty string');
     return { status: 201, body: sessionView(operator(board, body.mission)) };
   }],
-  // Rebuild (from a repo checkout; an installed app/ has no daemon/src and nothing to build), then close and exit 75. The
-  // shell restarts the daemon on 75 and the window follows it to the new port (docs/ARCHITECTURE.md -> Restart board).
+  // Start → Restart board: rebuild, then close and exit 75 (restartBoard in lifecycle.ts, which the board's own restart after a
+  // merge uses too). 409 with the compiler output when the build fails.
   ['POST', /^\/api\/restart$/, 'board.restart', async ({ board }) => {
     if (board.closing || !board.shutdown) throw new HttpError(409, board.closing ? 'the board is already shutting down' : 'restart needs the daemon running as its own process');
-    const root = board.root ?? resolve(import.meta.dirname, '../..');
-    if (existsSync(join(root, 'daemon', 'src'))) {
-      const failed = await new Promise<string | null>((ok) => {
-        // Through a shell, since npm is npm.cmd on Windows. The command is fixed; nothing from the request reaches it.
-        exec('npm run build', { cwd: root, timeout: BUILD_TIMEOUT, windowsHide: true }, (e, out, err) =>
-          ok(e ? `${out}${err}`.trim() || e.message : null));
-      });
-      if (failed !== null) throw new HttpError(409, failed);
-    }
-    if (board.closing) throw new HttpError(409, 'the board is already shutting down');
-    const shutdown = board.shutdown;
-    setTimeout(() => shutdown(75), 50); // after the reply is on its way
+    const failed = await restartBoard(board);
+    if (failed !== null) throw new HttpError(409, failed);
     return { status: 202, body: { restarting: true, shell: board.shell === true } };
   }],
   // <repo>/.kanban95/notepad.md, the operator's scratch notes, whole file in `value` both ways ('' when absent).

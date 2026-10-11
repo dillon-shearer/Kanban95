@@ -178,7 +178,7 @@ describe('move_ticket', () => {
   });
 
   it('goes through the lifecycle: a move the state machine does not have is denied, an allowed one moves the ticket', async () => {
-    // Ticket 3 is in backlog: only Launch moves it out. Lifecycle details are in lifecycle.test.ts.
+    // Ticket 3 is in backlog: only Launch moves it out. Lifecycle details are in the lifecycle-*.test.ts files.
     expect(await call(worker3, 'move_ticket', { status: 'testing' })).toMatchObject({ denied: true, text: 'cannot submit a ticket in backlog' });
     expect(lastAudit()).toMatchObject({ grant_id: grantIds.worker3, ticket_id: 3, tool: 'move_ticket', outcome: 'denied' });
     srv.db.prepare("UPDATE tickets SET status = 'in_progress' WHERE id = 3").run();
@@ -236,7 +236,7 @@ describe('tools', () => {
   });
 
   it('report_test(false) writes the failure note and moves the ticket back to in_progress, retry + 1; a following move_ticket there is accepted', async () => {
-    // Ticket 3 is in testing from the move_ticket tests. The pass path, with its merge, is in lifecycle.test.ts.
+    // Ticket 3 is in testing from the move_ticket tests. The pass path, with its merge, is in lifecycle-flow.test.ts.
     const fail = (await call(tester3, 'report_test', { passed: false, summary: 'criterion 2 fails', evidence: ['npm test: 1 failed'] })).json;
     expect(srv.db.prepare('SELECT role, kind, body FROM notes WHERE id = ?').get(fail.note_id)).toEqual({
       role: 'tester', kind: 'failure', body: 'FAIL: criterion 2 fails\n- npm test: 1 failed',
