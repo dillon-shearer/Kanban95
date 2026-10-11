@@ -255,9 +255,9 @@ const toggleRunner = () => act(async () => {
   drawBoard();
   if (cleared !== undefined) say(`Runner stopped, ${cleared} ${cleared === 1 ? 'hold' : 'holds'} cleared.`);
 });
-/** While on: what it waits on against the limit, what is left, and who waits on shared files. Off by itself: why. Off by Stop: nothing. */
+/** While on: what it waits on against the limit, what is left, who waits on shared files, and a memory hold. Off by itself: why. Off by Stop: nothing. */
 const runnerLine = (r) => r.on
-  ? `Running: ${r.running.map((id) => `#${id}`).join(', ') || 'nothing yet'} (${r.running.length} of ${r.concurrency}; ${r.left} of ${r.backlog} candidates left)${r.waits.map((w) => `; #${w.id} waits: shares files with #${w.on}`).join('')}`
+  ? `Running: ${r.running.map((id) => `#${id}`).join(', ') || 'nothing yet'} (${r.running.length} of ${r.concurrency}; ${r.left} of ${r.backlog} candidates left)${r.waits.map((w) => `; #${w.id} waits: shares files with #${w.on}`).join('')}${r.lowMemory ? `; waiting for memory (${(r.lowMemory.free / 1024 ** 3).toFixed(1)} GB free)` : ''}`
   : r.why ? `Runner stopped: ${r.why}` : '';
 // Replaces a running ticket's agent, live or hung, with a fresh one in the same phase and worktree (docs/LIFECYCLE.md).
 const restartable = (t) => t?.status === 'in_progress' || t?.status === 'testing';
