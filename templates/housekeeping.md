@@ -28,7 +28,7 @@ Retry count: {{retry}}.
 - Ephemeral docs per `CLAUDE.md` → Document lifecycle: handoffs, plans, proposals. Living docs are never deleted, only corrected.
 - Modules nothing imports, and exports nothing uses.
 - Templates in `.kanban95/templates/` that nothing renders.
-- Leftover artefacts: orphan directories under `.worktrees/`, temp dirs, screenshots not kept as run evidence.
+- Leftover artefacts: orphan directories under this repo's worktrees root `{{worktrees}}` (outside the repo; report them, the janitor or the operator removes them), temp dirs, screenshots not kept as run evidence.
 - The brain: rows that are stale, duplicate another row, repeat what the docs or code already say, or carry ticket status ("pending", "until #N merges").
 - Stray files: `.md`, `.txt`, `.log`, `.png` and other untracked leftovers at the repo root or under `docs/` that no living doc or README references. Delete them.
 

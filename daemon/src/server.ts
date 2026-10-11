@@ -244,7 +244,11 @@ export function start(config: Config = {}): Promise<{
           await killAll(); // run rows and exit flags are written before the db closes
           await idle(); // and every queued merge has finished
           for (const c of wss.clients) c.terminate();
-          await new Promise<void>((r) => server.close(() => r()));
+          const closed = new Promise<void>((r) => server.close(() => r()));
+          // A keep-alive or preconnected socket the browser still holds would keep close() waiting for the server's own timeouts
+          // (30 s and more, seen with the UI tests in parallel).
+          server.closeAllConnections();
+          await closed;
           db.close();
           unregister();
           brain.close();

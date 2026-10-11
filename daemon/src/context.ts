@@ -3,6 +3,7 @@ import { execFileSync } from 'node:child_process';
 import type { DatabaseSync } from 'node:sqlite';
 import { brainSearch, readTicket } from './api.js';
 import { attachments } from './attachments.js';
+import { worktreesRoot } from './git.js';
 import type { Role } from './grants.js';
 import { TOOLS } from './mcp.js';
 import { readPreferences } from './settings.js';
@@ -93,7 +94,8 @@ export function buildContext(db: DatabaseSync, repo: string, ticketId: number | 
     .map(([name, t]) => `- ${name} (${t.access[role]})`)
     .join('\n');
   const preferences = orNone(readPreferences());
-  if (ticketId === null) return { ticket: '(none)', criteria: '(none)', brain: '(none)', notes: '(none)', retry: '0', diff: '', tools, base: '(none)', preferences, mission: '(none)' };
+  const worktrees = worktreesRoot(repo);
+  if (ticketId === null) return { ticket: '(none)', criteria: '(none)', brain: '(none)', notes: '(none)', retry: '0', diff: '', tools, base: '(none)', preferences, mission: '(none)', worktrees };
 
   const t = readTicket(db, ticketId);
   let diff = '';
@@ -112,6 +114,7 @@ export function buildContext(db: DatabaseSync, repo: string, ticketId: number | 
     tools,
     preferences,
     mission: '(none)',
+    worktrees,
   };
 }
 

@@ -5,7 +5,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { readTicket, transaction, type Ticket } from './api.js';
-import { branchName, git, isAncestor, syncWorktree } from './git.js';
+import { branchName, git, isAncestor, syncWorktree, worktreePath } from './git.js';
 import { revoke, type Role } from './grants.js';
 import { cleanTicket } from './janitor.js';
 import { launch, launchRoot, prepareWorktree, sessions, sessionsOf, transcriptSize, type Session } from './launcher.js';
@@ -105,9 +105,9 @@ export const TABLE: Row[] = [
   // A submit whose base will not merge in (lifecycle submit) and a merge-queue conflict share the way back to the worker.
   { from: ['in_progress', 'done'], event: 'conflict', when: (f) => f.retry < MAX_RETRY, to: 'in_progress', set: { retry: '+1' }, effects: ['end_session', 'note', 'spawn_execute'] },
   { from: ['in_progress'], event: 'conflict', when: (f) => f.retry >= MAX_RETRY, set: { needs_human: 1 }, effects: ['end_session', 'note', 'chord'],
-    resolve: (id) => `in .worktrees/t-${id} commit or discard any uncommitted changes, run git merge with the base branch, fix the conflicting files keeping both sides' intent, run the tests, commit, then Resume; the worker submits again.` },
+    resolve: (id, repo) => `in ${worktreePath(repo, id)} commit or discard any uncommitted changes, run git merge with the base branch, fix the conflicting files keeping both sides' intent, run the tests, commit, then Resume; the worker submits again.` },
   { from: ['done'], event: 'conflict', when: (f) => f.retry >= MAX_RETRY, set: { needs_human: 1 }, effects: ['note', 'chord'],
-    resolve: (id) => `in .worktrees/t-${id} run git merge with the base branch, fix the conflicting files keeping both sides' intent, run the tests, commit, then Retry merge.` },
+    resolve: (id, repo) => `in ${worktreePath(repo, id)} run git merge with the base branch, fix the conflicting files keeping both sides' intent, run the tests, commit, then Retry merge.` },
   { from: ['done'], event: 'dirty', set: { needs_human: 1 }, effects: ['note', 'chord'],
     resolve: (_, repo) => `commit or stash those changes in the main checkout (${repo}), then Retry merge. While the board runs, work in a worktree, never in the main checkout.` },
   // The merge stays in the base; Retry merge finds the branch already in it and only pushes again.

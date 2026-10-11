@@ -8,10 +8,10 @@ const profiles = () => readdirSync(tmpdir()).filter((f) => f.startsWith('k95-bro
 test('a browser that quits before its DevTools port fails at once and its profile is removed', async () => {
   // Node stands in for a broken browser: it rejects --headless=new and exits. cdp.ts reads KANBAN95_BROWSER on import.
   process.env.KANBAN95_BROWSER = process.execPath;
-  const { browser } = await import('./cdp.ts');
+  const { launch } = await import('./cdp.ts');
   const before = profiles();
   const t0 = Date.now();
-  await expect(browser()).rejects.toThrow(/quit before opening its DevTools port/);
+  await expect(launch()).rejects.toThrow(/quit before opening its DevTools port/);
   expect(Date.now() - t0).toBeLessThan(15_000);
   expect(profiles()).toEqual(before);
 });

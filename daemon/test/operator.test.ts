@@ -8,6 +8,7 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { buildContext } from '../src/context.ts';
 import { MIGRATIONS_DIR, migrate } from '../src/db.ts';
+import { worktreesRoot } from '../src/git.ts';
 import { mint, verify } from '../src/grants.ts';
 import { buildArgv, sessions, type ArgvIn, type Session } from '../src/launcher.ts';
 import { start } from '../src/server.ts';
@@ -124,7 +125,7 @@ describe('operator over MCP', () => {
 });
 
 describe('operator argv', () => {
-  const base = { repo: 'C:\\r', promptPath: 'C:/r/.kanban95/sessions/-3/prompt.md', mcpConfigPath: 'C:/r/.kanban95/sessions/-3/mcp.json', settingsPath: 'C:/r/.kanban95/sessions/-3/settings.json', mcpUrl: 'http://127.0.0.1:5/mcp', cwd: 'C:/r', model: 'm', effort: 'high' };
+  const base = { repo: 'C:\\r', promptPath: 'C:/r/.kanban95/sessions/-3/prompt.md', mcpConfigPath: 'C:/r/.kanban95/sessions/-3/mcp.json', settingsPath: 'C:/r/.kanban95/sessions/-3/settings.json', mcpUrl: 'http://127.0.0.1:5/mcp', wtRoot: 'C:/k95/worktrees/r-0011aabb', cwd: 'C:/r', model: 'm', effort: 'high' };
   it.each(['claude', 'codex'])("%s: the worker's permissions, not the planner deny list", (cli) => {
     const argv = buildArgv({ ...base, cli, role: 'operator' } as ArgvIn);
     // The operator watches its terminal, so it keeps its own Claude settings and skills, which an unattended worker drops.
@@ -145,6 +146,15 @@ describe('operator template', () => {
     const { mission: _, ...without } = ctx;
     expect(() => fill(loadTemplate(repo, 'operator'), without as Ctx)).toThrow('no value for {{mission}}');
     expect(VARS).toContain('mission');
+  });
+
+  it('points the operator and housekeeping agents at the real worktrees root, outside the repo', () => {
+    const root = worktreesRoot(repo);
+    expect(root.startsWith(join(process.env.KANBAN95_HOME!, 'worktrees'))).toBe(true);
+    const ctx = buildContext(srv.db, repo, null, 'operator');
+    expect(ctx.worktrees).toBe(root);
+    expect(render(repo, 'operator', { ...ctx, mission: 'go' })).toContain(`git worktree add ${root}/op-<time> -b op-<time>`);
+    expect(render(repo, 'housekeeping', ctx)).toContain(`orphan directories under this repo's worktrees root \`${root}\``);
   });
 
   it('an unknown variable still fails', () => {
