@@ -14,8 +14,9 @@ describe('silent agents', { timeout: 60_000 }, () => {
   const settingsFile = () => join(process.env.USERPROFILE!, '.kanban95', 'settings.json');
   beforeAll(() => Object.assign(SILENCE, { every: 50, minute: 400 }));
   afterAll(() => Object.assign(SILENCE, silence0));
-  // The fake's node can take over a second to start (the suite run from an agent's terminal, under load), longer than the
-  // limit, so the limit drops to 1 only once it has printed; until then the default 20 (8 s here) holds.
+  // The fake's node can take seconds to start (1.5 s measured with the suite run from an agent's terminal on a loaded machine),
+  // longer than the limit, so the limit drops to 1 only once it has printed; until then 60 (24 s, past the wait for it) holds.
+  beforeEach(() => writeFileSync(settingsFile(), JSON.stringify({ idle_minutes: 60 })));
   const up = async (id: number) => {
     await until(() => sessionsOf(id)[0]?.scrollback().includes('FAKE'), 'the fake agent to start', 20_000);
     writeFileSync(settingsFile(), JSON.stringify({ idle_minutes: 1 }));
