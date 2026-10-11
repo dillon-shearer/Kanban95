@@ -142,6 +142,8 @@ describe('ui-settings', { timeout: 60_000 }, () => {
 
     await page.evaluate(`document.querySelector('#sound-done').click()`);
     await until(() => existsSync(file) && JSON.parse(readFileSync(file, 'utf8')).sounds?.done === false, 'the saved sounds.done');
+    // The file is written before the page has the PUT's answer; until then the page still has sounds.done on.
+    await until(async () => (await statusBar()) === 'Saved.', 'the page to have the saved settings');
     expect(JSON.parse(readFileSync(file, 'utf8')).sounds).toEqual({ merge: true, attention: true, done: false });
     events.emit('event', { sound: 'done', ticket: 8 });
     await until(async () => (await statusBar()) === '#8 passed, in Done.', 'the second status-bar message');
