@@ -346,26 +346,34 @@ function spawnSession(d: Daemon, o: RunSettings & { sessionId?: string; resume?:
   }
 }
 
+/** Tree kills still running (Windows): killAll waits for these too, so nothing an agent started outlives the daemon's close. */
+const killing = new Set<Promise<void>>();
+
 /**
  * Ends a process and everything it started; every session the board ends, and a worktree_setup that overruns, comes here.
  * `pty.kill()` alone is not enough: on Windows it ends the cmd.exe that spawnPty wraps around the CLI and the processes still
  * attached to its console, and a grandchild with no console (headless Edge, a detached vitest worker or MCP server) keeps
- * running. Windows: `taskkill /T /F` on the pid walks the tree by parent pid, so it runs while the root is still alive.
- * POSIX: node-pty starts the child with setsid (forkpty on Linux, POSIX_SPAWN_SETSID on macOS), so its pid is a process
- * group, killed whole. Then `kill()` itself, so node-pty still reports the exit (it ignores a process already gone).
- * Not on Windows once the root is dead: node-pty reports that exit by itself, and its `kill()` lists the console of the root's
- * pid in a helper it forks after releasing the process, then kills every process on that console. By then the pid may belong
- * to another process, and on that one's console are its siblings: twice in three full test runs it killed vitest (node-pty
- * 1.1.0, 2026-10-11).
+ * running. Windows: `taskkill /T /F` on the pid walks the tree by parent pid, so it starts while the root is still alive; it
+ * runs asynchronously so a slow taskkill under load does not stall the daemon. POSIX: node-pty starts the child with setsid
+ * (forkpty on Linux, POSIX_SPAWN_SETSID on macOS), so its pid is a process group, killed whole. Then `kill()` itself, so
+ * node-pty still reports the exit (it ignores a process already gone). Not on Windows once the root is dead: node-pty reports
+ * that exit by itself, and its `kill()` lists the console of the root's pid in a helper it forks after releasing the process,
+ * then kills every process on that console. By then the pid may belong to another process, and on that one's console are its
+ * siblings: twice in three full test runs it killed vitest (node-pty 1.1.0, 2026-10-11).
  */
 export function killTree(p: { pid?: number; kill(): unknown }) {
-  if (p.pid) {
-    try {
-      if (process.platform === 'win32') execFileSync('taskkill', ['/T', '/F', '/PID', String(p.pid)], { stdio: 'ignore', windowsHide: true, timeout: 10_000 });
-      else process.kill(-p.pid, 'SIGKILL');
-    } catch { /* already gone, or not a group leader: kill() below still ends the root */ }
+  if (!p.pid) return void p.kill();
+  if (process.platform === 'win32') {
+    const done = new Promise<void>((ok) => execFile('taskkill', ['/T', '/F', '/PID', String(p.pid)], { windowsHide: true, timeout: 10_000 }, () => ok()))
+      .then(() => void (alive(p.pid!) && p.kill()))
+      .finally(() => killing.delete(done));
+    killing.add(done);
+    return;
   }
-  if (process.platform !== 'win32' || !p.pid || alive(p.pid)) p.kill();
+  try {
+    process.kill(-p.pid, 'SIGKILL');
+  } catch { /* already gone, or not a group leader: kill() below still ends the root */ }
+  p.kill();
 }
 
 /**
@@ -415,5 +423,5 @@ export function killGrantSession(grantId: number) {
 export async function killAll() {
   const live = [...sessions.values()];
   for (const s of live) killSession(s);
-  await Promise.all(live.map((s) => s.done));
+  await Promise.all([...live.map((s) => s.done), ...killing]); // a pty reports its exit before taskkill is done with the rest of its tree
 }

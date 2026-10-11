@@ -81,7 +81,7 @@ body.k95-vector { --k95-font: Tahoma, sans-serif; }
 .k95-board { overflow: hidden !important; }
 .k95-toolbar { display: flex; gap: 4px; flex-wrap: wrap; flex: none; align-items: center; }
 .k95-filter-field { flex: none; padding: 0 2px; }
-.k95-filter { width: 140px; height: 16px; }
+.k95-filter { width: 220px; height: 16px; }
 .k95-columns { flex: 1; min-height: 0; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px; }
 .col { min-width: 0; min-height: 0; margin: 0; padding: 4px; display: flex; flex-direction: column; }
 .col > legend { cursor: pointer; }
@@ -106,8 +106,9 @@ body.k95-vector { --k95-font: Tahoma, sans-serif; }
 .badge.run { background: navy; color: #fff; }
 .badge.tag { background: #c0e0ff; }
 .status-bar { flex: none; }
+/* Equal shares, so a long runner line cannot squeeze the Board's last-action field to an ellipsis. */
+.k95-status, .k95-runner { flex: 1 1 0; min-width: 0; }
 .status-bar-field { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-.k95-count { flex: 0 0 140px; }
 
 /* Tabs, tables, text */
 menu[role=tablist] { flex: none; margin-bottom: -2px !important; }
