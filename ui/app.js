@@ -30,10 +30,11 @@ const tickets = new Map();
 let sessions = [];
 let inbox = [];
 let runner = { on: false, concurrency: 3, running: [], left: 0, backlog: 0, waits: [], unpushed: 0 }; // GET /api/runner: the Run button and its status-bar line
-let models = null; // ~/.kanban95/models.json as written, for the cards' default model and effort
+let models = null; // models.json this board runs on (this repo's copy, else the global file), for the cards' default model and effort
 // Sounds stay off until /config/settings loads: listen() starts first, and a ding in that gap ignored the operator's choice.
 // `terminals` is absent until then too, so no session is opened or passed over before the operator's phases are known.
-let settings = { paths: {}, sounds: { merge: false, attention: false, done: false }, voice: { backend: 'local', mode: 'push' }, housekeeping: { auto: true, every: 10 }, idle_minutes: 20, zoom: 1, push_after_merge: true };
+const SETTINGS = { paths: {}, sounds: { merge: false, attention: false, done: false }, voice: { backend: 'local', mode: 'push' }, housekeeping: { auto: true, every: 10 }, idle_minutes: 20, zoom: 1, push_after_merge: true };
+let settings = { ...SETTINGS };
 let limits = null; // GET /api/limits: { rows, errors, fetched_at }, null until the first answer
 const views = new Map(); // open window id → redraw(ticketId | null)
 
@@ -886,9 +887,23 @@ function openInbox() {
 
 // ---- settings ----
 
-async function saveSettings(patch) {
-  settings = (await api('PUT', '/config/settings', { ...settings, ...patch })).value;
+// GET returns the file as written: a sound it does not name (no file, or one from before that sound) takes the schema's default, on,
+// and an old single boolean applies to every sound.
+const settingsFrom = (v) => {
+  const sounds = v?.sounds;
+  return { ...SETTINGS, ...v,
+    sounds: typeof sounds === 'boolean' ? { merge: sounds, attention: sounds, done: sounds } : { merge: true, attention: true, done: true, ...sounds }, voice: { ...SETTINGS.voice, ...v?.voice }, housekeeping: { ...SETTINGS.housekeeping, ...v?.housekeeping },
+    terminals: { auto: ['plan', 'execute', 'test'], tile: true, ...v?.terminals } };
+};
+let settingsOwn = false;
+async function loadSettings() {
+  const r = await api('GET', '/config/settings?scope=project');
+  settings = settingsFrom(r.value);
+  settingsOwn = r.overridden;
   configure(settings.voice);
+}
+async function loadModels() {
+  models = (await api('GET', '/config/models?scope=project')).value;
 }
 
 // UI zoom, 80% to 200% in 10% steps. The body's CSS zoom scales the terminals' text as well (xterm measures its cells after
@@ -907,7 +922,7 @@ function zoomTo(f) {
   applyZoom(f);
   const pick = document.getElementById('zoom'); // Settings → Board, when open
   if (pick) pick.value = f;
-  zoomSaved = zoomSaved.then(() => act(() => api('PUT', '/config/settings', settings), `Zoom ${Math.round(f * 100)}%.`));
+  zoomSaved = zoomSaved.then(() => act(() => api('PUT', `/config/settings?scope=${settingsOwn ? 'project' : 'global'}`, settings), `Zoom ${Math.round(f * 100)}%.`));
 }
 // From the nearest step, so a hand-edited 1.25 still moves by one.
 const zoomStep = (d) => {
@@ -1004,61 +1019,115 @@ async function switchProject(path, name, live) {
 }
 
 let settingsTabs = null;
+let settingsScope = 'global';
+const FILES = { models: 'models.json', settings: 'settings.json', preferences: 'preferences.md' };
+const RELOAD = {
+  models: async () => { await loadModels(); drawBoard(); },
+  settings: async () => { await loadSettings(); applyZoom(settings.zoom); setTiling(settings.terminals.tile); },
+  preferences: async () => {},
+};
+async function putSettings(scope, patch) {
+  const cur = settingsFrom((await api('GET', `/config/settings?scope=${scope}`)).value);
+  const value = settingsFrom((await api('PUT', `/config/settings?scope=${scope}`, { ...cur, ...patch })).value);
+  await loadSettings();
+  return value;
+}
+async function scoped(name, draw, redraw) {
+  const r = await api('GET', `/config/${name}?scope=${settingsScope}`);
+  const greyed = settingsScope === 'project' && !r.overridden;
+  const body = h('fieldset', { class: 'k95-scoped', 'data-file': name, disabled: greyed }, draw(r.value, settingsScope, r.path));
+  if (settingsScope === 'global') return [body];
+  const file = FILES[name];
+  const done = async () => { await RELOAD[name](); redraw(); };
+  const bar = greyed
+    ? h('div', { class: 'field-row k95-scope-bar', 'data-file': name }, h('span', {}, 'Uses the global settings'),
+      h('button', { onclick: () => act(async () => { await api('POST', `/config/${name}/override`); await done(); }, `This project has its own ${file}.`) }, 'Customize for this project'))
+    : h('div', { class: 'field-row k95-scope-bar', 'data-file': name }, h('span', {}, `This project's own ${file}`),
+      h('button', { onclick: async () => {
+        if ((await dialog('Use the global settings', `Delete this project's ${file} and use the global one again?`, ['Use global', 'Cancel'])) !== 'Use global') return;
+        act(async () => { await api('DELETE', `/config/${name}/override`); await done(); }, `This project uses the global ${file} again.`);
+      } }, 'Use the global settings again'));
+  return [bar, body];
+}
 /** `tab`: the tab to show, also when the window is already open. */
 function openSettings(tab) {
   const w = open('settings', { title: 'Settings', w: 640, h: 440, persist: true, icon: 'settings', onClose: () => views.delete('settings') });
   if (w.body.firstChild) return tab && settingsTabs.show(tab);
+  let folder = '';
+  const titled = () => w.title(settingsScope === 'project' && folder ? `Settings: ${folder}` : 'Settings');
+  const here = h('label', { for: 'scope-project' }, 'This project');
+  api('GET', '/project').then((p) => { folder = p.name; here.textContent = `This project (${folder})`; titled(); }, (e) => say(e.message));
+  const pick = (v, id, label) => [h('input', { type: 'radio', id, name: 'settings-scope', checked: settingsScope === v,
+    onchange: () => { settingsScope = v; titled(); tb.show(); } }), label];
+  const scopeRow = h('div', { class: 'field-row k95-scope' }, ...pick('global', 'scope-global', h('label', { for: 'scope-global' }, 'All projects')), ...pick('project', 'scope-project', here));
   const tb = settingsTabs = tabs(['Agents', 'Prompts', 'Board', 'Projects', 'Grants'], async (tab, p, first) => {
     if (tab === 'Grants') {
       const grants = (await api('GET', '/grants')).filter(liveGrant);
       return p.replaceChildren(h('p', {}, 'Every live agent grant. Revoke invalidates its token and stops its terminal.'), grants.length ? grantTable(grants) : h('p', {}, 'No live grants.'));
     }
     if (!first) return; // the other tabs are forms; events leave them alone
+    const redraw = () => tb.show();
     if (tab === 'Agents') {
-      const [{ path, value }, known, trust] = await Promise.all([api('GET', '/config/models'), api('GET', '/models'), api('GET', '/trust')]);
-      const m = value ?? { cli: 'claude' };
-      const cli = h('select', {}, CLIS.map((c) => h('option', { selected: m.cli === c }, c)));
-      const cells = {};
-      const rows = PHASES.map((ph) => h('tr', {}, h('th', {}, ph), CLIS.flatMap((c) => {
-        const model = h('input', { type: 'text', 'data-mic': 'off', size: 16, value: m[c]?.[ph]?.model ?? '' });
-        const effort = h('select', {}, EFFORTS.map((e) => h('option', { selected: (m[c]?.[ph]?.effort ?? 'medium') === e }, e)));
-        cells[`${c}.${ph}`] = { model, effort };
-        // Free text, or ▾ for what the installed CLI offers now (plus the ids already saved for it).
-        const pick = h('button', { class: 'k95-pick', title: `Models ${c} offers`, onclick: () => {
-          const ids = [...new Set([...known[c], ...PHASES.map((q) => m[c]?.[q]?.model).filter(Boolean)])];
-          const r = pick.getBoundingClientRect();
-          menu(r.left, r.bottom, ids.length ? ids.map((id) => ({ label: id, run: () => { model.value = id; } }))
-            : [{ label: `${c} lists no models: type the id`, disabled: true }]);
-        } }, '▾');
-        return [h('td', {}, model, pick), h('td', {}, effort)];
-      })));
-      const saveModels = () => act(async () => {
-        const out = { cli: cli.value };
-        for (const c of CLIS) if (m[c]?.models) (out[c] ??= {}).models = m[c].models; // hand-edited; kept as is
-        for (const c of CLIS) for (const ph of PHASES) {
-          const { model, effort } = cells[`${c}.${ph}`];
-          if (model.value.trim()) (out[c] ??= {})[ph] = { model: model.value.trim(), effort: effort.value };
-        }
-        models = (await api('PUT', '/config/models', out)).value;
-        drawBoard();
-      }, `Saved ${path}.`);
-      const paths = Object.fromEntries(CLIS.map((c) => [c, h('input', { type: 'text', 'data-mic': 'off', size: 44, value: settings.paths[c] ?? '', placeholder: `${c} (found on PATH)` })]));
+      const [known, trust] = await Promise.all([api('GET', '/models'), api('GET', '/trust')]);
+      const modelsPart = scoped('models', (value, scope, path) => {
+        const m = value ?? { cli: 'claude' };
+        const cli = h('select', {}, CLIS.map((c) => h('option', { selected: m.cli === c }, c)));
+        const cells = {};
+        const rows = PHASES.map((ph) => h('tr', {}, h('th', {}, ph), CLIS.flatMap((c) => {
+          const model = h('input', { type: 'text', 'data-mic': 'off', size: 16, value: m[c]?.[ph]?.model ?? '' });
+          const effort = h('select', {}, EFFORTS.map((e) => h('option', { selected: (m[c]?.[ph]?.effort ?? 'medium') === e }, e)));
+          cells[`${c}.${ph}`] = { model, effort };
+          // Free text, or ▾ for what the installed CLI offers now (plus the ids already saved for it).
+          const pick = h('button', { class: 'k95-pick', title: `Models ${c} offers`, onclick: () => {
+            const ids = [...new Set([...known[c], ...PHASES.map((q) => m[c]?.[q]?.model).filter(Boolean)])];
+            const r = pick.getBoundingClientRect();
+            menu(r.left, r.bottom, ids.length ? ids.map((id) => ({ label: id, run: () => { model.value = id; } }))
+              : [{ label: `${c} lists no models: type the id`, disabled: true }]);
+          } }, '▾');
+          return [h('td', {}, model, pick), h('td', {}, effort)];
+        })));
+        const saveModels = () => act(async () => {
+          const out = { cli: cli.value };
+          for (const c of CLIS) if (m[c]?.models) (out[c] ??= {}).models = m[c].models; // hand-edited; kept as is
+          for (const c of CLIS) for (const ph of PHASES) {
+            const { model, effort } = cells[`${c}.${ph}`];
+            if (model.value.trim()) (out[c] ??= {})[ph] = { model: model.value.trim(), effort: effort.value };
+          }
+          await api('PUT', `/config/models?scope=${scope}`, out);
+          await RELOAD.models();
+        }, `Saved ${path}.`);
+        return h('fieldset', {}, h('legend', {}, 'Models'),
+          h('p', {}, `Which CLI runs agents, and the model and effort per phase (plan is the brainstorm; operator is the operator terminal, the CLI's default model when blank). A ticket's own model and effort override execute. ${path}`),
+          h('div', { class: 'field-row' }, h('label', {}, 'Default CLI'), cli),
+          h('table', { class: 'k95-models' }, h('thead', {}, h('tr', {}, h('th', {}), CLIS.flatMap((c) => [h('th', {}, `${c} model`), h('th', {}, 'effort')]))), h('tbody', {}, rows)),
+          h('button', { onclick: saveModels }, 'Save'));
+      }, redraw);
+      const settingsPart = scoped('settings', (value, scope) => {
+        const s = settingsFrom(value);
+        const put = (patch, ok = 'Saved.') => act(async () => Object.assign(s, await putSettings(scope, patch)), ok);
+        const paths = Object.fromEntries(CLIS.map((c) => [c, h('input', { type: 'text', 'data-mic': 'off', size: 44, value: s.paths[c] ?? '', placeholder: `${c} (found on PATH)` })]));
+        const idle = h('input', { type: 'number', id: 'idle-minutes', min: 1, step: 1, value: s.idle_minutes });
+        const hkAuto = h('input', { type: 'checkbox', id: 'hk-auto', checked: s.housekeeping.auto });
+        const hkEvery = h('input', { type: 'number', id: 'hk-every', min: 1, step: 1, value: s.housekeeping.every });
+        return [
+          h('fieldset', {}, h('legend', {}, 'Executables'), CLIS.map((c) => h('div', { class: 'field-row' }, h('label', { class: 'k95-label' }, c), paths[c])),
+            h('button', { onclick: () => put({ paths: Object.fromEntries(CLIS.map((c) => [c, paths[c].value.trim()])) }, 'CLI paths saved.') }, 'Save')),
+          h('fieldset', {}, h('legend', {}, 'Silent agents'),
+            h('div', { class: 'field-row' }, h('label', { for: 'idle-minutes' }, 'Flag an agent whose transcript is quiet for (minutes)'), idle),
+            h('p', {}, 'Keep it above the 10 min tool timeout, so a long test run is not flagged.'),
+            h('button', { onclick: () => put({ idle_minutes: Number(idle.value) }) }, 'Save')),
+          h('fieldset', {}, h('legend', {}, 'Housekeeping'),
+            h('div', { class: 'field-row' }, hkAuto, h('label', { for: 'hk-auto' }, 'File a housekeeping ticket after merges')),
+            h('div', { class: 'field-row' }, h('label', { for: 'hk-every' }, 'Merged tickets between runs'), hkEvery),
+            h('button', { onclick: () => put({ housekeeping: { auto: hkAuto.checked, every: Number(hkEvery.value) } }) }, 'Save'))];
+      }, redraw);
       const at = h('input', { type: 'number', id: 'concurrency', min: 1, max: 10, step: 1, value: runner.concurrency });
       const saveRunner = () => act(async () => {
         runner = await api('PUT', '/runner', { concurrency: Number(at.value) });
         drawBoard();
       }, 'Saved.');
-      const idle = h('input', { type: 'number', id: 'idle-minutes', min: 1, step: 1, value: settings.idle_minutes });
-      const hkAuto = h('input', { type: 'checkbox', id: 'hk-auto', checked: settings.housekeeping.auto });
-      const hkEvery = h('input', { type: 'number', id: 'hk-every', min: 1, step: 1, value: settings.housekeeping.every });
       p.replaceChildren(
-        h('fieldset', {}, h('legend', {}, 'Models'),
-          h('p', {}, `Which CLI runs agents, and the model and effort per phase (plan is the brainstorm; operator is the operator terminal, the CLI's default model when blank). A ticket's own model and effort override execute. ${path}`),
-          h('div', { class: 'field-row' }, h('label', {}, 'Default CLI'), cli),
-          h('table', { class: 'k95-models' }, h('thead', {}, h('tr', {}, h('th', {}), CLIS.flatMap((c) => [h('th', {}, `${c} model`), h('th', {}, 'effort')]))), h('tbody', {}, rows)),
-          h('button', { onclick: saveModels }, 'Save')),
-        h('fieldset', {}, h('legend', {}, 'Executables'), CLIS.map((c) => h('div', { class: 'field-row' }, h('label', { class: 'k95-label' }, c), paths[c])),
-          h('button', { onclick: () => act(() => saveSettings({ paths: Object.fromEntries(CLIS.map((c) => [c, paths[c].value.trim()])) }), 'CLI paths saved.') }, 'Save')),
+        ...await modelsPart,
         h('fieldset', {}, h('legend', {}, 'Trusted folders'),
           h('p', {}, trust.trusted
             ? `Claude Code trusts ${trust.key}${trust.byBoard ? ' (written by the board)' : ''} in ${trust.file}. Its worktrees open without the trust prompt.`
@@ -1066,20 +1135,18 @@ function openSettings(tab) {
           h('p', {}, 'Codex is told per launch that this repo is trusted; nothing is written to its config.'),
           h('button', { disabled: !trust.trusted, onclick: () => act(async () => { await api('DELETE', '/trust'); tb.show(); }, 'Claude trust entry cleared.') }, 'Clear Claude trust')),
         h('fieldset', {}, h('legend', {}, 'Runner'),
-          h('div', { class: 'field-row' }, h('label', { for: 'concurrency' }, 'Tickets running at once'), at),
+          h('div', { class: 'field-row' }, h('label', { for: 'concurrency' }, 'Tickets running at once (this project)'), at),
           h('button', { onclick: saveRunner }, 'Save')),
-        h('fieldset', {}, h('legend', {}, 'Silent agents'),
-          h('div', { class: 'field-row' }, h('label', { for: 'idle-minutes' }, 'Flag an agent whose transcript is quiet for (minutes)'), idle),
-          h('p', {}, 'Keep it above the 10 min tool timeout, so a long test run is not flagged.'),
-          h('button', { onclick: () => act(() => saveSettings({ idle_minutes: Number(idle.value) }), 'Saved.') }, 'Save')),
-        h('fieldset', {}, h('legend', {}, 'Housekeeping'),
-          h('div', { class: 'field-row' }, hkAuto, h('label', { for: 'hk-auto' }, 'File a housekeeping ticket after merges')),
-          h('div', { class: 'field-row' }, h('label', { for: 'hk-every' }, 'Merged tickets between runs'), hkEvery),
-          h('button', { onclick: () => act(() => saveSettings({ housekeeping: { auto: hkAuto.checked, every: Number(hkEvery.value) } }), 'Saved.') }, 'Save')));
+        ...await settingsPart);
     } else if (tab === 'Prompts') {
-      const [{ path, value }, tpls] = await Promise.all([api('GET', '/config/preferences'), api('GET', '/templates')]);
-      const text = h('textarea', { id: 'preferences', rows: 10, placeholder: 'e.g. No em dashes or non-ASCII characters in output.' });
-      text.value = value;
+      const [prefs, tpls] = await Promise.all([scoped('preferences', (value, scope, path) => {
+        const text = h('textarea', { id: 'preferences', rows: 10, placeholder: 'e.g. No em dashes or non-ASCII characters in output.' });
+        text.value = value;
+        return h('fieldset', {}, h('legend', {}, 'Preferences'),
+          h('p', {}, `Standing instructions every agent prompt gets under "Operator preferences". Up to 16 KB. ${path}`),
+          h('div', { class: 'field-row' }, text),
+          h('button', { onclick: () => act(() => api('PUT', `/config/preferences?scope=${scope}`, { value: text.value }), `Saved ${path}.`) }, 'Save'));
+      }, redraw), api('GET', '/templates')]);
       // One template at a time: the select picks it, Save and Reset replace its entry with what the daemon wrote.
       const byName = Object.fromEntries(tpls.templates.map((t) => [t.name, t]));
       // A stale copy differs from the shipped default (edited, or from an older default the board would not overwrite): its option and Reset say so.
@@ -1095,10 +1162,7 @@ function openSettings(tab) {
       };
       pick.onchange = () => show(byName[pick.value]);
       show(tpls.templates[0]);
-      p.replaceChildren(h('fieldset', {}, h('legend', {}, 'Preferences'),
-        h('p', {}, `Standing instructions every agent prompt gets under "Operator preferences". Up to 16 KB. ${path}`),
-        h('div', { class: 'field-row' }, text),
-        h('button', { onclick: () => act(() => api('PUT', '/config/preferences', { value: text.value }), `Saved ${path}.`) }, 'Save')),
+      p.replaceChildren(...prefs,
         h('fieldset', {}, h('legend', {}, 'Templates'),
           h('p', {}, 'The prompt each phase starts from; the next run uses what you save.'),
           h('div', { class: 'field-row' }, h('label', { for: 'template' }, 'Template'), pick),
@@ -1109,39 +1173,46 @@ function openSettings(tab) {
           h('button', { onclick: () => act(async () => show(await api('POST', `/templates/${pick.value}/reset`)), `${pick.value}.md reset to default.`) }, 'Reset to default'),
           ' ', stale));
     } else if (tab === 'Board') {
-      const s = await api('GET', '/voice');
-      const zoom = h('select', { id: 'zoom', onchange: (e) => zoomTo(Number(e.target.value)) },
-        ZOOMS.map((f) => h('option', { value: f, selected: f === settings.zoom }, `${Math.round(f * 100)}%`)));
-      const mode = (v, label) => h('div', { class: 'field-row' }, h('input', { type: 'radio', id: `mode-${v}`, name: 'mode', checked: settings.voice.mode === v,
-        onchange: () => act(() => saveSettings({ voice: { ...settings.voice, mode: v } }), 'Voice mode saved.') }), h('label', { for: `mode-${v}` }, label));
-      p.replaceChildren(
-        h('fieldset', {}, h('legend', {}, 'Zoom'),
-          h('div', { class: 'field-row' }, h('label', { for: 'zoom' }, 'Zoom (Ctrl+= / Ctrl+- / Ctrl+0)'), zoom)),
-        h('fieldset', {}, h('legend', {}, 'Sounds'),
-          ...[['merge', 'Ding when a ticket merges'], ['attention', 'Chord when the board needs you'], ['done', 'Sound when a ticket lands in Done']].map(([k, label]) =>
-            h('div', { class: 'field-row' }, h('input', { type: 'checkbox', id: `sound-${k}`, checked: settings.sounds[k],
-              onchange: (e) => act(() => saveSettings({ sounds: { ...settings.sounds, [k]: e.target.checked } }), 'Saved.') }), h('label', { for: `sound-${k}` }, label)))),
-        h('fieldset', {}, h('legend', {}, 'Open a terminal automatically for'),
-          ...['plan', 'execute', 'test'].map((ph) => h('div', { class: 'field-row' }, h('input', { type: 'checkbox', id: `term-auto-${ph}`, checked: settings.terminals.auto.includes(ph),
-            onchange: (e) => act(() => saveSettings({ terminals: { ...settings.terminals, auto: [...settings.terminals.auto.filter((x) => x !== ph), ...(e.target.checked ? [ph] : [])] } }), 'Saved.') }),
-          h('label', { for: `term-auto-${ph}` }, ph))),
-          h('p', {}, 'Brainstorms always open. A hidden session still runs: right-click its card → Terminal.')),
-        h('fieldset', {}, h('legend', {}, 'Terminal tiling'),
-          h('div', { class: 'field-row' }, h('input', { type: 'checkbox', id: 'term-tile', checked: settings.terminals.tile,
-            onchange: (e) => act(async () => { await saveSettings({ terminals: { ...settings.terminals, tile: e.target.checked } }); setTiling(settings.terminals.tile); }, 'Saved.') }),
-            h('label', { for: 'term-tile' }, 'Tile terminals into slots left of the Board'))),
-        h('fieldset', {}, h('legend', {}, 'Git'),
-          h('div', { class: 'field-row' }, h('input', { type: 'checkbox', id: 'push-after-merge', checked: settings.push_after_merge,
-            onchange: (e) => act(() => saveSettings({ push_after_merge: e.target.checked }), 'Saved.') }), h('label', { for: 'push-after-merge' }, 'Push the base branch to its upstream after each merge'))),
-        h('fieldset', {}, h('legend', {}, 'Voice'),
-          h('p', {}, `Speech model ${s.id}, ${(s.size / 1e6).toFixed(1)} MB: ${s.downloaded ? 'downloaded and verified' : 'not downloaded'}. It runs inside this window; audio is never sent anywhere.`),
-          !s.downloaded && h('button', { onclick: async () => { if (await ensureModel()) tb.show(); } }, 'Download…'),
-          mode('push', 'Mic button: push to talk (hold the button)'), mode('toggle', 'Mic button: toggle (click to start, click to stop)')));
+      const [v, part] = await Promise.all([api('GET', '/voice'), scoped('settings', (value, scope) => {
+        const s = settingsFrom(value);
+        const put = (patch, ok = 'Saved.', then) => act(async () => { Object.assign(s, await putSettings(scope, patch)); then?.(); }, ok);
+        const live = () => scope === (settingsOwn ? 'project' : 'global');
+        const zoom = h('select', { id: 'zoom', onchange: (e) => { const f = Number(e.target.value); if (live()) { s.zoom = f; zoomTo(f); } else put({ zoom: f }); } },
+          ZOOMS.map((f) => h('option', { value: f, selected: f === s.zoom }, `${Math.round(f * 100)}%`)));
+        const mode = (m, label) => h('div', { class: 'field-row' }, h('input', { type: 'radio', id: `mode-${m}`, name: 'mode', checked: s.voice.mode === m,
+          onchange: () => put({ voice: { ...s.voice, mode: m } }, 'Voice mode saved.') }), h('label', { for: `mode-${m}` }, label));
+        return [
+          h('fieldset', {}, h('legend', {}, 'Zoom'),
+            h('div', { class: 'field-row' }, h('label', { for: 'zoom' }, 'Zoom (Ctrl+= / Ctrl+- / Ctrl+0)'), zoom)),
+          h('fieldset', {}, h('legend', {}, 'Sounds'),
+            ...[['merge', 'Ding when a ticket merges'], ['attention', 'Chord when the board needs you'], ['done', 'Sound when a ticket lands in Done']].map(([k, label]) =>
+              h('div', { class: 'field-row' }, h('input', { type: 'checkbox', id: `sound-${k}`, checked: s.sounds[k],
+                onchange: (e) => put({ sounds: { ...s.sounds, [k]: e.target.checked } }) }), h('label', { for: `sound-${k}` }, label)))),
+          h('fieldset', {}, h('legend', {}, 'Open a terminal automatically for'),
+            ...['plan', 'execute', 'test'].map((ph) => h('div', { class: 'field-row' }, h('input', { type: 'checkbox', id: `term-auto-${ph}`, checked: s.terminals.auto.includes(ph),
+              onchange: (e) => put({ terminals: { ...s.terminals, auto: [...s.terminals.auto.filter((x) => x !== ph), ...(e.target.checked ? [ph] : [])] } }) }),
+            h('label', { for: `term-auto-${ph}` }, ph))),
+            h('p', {}, 'Brainstorms always open. A hidden session still runs: right-click its card → Terminal.')),
+          h('fieldset', {}, h('legend', {}, 'Terminal tiling'),
+            h('div', { class: 'field-row' }, h('input', { type: 'checkbox', id: 'term-tile', checked: s.terminals.tile,
+              onchange: (e) => put({ terminals: { ...s.terminals, tile: e.target.checked } }, 'Saved.', () => setTiling(settings.terminals.tile)) }),
+              h('label', { for: 'term-tile' }, 'Tile terminals into slots left of the Board'))),
+          h('fieldset', {}, h('legend', {}, 'Git'),
+            h('div', { class: 'field-row' }, h('input', { type: 'checkbox', id: 'push-after-merge', checked: s.push_after_merge,
+              onchange: (e) => put({ push_after_merge: e.target.checked }) }), h('label', { for: 'push-after-merge' }, 'Push the base branch to its upstream after each merge'))),
+          h('fieldset', {}, h('legend', {}, 'Voice'),
+            mode('push', 'Mic button: push to talk (hold the button)'), mode('toggle', 'Mic button: toggle (click to start, click to stop)'))];
+      }, redraw)]);
+      p.replaceChildren(...part,
+        h('fieldset', {}, h('legend', {}, 'Speech model'),
+          h('p', {}, `Speech model ${v.id}, ${(v.size / 1e6).toFixed(1)} MB: ${v.downloaded ? 'downloaded and verified' : 'not downloaded'}. It runs inside this window; audio is never sent anywhere.`),
+          !v.downloaded && h('button', { onclick: async () => { if (await ensureModel()) tb.show(); } }, 'Download…')));
     } else if (tab === 'Projects') {
       await projectsPanel(p);
     }
   }, tab);
-  w.body.append(...tb.el);
+  titled();
+  w.body.append(scopeRow, ...tb.el);
   views.set('settings', () => tb.redraw());
 }
 
@@ -1400,18 +1471,10 @@ async function boot() {
   setInterval(refreshLimits, 5 * 60_000); // the daemon's cache lives as long, so this reads fresh numbers
   listen();
   paintProject().catch((e) => say(e.message));
-  const [list, st, md] = await Promise.all([api('GET', '/tickets'), api('GET', '/config/settings'), api('GET', '/config/models').catch(() => ({ value: null })), ui.load()]);
+  const [list] = await Promise.all([api('GET', '/tickets'), loadSettings(), loadModels().catch(() => { models = null; }), ui.load()]);
   for (const s of ui.get('k95.collapsed') ?? ['done']) collapsed.add(s); // nothing saved: Done starts folded
   loadView(ui.get('k95.view'));
   for (const t of list) tickets.set(t.id, t);
-  // GET returns the file as written: a sound it does not name (no file, or one from before that sound) takes the schema's default, on,
-  // and an old single boolean applies to every sound.
-  const sounds = st.value?.sounds;
-  settings = { ...settings, ...st.value,
-    sounds: typeof sounds === 'boolean' ? { merge: sounds, attention: sounds, done: sounds } : { merge: true, attention: true, done: true, ...sounds }, voice: { ...settings.voice, ...st.value?.voice }, housekeeping: { ...settings.housekeeping, ...st.value?.housekeeping },
-    terminals: { auto: ['plan', 'execute', 'test'], tile: true, ...st.value?.terminals } };
-  models = md.value;
-  configure(settings.voice);
   applyZoom(settings.zoom);
   setTiling(settings.terminals.tile);
   micEverywhere();
