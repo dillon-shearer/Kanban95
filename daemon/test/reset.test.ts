@@ -67,7 +67,8 @@ describe('reset to backlog', { timeout: 60_000 }, () => {
     expect((await request('PATCH', `/api/tickets/${id}`, { status: 'backlog' })).status).toBe(200);
     const t0 = Date.now();
     await until(async () => !(await live()).some((x) => x.ticket_id === id), 'the session to end', 5_000);
-    expect(Date.now() - t0).toBeLessThan(1_000);
+    // killTree's taskkill /T takes ~300 ms before node-pty's own exit report (about a second on Windows).
+    expect(Date.now() - t0).toBeLessThan(2_000);
     await pty.done;
 
     expect(db.prepare('SELECT outcome FROM runs WHERE id = ?').get(s.run_id)).toEqual({ outcome: 'reset' });

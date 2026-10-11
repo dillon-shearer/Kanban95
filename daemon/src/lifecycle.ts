@@ -233,7 +233,9 @@ export function apply(b: Board, id: number, event: Event, x: { note?: Note; answ
       case 'spawn_test': spawn(b, id, 'test', resume); break;
       case 'end_session':
         // The agent reported; its session is over. The grant expires now, the pty is killed, its exit is expected.
+        // A session with an outcome is already dying (an earlier report); its outcome stays the one that ended it.
         for (const s of sessionsOf(id)) {
+          if (s.outcome) continue;
           s.outcome = event;
           revoke(b.db, s.grantId);
           killTree(s.pty);

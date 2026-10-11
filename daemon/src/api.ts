@@ -113,9 +113,13 @@ export function setDeps(db: DatabaseSync, id: number, deps: number[]) {
   if (cycle) throw new HttpError(400, `dependency cycle: ticket ${id} would end up depending on itself`);
 }
 
-/** Ends every live session of a ticket. The outcome is set before the kill, so exited() records it and flags nothing. */
+/**
+ * Ends every live session of a ticket. The outcome is set before the kill, so exited() records it and flags nothing. A session
+ * that already has one is already dying and keeps it.
+ */
 function endSessions(db: DatabaseSync, id: number, outcome: string) {
   for (const s of sessionsOf(id)) {
+    if (s.outcome) continue;
     s.outcome = outcome;
     revoke(db, s.grantId);
     killTree(s.pty);
