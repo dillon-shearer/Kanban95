@@ -172,7 +172,7 @@ beforeEach(async () => {
 afterEach(async () => {
   events.off('event', onEvent);
   // close() kills every pty. Killed before its fake printed, a pty can crash node-pty natively (0xC0000374) or never exit,
-  // and its kill waits for killSession's sweep (about 1 s).
+  // and its kill waits for killSession's sweep (1-5 s).
   await until(() => [...sessions.values()].every((s) => s.scrollback().includes('FAKE')), 'every agent to print before the kill', 20_000);
   await srv.close();
   // A killed agent's process can hold the repo for seconds after its pty exits when the full suite loads the machine: EPERM

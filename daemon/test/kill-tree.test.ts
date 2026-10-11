@@ -97,7 +97,7 @@ describe('ending a session kills its process tree', { timeout: 30_000 }, () => {
   // The race (killSession in launcher.ts): cmd.exe, slow to start under load, creates the CLI after taskkill's snapshot of the
   // tree. A kill in the first ~150 ms meets it in about one in fifty under a loaded run, rarely on an idle machine, so this test
   // fails for it only now and then. The fake writes fake.pid as it starts and never prints.
-  it('sessions killed while their CLI is starting, before any output, leave no CLI running', async () => {
+  it('sessions killed while their CLI is starting, before any output, leave no CLI running', { timeout: 60_000 }, async () => {
     const srv = await start({ repo });
     try {
       const all: Session[] = [];

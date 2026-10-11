@@ -319,12 +319,13 @@ function spawnSession(d: Daemon, o: RunSettings & { sessionId?: string; resume?:
       ...(o.cli === 'codex' ? { [TOKEN_ENV]: grant.token } : {}),
       ...(o.cli === 'claude' && unattended(r.role) ? { CLAUDE_CODE_PROMPT_CACHE_TTL: '5m' } : {}),
     });
+    const started = Date.now(); // before the spawn: reapOrphans takes it as the earliest the CLI can have been created
     const { pty, scrollback } = spawnPty(o.path || cmd, args, { cwd: r.cwd, env });
 
     let finished!: () => void;
     const s: Session = {
       key, runId: r.runId, grantId: grant.id, ticketId: r.ticketId, role: r.role, phase: r.phase, model: o.model, dir, pty, scrollback,
-      cli: o.cli, cwd: r.cwd, sessionId: o.sessionId, started: Date.now(),
+      cli: o.cli, cwd: r.cwd, sessionId: o.sessionId, started,
       done: new Promise((ok) => (finished = ok)),
     };
     sessions.set(key, s);
@@ -385,20 +386,20 @@ export function killTree(p: { pid?: number; kill(): unknown }) {
  * A kill that lands while cmd.exe is still starting the CLI can miss it: taskkill /T walks a snapshot, and the CLI created
  * after it runs on, orphaned, holding its worktree (6 of 150 kills in the first 120 ms under load, with or without taskkill;
  * node-pty 1.1.0, Windows 11, 2026-10-11). Once the CLI has printed visible text it was in that snapshot (cmd.exe /c prints
- * none of its own), so only an earlier kill pays for the sweep, about 1 s of PowerShell.
+ * none of its own), so only an earlier kill pays for the sweep, 1-5 s of PowerShell.
  */
 export function killSession(s: Session) {
-  const early = process.platform === 'win32' && lastLines(s.scrollback(), 1).length === 0;
-  const pid = s.pty.pid;
+  if (process.platform === 'win32' && lastLines(s.scrollback(), 1).length === 0) s.reaped ??= reapOrphans(s.pty, s.started);
   killTree(s.pty);
-  if (early) s.reaped ??= reapOrphans(pid, s.started);
 }
 
 /**
  * An orphan keeps its dead parent's pid as ParentProcessId, so once the root is gone it can no longer start anything, and every
  * process it started while it lived is found and its tree killed. The creation window skips children of another process that
  * held that pid; one that holds it now (a reused pid) ends the window where it was created, so its own children are left alone.
- * A root still alive after 5 s is left to node-pty. Never rejects: `done` waits for it.
+ * The sweep waits for node-pty to report the root's exit, however late. Under load each taskkill /T takes seconds and several
+ * queue up, which is when the CLI most often starts after the snapshot; an earlier 5 s cap on that wait skipped the sweep
+ * exactly then. Never rejects: `done` waits for it.
  */
 const REAP_PS = `$from = [DateTimeOffset]::FromUnixTimeMilliseconds([long]$env:K95_FROM).LocalDateTime
 $to = [DateTimeOffset]::FromUnixTimeMilliseconds([long]$env:K95_TO).LocalDateTime
@@ -406,20 +407,12 @@ $owner = Get-CimInstance Win32_Process -Filter "ProcessId=$([int]$env:K95_PID)"
 if ($owner -and $owner.CreationDate -lt $to) { $to = $owner.CreationDate }
 Get-CimInstance Win32_Process -Filter "ParentProcessId=$([int]$env:K95_PID)" | Where-Object { $_.CreationDate -ge $from -and $_.CreationDate -le $to } |
   ForEach-Object { taskkill /T /F /PID $_.ProcessId *> $null }`;
-async function reapOrphans(pid: number, since: number) {
-  for (const end = Date.now() + 5000; alive(pid); await new Promise((r) => setTimeout(r, 50))) if (Date.now() > end) return;
+async function reapOrphans(pty: IPty, since: number) {
+  const pid = pty.pid;
+  await new Promise<void>((ok) => pty.onExit(() => ok()));
   const env = { ...process.env, K95_PID: String(pid), K95_FROM: String(since), K95_TO: String(Date.now()) };
-  await new Promise((ok) => execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', REAP_PS], { env, windowsHide: true, timeout: 30_000 }, ok));
+  await new Promise((ok) => execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', REAP_PS], { env, windowsHide: true, timeout: 60_000 }, ok));
 }
-
-const alive = (pid: number) => {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-};
 
 /** Revoking a grant ends its session: the process tree is killed and its exit handler tears the rest down. */
 export function killGrantSession(grantId: number) {
