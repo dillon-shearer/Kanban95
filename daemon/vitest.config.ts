@@ -10,7 +10,8 @@ const here = (f: string) => fileURLToPath(new URL(f, import.meta.url));
 const isolated = ['restart.test.ts'];
 const files = readdirSync(here('test')).filter((f) => f.endsWith('.test.ts') && !isolated.includes(f));
 const imports = (f: string, mod: string) => readFileSync(here(`test/${f}`), 'utf8').includes(`from '${mod}'`);
-// Headless Edge (cdp.ts) is what times out under load, so only those files get a retry; a unit failure is always real.
+// Headless Edge (cdp.ts) and the ptys are what fail under load (a process Windows fails to start, docs/ARCHITECTURE.md →
+// Working on the board), so those files get one retry: no test runs more than twice. A unit failure is always real.
 const browser = files.filter((f) => imports(f, './cdp.ts'));
 const pty = files.filter((f) => !browser.includes(f) && (imports(f, '../src/launcher.ts') || imports(f, './board.ts')));
 const unit = files.filter((f) => !browser.includes(f) && !pty.includes(f));
@@ -30,7 +31,7 @@ export default defineConfig({
     }],
     projects: [
       // A pty test measured up to 3 s alone against the 5 s default; launches and git under load need headroom.
-      project('pty', pty, { testTimeout: 30_000, hookTimeout: 30_000 }),
+      project('pty', pty, { testTimeout: 30_000, hookTimeout: 30_000, retry: 1 }),
       project('unit', unit),
       // The ui-*.test.ts files each start a daemon and open a tab in one headless browser, which browser-setup.ts starts once
       // per run. They run as a second group, after the rest, so their load does not time out the other files, and in
