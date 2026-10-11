@@ -1,10 +1,11 @@
 // Removes what the board created once nothing needs it. Every deletion writes an audit row (tool `janitor.*`, no grant).
+import { execFile } from 'node:child_process';
 import { existsSync, readdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { git, removeWorktree, unlinkLinks, worktreePath, worktreesRoot } from './git.js';
 import { audit, revoke } from './grants.js';
-import { sessions } from './launcher.js';
+import { killTree, sessions } from './launcher.js';
 
 const SCROLLBACK_DAYS = 30;
 export const SWEEP_MS = 24 * 60 * 60 * 1000;
@@ -48,9 +49,10 @@ export async function cleanTicket(b: Board, id: number): Promise<void> {
  * On daemon start and once a day. Orphans only: a worktree whose ticket is gone or merged, a session dir or grant with no live
  * session, an unfinished run with no live session. A worktree of an unmerged ticket is never touched: it may hold the only copy of work.
  */
-export function sweep(b: Board): void {
+export function sweep(b: Board): Promise<void> {
   const { db, repo } = b;
   const live = [...sessions.values()];
+  const processes = sweepProcesses(b);
 
   const wtRoot = worktreesRoot(repo);
   const legacy = join(repo, '.worktrees'); // the old layout's worktrees, under the repo: removed once, then the empty directory
@@ -115,4 +117,54 @@ export function sweep(b: Board): void {
   const { changes } = db.prepare('UPDATE runs SET scrollback = NULL WHERE scrollback IS NOT NULL AND ended_at < ?').run(cutoff);
   if (changes) log(db, null, 'janitor.scrollback', { runs: Number(changes), before: cutoff });
   db.exec('VACUUM');
+  return processes;
+}
+
+const PS_LIST = 'Get-CimInstance Win32_Process | ForEach-Object { "$($_.ProcessId) $($_.ParentProcessId) $($_.CommandLine)" }';
+const listProcesses = () => new Promise<{ pid: number; ppid: number; args: string }[]>((ok, fail) => {
+  const [cmd, argv] = process.platform === 'win32'
+    ? ['powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', PS_LIST]]
+    : ['ps', ['-eo', 'pid=,ppid=,args=']];
+  execFile(cmd, argv, { windowsHide: true, timeout: 60_000, maxBuffer: 64 * 1024 * 1024 }, (e, out) => {
+    if (e) return fail(e);
+    ok(out.split(/\r?\n/).flatMap((line) => {
+      const m = /^\s*(\d+)\s+(\d+)\s?(.*)$/.exec(line);
+      return m ? [{ pid: Number(m[1]), ppid: Number(m[2]), args: m[3] }] : [];
+    }));
+  });
+});
+
+/**
+ * Agent processes that outlived their session (a daemon crash, a hard reset, a kill that raced a process still starting): a
+ * process whose command line names `<repo>/.kanban95/sessions/<key>/prompt.md` (buildArgv's brief) for a key not in `sessions`.
+ * The path, never a process name, so another board's agents and the operator's own CLI are left alone. A match whose parent also
+ * matches (the CLI under its cmd.exe) is part of that root's tree. One process listing per sweep; never rejects.
+ */
+async function sweepProcesses({ db, repo }: Board): Promise<void> {
+  const win = process.platform === 'win32';
+  const norm = (s: string) => (win ? s.replaceAll('\\', '/').toLowerCase() : s);
+  const dir = norm(join(repo, '.kanban95', 'sessions')) + '/';
+  let list;
+  try {
+    list = await listProcesses();
+  } catch (e) {
+    return log(db, null, 'janitor.process', { error: message(e) }, 'error');
+  }
+  const orphans = new Map<number, number>();
+  for (const p of list) {
+    if (p.pid === process.pid) continue;
+    const args = norm(p.args);
+    for (let i = args.indexOf(dir); i >= 0; i = args.indexOf(dir, i + 1)) {
+      const key = /^(-?\d+)\/prompt\.md/.exec(args.slice(i + dir.length))?.[1];
+      if (key !== undefined && !sessions.has(Number(key))) orphans.set(p.pid, Number(key));
+    }
+  }
+  // ponytail: a grandchild whose parent already died names no session dir, so it is not found; upgrade by also matching the
+  // ticket's worktree path (worktreesRoot in git.ts) on the command line.
+  for (const p of list) {
+    const key = orphans.get(p.pid);
+    if (key === undefined || orphans.has(p.ppid)) continue;
+    killTree({ pid: p.pid, kill: () => { try { process.kill(p.pid, 'SIGKILL'); } catch { /* already gone */ } } });
+    log(db, null, 'janitor.process', { pid: p.pid, key });
+  }
 }
