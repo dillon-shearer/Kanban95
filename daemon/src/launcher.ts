@@ -352,15 +352,22 @@ const killing = new Set<Promise<void>>();
  * `pty.kill()` alone is not enough: on Windows it ends the cmd.exe that spawnPty wraps around the CLI and the processes still
  * attached to its console, and a grandchild with no console (headless Edge, a detached vitest worker or MCP server) keeps
  * running. Windows: `taskkill /T /F` on the pid walks the tree by parent pid, so it starts while the root is still alive; it
- * runs asynchronously so a slow taskkill under load does not stall the daemon, and `kill()` follows once it is done. POSIX:
- * node-pty starts the child with setsid (forkpty on Linux, POSIX_SPAWN_SETSID on macOS), so its pid is a process group,
- * killed whole. Then `kill()` itself, so node-pty still reports the exit (it ignores a process already gone).
+ * runs asynchronously so a slow taskkill under load does not stall the daemon. POSIX: node-pty starts the child with setsid
+ * (forkpty on Linux, POSIX_SPAWN_SETSID on macOS), so its pid is a process group, killed whole. Then `kill()` itself, so
+ * node-pty still reports the exit (it ignores a process already gone). On Windows `kill()` follows only a taskkill that timed
+ * out, while the root is still alive: once the root is dead node-pty reports that exit by itself, and its `kill()` lists the
+ * console of the root's pid in a helper it forks after releasing the process, then kills every process on that console. By
+ * then the pid may belong to another process, and on that one's console are its siblings. It killed vitest, and, with the suite
+ * run from an agent's terminal, the agent itself, even behind a check that the pid was still alive: a reused pid is alive
+ * (node-pty 1.1.0, 2026-10-11).
  */
 export function killTree(p: { pid?: number; kill(): unknown }) {
   if (!p.pid) return void p.kill();
   if (process.platform === 'win32') {
-    const done = new Promise<void>((ok) => execFile('taskkill', ['/T', '/F', '/PID', String(p.pid)], { windowsHide: true, timeout: 10_000 }, () => ok()))
-      .then(() => void p.kill())
+    const done = new Promise<void>((ok) => execFile('taskkill', ['/T', '/F', '/PID', String(p.pid)], { windowsHide: true, timeout: 10_000 }, (e) => {
+      if (e?.killed) p.kill();
+      ok();
+    }))
       .finally(() => killing.delete(done));
     killing.add(done);
     return;
