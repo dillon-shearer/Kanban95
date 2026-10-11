@@ -8,7 +8,7 @@ import { readTicket, transaction, type Ticket } from './api.js';
 import { branchName, git, isAncestor, syncWorktree, worktreePath } from './git.js';
 import { revoke, type Role } from './grants.js';
 import { cleanTicket } from './janitor.js';
-import { killTree, launch, launchRoot, prepareWorktree, sessions, sessionsOf, transcriptSize, type Session } from './launcher.js';
+import { killSession, launch, launchRoot, prepareWorktree, sessions, sessionsOf, transcriptSize, type Session } from './launcher.js';
 import { ahead, enqueue, merge, push } from './merge.js';
 import { lastLines } from './pty.js';
 import { BadConfig, EFFORT, readConfig, runSettings, type Effort } from './settings.js';
@@ -238,7 +238,7 @@ export function apply(b: Board, id: number, event: Event, x: { note?: Note; answ
           if (s.outcome) continue;
           s.outcome = event;
           revoke(b.db, s.grantId);
-          killTree(s.pty);
+          killSession(s);
         }
         break;
       case 'enqueue_merge': queueMerge(b, id); break;
