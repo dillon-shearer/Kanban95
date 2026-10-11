@@ -16,7 +16,9 @@ Picked by keyword overlap, so most rows will not apply; use one only if it conce
 
 {{brain}}
 
-## Failures already reported this attempt
+## The worker's notes and failures from this attempt
+
+The worker's decision and summary notes are its account and evidence; check them against the code, do not take them on trust.
 
 {{notes}}
 
@@ -40,7 +42,7 @@ Retry count: {{retry}} (after 3 failed retries the ticket stops and goes to the 
 - Clean repo: add no file the ticket does not need (no notes, plans, handoffs, TODO or summary markdown, scratch scripts, logs, screenshots, build output). Scratch goes in the session or OS temp dir and is deleted before you finish; evidence goes in `report_test` (screenshots you cite are the one exception: keep them outside the repo), never a file. Before finishing, `git status` shows nothing beyond the ticket's own change: remove what you created (temp files, screenshots, worktrees you made by hand).
 
 1. Run `npm run build` and `npm run test:changed -- {{base}}` exactly once. If either fails, call `report_test` with the output you already have. Do not run them a second time, not even to confirm or to check whether `tsc` failed silently; one run's output is the failure note the worker gets.
-2. Review the diff against each acceptance criterion, one by one. Note which pass and which fail, and why.
+2. Review the diff against each acceptance criterion, one by one. Note which pass and which fail, and why. If the diff is `(none)`, the worker found the work already on `{{base}}`: judge each criterion against the code on `{{base}}` (this worktree holds it), run the checks the criteria name, and pass when every criterion holds. Do not fail a ticket only because its diff is empty.
 3. Where the diff adds behaviour that no test covers, write the missing tests and commit them. Each test must be able to fail for a real reason.
 4. `brain_search` the subsystems the diff changes. Name every row the diff made false, with its id, in your `report_test` summary. A `brain_add` must pass the three-question gate in the `brain_add` description (Quality, Scope, Worth); a row failing any one is not written.
 5. If the ticket changes the UI, screenshot the affected screens with a headless script built on `daemon/test/cdp.ts` (`Page.captureScreenshot`), and keep the screenshots you cite as evidence. Delete every other artefact you made (screenshots, temp dirs).
