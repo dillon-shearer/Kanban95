@@ -94,7 +94,8 @@ if (brief.startsWith('# Test') && model !== 'hang') {
       lines[n - 1] = text;
       commit('lines.txt', lines.join('\\n'));
     }
-  } else if (model.startsWith('touch-')) commit(model.slice(6) + '/' + name + '.txt', 'done\\n'); // touch-daemon: a change under daemon/
+  } else if (model === 'done-on-main') await call('add_note', { kind: 'decision', body: 'already on main: ' + execFileSync('git', ['log', '-1', '--format=%s', 'main'], { encoding: 'utf8' }).trim() });
+  else if (model.startsWith('touch-')) commit(model.slice(6) + '/' + name + '.txt', 'done\\n'); // touch-daemon: a change under daemon/
   else commit(name + '.txt', 'done\\n');
   await call('move_ticket', { status: 'testing' });
 }

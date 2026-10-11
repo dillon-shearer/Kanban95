@@ -52,14 +52,17 @@ export function brainFor(db: DatabaseSync, text: string, limit = BRAIN_LIMIT, ch
   return lines.join('\n');
 }
 
-/** Failure notes written since the latest execute run started: what went wrong in the attempt now being retried. Older cycles are left out. */
-function failureNotes(db: DatabaseSync, ticketId: number): string {
+/**
+ * Notes of `kinds` written since the latest execute run started; older cycles are left out. The worker gets the failures of the
+ * attempt now being retried; the tester also gets the worker's decisions and summary, its evidence when the diff is empty.
+ */
+function attemptNotes(db: DatabaseSync, ticketId: number, kinds: string[]): string {
   const rows = db.prepare(`
-    SELECT role, body FROM notes
-    WHERE ticket_id = ? AND kind = 'failure'
+    SELECT role, kind, body FROM notes
+    WHERE ticket_id = ? AND kind IN (${kinds.map(() => '?').join(',')})
       AND created_at >= coalesce((SELECT max(started_at) FROM runs WHERE ticket_id = ? AND phase = 'execute'), '')
-    ORDER BY id`).all(ticketId, ticketId) as { role: string; body: string }[];
-  return rows.map((r) => bullet(`[${r.role}] `, r.body)).join('\n');
+    ORDER BY id`).all(ticketId, ...kinds, ticketId) as { role: string; kind: string; body: string }[];
+  return rows.map((r) => bullet(kinds.length > 1 ? `[${r.role} ${r.kind}] ` : `[${r.role}] `, r.body)).join('\n');
 }
 
 /** The files the operator attached, by absolute path, for the agent to open with its own file reader. Empty when none. */
@@ -107,7 +110,7 @@ export function buildContext(db: DatabaseSync, repo: string, ticketId: number | 
     ticket: [`#${t.id} ${t.title}\n\n${t.body}`.trimEnd(), attachmentList(repo, t.id)].filter(Boolean).join('\n\n'),
     criteria: orNone(t.criteria),
     brain: orNone(brainFor(db, `${t.title} ${t.body}`, opts.brainLimit, opts.brainChars, opts.global)),
-    notes: orNone(failureNotes(db, t.id)),
+    notes: orNone(attemptNotes(db, t.id, role === 'tester' ? ['decision', 'summary', 'failure'] : ['failure'])),
     retry: String(t.retry),
     diff,
     base: opts.base ?? '(none)',
