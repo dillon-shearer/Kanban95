@@ -155,6 +155,10 @@ menu[role=tablist] > li[aria-selected=true] > a { color: #000; }
 .k95-notepad { flex: 1; min-height: 0; display: flex; gap: 4px; }
 .k95-notepad textarea { flex: 1; resize: none; font-family: Consolas, monospace; font-size: 12px; }
 fieldset { margin: 0; }
+.k95-scope { flex: none; margin: 2px 4px; }
+.k95-scoped { border: 0; border-image: none; padding: 0; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.k95-scoped:disabled { color: grey; }
+.k95-scope-bar { flex: none; }
 
 /* Terminal */
 .k95-term { padding: 0 !important; margin: 2px !important; background: #000; overflow: hidden !important; }

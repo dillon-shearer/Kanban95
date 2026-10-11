@@ -94,7 +94,7 @@ describe('ui-settings', { timeout: 60_000 }, () => {
       await page.evaluate(`document.querySelector('[data-icon="Settings"]').dispatchEvent(new MouseEvent('dblclick'))`);
       await page.evaluate(`[...document.querySelectorAll('[data-win="settings"] [role=tab] a')].find((t) => t.textContent === 'Agents').click()`);
       await until(() => page.evaluate(`!!document.querySelector('#concurrency')`), 'the Agents tab');
-      expect(await page.evaluate(`document.querySelector('label[for=concurrency]').textContent`)).toBe('Tickets running at once');
+      expect(await page.evaluate(`document.querySelector('label[for=concurrency]').textContent`)).toBe('Tickets running at once (this project)');
       await page.evaluate(`(() => { const f = document.querySelector('#concurrency'); f.value = '1'; f.closest('fieldset').querySelector('button').click(); })()`);
       await until(async () => (await runnerApi()).concurrency === 1, 'the saved concurrency');
       await runnerApi({ on: true });
