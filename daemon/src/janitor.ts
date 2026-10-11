@@ -52,7 +52,7 @@ export async function cleanTicket(b: Board, id: number): Promise<void> {
 export function sweep(b: Board): Promise<void> {
   const { db, repo } = b;
   const live = [...sessions.values()];
-  const processes = sweepProcesses(b);
+  const processes = sweepProcesses(b).catch(() => {});
 
   const wtRoot = worktreesRoot(repo);
   const legacy = join(repo, '.worktrees'); // the old layout's worktrees, under the repo: removed once, then the empty directory
@@ -138,9 +138,14 @@ const listProcesses = () => new Promise<{ pid: number; ppid: number; args: strin
  * Agent processes that outlived their session (a daemon crash, a hard reset, a kill that raced a process still starting): a
  * process whose command line names `<repo>/.kanban95/sessions/<key>/prompt.md` (buildArgv's brief) for a key not in `sessions`.
  * The path, never a process name, so another board's agents and the operator's own CLI are left alone. A match whose parent also
- * matches (the CLI under its cmd.exe) is part of that root's tree. One process listing per sweep; never rejects.
+ * matches (the CLI under its cmd.exe) is part of that root's tree. One process listing per sweep. The listing can outlast the
+ * daemon (tests stop it within a second), so nothing is killed or audited once the db is closed, and a failed audit is dropped.
  */
 async function sweepProcesses({ db, repo }: Board): Promise<void> {
+  const safeLog = (args: unknown, outcome?: 'ok' | 'error') => {
+    if (!db.isOpen) return;
+    try { log(db, null, 'janitor.process', args, outcome); } catch { /* db closed under us */ }
+  };
   const win = process.platform === 'win32';
   const norm = (s: string) => (win ? s.replaceAll('\\', '/').toLowerCase() : s);
   const dir = norm(join(repo, '.kanban95', 'sessions')) + '/';
@@ -148,8 +153,9 @@ async function sweepProcesses({ db, repo }: Board): Promise<void> {
   try {
     list = await listProcesses();
   } catch (e) {
-    return log(db, null, 'janitor.process', { error: message(e) }, 'error');
+    return safeLog({ error: message(e) }, 'error');
   }
+  if (!db.isOpen) return;
   const orphans = new Map<number, number>();
   for (const p of list) {
     if (p.pid === process.pid) continue;
@@ -165,6 +171,6 @@ async function sweepProcesses({ db, repo }: Board): Promise<void> {
     const key = orphans.get(p.pid);
     if (key === undefined || orphans.has(p.ppid)) continue;
     killTree({ pid: p.pid, kill: () => { try { process.kill(p.pid, 'SIGKILL'); } catch { /* already gone */ } } });
-    log(db, null, 'janitor.process', { pid: p.pid, key });
+    safeLog({ pid: p.pid, key });
   }
 }
