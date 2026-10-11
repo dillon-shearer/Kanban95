@@ -12,4 +12,5 @@ process.env.KANBAN95_HOME = join(home, '.kanban95');
 delete process.env.CLAUDE_CONFIG_DIR;
 delete process.env.CODEX_HOME;
 if (homedir() !== home) throw new Error(`test home not in effect: os.homedir() is ${homedir()}; refusing to run against the operator's home`);
-afterAll(() => rmSync(home, { recursive: true, force: true, maxRetries: 5 }));
+// A pty file's agents ran in worktrees under this home, and Windows can hold them for seconds after the ptys exit under load.
+afterAll(() => rmSync(home, { recursive: true, force: true, maxRetries: 8, retryDelay: 400 }));
