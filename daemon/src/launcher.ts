@@ -112,6 +112,8 @@ export interface Session {
   started: number;
   /** Set by the lifecycle when it ends the session after the agent reported (a move_ticket); its exit is then expected. */
   outcome?: string;
+  /** The pty's exit code, once it has exited. */
+  exitCode?: number;
   dir: string;
   pty: IPty;
   scrollback: () => string;
@@ -245,7 +247,8 @@ export function transcriptSize(s: Pick<Session, 'cli' | 'cwd' | 'sessionId' | 's
  * ended without reporting (killed by a restart, a crash or the operator's X) and its transcript is still on disk.
  */
 function resumable(db: DatabaseSync, ticketId: number, phase: string): string | undefined {
-  const r = db.prepare('SELECT phase, cli, outcome, session_id FROM runs WHERE ticket_id = ? ORDER BY id DESC LIMIT 1').get(ticketId) as
+  // A run whose process never started (`unstarted`) is skipped: its relaunch continues what that run was resuming.
+  const r = db.prepare("SELECT phase, cli, outcome, session_id FROM runs WHERE ticket_id = ? AND outcome IS NOT 'unstarted' ORDER BY id DESC LIMIT 1").get(ticketId) as
     { phase: string; cli: string; outcome: string | null; session_id: string | null } | undefined;
   if (r?.phase !== phase || r.cli !== 'claude' || !r.session_id || !['exit', 'lost', 'closed'].includes(r.outcome ?? '')) return undefined;
   return hasTranscript(r.session_id) ? r.session_id : undefined;
@@ -329,7 +332,8 @@ function spawnSession(d: Daemon, o: RunSettings & { sessionId?: string; resume?:
       done: new Promise((ok) => (finished = ok)),
     };
     sessions.set(key, s);
-    pty.onExit(() => {
+    pty.onExit(({ exitCode }) => {
+      s.exitCode = exitCode;
       sessions.delete(key);
       try {
         teardown(scrollback());

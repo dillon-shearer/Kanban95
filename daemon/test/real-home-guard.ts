@@ -3,6 +3,7 @@
 // a board backup of ~/.claude.json, or a ~/.kanban95 that did not exist before.
 // Every temp dir of this run lives under one fresh `k95-run-*` dir (TEMP/TMP point there before the workers start), so a
 // `k95-*` trust entry another worktree's run writes at the same time is not this run's and does not fail it.
+import { execFileSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -29,9 +30,24 @@ export default function setup() {
       ...(after.bak && !before.bak ? [`${state}.kanban95.bak`] : []),
       ...(after.board && !before.board ? [join(homedir(), '.kanban95')] : []),
     ];
+    // A fake agent left running holds its worktree under a test home (test/home.ts leaves such a home here): end it, and say so.
+    const left = process.platform === 'win32' ? strays(run) : [];
+    for (const { pid } of left) try { execFileSync('taskkill', ['/T', '/F', '/PID', String(pid)], { stdio: 'ignore' }); } catch {}
+    if (left.length) console.warn(`killed processes this run left running:\n${left.map((p) => `- ${p.pid} ${p.cmd}`).join('\n')}`);
     try {
-      rmSync(run, { recursive: true, force: true, maxRetries: 5 });
+      rmSync(run, { recursive: true, force: true, maxRetries: 8, retryDelay: 400 });
     } catch {} // ponytail: a file still held open stays in %TEMP%; the OS temp cleanup takes it
     if (found.length) throw new Error(`tests wrote to the operator's real home; remove by hand:\n- ${found.join('\n- ')}`);
   };
+}
+
+// Processes whose command line names the run dir: every fake CLI is started from a `k95-bin-*` dir under it.
+function strays(run: string): { pid: number; cmd: string }[] {
+  const ps = `Get-CimInstance Win32_Process | ? { $_.CommandLine -and $_.CommandLine.Contains($env:K95_RUN) } | % { "$($_.ProcessId) $($_.CommandLine)" }`;
+  try {
+    const out = execFileSync('powershell', ['-NoProfile', '-Command', ps], { encoding: 'utf8', env: { ...process.env, K95_RUN: run }, timeout: 30_000 });
+    return out.split(/\r?\n/).filter(Boolean).map((l) => ({ pid: Number(l.split(' ')[0]), cmd: l.slice(l.indexOf(' ') + 1) }));
+  } catch {
+    return [];
+  }
 }

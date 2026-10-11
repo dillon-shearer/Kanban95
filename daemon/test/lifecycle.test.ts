@@ -38,6 +38,7 @@ describe('transition table', () => {
     ['merge conflict goes back to the worker', { status: 'done', retry: MAX_RETRY - 1 }, 'conflict', { to: 'in_progress', set: { retry: '+1' }, effects: ['end_session', 'note', 'spawn_execute'] }],
     ['merge conflict at the retry cap stops', { status: 'done', retry: MAX_RETRY }, 'conflict', { to: 'done', set: { needs_human: 1 }, effects: ['note', 'chord'] }],
     ['base still dirty after the wait', { status: 'done' }, 'dirty', { to: 'done', set: { needs_human: 1 }, effects: ['note', 'chord'] }],
+    ['merge queue git never ran on any try', { status: 'done' }, 'unmerged', { to: 'done', set: { needs_human: 1 }, effects: ['note', 'chord'] }],
     ['merged but the push failed', { status: 'done' }, 'unpushed', { to: 'done', set: { needs_human: 1 }, effects: ['note', 'chord'] }],
     ['operator rejects a merged ticket', { status: 'done', merged: true, retry: 2, live: false }, 'reject', { to: 'in_progress', set: { needs_human: 0, retry: 0 }, effects: ['note', 'spawn_execute'] }],
     ['operator rejects a flagged unmerged ticket', { status: 'done', needs_human: true, live: false }, 'reject', { to: 'in_progress', set: { needs_human: 0, retry: 0 }, effects: ['note', 'spawn_execute'] }],
@@ -51,9 +52,9 @@ describe('transition table', () => {
     backlog: ['launch'],
     in_progress: ['launch', 'resume', 'restart', 'submit', 'ask', 'answer', 'exit', 'silent', 'woke', 'conflict'],
     testing: ['launch', 'resume', 'restart', 'pass', 'fail', 'ask', 'answer', 'exit', 'silent', 'woke'],
-    done: ['merged', 'conflict', 'merge', 'dirty', 'unpushed', 'reject'],
+    done: ['merged', 'conflict', 'merge', 'dirty', 'unmerged', 'unpushed', 'reject'],
   };
-  const EVENTS: Event[] = ['launch', 'submit', 'pass', 'fail', 'ask', 'answer', 'exit', 'silent', 'woke', 'merged', 'conflict', 'merge', 'dirty', 'unpushed', 'resume', 'restart', 'reject'];
+  const EVENTS: Event[] = ['launch', 'submit', 'pass', 'fail', 'ask', 'answer', 'exit', 'silent', 'woke', 'merged', 'conflict', 'merge', 'dirty', 'unmerged', 'unpushed', 'resume', 'restart', 'reject'];
   it('refuses every other event in every status', () => {
     let n = 0;
     for (const status of Object.keys(allowed) as Status[]) {
@@ -62,7 +63,7 @@ describe('transition table', () => {
         n++;
       }
     }
-    expect(n).toBe(4 * EVENTS.length - 27);
+    expect(n).toBe(4 * EVENTS.length - 28);
   });
 
   it('refuses a guarded row whose guard fails, saying why', () => {
@@ -84,7 +85,7 @@ describe('transition table', () => {
 
   it('every row that raises needs_human writes one note, and all but a question end it with what resolves it', () => {
     const flagged = TABLE.filter((r) => r.set?.needs_human === 1);
-    expect(flagged.map((r) => r.event)).toEqual(['fail', 'ask', 'exit', 'silent', 'conflict', 'conflict', 'dirty', 'unpushed']);
+    expect(flagged.map((r) => r.event)).toEqual(['fail', 'ask', 'exit', 'silent', 'conflict', 'conflict', 'dirty', 'unmerged', 'unpushed']);
     for (const r of flagged) {
       expect(r.effects.filter((e) => e === 'note'), r.event).toHaveLength(1);
       expect(r.resolve === undefined, r.event).toBe(r.event === 'ask');
@@ -93,6 +94,7 @@ describe('transition table', () => {
     expect(fix('conflict')).toMatch(new RegExp(`^in ${esc(worktreePath('C:/repo', 7))} .*Retry merge`));
     expect(fix('conflict', 'in_progress')).toMatch(new RegExp(`^in ${esc(worktreePath('C:/repo', 7))} .*uncommitted .*git merge .*Resume`));
     expect(fix('dirty')).toMatch(/main checkout \(C:\/repo\).*Retry merge/);
+    expect(fix('unmerged')).toMatch(/git runs in the main checkout \(C:\/repo\).*Retry merge/);
     expect(fix('unpushed')).toMatch(/main checkout \(C:\/repo\).*pull .*sign in .*Retry merge/);
     expect(`To resolve: ${fix('exit', 'in_progress')}`).toBe(TO_RESOLVE);
   });
