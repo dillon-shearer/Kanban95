@@ -24,7 +24,7 @@ describe('ui-taskbar', { timeout: 60_000 }, () => {
     expect(m.tasksAfter).toBeGreaterThanOrEqual(0);
     expect(m.trayH).toBeLessThanOrEqual(m.startH);
     expect(m.trayW).toBeLessThan(300); // 98.css's .status-bar-field flex-grow stretched it across the bar
-    expect(m.font).toBe(11);
+    expect(m.font).toBeLessThan(11);
     expect(m.overflow).toBe(0);
   });
 
@@ -43,7 +43,7 @@ describe('ui-taskbar', { timeout: 60_000 }, () => {
     await wm(`${JSON.stringify(ids)}.forEach((id) => wm.open(id, { title: id }));`);
     try {
       expect(await arrowsShown()).toBe(true);
-      expect(await page.evaluate<number>(`Math.min(...[...document.querySelectorAll('#tasks .task')].map((b) => b.getBoundingClientRect().width))`)).toBe(110);
+      expect(await page.evaluate<number>(`Math.min(...[...document.querySelectorAll('#tasks .task')].map((b) => b.getBoundingClientRect().width))`)).toBe(80);
       expect(await shown('scroll-59')).toBe(true); // the newest window is focused, so its button scrolled into view
 
       await page.evaluate(`document.getElementById('tasks').scrollLeft = 0`);
@@ -165,7 +165,7 @@ describe('ui-taskbar', { timeout: 60_000 }, () => {
       const b = document.querySelector('[data-task="long"]'), s = b.querySelector('span');
       return { w: b.getBoundingClientRect().width, cut: s.scrollWidth > s.clientWidth && getComputedStyle(s).textOverflow === 'ellipsis' };
     })()`);
-    expect(m).toEqual({ w: 110, cut: true });
+    expect(m).toEqual({ w: 80, cut: true });
     await page.evaluate(`import('/wm.js').then((wm) => wm.close('long'))`);
     await until(() => sessions.size === 0, 'the agents to exit');
   });

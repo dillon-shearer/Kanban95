@@ -46,15 +46,15 @@ body.k95-vector { --k95-font: Tahoma, sans-serif; }
 #pinned button:hover { box-shadow: inset -1px -1px #0a0a0a, inset 1px 1px #fff; }
 #pinned button:active { box-shadow: inset -1px -1px #fff, inset 1px 1px #0a0a0a; }
 #tasks { flex: 1; min-width: 0; display: flex; gap: 3px; overflow-x: auto; scrollbar-width: none; }
-#tasks .task { min-width: 0; width: 110px; height: 23px; flex: none; padding: 0 4px; display: flex; align-items: center; gap: 3px; }
+#tasks .task { min-width: 0; width: 80px; height: 23px; flex: none; padding: 0 3px; display: flex; align-items: center; gap: 2px; font-size: 10px; }
 #tasks .task span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; pointer-events: none; }
 #pinned img { display: block; margin: auto; pointer-events: none; }
 #tasks .task img { flex: none; pointer-events: none; }
 #tasks .task.selected { outline: 1px dotted #000; outline-offset: -4px; background: #e8e8ff; }
 #tasks .task.active { box-shadow: inset -1px -1px #fff, inset 1px 1px #0a0a0a, inset -2px -2px #dfdfdf, inset 2px 2px grey; font-weight: bold; }
 .task-scroll { flex: none; min-width: 0; width: 16px; padding: 0; font-size: 7px; }
-#tray { flex: none; display: flex; align-items: center; gap: 8px; height: 23px; box-sizing: border-box; padding: 0 4px; margin: 0; font-size: 11px; white-space: nowrap; }
-.tray-button { min-width: 0; min-height: 0; padding: 0 4px; height: 18px; }
+#tray { flex: none; display: flex; align-items: center; gap: 4px; height: 23px; box-sizing: border-box; padding: 0 3px; margin: 0; font-size: 10px; white-space: nowrap; }
+.tray-button { min-width: 0; min-height: 0; padding: 0 3px; height: 18px; font-size: 10px; }
 .tray-button.flag { color: #a00; font-weight: bold; }
 
 /* Menus (Start, card context menu) */
