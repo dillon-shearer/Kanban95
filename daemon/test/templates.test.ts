@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { BRAIN_TRUNCATED, brainFor, buildContext, gitDiff, startRun } from '../src/context.ts';
 import { openDb } from '../src/db.ts';
 import { preferencesPath } from '../src/settings.ts';
@@ -37,7 +37,7 @@ describe('templates', () => {
     expect(render(repo, 'execute', ctx)).toBe('edited <retry>');
   });
 
-  it('records the default sha256 on copy and reset; on start an unedited copy follows a changed default, an edited or unrecorded one never does', () => {
+  it('records the default sha256 on copy and reset; on start an unedited copy follows a changed default, an edited one never does', () => {
     const sha = (t: string) => createHash('sha256').update(t).digest('hex');
     const record = () => JSON.parse(readFileSync(shippedPath(repo), 'utf8'));
     const def = (n: string) => readFileSync(join(DEFAULTS_DIR, `${n}.md`), 'utf8');
@@ -54,23 +54,25 @@ describe('templates', () => {
     expect(readFileSync(tpl('test'), 'utf8')).toBe(def('test'));
     expect(record().test).toBe(sha(def('test')));
     expect(readFileSync(tpl('execute'), 'utf8')).toBe('edited {{ticket}}');
-    expect(readFileSync(tpl('plan'), 'utf8')).toBe('pre-record {{ticket}}');
-    expect(record().plan).toBeUndefined();
-    expect(isStale('execute', readFileSync(tpl('execute'), 'utf8'))).toBe(true);
-    expect(isStale('plan', readFileSync(tpl('plan'), 'utf8'))).toBe(true);
-    expect(isStale('test', readFileSync(tpl('test'), 'utf8'))).toBe(false);
-
-    resetTemplate(repo, 'plan');
     expect(readFileSync(tpl('plan'), 'utf8')).toBe(def('plan'));
     expect(record().plan).toBe(sha(def('plan')));
+    expect(isStale('execute', readFileSync(tpl('execute'), 'utf8'))).toBe(true);
+    expect(isStale('test', readFileSync(tpl('test'), 'utf8'))).toBe(false);
+
+    resetTemplate(repo, 'execute');
+    expect(readFileSync(tpl('execute'), 'utf8')).toBe(def('execute'));
+    expect(record().execute).toBe(sha(def('execute')));
   });
 
-  it('a corrupt record protects every copy and is rewritten', () => {
+  it('a corrupt record counts as none: a differing copy is replaced, its old text kept, and the record rewritten', () => {
     writeFileSync(tpl('test'), 'mine {{ticket}}');
     writeFileSync(shippedPath(repo), '{not json');
+    vi.spyOn(console, 'error').mockImplementation(() => {});
     initTemplates(repo);
-    expect(readFileSync(tpl('test'), 'utf8')).toBe('mine {{ticket}}');
-    expect(JSON.parse(readFileSync(shippedPath(repo), 'utf8')).test).toBeUndefined();
+    vi.restoreAllMocks();
+    expect(readFileSync(tpl('test'), 'utf8')).toBe(readFileSync(join(DEFAULTS_DIR, 'test.md'), 'utf8'));
+    expect(readFileSync(join(repo, '.kanban95', 'templates', 'test.replaced.md'), 'utf8')).toBe('mine {{ticket}}');
+    expect(JSON.parse(readFileSync(shippedPath(repo), 'utf8')).test).toMatch(/^[0-9a-f]{64}$/);
   });
 
   it('refuses an unknown variable by name and template, even when ctx would supply it', () => {
