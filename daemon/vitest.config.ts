@@ -12,7 +12,7 @@ const files = readdirSync(here('test')).filter((f) => f.endsWith('.test.ts') && 
 const imports = (f: string, mod: string) => readFileSync(here(`test/${f}`), 'utf8').includes(`from '${mod}'`);
 // Headless Edge (cdp.ts) is what times out under load, so only those files get a retry; a unit failure is always real.
 const browser = files.filter((f) => imports(f, './cdp.ts'));
-const pty = files.filter((f) => !browser.includes(f) && imports(f, '../src/launcher.ts'));
+const pty = files.filter((f) => !browser.includes(f) && (imports(f, '../src/launcher.ts') || imports(f, './board.ts')));
 const unit = files.filter((f) => !browser.includes(f) && !pty.includes(f));
 const project = (name: string, list: string[], o: object = {}) => ({ extends: true, test: { name, include: list.map((f) => `test/${f}`), ...o } });
 
@@ -21,8 +21,8 @@ export default defineConfig({
   test: {
     setupFiles: [here('test/home.ts')],
     globalSetup: [here('test/real-home-guard.ts')],
-    // Four workers: lifecycle.test.ts alone is the critical path (docs/ARCHITECTURE.md → Working on the board); more workers
-    // only add ptys and browsers fighting for the CPU.
+    // Four workers: the pty files (the lifecycle-*.test.ts split, runner, launcher) fill them for the first group; more workers
+    // only add ptys and browsers fighting for the CPU (docs/ARCHITECTURE.md → Working on the board).
     maxWorkers: 4,
     // The default reporter leaves a test that passed on its retry out of its output; this line never does.
     reporters: ['default', {
