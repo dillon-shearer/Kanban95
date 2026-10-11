@@ -1,5 +1,5 @@
-// Shared setup for the ui-*.test.ts files: a throwaway repo, a fake `claude` on PATH, a daemon and a headless browser
-// logged in to it. Importing this file registers the beforeAll/afterAll for the importing test file. Exports are live
+// Shared setup for the ui-*.test.ts files: a throwaway repo, a fake `claude` on PATH, a daemon and a tab of the run's
+// headless browser (cdp.ts) logged in to it. Importing this file registers the beforeAll/afterAll for the importing test file. Exports are live
 // bindings, so `page`, `db` and the rest are set once beforeAll has run. Only what the UI handoff asks to be automated;
 // the rest of the UI is checked by the dogfood cycle, not by DOM tests.
 import './home.ts'; // also here, not only in vitest.config.ts: a run from the repo root skips that config and wrote the real home
@@ -115,7 +115,7 @@ beforeAll(async () => {
   // As the shell does: open on ?k95=<secret>, which the daemon trades for a cookie and redirects to /.
   await page.send('Page.navigate', { url: `${base}?k95=${srv.secret}` });
   await until(() => page.evaluate(`document.readyState === 'complete' && location.href === ${JSON.stringify(base)}`), 'the redirect to /');
-}, 120_000); // a cold browser start on a loaded machine
+}, 30_000); // measured 0.8 to 1.4 s with the files in parallel: a tab, not a browser start
 afterAll(async () => {
   await page?.close();
   await srv?.close();

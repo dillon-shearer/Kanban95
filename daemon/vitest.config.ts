@@ -32,10 +32,10 @@ export default defineConfig({
       // A pty test measured up to 3 s alone against the 5 s default; launches and git under load need headroom.
       project('pty', pty, { testTimeout: 30_000, hookTimeout: 30_000 }),
       project('unit', unit),
-      // The ui-*.test.ts files each start a daemon and a browser; they run as a second group, after the rest, so their load
-      // does not time out the other files, and one at a time: parallel Chromes on Windows still lock their profile dirs at
-      // afterAll (rmSync EPERM). They set their own 60 s per test (the slowest measured 13 s alone).
-      project('browser', browser, { retry: 1, sequence: { groupOrder: 1 }, fileParallelism: false }),
+      // The ui-*.test.ts files each start a daemon and open a tab in one headless browser, which browser-setup.ts starts once
+      // per run. They run as a second group, after the rest, so their load does not time out the other files, and in
+      // parallel like the rest. They set their own 60 s per test (the slowest measured 13 s alone).
+      project('browser', browser, { retry: 1, sequence: { groupOrder: 1 }, globalSetup: [here('test/browser-setup.ts')] }),
       project('restart', isolated, { sequence: { groupOrder: 2 } }),
     ],
   },
