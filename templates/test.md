@@ -33,13 +33,13 @@ Retry count: {{retry}} (after 3 failed retries the ticket stops and goes to the 
 ## How to work
 
 - If the worktree needs dependencies, install them in it (`npm install`, or the repo's equivalent). Never junction or symlink the main checkout's `node_modules`, or anything else of the main checkout's, into the worktree: removing the worktree, or any tool that deletes through the link, reaches the main checkout's files.
-- Verify with `npm test` or a script built on `daemon/test/cdp.ts`, never by starting the app (`npm run dev`, `Kanban95.cmd`, `cargo run`) or a visible browser.
-- Your step 1 run of `npm test` is the only full run of the suite for this ticket; the worker ran only `npm run test:changed`. While you iterate on tests you add in step 3, use `npm run test:changed -- {{base}}`, which runs only the tests the changes against `{{base}}` can affect.
+- Verify with `npm run build` and `npm run test:changed -- {{base}}` (or a script built on `daemon/test/cdp.ts`, never by starting the app (`npm run dev`, `Kanban95.cmd`, `cargo run`) or a visible browser.
+- `test:changed` runs only the tests the changes against `{{base}}` can affect. Never run the full `npm test`; it is the operator's, by hand. While you iterate on tests you add in step 3, run it again.
 - Put new tests in a new file named for the feature (`daemon/test/<feature>.test.ts`) unless you are extending an existing test's scenario. Several tickets run at once and appending to a shared test file is the most common merge conflict.
 - Never give `rm` a variable path that could expand empty (`rm -f "$DIR"/*`): Claude Code's "Dangerous rm operation on possibly-empty variable path" check stops for a yes/no even with permissions off (no setting turns it off) and, unattended, denies the command after two minutes. Write `rm -rf "${VAR:?}/sub"` or a literal path; for cleanup prefer your file tools or `node -e`.
 - Clean repo: add no file the ticket does not need (no notes, plans, handoffs, TODO or summary markdown, scratch scripts, logs, screenshots, build output). Scratch goes in the session or OS temp dir and is deleted before you finish; evidence goes in `report_test` (screenshots you cite are the one exception: keep them outside the repo), never a file. Before finishing, `git status` shows nothing beyond the ticket's own change: remove what you created (temp files, screenshots, worktrees you made by hand).
 
-1. Run the full test suite (`npm test`) and the build, once. A failure is a failed ticket.
+1. Run `npm run build` and `npm run test:changed -- {{base}}`, once. A failure is a failed ticket.
 2. Review the diff against each acceptance criterion, one by one. Note which pass and which fail, and why.
 3. Where the diff adds behaviour that no test covers, write the missing tests and commit them. Each test must be able to fail for a real reason.
 4. `brain_search` the subsystems the diff changes. Name every row the diff made false, with its id, in your `report_test` summary. A `brain_add` must pass the three-question gate in the `brain_add` description (Quality, Scope, Worth); a row failing any one is not written.

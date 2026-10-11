@@ -7,6 +7,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os';
 import { delimiter, join, resolve } from 'node:path';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { worktreePath } from '../src/git.ts';
 import { prepareWorktree, sessions, type Session } from '../src/launcher.ts';
 import { start } from '../src/server.ts';
 
@@ -105,7 +106,7 @@ describe('ending a session kills its process tree', { timeout: 30_000 }, () => {
   it('a worktree_setup that overruns its timeout leaves no grandchild', async () => {
     const setup = prepareWorktree(repo, 3, `node "${join(bin, 'spawner.mjs')}"`, 1500)!;
     await expect(setup).rejects.toThrow(/timed out after 1\.5 s/);
-    const wt = join(repo, '.worktrees', 't-3');
+    const wt = worktreePath(repo, 3);
     const pid = pidIn(wt, 'grand.pid');
     await waitFor('the grandchild to die', () => !alive(pid));
     expect(alive(pidIn(wt, 'fake.pid'))).toBe(false);

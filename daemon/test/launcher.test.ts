@@ -1,15 +1,13 @@
 import './home.ts'; // also here, not only in vitest.config.ts: a run from the repo root skips that config and wrote the real home
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { delimiter, dirname, join, resolve } from 'node:path';
+import { basename, delimiter, dirname, join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import WebSocket from 'ws';
-import { createWorktree, removeWorktree } from '../src/git.ts';
-import type { Role } from '../src/grants.ts';
-import { buildArgv, RESUME_MESSAGE, sessions, transcriptSize, type ArgvIn, type Cli, type Effort, type Session } from '../src/launcher.ts';
-import { lastLines } from '../src/pty.ts';
+import { createWorktree, removeWorktree, worktreePath, worktreesRoot } from '../src/git.ts';
+import { sessions, type Cli, type Session } from '../src/launcher.ts';
 import { start } from '../src/server.ts';
 
 // Fake `claude` and `codex` first on PATH. Each records its argv, env and cwd in the worktree, echoes typed input,
@@ -30,7 +28,7 @@ let repo: string;
 let srv: Awaited<ReturnType<typeof start>>;
 let db: DatabaseSync;
 const git = (...a: string[]) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', ...a], { cwd: repo, encoding: 'utf8' }).trim();
-const fakeOut = (s: Session) => JSON.parse(readFileSync(join(repo, '.worktrees', `t-${s.ticketId}`, 'fake-out.json'), 'utf8'));
+const fakeOut = (s: Session) => JSON.parse(readFileSync(join(worktreePath(repo, s.ticketId), 'fake-out.json'), 'utf8'));
 const alive = (pid: number) => {
   try {
     process.kill(pid, 0);
@@ -39,7 +37,7 @@ const alive = (pid: number) => {
     return false;
   }
 };
-const waitFor = async (f: () => boolean, ms = 5000) => {
+const waitFor = async (f: () => boolean, ms = 20_000) => { // a fake's first output took over 5 s in a loaded full run
   const end = Date.now() + ms;
   while (!f()) {
     if (Date.now() > end) throw new Error('timed out');
@@ -72,8 +70,10 @@ beforeEach(async () => {
   db.prepare("INSERT INTO tickets (id, title, body, criteria) VALUES (7, 'Fix the thing', 'body', 'it works')").run();
 });
 afterEach(async () => {
+  // A pty killed before its fake printed leaves the fake running, orphaned (board.ts): close() kills them all.
+  await waitFor(() => [...sessions.values()].every((s) => s.scrollback().includes('FAKE UP')));
   await srv.close();
-  rmSync(repo, { recursive: true, force: true, maxRetries: 5 });
+  rmSync(repo, { recursive: true, force: true, maxRetries: 8, retryDelay: 400 }); // a killed agent can hold it for seconds under load
 });
 
 const launch = (cli: Cli, model = 'hang') => srv.launch({ ticketId: 7, template: 'execute', cli, model, effort: 'high' });
@@ -84,78 +84,28 @@ const end = async (s: Session) => {
   await s.done;
 };
 
-describe('buildArgv', () => {
-  const base = { repo: 'C:\\r', promptPath: 'C:/r/.kanban95/sessions/3/prompt.md', mcpConfigPath: 'C:/r/.kanban95/sessions/3/mcp.json', settingsPath: 'C:/r/.kanban95/sessions/3/settings.json', mcpUrl: 'http://127.0.0.1:5/mcp', cwd: 'C:/r/.worktrees/t-7' };
-  // The absolute path: agents given the relative one resolved it against the home directory.
-  const msg = `Read ${resolve(base.promptPath).replaceAll('\\', '/')} in full and follow it. It is your brief for this session.`;
-  const claude = (model: string, effort: string, ...role: string[]) =>
-    ['claude', '--mcp-config', base.mcpConfigPath, '--strict-mcp-config', ...(model ? ['--model', model] : []), '--effort', effort, ...role, '--dangerously-skip-permissions', msg];
-  const codex = (model: string, effort: string, ...role: string[]) =>
-    ['codex', ...(model ? ['--model', model] : []), '-c', `model_reasoning_effort=${effort}`, '-c', 'mcp_servers.kanban95.url=http://127.0.0.1:5/mcp',
-      '-c', 'mcp_servers.kanban95.bearer_token_env_var=KANBAN95_TOKEN', '-c', 'mcp_servers.kanban95.default_tools_approval_mode=approve', '-c', "projects={'C:\\r'={trust_level='trusted'}}", ...role, msg];
-  // Workers and testers drop the operator's user settings (plugin hooks) and skills; planner and operator sessions keep them.
-  const lean = ['--setting-sources', 'project,local', '--settings', 'C:/r/.kanban95/sessions/3/settings.json', '--disable-slash-commands'];
-  // Reach by role: a planner cannot write files; workers and testers run with permissions off.
-  const rows: [Cli, Role, string, Effort, string[]][] = [
-    ['claude', 'worker', 'claude-opus-5-5', 'low', claude('claude-opus-5-5', 'low', ...lean)],
-    ['claude', 'tester', 'claude-sonnet-5-5', 'max', claude('claude-sonnet-5-5', 'max', ...lean)],
-    ['claude', 'planner', 'claude-fable-5-1', 'high', claude('claude-fable-5-1', 'high', '--disallowedTools', 'Edit', 'Write', 'NotebookEdit', 'Bash', 'PowerShell', 'Agent')],
-    ['claude', 'operator', 'claude-opus-5-5', 'high', claude('claude-opus-5-5', 'high')],
-    ['codex', 'worker', 'gpt-5.6-terra', 'medium', codex('gpt-5.6-terra', 'medium', '--dangerously-bypass-approvals-and-sandbox')],
-    ['codex', 'tester', 'gpt-5.6-luna', 'max', codex('gpt-5.6-luna', 'max', '--dangerously-bypass-approvals-and-sandbox')],
-    ['codex', 'planner', 'gpt-5.6-sol', 'high', codex('gpt-5.6-sol', 'high', '-s', 'read-only', '-a', 'never')],
-    // An operator terminal with no operator row: no --model, the CLI's own default.
-    ['claude', 'operator', '', 'medium', claude('', 'medium')],
-    ['codex', 'operator', '', 'medium', codex('', 'medium', '--dangerously-bypass-approvals-and-sandbox')],
-  ];
-  it.each(rows)('%s %s %s %s', (cli, role, model, effort, want) => {
-    expect(buildArgv({ ...base, cli, role, model, effort } as ArgvIn)).toEqual(want);
-  });
-
-  // A ticket's Claude session is named at launch and continued by that name; Codex has no such flag in use (ponytail in launcher.ts).
-  const id = '0f8fad5b-d9cb-469f-a165-70867728950e';
-  it('names a fresh Claude session with --session-id and continues a killed one with --resume and the one-line restart message', () => {
-    const fresh = buildArgv({ ...base, cli: 'claude', role: 'worker', model: 'm', effort: 'low', sessionId: id });
-    expect(fresh.slice(0, 6)).toEqual(['claude', '--mcp-config', base.mcpConfigPath, '--strict-mcp-config', '--session-id', id]);
-    expect(fresh.at(-1)).toBe(msg);
-    const resumed = buildArgv({ ...base, cli: 'claude', role: 'tester', model: 'm', effort: 'low', sessionId: id, resume: true });
-    expect(resumed).toEqual(['claude', '--mcp-config', base.mcpConfigPath, '--strict-mcp-config', '--resume', id, '--model', 'm', '--effort', 'low', ...lean,
-      '--dangerously-skip-permissions', RESUME_MESSAGE]);
-    expect(RESUME_MESSAGE).not.toMatch(/["%\n]/); // it must cross cmd.exe
-    expect(buildArgv({ ...base, cli: 'codex', role: 'worker', model: 'm', effort: 'low', sessionId: id, resume: true })).toEqual(codex('m', 'low', '--dangerously-bypass-approvals-and-sandbox'));
-  });
-
-  it('keeps the relative prompt path when the absolute one holds a character cmd.exe refuses', () => {
-    const p = (s: string) => s.replace('C:/r/', 'C:/100%/');
-    const argv = buildArgv({ ...base, promptPath: p(base.promptPath), cwd: p(base.cwd), cli: 'claude', role: 'worker', model: 'm', effort: 'low' });
-    expect(argv.at(-1)).toBe('Read ../../.kanban95/sessions/3/prompt.md in full and follow it. It is your brief for this session.');
-  });
-
-  it('refuses a repo path Codex trust cannot quote', () => {
-    expect(() => buildArgv({ ...base, repo: "C:\\o'brien", cli: 'codex', role: 'worker', model: 'm', effort: 'low' })).toThrow(/containing '/);
-  });
-});
-
 describe('Claude Code pre-trust', () => {
   const state = () => join(process.env.USERPROFILE!, '.claude.json');
   const trustRows = () => db.prepare("SELECT ticket_id, args_summary FROM audit WHERE tool = 'trust.write'").all() as { ticket_id: number; args_summary: string }[];
 
-  it('trusts the repo root once, merged into the existing file, backed up first and audited', async () => {
+  it('trusts the repo\'s worktrees root once, merged into the existing file, backed up first and audited', async () => {
     const before = { numStartups: 7, projects: { 'D:/other': { hasTrustDialogAccepted: true, allowedTools: ['x'] } } };
     writeFileSync(state(), JSON.stringify(before));
     const s = launch('claude');
-    const key = repo.replaceAll('\\', '/');
+    const key = worktreesRoot(repo).replaceAll('\\', '/');
+    expect(key.startsWith(process.env.KANBAN95_HOME!.replaceAll('\\', '/') + '/worktrees/')).toBe(true);
     const after = JSON.parse(readFileSync(state(), 'utf8'));
     expect(after).toEqual({ ...before, projects: { ...before.projects, [key]: { hasTrustDialogAccepted: true } } });
     expect(JSON.parse(readFileSync(state() + '.kanban95.bak', 'utf8'))).toEqual(before);
-    expect(trustRows()).toEqual([{ ticket_id: 7, args_summary: expect.stringContaining(`projects[\\"${key}\\"].hasTrustDialogAccepted`) }]);
+    // args_summary is cut at 200 characters, which a key under the throwaway home outruns.
+    expect(trustRows()).toEqual([{ ticket_id: 7, args_summary: expect.stringContaining(`"key":"projects[\\"${key}`.slice(0, 60)) }]);
     await end(s);
     await end(srv.launch({ ticketId: 7, template: 'test', cli: 'claude', model: 'hang', effort: 'low' })); // second launch: no write
     expect(trustRows()).toHaveLength(1);
   });
 
-  it('writes nothing when an ancestor of the repo is already trusted', async () => {
-    const parent = join(repo, '..').replaceAll('\\', '/');
+  it('writes nothing when an ancestor of the worktrees root is already trusted', async () => {
+    const parent = process.env.KANBAN95_HOME!.replaceAll('\\', '/');
     writeFileSync(state(), JSON.stringify({ projects: { [parent]: { hasTrustDialogAccepted: true } } }));
     await end(launch('claude'));
     expect(trustRows()).toHaveLength(0);
@@ -173,7 +123,7 @@ describe('Claude Code pre-trust', () => {
 describe('launch', () => {
   it('produces a worktree, a worker grant, a session dir, a run row with the prompt and a live pty', async () => {
     const s = launch('claude');
-    await waitFor(() => existsSync(join(repo, '.worktrees', 't-7', 'fake-out.json')));
+    await waitFor(() => existsSync(join(worktreePath(repo, 7), 'fake-out.json')));
     expect(git('branch', '--list', 'ticket/7')).toContain('ticket/7');
     expect(grantRow(s.grantId)).toMatchObject({ role: 'worker', ticket_id: 7, revoked_at: null });
     expect(readFileSync(join(s.dir, 'prompt.md'), 'utf8')).toBe(runRow(s.runId).prompt_rendered);
@@ -185,13 +135,17 @@ describe('launch', () => {
     const argv = fakeOut(s).argv as string[];
     expect(runRow(s.runId).session_id).toMatch(/^[0-9a-f-]{36}$/);
     expect(argv[argv.indexOf('--session-id') + 1]).toBe(runRow(s.runId).session_id);
-    // nothing in git status of the base branch: .worktrees/ is excluded locally
-    expect(git('status', '--porcelain')).not.toContain('.worktrees');
+    // The worktree is under the board home, named for the repo's folder and a hash of its path; nothing new is under the repo.
+    const wt = fakeOut(s).cwd as string;
+    expect(dirname(dirname(wt))).toBe(join(process.env.KANBAN95_HOME!, 'worktrees'));
+    expect(basename(dirname(wt))).toMatch(new RegExp(`^${basename(realpathSync.native(repo))}-[0-9a-f]{8}$`));
+    expect(basename(wt)).toBe('t-7');
+    expect(readdirSync(repo).sort()).toEqual(['.git', '.kanban95', 'a.txt']);
   });
 
   it('passes only the env allowlist: a canary on the daemon is absent in the child', async () => {
     const s = launch('codex');
-    await waitFor(() => existsSync(join(repo, '.worktrees', 't-7', 'fake-out.json')));
+    await waitFor(() => existsSync(join(worktreePath(repo, 7), 'fake-out.json')));
     const env = fakeOut(s).env as Record<string, string>;
     const keys = Object.keys(env).map((k) => k.toUpperCase());
     expect(keys).not.toContain('KANBAN95_CANARY');
@@ -219,7 +173,7 @@ describe('launch', () => {
     expect(runRow(s.runId).ended_at).not.toBeNull();
     expect(runRow(s.runId).scrollback).toContain('FAKE UP');
     await waitFor(() => !alive(fakeOut(s).pid), 2000 - (Date.now() - t0)); // the CLI itself, not just cmd.exe
-    expect(existsSync(join(repo, '.worktrees', 't-7'))).toBe(true); // the operator decides about the worktree
+    expect(existsSync(worktreePath(repo, 7))).toBe(true); // the operator decides about the worktree
   });
 
   it('deleting the ticket ends its session within two seconds: grant gone, pty killed, session map cleared', async () => {
@@ -296,10 +250,22 @@ describe('websocket /pty/<run-id>', () => {
 });
 
 describe('git worktrees', () => {
+  it('gives two repos with the same folder name different worktree roots, and one repo one root however it is spelled', () => {
+    const a = join(repo, 'a', 'proj');
+    const b = join(repo, 'b', 'proj');
+    mkdirSync(a, { recursive: true });
+    mkdirSync(b, { recursive: true });
+    expect(dirname(worktreesRoot(a))).toBe(dirname(worktreesRoot(b)));
+    expect(basename(worktreesRoot(a))).toMatch(/^proj-[0-9a-f]{8}$/);
+    expect(worktreesRoot(a)).not.toBe(worktreesRoot(b));
+    expect(worktreesRoot(join(a, '..', 'proj'))).toBe(worktreesRoot(a));
+    if (process.platform === 'win32') expect(worktreesRoot(a.toUpperCase())).toBe(worktreesRoot(a));
+  });
+
   it('refuses to fork from a base branch with uncommitted changes, and says so', () => {
     writeFileSync(join(repo, 'a.txt'), 'changed\n');
     expect(() => createWorktree(repo, 7)).toThrow(/base branch main has uncommitted changes/);
-    expect(existsSync(join(repo, '.worktrees', 't-7'))).toBe(false);
+    expect(existsSync(worktreePath(repo, 7))).toBe(false);
   });
 
   it('ignores untracked files and reuses an existing worktree', () => {
@@ -319,45 +285,5 @@ describe('git worktrees', () => {
     expect(removeWorktree(repo, 8)).toEqual({ branchDeleted: false });
     expect(existsSync(wt)).toBe(false);
     expect(git('branch', '--list', 'ticket/8')).toContain('ticket/8');
-  });
-});
-
-describe('transcripts, for the silence watch', () => {
-  const day = (t: number) => { const d = new Date(t); return join(String(d.getFullYear()), String(d.getMonth() + 1).padStart(2, '0'), String(d.getDate()).padStart(2, '0')); };
-  const rollout = (name: string, cwd: string, extra = '') => {
-    const dir = join(process.env.USERPROFILE!, '.codex', 'sessions', day(Date.now()));
-    mkdirSync(dir, { recursive: true });
-    const f = join(dir, `rollout-${name}.jsonl`);
-    writeFileSync(f, JSON.stringify({ type: 'session_meta', payload: { id: name, cwd } }) + '\n' + extra);
-    return f;
-  };
-  afterEach(() => rmSync(join(process.env.USERPROFILE!, '.codex'), { recursive: true, force: true }));
-
-  it("Codex: the newest rollout written since the start whose cwd is the session's; another worktree's or an earlier run's is not", () => {
-    const cwd = join(tmpdir(), 'k95-wt', 't-9');
-    const started = Date.now();
-    const old = rollout('2026-01-01T00-00-00-a', cwd, 'x'.repeat(50));
-    utimesSync(old, new Date(started - 60_000), new Date(started - 60_000)); // the previous run in this worktree
-    rollout('2026-01-01T00-00-02-c', join(tmpdir(), 'k95-wt', 't-10'), 'x'.repeat(70));
-    const s = { cli: 'codex' as const, cwd, started };
-    expect(transcriptSize(s)).toBe(-1);
-    const mine = rollout('2026-01-01T00-00-01-b', process.platform === 'win32' ? cwd.toUpperCase() : cwd, 'line\n'); // Windows paths ignore case
-    expect(transcriptSize(s)).toBe(readFileSync(mine).length);
-  });
-
-  it('Claude: the --session-id transcript under any project dir, -1 until it exists', () => {
-    const s = { cli: 'claude' as const, cwd: tmpdir(), started: Date.now(), sessionId: '00000000-0000-4000-8000-000000000001' };
-    expect(transcriptSize(s)).toBe(-1);
-    const dir = join(process.env.USERPROFILE!, '.claude', 'projects', 'C--anything');
-    mkdirSync(dir, { recursive: true });
-    writeFileSync(join(dir, `${s.sessionId}.jsonl`), '{}\n{}\n');
-    expect(transcriptSize(s)).toBe(6);
-    rmSync(join(process.env.USERPROFILE!, '.claude', 'projects'), { recursive: true, force: true });
-  });
-
-  it('lastLines: escape sequences gone, cursor moves and carriage returns as breaks, blanks and repeats dropped, only the last n', () => {
-    const raw = '\x1b]0;title\x07one\r\n\x1b[2K\x1b[1;1Htwo\x1b[32m green\x1b[0m\x1b[3;1H\x1b[?25l\r\n\r\nthree\rthree\nfour';
-    expect(lastLines(raw, 3)).toEqual(['two green', 'three', 'four']);
-    expect(lastLines('', 5)).toEqual([]);
   });
 });

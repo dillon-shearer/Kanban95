@@ -2,7 +2,7 @@
 import { existsSync, readdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
-import { git, removeWorktree, unlinkLinks, worktreePath } from './git.js';
+import { git, removeWorktree, unlinkLinks, worktreePath, worktreesRoot } from './git.js';
 import { audit, revoke } from './grants.js';
 import { sessions } from './launcher.js';
 
@@ -27,7 +27,8 @@ const remove = (repo: string, path: string): string | undefined => {
 /**
  * After a ticket's branch has landed: its worktree (forced, the committed work is on the base now; what is left is build
  * output and test leftovers) and its branch. Windows keeps a directory locked for a moment after the agent that sat in it
- * exits, so the removal is retried for about two seconds before it is given up and audited as an error.
+ * exits, longer on a loaded machine (over 2 s seen in a full test run beside other agents), so the removal is retried for about
+ * ten seconds before it is given up and audited as an error.
  */
 export async function cleanTicket(b: Board, id: number): Promise<void> {
   const path = worktreePath(b.repo, id);
@@ -37,8 +38,8 @@ export async function cleanTicket(b: Board, id: number): Promise<void> {
       log(b.db, id, 'janitor.worktree', { path, branchDeleted });
       return;
     } catch (e) {
-      if (attempt === 10) return log(b.db, id, 'janitor.worktree', { path, error: message(e) }, 'error');
-      await new Promise((r) => setTimeout(r, 200));
+      if (attempt === 25) return log(b.db, id, 'janitor.worktree', { path, error: message(e) }, 'error');
+      await new Promise((r) => setTimeout(r, 400));
     }
   }
 }
@@ -51,19 +52,26 @@ export function sweep(b: Board): void {
   const { db, repo } = b;
   const live = [...sessions.values()];
 
-  const wtRoot = join(repo, '.worktrees');
-  if (existsSync(wtRoot)) {
-    git(repo, 'worktree', 'prune'); // forget registrations whose directory is already gone
-    for (const name of readdirSync(wtRoot)) {
+  const wtRoot = worktreesRoot(repo);
+  const legacy = join(repo, '.worktrees'); // the old layout's worktrees, under the repo: removed once, then the empty directory
+  if (existsSync(wtRoot) || existsSync(legacy)) {
+    // Forget registrations whose directory is already gone. A failure here (git itself refused to start with EPERM once, in a
+    // loaded full test run) is audited and the sweep goes on: inside start() a throw left the daemon never listening.
+    try { git(repo, 'worktree', 'prune'); } catch (e) { log(db, null, 'janitor.worktree', { prune: true, error: message(e) }, 'error'); }
+  }
+  for (const root of [wtRoot, legacy]) {
+    if (!existsSync(root)) continue;
+    for (const name of readdirSync(root)) {
       const id = Number(/^t-(\d+)$/.exec(name)?.[1]);
       if (!id || live.some((s) => s.ticketId === id)) continue;
       const t = db.prepare('SELECT merged_at FROM tickets WHERE id = ?').get(id) as { merged_at: string | null } | undefined;
+      // An unmerged ticket's worktree in the old layout stays too; its next launch moves it to the new root (createWorktree).
       if (t && t.merged_at === null) continue;
       const ticket = t ? id : null;
-      const path = join(wtRoot, name);
+      const path = join(root, name);
       try {
         // A deleted ticket's worktree is removed only if clean; its branch stays unless merged, so commits are never lost.
-        const { branchDeleted } = removeWorktree(repo, id, t !== undefined);
+        const { branchDeleted } = removeWorktree(repo, id, t !== undefined, path);
         log(db, ticket, 'janitor.worktree', { path, branchDeleted });
       } catch (e) {
         if (!/is not a working tree/.test(message(e))) {
@@ -74,6 +82,10 @@ export function sweep(b: Board): void {
         log(db, ticket, 'janitor.worktree', { path, registered: false, error }, error ? 'error' : 'ok');
       }
     }
+  }
+  if (existsSync(legacy) && readdirSync(legacy).length === 0) {
+    const error = remove(repo, legacy); // OneDrive may still hold it: left for the next sweep
+    log(db, null, 'janitor.worktree', { path: legacy, error }, error ? 'error' : 'ok');
   }
 
   const sessRoot = join(repo, '.kanban95', 'sessions');

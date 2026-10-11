@@ -110,3 +110,36 @@ describe('removing a worktree with links into the main checkout', () => {
     targetIntact();
   });
 });
+
+// Before worktrees moved to the board home they lived in <repo>/.worktrees, where a synced folder (OneDrive) uploaded and locked them.
+describe('worktrees left under the repo by the old layout', () => {
+  const legacy = (id: number) => join(repo, '.worktrees', `t-${id}`);
+  const addLegacy = (id: number) => git('worktree', 'add', '-q', '-b', `ticket/${id}`, legacy(id));
+
+  it("the janitor removes a merged ticket's worktree and a leftover there, then the empty directory", () => {
+    const id = ticket(true);
+    addLegacy(id);
+    writeFileSync(join(legacy(id), 'build.log'), 'left over');
+    mkdirSync(legacy(901));
+    writeFileSync(join(legacy(901), 'junk'), 'x');
+    sweep({ db, repo });
+    expect(existsSync(join(repo, '.worktrees'))).toBe(false);
+    expect(git('branch', '--list', `ticket/${id}`)).toBe('');
+    expect(git('worktree', 'list', '--porcelain')).not.toContain(`t-${id}`);
+  });
+
+  it("keeps an unmerged ticket's worktree, and its next launch moves it to the board home with its work", () => {
+    const id = ticket(false);
+    addLegacy(id);
+    writeFileSync(join(legacy(id), 'wip.txt'), 'uncommitted');
+    sweep({ db, repo });
+    expect(readFileSync(join(legacy(id), 'wip.txt'), 'utf8')).toBe('uncommitted');
+    const wt = createWorktree(repo, id);
+    expect(wt.path).toBe(worktreePath(repo, id));
+    expect(readFileSync(join(wt.path, 'wip.txt'), 'utf8')).toBe('uncommitted');
+    expect(git('-C', wt.path, 'rev-parse', '--abbrev-ref', 'HEAD')).toBe(`ticket/${id}`);
+    sweep({ db, repo });
+    expect(existsSync(join(repo, '.worktrees'))).toBe(false);
+    expect(existsSync(wt.path)).toBe(true);
+  });
+});

@@ -9,7 +9,7 @@ import * as ui from './state.js';
 
 const desktop = document.getElementById('desktop');
 const tasks = document.getElementById('tasks');
-const wins = new Map(); // id → { el, task, onClose, api, toggleMax, items, tile, slot, free, rebase }
+const wins = new Map(); // id → { el, task, onClose, api, toggleMax, items, tile, slot, packed, free, rebase }
 let z = 10;
 // The UI zoom: CSS `zoom` on body, so menus and dialogs appended to it scale too. Inside it, offsets and inline styles (and so
 // the saved geometry) are CSS px before zoom, while pointer coordinates and getBoundingClientRect are screen px: divide those by it.
@@ -30,13 +30,14 @@ export function setZoom(f) {
 // ---- terminal slots ----
 // The terminal region is the desktop between the desktop icons and the action column: from just right of the icon column, so
 // the icons always show, to the left edge of the leftmost open, non-minimized, non-maximized window in ACTION (the desktop's
-// right edge when none is open, or when that leaves less than MIN_REGION px), full height. A tiled window (opened with `tile`)
-// takes the lowest slot no other tiled window holds and keeps it for life: nothing else moves when one opens, closes,
-// minimizes or ends, and a minimized or maximized one keeps its slot for when it is restored. The grid is the first SLOTS row
-// whose count covers the highest held slot, slots in reading order, so it grows only when every slot is taken and shrinks when
-// the top slots free. Dragged or resized, a tiled window is free: it stays where it was left and its slot is empty; a
-// double-click on its title bar takes it back to the lowest empty slot. Past the last row's count a window is not tiled: it
-// stays where it opened (`place`) and takes a slot once one is empty. `setTiling(false)` (Settings → Board,
+// right edge when none is open, or when that leaves less than MIN_REGION px), full height. The grid always fits what is shown:
+// its members are the tiled windows (opened with `tile`) that are shown (not minimized, not maximized) and not free, packed
+// into slots 0..n-1 in reading order, in the order of the slot each last held, new ones after. The grid is the first SLOTS
+// row whose count covers n, so there is never a hole. Every change that adds or removes a member repacks: open, close,
+// minimize, restore, maximize, unmaximize, drag-out, rejoin, and a change of the region. Dragged or resized, a tiled window
+// is free: it stays where it was left and the rest repack; a double-click on its title bar makes it a member again, after
+// the others. Past the last row's count a window is not tiled: it stays where it opened (`place`) and joins when one
+// leaves. `setTiling(false)` (Settings → Board,
 // `terminals.tile`) stops tiling: terminals open at the least-covered spot and stay where they are dragged.
 // To change the arrangement, edit SLOTS: [up to n windows, columns, rows], ascending n.
 export const SLOTS = [[1, 1, 1], [2, 2, 1], [3, 3, 1], [4, 2, 2], [6, 3, 2], [9, 3, 3], [12, 4, 3]];
@@ -45,13 +46,13 @@ const MIN_REGION = 240;
 
 let tiling = null;
 let tileOn = true;
-/** Turns terminal slots on (every tiled window, free or not, takes a slot now) or off (they stay where they are). */
+/** Turns terminal slots on (every tiled window, free or not, joins the grid now) or off (they stay where they are). */
 export function setTiling(on) {
   tileOn = on;
   if (on) for (const w of wins.values()) w.free = false;
   retile();
 }
-/** Gives every waiting tiled window the lowest empty slot, then puts each shown one in its slot of the current region. */
+/** Packs the grid's members into slots 0..n-1 of the grid for n in the current region. */
 export function retile() {
   clearTimeout(tiling);
   if (!tileOn) return;
@@ -62,18 +63,16 @@ export function retile() {
   const shown = (el) => !el.hidden && !el.classList.contains('max');
   const edge = Math.min(W, ...ACTION.map((id) => wins.get(id)?.el).filter((el) => el && shown(el)).map((el) => el.offsetLeft));
   const R = edge - L < MIN_REGION ? W : edge;
-  const list = [...wins.values()].filter((w) => w.tile);
-  const held = new Set(list.map((w) => w.slot).filter((s) => s != null));
-  for (const w of list.filter((w) => w.slot == null && !w.free)) {
-    let s = 0;
-    while (held.has(s)) s++;
-    if (s >= SLOTS.at(-1)[0]) break;
-    held.add((w.slot = s));
-  }
-  if (!held.size) return;
-  const [, cols, rows] = SLOTS.find(([n]) => n > Math.max(...held));
-  for (const { el, slot } of list) {
-    if (slot == null || !shown(el)) continue;
+  // A window coming back to the slot it last held goes ahead of the one packed into it meanwhile; new ones (no slot) go last.
+  const list = [...wins.values()].filter((w) => w.tile && !w.free && shown(w.el))
+    .sort((a, b) => (a.slot ?? Infinity) - (b.slot ?? Infinity) || a.packed - b.packed);
+  for (const w of wins.values()) w.packed = false;
+  const members = list.slice(0, SLOTS.at(-1)[0]);
+  for (const w of list.slice(members.length)) w.slot = null; // stays where it opened until one leaves
+  members.forEach((w, i) => Object.assign(w, { slot: i, packed: true }));
+  if (!members.length) return;
+  const [, cols, rows] = SLOTS.find(([n]) => n >= members.length);
+  for (const { el, slot } of members) {
     const [c, r] = [slot % cols, Math.floor(slot / cols)];
     const x = L + Math.round((c * (R - L)) / cols);
     const y = Math.round((r * H) / rows);
@@ -208,7 +207,7 @@ export function open(id, { title, w = 480, h: height = 320, persist = false, til
   dragTask(task);
   const api = { el, body, title: (t, l = t) => { text.textContent = t; task.title = t; task.setAttribute('aria-label', t); task.lastChild.textContent = l; }, close: () => close(id) };
   let last; // the geometry last saved
-  const win = { el, task, onClose, api, toggleMax, items, tile, rebase: () => { last = JSON.stringify(rect(el)); } };
+  const win = { el, task, onClose, api, toggleMax, items, tile, packed: false, rebase: () => { last = JSON.stringify(rect(el)); } };
   wins.set(id, win);
   desktop.append(el);
   tasks.append(task);

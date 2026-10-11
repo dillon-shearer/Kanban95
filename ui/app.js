@@ -25,8 +25,6 @@ const LABEL = Object.fromEntries(COLUMNS);
 const EFFORTS = ['low', 'medium', 'high', 'max'];
 const PHASES = ['plan', 'execute', 'test', 'operator'];
 const CLIS = ['claude', 'codex'];
-/** Where the operator may drag a ticket. Everything onward is the agents' job; anything may go back to Backlog (reset). */
-const MOVES = { backlog: ['in_progress'], in_progress: ['backlog'], testing: ['backlog'], done: ['backlog'] };
 
 const tickets = new Map();
 let sessions = [];
@@ -177,11 +175,9 @@ function dragCard(el, t) {
 
 async function drop(t, to) {
   if (to === t.status) return;
-  const allowed = MOVES[t.status];
-  if (!allowed.includes(to)) {
-    return say(`#${t.id} cannot be dragged from ${LABEL[t.status]} to ${LABEL[to]}. Allowed: ${allowed.map((s) => LABEL[s]).join(', ')}.`);
-  }
   if (to === 'backlog') return reset([t]);
+  // Any other column: the daemon stops a running agent and clears the flag (docs/LIFECYCLE.md → Moves by hand).
+  if (live(t.id).length && (await dialog('Move', `#${t.id} has a running agent. Stop it and move the ticket to ${LABEL[to]}?`, ['Move', 'Cancel'])) !== 'Move') return;
   await act(() => api('PATCH', `/tickets/${t.id}`, { status: to }), `#${t.id} moved to ${LABEL[to]} by hand; no agent was started.`);
 }
 
@@ -960,6 +956,15 @@ async function projectsPanel(p) {
     h('div', { class: 'field-row' }, h('label', { for: 'project-add' }, 'Folder'), add,
       h('button', { onclick: () => save([...list, { path: add.value.trim(), colour: '#008080' }], 'Project added.') }, 'Add')));
   draw();
+  if (focusProjectAdd) add.focus();
+  focusProjectAdd = false;
+}
+
+/** Start → Projects → Add project board…: Settings on Projects with Folder focused. The tab redraws on every show, so the flag reaches its draw. */
+let focusProjectAdd = false;
+function addProjectBoard() {
+  focusProjectAdd = true;
+  openSettings('Projects');
 }
 
 /**
@@ -1267,7 +1272,7 @@ const START = [
   { label: 'Settings', run: () => openSettings() },
   { label: 'Notepad', run: openNotepad },
   { label: 'Limits', run: openLimits },
-  { label: 'Projects', get items() { return projectItems; } },
+  { label: 'Projects', get items() { return [...projectItems, '-', { label: 'Add project board…', run: addProjectBoard }]; } },
   '-',
   { label: 'New ticket', run: () => openTicket(null) },
   { label: 'New brainstorm', run: newBrainstorm },

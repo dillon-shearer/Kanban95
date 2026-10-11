@@ -1,6 +1,6 @@
 // In headless Edge or Chrome against a running daemon (setup in ui.ts): live terminals tile into the slots between the
-// desktop icons and the action column (`SLOTS` in ui/wm.js) and keep their slot until moved, and every window scales with
-// the desktop.
+// desktop icons and the action column (`SLOTS` in ui/wm.js), always packed into a grid that fits the shown ones, and every
+// window scales with the desktop.
 import './home.ts'; // also here, not only in vitest.config.ts: a run from the repo root skips that config and wrote the real home
 import { readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -82,7 +82,7 @@ async function launch(id: number) {
 }
 
 describe('ui-slots', { timeout: 120_000 }, () => {
-  it('tiles 1 to 6 terminals between the desktop icons and the action column, keeps their slots on close and minimize, follows a moved Board and a resized desktop, and stops while Tile terminals is off', async () => {
+  it('tiles 1 to 6 terminals between the desktop icons and the action column, repacks them on close and minimize, follows a moved Board and a resized desktop, and stops while Tile terminals is off', async () => {
     const settings = join(process.env.USERPROFILE!, '.kanban95', 'settings.json');
     writeFileSync(settings, JSON.stringify({ terminals: { auto: ['execute'] } }));
     try {
@@ -103,22 +103,23 @@ describe('ui-slots', { timeout: 120_000 }, () => {
         await tiled(wids.length);
         expect(await page.evaluate(`document.querySelector('[data-task="${wids.at(-1)}"] img').getAttribute('src')`)).toBe('icons/execute.svg');
       }
-      // Closing the one in slot 0 moves nobody; the next terminals take slot 0, then grow the grid.
+      // Closing the one in slot 0 of four leaves the other three filling the region as one row of three; new ones go after.
       await wm(`close('${wids.shift()}')`);
-      await at({ [wids[0]]: 1, [wids[1]]: 2, [wids[2]]: 3 }, 4);
+      await at({ [wids[0]]: 0, [wids[1]]: 1, [wids[2]]: 2 }, 3);
+      await tiled(3);
       for (const id of ids.slice(4)) wids.push(await launch(id));
-      await at({ [wids[3]]: 0, [wids[0]]: 1, [wids[1]]: 2, [wids[2]]: 3, [wids[4]]: 4, [wids[5]]: 5 }, 6);
+      await at({ [wids[0]]: 0, [wids[1]]: 1, [wids[2]]: 2, [wids[3]]: 3, [wids[4]]: 4, [wids[5]]: 5 }, 6);
       await tiled(6);
 
-      // Minimized, a terminal keeps its slot and nobody moves; restored, it is back in it.
+      // Minimized, a terminal leaves the grid and the rest repack into five; restored, it is back where it was.
       await wm(`minimize('${wids[1]}')`);
-      await settle();
-      await at({ [wids[3]]: 0, [wids[0]]: 1, [wids[2]]: 3, [wids[4]]: 4, [wids[5]]: 5 }, 6);
+      await at({ [wids[0]]: 0, [wids[2]]: 1, [wids[3]]: 2, [wids[4]]: 3, [wids[5]]: 4 }, 5);
+      await tiled(5);
       await wm(`focus('${wids[1]}')`);
-      await tiled(6);
+      await at({ [wids[0]]: 0, [wids[1]]: 1, [wids[2]]: 2, [wids[3]]: 3, [wids[4]]: 4, [wids[5]]: 5 }, 6);
 
       // Settings → Board → Terminal tiling → Tile terminals off: a dragged terminal stays where it was put, also after a re-tile would have
-      // run; back on, every terminal, the dragged one too, takes its slot again. Saved in settings.json.
+      // run; back on, every terminal, the dragged one too, joins the grid again, the dragged one last. Saved in settings.json.
       await page.evaluate(`document.querySelector('[data-icon="Settings"]').dispatchEvent(new MouseEvent('dblclick'))`);
       await page.evaluate(`[...document.querySelectorAll('[data-win="settings"] [role=tab] a')].find((t) => t.textContent === 'Board').click()`);
       await until(() => page.evaluate(`!!document.querySelector('#term-tile')`), 'the Board tab');
@@ -129,17 +130,19 @@ describe('ui-slots', { timeout: 120_000 }, () => {
       const before = await box(wids[0]);
       const t2 = await page.center(`[data-win="${wids[0]}"] .title-bar-text`);
       await page.drag(t2, { x: t2.x + 200, y: t2.y + 150 });
-      await wm(`minimize('${wids[3]}')`); // would re-tile the rest
+      const other = await box(wids[1]);
+      await wm(`minimize('${wids[3]}')`); // would repack the rest
       await settle();
       expect(await box(wids[0])).toEqual([before[0] + 200, before[1] + 150, before[2] + 200, before[3] + 150]);
+      expect(await box(wids[1])).toEqual(other);
       await wm(`focus('${wids[3]}')`);
       await page.evaluate(`document.querySelector('#term-tile').click()`);
       await until(() => { try { return JSON.parse(readFileSync(settings, 'utf8')).terminals.tile === true; } catch { return false; } }, 'tile on saved');
       await wm(`close('settings')`);
-      await at({ [wids[3]]: 0, [wids[0]]: 1, [wids[1]]: 2, [wids[2]]: 3, [wids[4]]: 4, [wids[5]]: 5 }, 6);
+      await at({ [wids[1]]: 0, [wids[2]]: 1, [wids[3]]: 2, [wids[4]]: 3, [wids[5]]: 4, [wids[0]]: 5 }, 6);
 
       // Twelve tiled (six more windows opened with `tile`), then a 13th opens at the least-covered spot and the twelve stay put;
-      // it takes the first slot that frees.
+      // it joins, last, when one leaves.
       for (let k = 1; k <= 6; k++) await wm(`open('slot-${k}', { title: 'Slot ${k}', tile: true })`);
       await tiled(12);
       const twelve = await terms();
@@ -151,7 +154,7 @@ describe('ui-slots', { timeout: 120_000 }, () => {
       expect(extra[2]).toBeLessThanOrEqual(W);
       expect(extra[3]).toBeLessThanOrEqual(H);
       await wm(`close('slot-1')`);
-      await at({ extra: 6, 'slot-2': 7 }, 12);
+      await at({ 'slot-2': 6, 'slot-6': 10, extra: 11 }, 12);
       for (let k = 2; k <= 6; k++) await wm(`close('slot-${k}')`);
       await wm(`close('extra')`);
       await tiled(6);
@@ -162,15 +165,15 @@ describe('ui-slots', { timeout: 120_000 }, () => {
       expect(await edge()).toBe(W / 2 - 200);
       await tiled(6);
 
-      // Start → Close ended terminals closes the ended one (slot 2) and leaves the live ones in their slots.
+      // Start → Close ended terminals closes the ended one (slot 0) and the live ones repack into five.
       const ended = await until(async () => (await (await api('/sessions')).json()).find((s: { id: number }) => `term-${s.id}` === wids[1]), 'the session');
       await api(`/grants/${ended.grant_id}`, 'DELETE');
       await until(() => page.evaluate(`document.querySelector('[data-win="${wids[1]}"]').classList.contains('ended')`), 'the ended terminal');
       await click('#start');
       await menuPick('Close ended terminals');
       await until(() => page.evaluate(`!document.querySelector('[data-win="${wids[1]}"]')`), 'the ended terminal to close');
-      const five = { [wids[3]]: 0, [wids[0]]: 1, [wids[2]]: 3, [wids[4]]: 4, [wids[5]]: 5 };
-      await at(five, 6);
+      const five = { [wids[2]]: 0, [wids[3]]: 1, [wids[4]]: 2, [wids[5]]: 3, [wids[0]]: 4 };
+      await at(five, 5);
 
       // A larger desktop (full screen on a bigger monitor): the action column keeps its proportions, nothing leaves a bar of
       // empty desktop, and the terminals re-tile into the new region.
@@ -181,7 +184,7 @@ describe('ui-slots', { timeout: 120_000 }, () => {
       expect(Math.abs(b2[0] - Math.round(((W / 2 - 200) * W2) / W))).toBeLessThanOrEqual(1);
       expect(Math.abs(i2[2] - W2)).toBeLessThanOrEqual(1);
       expect(Math.abs(i2[3] - H2)).toBeLessThanOrEqual(1);
-      await at(five, 6);
+      await at(five, 5);
     } finally {
       rmSync(settings, { force: true });
       for (const { id } of db.prepare('SELECT id FROM grants WHERE revoked_at IS NULL AND ticket_id IS NOT NULL').all() as { id: number }[]) await api(`/grants/${id}`, 'DELETE');
@@ -190,73 +193,85 @@ describe('ui-slots', { timeout: 120_000 }, () => {
     }
   });
 
-  it('frees a dragged or resized terminal where it was left and puts it back in the lowest empty slot on a double-click', async () => {
+  it('frees a dragged or resized terminal where it was left, repacks the rest to fit, and puts it back in the grid on a double-click', async () => {
     await fresh('sticky');
     const open = (k: string) => wm(`open('slot-${k}', { title: 'Slot ${k}', tile: true })`);
     const id = (k: string) => `slot-${k}`;
+    const dragOut = async (k: string, dx: number, dy: number) => {
+      await click(`[data-task="${id(k)}"]`); // in front of the Board, so the drag lands on its title bar
+      const t = await page.center(`[data-win="${id(k)}"] .title-bar-text`);
+      await page.drag(t, { x: t.x + dx, y: t.y + dy });
+    };
     try {
       await open('a');
       await open('b');
       await at({ [id('a')]: 0, [id('b')]: 1 }, 2);
 
-      // Dragged by its title bar, a terminal stays where it was dropped and the other does not move.
+      // Dragged by its title bar, a terminal stays where it was dropped and the other fills the region alone.
       const a0 = await box(id('a'));
-      const b0 = await box(id('b'));
-      await click(`[data-task="${id('a')}"]`); // in front of the Board, so the drag lands on its title bar
-      const t = await page.center(`[data-win="${id('a')}"] .title-bar-text`);
-      await page.drag(t, { x: t.x + 100, y: t.y + 150 });
-      await settle();
+      await dragOut('a', 100, 150);
+      await at({ [id('b')]: 0 }, 1);
       expect(await box(id('a'))).toEqual([a0[0] + 100, a0[1] + 150, a0[2] + 100, a0[3] + 150]);
-      expect(await box(id('b'))).toEqual(b0);
 
-      // The next terminal takes the freed slot 0 and the grid stays the 2-slot row; the free one stays put.
+      // The next terminal goes after it; the free one stays put.
       await open('c');
-      await at({ [id('c')]: 0, [id('b')]: 1 }, 2);
+      await at({ [id('b')]: 0, [id('c')]: 1 }, 2);
       expect(await box(id('a'))).toEqual([a0[0] + 100, a0[1] + 150, a0[2] + 100, a0[3] + 150]);
 
-      // With three tiled, closing the one in slot 1 leaves slots 0 and 2 where they are.
+      // With three tiled, closing the middle one leaves the other two filling the region.
       await open('d');
-      await at({ [id('c')]: 0, [id('b')]: 1, [id('d')]: 2 }, 3);
+      await at({ [id('b')]: 0, [id('c')]: 1, [id('d')]: 2 }, 3);
       await wm(`close('${id('b')}')`);
-      await settle();
-      await at({ [id('c')]: 0, [id('d')]: 2 }, 3);
+      await at({ [id('c')]: 0, [id('d')]: 1 }, 2);
 
-      // A double-click on the free one puts it in the lowest empty slot; on a tiled one it maximizes, and again restores.
+      // A double-click on the free one puts it back in the grid, last; on a tiled one it maximizes, the rest repack, and again
+      // it restores to the slot it held.
       await dblclick(id('a'));
-      await at({ [id('c')]: 0, [id('a')]: 1, [id('d')]: 2 }, 3);
+      await at({ [id('c')]: 0, [id('d')]: 1, [id('a')]: 2 }, 3);
       await dblclick(id('c'));
       expect(await page.evaluate(`document.querySelector('[data-win="${id('c')}"]').classList.contains('max')`)).toBe(true);
+      await at({ [id('d')]: 0, [id('a')]: 1 }, 2);
       await dblclick(id('c'));
-      await at({ [id('c')]: 0, [id('a')]: 1, [id('d')]: 2 }, 3);
+      await at({ [id('c')]: 0, [id('d')]: 1, [id('a')]: 2 }, 3);
 
-      // Resized by its corner, a terminal is freed the same way: it keeps its new size.
+      // Resized by its corner, a terminal is freed the same way: it keeps its new size and the rest repack.
       const r = await page.evaluate<{ x: number; y: number }>(`(() => { const r = document.querySelector('[data-win="${id('d')}"]').getBoundingClientRect(); return { x: r.right - 3, y: r.bottom - 3 }; })()`);
       const d0 = await box(id('d'));
       await page.drag(r, { x: r.x - 60, y: r.y - 80 });
-      await settle();
+      await at({ [id('c')]: 0, [id('a')]: 1 }, 2);
       const d1 = await box(id('d'));
       expect(d1).not.toEqual(d0);
       expect([d1[0], d1[1]]).toEqual([d0[0], d0[1]]);
-      await at({ [id('c')]: 0, [id('a')]: 1 }, 2); // its slot was the top one, so the grid shrinks
-      await open('e'); // takes the freed slot 2
-      await at({ [id('c')]: 0, [id('a')]: 1, [id('e')]: 2 }, 3);
-      expect(await box(id('d'))).toEqual(d1);
-
-      // Minimized and restored, a terminal is back in the same slot.
-      await wm(`minimize('${id('a')}')`);
-      await settle();
-      await at({ [id('c')]: 0, [id('e')]: 2 }, 3);
-      await wm(`focus('${id('a')}')`);
-      await at({ [id('c')]: 0, [id('a')]: 1, [id('e')]: 2 }, 3);
-
-      // With no empty slot, one more grows the grid to the 2×2 row; everyone keeps their number in reading order.
+      await open('e');
       await open('f');
       await at({ [id('c')]: 0, [id('a')]: 1, [id('e')]: 2, [id('f')]: 3 }, 4);
-      // The top slot freed, the grid shrinks back.
-      await wm(`close('${id('f')}')`);
-      await at({ [id('c')]: 0, [id('a')]: 1, [id('e')]: 2 }, 3);
+      expect(await box(id('d'))).toEqual(d1);
+
+      // Four tiled: minimizing one leaves a row of three; restored, the 2×2 is back as it was.
+      await wm(`minimize('${id('a')}')`);
+      await at({ [id('c')]: 0, [id('e')]: 1, [id('f')]: 2 }, 3);
+      await wm(`focus('${id('a')}')`);
+      await at({ [id('c')]: 0, [id('a')]: 1, [id('e')]: 2, [id('f')]: 3 }, 4);
+
+      // A fifth packs five into the 3×2 shape, no hole below slot 4; closed, the 2×2 is back.
+      await open('g');
+      await at({ [id('c')]: 0, [id('a')]: 1, [id('e')]: 2, [id('f')]: 3, [id('g')]: 4 }, 5);
+      await wm(`close('${id('g')}')`);
+      await at({ [id('c')]: 0, [id('a')]: 1, [id('e')]: 2, [id('f')]: 3 }, 4);
+
+      // Four tiled: closing one that is not in slot 0 leaves a row of three.
+      await wm(`close('${id('e')}')`);
+      await at({ [id('c')]: 0, [id('a')]: 1, [id('f')]: 2 }, 3);
+
+      // Four tiled: dragging the one in slot 0 out leaves a row of three; double-clicked, it rejoins and the 2×2 is back.
+      await open('h');
+      await at({ [id('c')]: 0, [id('a')]: 1, [id('f')]: 2, [id('h')]: 3 }, 4);
+      await dragOut('c', 40, 60);
+      await at({ [id('a')]: 0, [id('f')]: 1, [id('h')]: 2 }, 3);
+      await dblclick(id('c'));
+      await at({ [id('a')]: 0, [id('f')]: 1, [id('h')]: 2, [id('c')]: 3 }, 4);
     } finally {
-      for (const k of 'abcdef') await wm(`close('${id(k)}')`);
+      for (const k of 'abcdefgh') await wm(`close('${id(k)}')`);
     }
   });
 });

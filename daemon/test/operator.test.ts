@@ -8,6 +8,7 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { buildContext } from '../src/context.ts';
 import { MIGRATIONS_DIR, migrate } from '../src/db.ts';
+import { worktreesRoot } from '../src/git.ts';
 import { mint, verify } from '../src/grants.ts';
 import { buildArgv, sessions, type ArgvIn, type Session } from '../src/launcher.ts';
 import { start } from '../src/server.ts';
@@ -24,11 +25,12 @@ const ticket = (title: string, status = 'backlog') => Number(srv.db.prepare('INS
 const row = (id: number) => srv.db.prepare('SELECT * FROM tickets WHERE id = ?').get(id) as Record<string, unknown>;
 const post = (path: string, body: unknown) =>
   fetch(`http://127.0.0.1:${srv.port}/api${path}`, { method: 'POST', headers: { 'content-type': 'application/json', cookie: `k95=${srv.secret}` }, body: JSON.stringify(body) });
-/** Killing a pty before its process is up can leave the exit unreported on Windows, so wait for the fake first. */
+/** Killing a pty before its process is up can leave the exit unreported on Windows, so wait for the fake first. Up to 20 s:
+ *  cmd.exe and a cold node took over 5 s in a full run beside the other pty files. */
 async function end(s: Session) {
   const t0 = Date.now();
   while (!s.scrollback().includes('FAKE UP')) {
-    if (Date.now() - t0 > 5000) throw new Error('fake never came up');
+    if (Date.now() - t0 > 20_000) throw new Error(`fake never came up; scrollback: ${JSON.stringify(s.scrollback().slice(-500))}`);
     await new Promise((r) => setTimeout(r, 25));
   }
   s.pty.kill();
@@ -56,7 +58,7 @@ afterAll(async () => {
   await op.close();
   await srv.close();
   process.env.PATH = PATH0;
-  rmSync(repo, { recursive: true, force: true, maxRetries: 5 });
+  rmSync(repo, { recursive: true, force: true, maxRetries: 8, retryDelay: 400 }); // a killed agent can hold it for seconds under load
   rmSync(bin, { recursive: true, force: true });
 });
 
@@ -123,7 +125,7 @@ describe('operator over MCP', () => {
 });
 
 describe('operator argv', () => {
-  const base = { repo: 'C:\\r', promptPath: 'C:/r/.kanban95/sessions/-3/prompt.md', mcpConfigPath: 'C:/r/.kanban95/sessions/-3/mcp.json', settingsPath: 'C:/r/.kanban95/sessions/-3/settings.json', mcpUrl: 'http://127.0.0.1:5/mcp', cwd: 'C:/r', model: 'm', effort: 'high' };
+  const base = { repo: 'C:\\r', promptPath: 'C:/r/.kanban95/sessions/-3/prompt.md', mcpConfigPath: 'C:/r/.kanban95/sessions/-3/mcp.json', settingsPath: 'C:/r/.kanban95/sessions/-3/settings.json', mcpUrl: 'http://127.0.0.1:5/mcp', wtRoot: 'C:/k95/worktrees/r-0011aabb', cwd: 'C:/r', model: 'm', effort: 'high' };
   it.each(['claude', 'codex'])("%s: the worker's permissions, not the planner deny list", (cli) => {
     const argv = buildArgv({ ...base, cli, role: 'operator' } as ArgvIn);
     // The operator watches its terminal, so it keeps its own Claude settings and skills, which an unattended worker drops.
@@ -144,6 +146,15 @@ describe('operator template', () => {
     const { mission: _, ...without } = ctx;
     expect(() => fill(loadTemplate(repo, 'operator'), without as Ctx)).toThrow('no value for {{mission}}');
     expect(VARS).toContain('mission');
+  });
+
+  it('points the operator and housekeeping agents at the real worktrees root, outside the repo', () => {
+    const root = worktreesRoot(repo);
+    expect(root.startsWith(join(process.env.KANBAN95_HOME!, 'worktrees'))).toBe(true);
+    const ctx = buildContext(srv.db, repo, null, 'operator');
+    expect(ctx.worktrees).toBe(root);
+    expect(render(repo, 'operator', { ...ctx, mission: 'go' })).toContain(`git worktree add ${root}/op-<time> -b op-<time>`);
+    expect(render(repo, 'housekeeping', ctx)).toContain(`orphan directories under this repo's worktrees root \`${root}\``);
   });
 
   it('an unknown variable still fails', () => {

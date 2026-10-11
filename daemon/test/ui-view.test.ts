@@ -2,7 +2,7 @@
 import './home.ts'; // also here, not only in vitest.config.ts: a run from the repo root skips that config and wrote the real home
 import { describe, expect, it } from 'vitest';
 import { until } from './cdp.ts';
-import { page, base, ticket, column, click, setUi } from './ui.ts';
+import { page, base, db, ticket, column, click, setUi, uiSaved } from './ui.ts';
 
 const key = (key: string, code: string, vk: number, modifiers = 0) =>
   page.send('Input.dispatchKeyEvent', { type: 'keyDown', key, code, windowsVirtualKeyCode: vk, modifiers });
@@ -15,6 +15,9 @@ const typeFilter = async (text: string) => {
 
 describe('ui-view', { timeout: 90_000 }, () => {
   it('filters by any field or one field from the status bar and keeps the filter across a reload', async () => {
+    // From a clean board, so a retry is a real second try and not a count of the first one's cards and filter.
+    db.exec('DELETE FROM tickets');
+    await setUi('k95.view', undefined);
     // The test home's default execute effort is low and model "work", so "ui" can only come from a title or a tag.
     const a = ticket('Build the UI', { effort: 'high' });
     const b = ticket('Daemon thing', { effort: 'max', tags: 'ui' });
@@ -42,6 +45,7 @@ describe('ui-view', { timeout: 90_000 }, () => {
 
     // Nor a card in a folded column: Done starts folded, and unfolding it shows its card unselected.
     const e = ticket('Shipped ui', { status: 'done', tags: 'ui' });
+    await uiSaved('k95.view'); // else the reload can read ui.json before the typed filter reaches it, and Ctrl+A takes every card
     await page.goto(base);
     await until(() => column(b), 'the cards after the reload');
     await click(`.card[data-id="${b}"]`);
@@ -63,6 +67,7 @@ describe('ui-view', { timeout: 90_000 }, () => {
     // The box is in the status bar, not the toolbar, and it alone shows the filter: no "Filter: …" status text.
     expect(await page.evaluate<boolean>(`!!document.querySelector('.k95-board .status-bar .k95-filter') && !document.querySelector('.k95-toolbar input, .k95-toolbar select')`)).toBe(true);
     await typeFilter('tag:docs');
+    await uiSaved('k95.view');
     await page.goto(base);
     await until(() => column(c), 'the cards after the reload');
     expect(await page.evaluate<string>(`document.querySelector('.k95-filter').value`)).toBe('tag:docs');
