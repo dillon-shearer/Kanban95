@@ -33,14 +33,16 @@ export function setZoom(f) {
 // right edge when none is open, or when that leaves less than MIN_REGION px), full height. The grid always fits what is shown:
 // its members are the tiled windows (opened with `tile`) that are shown (not minimized, not maximized) and not free, packed
 // into slots 0..n-1 in reading order, in the order of the slot each last held, new ones after. The grid is the first SLOTS
-// row whose count covers n, so there is never a hole. Every change that adds or removes a member repacks: open, close,
+// row whose count covers n. The last row's members share the full region width (5 → 3 on top, 2 below at half the width
+// each), so there is never a hole. Every change that adds or removes a member repacks: open, close,
 // minimize, restore, maximize, unmaximize, drag-out, rejoin, and a change of the region. Dragged or resized, a tiled window
 // is free: it stays where it was left and the rest repack; a double-click on its title bar makes it a member again, after
 // the others. Past the last row's count a window is not tiled: it stays where it opened (`place`) and joins when one
 // leaves. `setTiling(false)` (Settings → Board,
 // `terminals.tile`) stops tiling: terminals open at the least-covered spot and stay where they are dragged.
-// To change the arrangement, edit SLOTS: [up to n windows, columns, rows], ascending n.
-export const SLOTS = [[1, 1, 1], [2, 2, 1], [3, 3, 1], [4, 2, 2], [6, 3, 2], [9, 3, 3], [12, 4, 3]];
+// To change the arrangement, edit SLOTS: [up to n windows, columns, rows], ascending n. [8, 4, 2] keeps 7 and 8 to two rows
+// (4 + 3, 4 + 4); 10 and 11 are 4 + 4 + 2 and 4 + 4 + 3.
+export const SLOTS = [[1, 1, 1], [2, 2, 1], [3, 3, 1], [4, 2, 2], [6, 3, 2], [8, 4, 2], [9, 3, 3], [12, 4, 3]];
 const ACTION = ['board', 'inbox', 'notepad'];
 const MIN_REGION = 240;
 
@@ -74,9 +76,10 @@ export function retile() {
   const [, cols, rows] = SLOTS.find(([n]) => n >= members.length);
   for (const { el, slot } of members) {
     const [c, r] = [slot % cols, Math.floor(slot / cols)];
-    const x = L + Math.round((c * (R - L)) / cols);
+    const across = Math.min(cols, members.length - r * cols); // the last row stretches to the full width
+    const x = L + Math.round((c * (R - L)) / across);
     const y = Math.round((r * H) / rows);
-    Object.assign(el.style, { left: `${x}px`, top: `${y}px`, width: `${L + Math.round(((c + 1) * (R - L)) / cols) - x}px`, height: `${Math.round(((r + 1) * H) / rows) - y}px` });
+    Object.assign(el.style, { left: `${x}px`, top: `${y}px`, width: `${L + Math.round(((c + 1) * (R - L)) / across) - x}px`, height: `${Math.round(((r + 1) * H) / rows) - y}px` });
   }
 }
 /** retile() once things settle: a drag of the Board moves the region many times a second. */
