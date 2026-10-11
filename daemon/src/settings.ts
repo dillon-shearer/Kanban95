@@ -1,8 +1,9 @@
 // The operator's own settings in ~/.kanban95/, edited in the Settings window. No secrets live here.
 // models.json: which CLI, and the model and effort per phase (docs/LIFECYCLE.md → Run settings). settings.json: CLI paths,
 // sounds, voice, housekeeping, auto-opened terminals, idle minutes, UI zoom, push after merge. projects.json: every repo with a board and its wallpaper colour. All are read on every use, so an edit applies to the next run without a restart.
+// models.json, settings.json and preferences.md may have a per-project copy in projects/<repo key>/, used whole instead of the global file.
 import { execFile } from 'node:child_process';
-import { createReadStream, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync } from 'node:fs';
+import { copyFileSync, createReadStream, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, rmdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, delimiter, dirname, isAbsolute, join, resolve } from 'node:path';
 import * as z from 'zod';
@@ -56,7 +57,63 @@ export function boardHome(): string {
   return join(homedir(), '.kanban95');
 }
 
-export const configPath = (name: ConfigName) => join(boardHome(), `${name}.json`);
+/** FNV-1a, 32 bit, as hex: stable across Node releases, like the shell's per-repo WebView2 profile name. */
+const fnv1a = (s: string) => {
+  let h = 0x811c9dc5;
+  for (const b of Buffer.from(s, 'utf8')) h = Math.imul(h ^ b, 0x01000193) >>> 0;
+  return h.toString(16).padStart(8, '0');
+};
+
+/**
+ * A repo's key under the board home: `<basename>-<hash of the canonical path>`. The hash keeps two repos with the same folder
+ * name apart; Windows paths are hashed lower-cased, as one folder has one key whatever case it is typed in.
+ */
+export function repoKey(repo: string): string {
+  const path = normal(repo);
+  return `${basename(path)}-${fnv1a(process.platform === 'win32' ? path.toLowerCase() : path)}`;
+}
+
+/** A file that may have a per-project copy. */
+export type OverridableName = ConfigName | 'preferences';
+const fileName = (name: OverridableName) => (name === 'preferences' ? 'preferences.md' : `${name}.json`);
+export const isOverridable = (s: string): s is OverridableName => s === 'preferences' || (CONFIGS as string[]).includes(s);
+
+/** <board home>/projects/<repo key>/<file>: the repo's own copy, whether or not it exists. */
+export const projectPath = (name: OverridableName, repo: string) => join(boardHome(), 'projects', repoKey(repo), fileName(name));
+export const globalPath = (name: OverridableName) => join(boardHome(), fileName(name));
+
+/** The file a run on `repo` reads: its project copy when one exists, else the global file. No repo: the global file. */
+export function configPath(name: OverridableName, repo?: string): string {
+  if (repo) {
+    const own = projectPath(name, repo);
+    if (existsSync(own)) return own;
+  }
+  return globalPath(name);
+}
+
+/**
+ * Starts a project copy as a copy of the global file (settings: `{}`, preferences: empty when there is none). False when
+ * the copy exists already. No global models.json is BadConfig: there is nothing to start from.
+ */
+export function addOverride(name: OverridableName, repo: string): boolean {
+  const own = projectPath(name, repo);
+  if (existsSync(own)) return false;
+  const global = globalPath(name);
+  if (!existsSync(global) && name === 'models') throw new BadConfig(`no model catalog at ${global} to copy`);
+  mkdirSync(dirname(own), { recursive: true });
+  if (existsSync(global)) copyFileSync(global, own);
+  else writeFileSync(own, name === 'settings' ? '{}\n' : '');
+  return true;
+}
+
+/** Removes a project copy, and its project dir once empty. False when there is no copy. */
+export function dropOverride(name: OverridableName, repo: string): boolean {
+  const own = projectPath(name, repo);
+  if (!existsSync(own)) return false;
+  unlinkSync(own);
+  try { rmdirSync(dirname(own)); } catch { /* another copy is still there */ }
+  return true;
+}
 
 /** A file that does not pass its schema. REST answers it with 400. */
 export class BadConfig extends Error {}
@@ -67,9 +124,9 @@ function check<N extends ConfigName>(name: N, value: unknown, where: string): Co
   return r.data as Config<N>;
 }
 
-/** models.json has no default (the operator picks the models); a missing settings.json is all defaults. */
-export function readConfig<N extends ConfigName>(name: N): Config<N> {
-  const file = configPath(name);
+/** models.json has no default (the operator picks the models); a missing settings.json is all defaults. A project copy is read whole. */
+export function readConfig<N extends ConfigName>(name: N, repo?: string): Config<N> {
+  const file = configPath(name, repo);
   if (!existsSync(file)) {
     if (name === 'models') throw new BadConfig(`no model catalog at ${file}`);
     return check(name, {}, file);
@@ -77,9 +134,12 @@ export function readConfig<N extends ConfigName>(name: N): Config<N> {
   return check(name, JSON.parse(readFileSync(file, 'utf8')), file);
 }
 
-/** Checked first, then written whole through a temp file, so a bad edit never reaches the file and a crash never half-writes it. */
-export function writeConfig<N extends ConfigName>(name: N, value: unknown): Config<N> {
-  const file = configPath(name);
+/**
+ * Checked first, then written whole through a temp file, so a bad edit never reaches the file and a crash never half-writes it.
+ * With a repo it writes that repo's project copy, creating it; else the global file.
+ */
+export function writeConfig<N extends ConfigName>(name: N, value: unknown, repo?: string): Config<N> {
+  const file = repo ? projectPath(name, repo) : globalPath(name);
   const data = check(name, value, `${name}.json`);
   mkdirSync(dirname(file), { recursive: true });
   writeFileSync(`${file}.tmp`, JSON.stringify(data, null, 2) + '\n');
@@ -93,7 +153,7 @@ export function writeConfig<N extends ConfigName>(name: N, value: unknown): Conf
  * its "latest model" aliases from `claude --help` come first, then every full id compiled into its executable, newest first.
  * Any failure is an empty list.
  */
-export async function knownModels(): Promise<Record<Cli, string[]>> {
+export async function knownModels(repo?: string): Promise<Record<Cli, string[]>> {
   const codex = (() => {
     try {
       const { models } = JSON.parse(readFileSync(join(homedir(), '.codex', 'models_cache.json'), 'utf8'));
@@ -102,7 +162,7 @@ export async function knownModels(): Promise<Record<Cli, string[]>> {
       return [];
     }
   })();
-  const exe = (() => { try { return readConfig('settings').paths.claude; } catch { return ''; } })()
+  const exe = (() => { try { return readConfig('settings', repo).paths.claude; } catch { return ''; } })()
     || process.env.PATH?.split(delimiter).map((d) => join(d, process.platform === 'win32' ? 'claude.exe' : 'claude')).find((p) => existsSync(p));
   if (!exe) return { claude: [], codex };
   const [aliases, ids] = await Promise.all([
@@ -151,8 +211,8 @@ async function claudeIds(exe: string): Promise<string[]> {
  * cli, model, effort and executable for a run. The ticket's cli wins; its model and effort override the execute phase only.
  * A brainstorm (no ticket) runs the plan phase; an operator terminal the operator phase, whose model may be unset (''): the CLI's own default.
  */
-export function runSettings(t: Ticket | null, phase: 'plan' | 'execute' | 'test' | 'operator'): { cli: Cli; model: string; effort: Effort; path?: string } {
-  const file = configPath('models');
+export function runSettings(t: Ticket | null, phase: 'plan' | 'execute' | 'test' | 'operator', repo?: string): { cli: Cli; model: string; effort: Effort; path?: string } {
+  const file = configPath('models', repo);
   if (!existsSync(file)) throw new Error(`no model catalog at ${file}`);
   const cfg = JSON.parse(readFileSync(file, 'utf8'));
   const cli = t?.cli ?? cfg.cli;
@@ -162,20 +222,20 @@ export function runSettings(t: Ticket | null, phase: 'plan' | 'execute' | 'test'
   const model = (own && t?.model) || d.model || '';
   const effort = (own && t?.effort) || d.effort || 'medium';
   if (!model && phase !== 'operator') throw new Error(`no ${phase} model for ${cli} in ${file}`);
-  const bad = model && uncatalogued(model, cli);
+  const bad = model && uncatalogued(model, cli, repo);
   if (bad) throw new Error(bad);
   // Only a model id outside the list is caught before launch; an agent stuck at its prompt for another reason is flagged by the
   // silence watch (lifecycle.ts) after idle_minutes.
   if (!EFFORT.includes(effort)) throw new Error(`bad effort ${effort} for ${cli} ${phase} in ${file}`);
-  return { cli, model, effort, path: readConfig('settings').paths[cli as Cli] || undefined };
+  return { cli, model, effort, path: readConfig('settings', repo).paths[cli as Cli] || undefined };
 }
 
 /**
  * Why a model id may not run on a CLI: it is not in that CLI's `models` list in models.json. No list (or no file) means
  * no check, so a catalog written before the list existed keeps launching. Null when the model is fine.
  */
-export function uncatalogued(model: string, cli?: string | null): string | null {
-  const file = configPath('models');
+export function uncatalogued(model: string, cli?: string | null, repo?: string): string | null {
+  const file = configPath('models', repo);
   if (!existsSync(file)) return null;
   const cfg = JSON.parse(readFileSync(file, 'utf8'));
   const c = cli ?? cfg.cli;
@@ -185,33 +245,33 @@ export function uncatalogued(model: string, cli?: string | null): string | null 
 }
 
 /** The operator's configured executable for a CLI, else its bare name for PATH. A broken settings.json reads as unset. */
-export function cliPath(cli: Cli): string {
+export function cliPath(cli: Cli, repo?: string): string {
   try {
-    return readConfig('settings').paths[cli] || cli;
+    return readConfig('settings', repo).paths[cli] || cli;
   } catch {
     return cli;
   }
 }
 
-/** ~/.kanban95/preferences.md: the operator's standing instructions, injected into every prompt as {{preferences}}. */
-export const preferencesPath = () => join(boardHome(), 'preferences.md');
+/** ~/.kanban95/preferences.md (or the repo's project copy): the operator's standing instructions, injected into every prompt as {{preferences}}. */
+export const preferencesPath = (repo?: string) => configPath('preferences', repo);
 const PREFERENCES_MAX = 16 * 1024;
 
 /** A missing file is an empty string. */
-export function readPreferences(): string {
+export function readPreferences(repo?: string): string {
   try {
-    return readFileSync(preferencesPath(), 'utf8');
+    return readFileSync(preferencesPath(repo), 'utf8');
   } catch (e) {
     if ((e as NodeJS.ErrnoException).code === 'ENOENT') return '';
     throw e;
   }
 }
 
-/** Refused over 16 KB (UTF-8 bytes); written through a temp file like the config files. */
-export function writePreferences(value: unknown): string {
+/** Refused over 16 KB (UTF-8 bytes); written through a temp file like the config files. With a repo, to its project copy. */
+export function writePreferences(value: unknown, repo?: string): string {
   if (typeof value !== 'string') throw new BadConfig('preferences.md: value must be a string');
   if (Buffer.byteLength(value) > PREFERENCES_MAX) throw new BadConfig(`preferences.md: over ${PREFERENCES_MAX / 1024} KB`);
-  const file = preferencesPath();
+  const file = repo ? projectPath('preferences', repo) : globalPath('preferences');
   mkdirSync(dirname(file), { recursive: true });
   writeFileSync(`${file}.tmp`, value);
   renameSync(`${file}.tmp`, file);

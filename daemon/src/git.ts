@@ -1,9 +1,9 @@
 // One git worktree per ticket: <board home>/worktrees/<repo key>/t-<id> on branch ticket/<id>, forked from the repo's current branch.
 import { execFileSync } from 'node:child_process';
 import { existsSync, lstatSync, mkdirSync, readdirSync, readlinkSync, realpathSync, unlinkSync, writeFileSync } from 'node:fs';
-import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { INNER_GITIGNORE } from './db.js';
-import { boardHome, normal } from './settings.js';
+import { boardHome, repoKey } from './settings.js';
 
 export const git = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: 'pipe' }).trim();
 
@@ -26,22 +26,13 @@ export function gitNotRun(e: unknown): boolean {
   return notStarted(x.status ?? x.code) || !`${x.stdout ?? ''}${x.stderr ?? ''}`.trim();
 }
 
-/** FNV-1a, 32 bit, as hex: stable across Node releases, like the shell's per-repo WebView2 profile name. */
-const fnv1a = (s: string) => {
-  let h = 0x811c9dc5;
-  for (const b of Buffer.from(s, 'utf8')) h = Math.imul(h ^ b, 0x01000193) >>> 0;
-  return h.toString(16).padStart(8, '0');
-};
-
 /**
  * Where a repo's ticket worktrees live: `<board home>/worktrees/<basename>-<hash of the canonical path>`, never under the
  * repo. A repo in a synced folder (OneDrive) would otherwise upload every worktree's `npm ci`, get throttled, and lock files
- * so a worktree could not be removed. The hash keeps two repos with the same folder name apart; Windows paths are hashed
- * lower-cased, as one folder has one key whatever case it is typed in.
+ * so a worktree could not be removed. The key is settings.ts `repoKey`.
  */
 export function worktreesRoot(repo: string): string {
-  const path = normal(repo);
-  return join(boardHome(), 'worktrees', `${basename(path)}-${fnv1a(process.platform === 'win32' ? path.toLowerCase() : path)}`);
+  return join(boardHome(), 'worktrees', repoKey(repo));
 }
 export const worktreePath = (repo: string, ticketId: number) => join(worktreesRoot(repo), `t-${ticketId}`);
 export const branchName = (ticketId: number) => `ticket/${ticketId}`;

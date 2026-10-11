@@ -92,7 +92,7 @@ export const TOOLS: Record<string, Tool<z.ZodRawShape>> = {
     run(c, a) {
       const worker = c.grant.role === 'worker';
       if (worker && (a.model !== undefined || a.effort !== undefined)) throw new Deny('a worker may not set model or effort; the follow-up runs on the operator\x27s defaults');
-      const bad = a.model && uncatalogued(a.model);
+      const bad = a.model && uncatalogued(a.model, null, c.board.repo);
       if (bad) throw new Error(bad);
       const body = worker ? `Filed by #${c.grant.ticket_id}\n\n${a.body}` : a.body;
       const tags = normaliseTags(a.tags ?? []);
@@ -183,7 +183,7 @@ export const TOOLS: Record<string, Tool<z.ZodRawShape>> = {
       const id = (c.ticket = own(c, a.ticket_id));
       if (a.model === undefined && a.effort === undefined) throw new Error('give model and/or effort');
       const t = readTicket(c.db, id);
-      const bad = a.model !== undefined && uncatalogued(a.model, t.cli);
+      const bad = a.model !== undefined && uncatalogued(a.model, t.cli, c.board.repo);
       if (bad) throw new Error(bad);
       const set: Record<string, unknown> = {};
       if (a.model !== undefined) set.model = a.model;
