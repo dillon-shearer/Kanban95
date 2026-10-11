@@ -8,7 +8,7 @@ import { readTicket, transaction, type Ticket } from './api.js';
 import { branchName, git, isAncestor, syncWorktree, worktreePath } from './git.js';
 import { revoke, type Role } from './grants.js';
 import { cleanTicket } from './janitor.js';
-import { launch, launchRoot, prepareWorktree, sessions, sessionsOf, transcriptSize, type Session } from './launcher.js';
+import { killTree, launch, launchRoot, prepareWorktree, sessions, sessionsOf, transcriptSize, type Session } from './launcher.js';
 import { ahead, enqueue, merge, push } from './merge.js';
 import { lastLines } from './pty.js';
 import { BadConfig, EFFORT, readConfig, runSettings, type Effort } from './settings.js';
@@ -233,10 +233,12 @@ export function apply(b: Board, id: number, event: Event, x: { note?: Note; answ
       case 'spawn_test': spawn(b, id, 'test', resume); break;
       case 'end_session':
         // The agent reported; its session is over. The grant expires now, the pty is killed, its exit is expected.
+        // A session with an outcome is already dying (an earlier report); its outcome stays the one that ended it.
         for (const s of sessionsOf(id)) {
+          if (s.outcome) continue;
           s.outcome = event;
           revoke(b.db, s.grantId);
-          s.pty.kill();
+          killTree(s.pty);
         }
         break;
       case 'enqueue_merge': queueMerge(b, id); break;
@@ -323,8 +325,12 @@ function exited(b: Board, s: Session) {
 
 /** How often running agents' transcripts are looked at, and how long one of settings.json's idle_minutes is. Tests shorten both. */
 export const SILENCE = { every: 60_000, minute: 60_000 };
-/** Per session key: the transcript size last seen, when the silence began, and the note that flagged it, if it did (`prompt`: a CLAUDE_PROMPT question). */
-const heard = new Map<number, { size: number; at: number; note?: number; prompt?: boolean }>();
+/**
+ * Per session: the transcript size last seen, when the silence began, and the note that flagged it, if it did (`prompt`: a
+ * CLAUDE_PROMPT question). Keyed by the session, not its key: a key is a run id, which a second board in the same process (the
+ * tests) hands out again, and an entry left by the first would date the new session's silence from the old one's start.
+ */
+const heard = new WeakMap<Session, { size: number; at: number; note?: number; prompt?: boolean }>();
 
 /**
  * Claude Code's own yes/no menu. A few of its safety checks still raise it under --dangerously-skip-permissions, and no
@@ -403,13 +409,12 @@ function listen(b: Board) {
     limit = readConfig('settings').idle_minutes;
   } catch { /* a broken settings.json: the default */ }
   const now = Date.now();
-  for (const k of heard.keys()) if (!sessions.has(k)) heard.delete(k);
   for (const s of sessions.values()) {
     if (s.ticketId === null || s.outcome) continue;
     try {
       const size = transcriptSize(s);
-      const h = heard.get(s.key) ?? { size, at: s.started };
-      heard.set(s.key, h);
+      const h = heard.get(s) ?? { size, at: s.started };
+      heard.set(s, h);
       const flagged = readTicket(b.db, s.ticketId).flags.needs_human;
       const prompt = s.cli === 'claude' ? claudePrompt(s.scrollback()) : undefined;
       if (prompt !== undefined) {

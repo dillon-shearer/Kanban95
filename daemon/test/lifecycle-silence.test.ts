@@ -4,7 +4,7 @@ import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { delimiter, dirname, join } from 'node:path';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { worktreePath } from '../src/git.ts';
-import { sessionsOf, transcriptSize } from '../src/launcher.ts';
+import { sessionsOf } from '../src/launcher.ts';
 import { SILENCE } from '../src/lifecycle.ts';
 import { db, git, models, notes, post, repo, runs, sounds, t, ticket, until } from './board.ts';
 
@@ -14,21 +14,23 @@ describe('silent agents', { timeout: 60_000 }, () => {
   const settingsFile = () => join(process.env.USERPROFILE!, '.kanban95', 'settings.json');
   beforeAll(() => Object.assign(SILENCE, { every: 50, minute: 400 }));
   afterAll(() => Object.assign(SILENCE, silence0));
-  afterEach(() => rmSync(settingsFile(), { force: true }));
-  // The fake takes 0.5 s to start alone and seconds under load, longer than a test minute, and the clock runs from the spawn.
-  // So the watch stays at the default 20 until the agent has printed and written its transcript, then drops to 1 (read every look).
-  const started = async (id: number) => {
-    await until(() => sessionsOf(id).length === 1 && sessionsOf(id)[0].scrollback().includes('FAKE') && transcriptSize(sessionsOf(id)[0]) > 0, 'the agent to start');
+  // The fake's node can take seconds to start (1.5 s measured with the suite run from an agent's terminal on a loaded machine),
+  // longer than the limit, so the limit drops to 1 only once it has printed; until then 60 (24 s, past the wait for it) holds.
+  beforeEach(() => writeFileSync(settingsFile(), JSON.stringify({ idle_minutes: 60 })));
+  const up = async (id: number) => {
+    await until(() => sessionsOf(id)[0]?.scrollback().includes('FAKE'), 'the fake agent to start', 20_000);
     writeFileSync(settingsFile(), JSON.stringify({ idle_minutes: 1 }));
   };
+  afterEach(() => rmSync(settingsFile(), { force: true }));
 
   it('a live agent whose transcript gains no line for idle_minutes is flagged once, with the minutes and its last terminal lines', async () => {
     const id = ticket('Frozen', { model: 'hang' });
+    const at = Date.now();
     await post(`/api/tickets/${id}/launch`);
-    await started(id);
+    await up(id);
     await until(() => t(id).flags.needs_human, 'the silence flag', 10_000);
+    expect(Date.now() - at).toBeGreaterThanOrEqual(400);
     const [note] = notes(id, 'failure');
-    expect(Date.now() - Date.parse(/since (\S+)\. /.exec(note)![1])).toBeGreaterThanOrEqual(400);
     expect(note).toMatch(/^agent silent for 1 min: its transcript has had no new line since \d{4}-\d\d-\d\dT[\d:.]+Z\. Last lines of its terminal:\n```\n/);
     expect(note).toMatch(/\nFAKE hang\n```\nTo resolve: open its terminal .*Restart/);
     expect(sounds).toEqual([{ sound: 'chord', ticket: id }]);
@@ -41,7 +43,7 @@ describe('silent agents', { timeout: 60_000 }, () => {
   it('an agent that keeps writing to its transcript is not flagged, however long it runs', async () => {
     const id = ticket('Busy', { model: 'chatty' });
     await post(`/api/tickets/${id}/launch`);
-    await started(id);
+    await up(id);
     await new Promise((r) => setTimeout(r, 2000)); // five times the limit
     expect(t(id).flags.needs_human).toBe(false);
     expect(notes(id, 'failure')).toEqual([]);
@@ -51,7 +53,7 @@ describe('silent agents', { timeout: 60_000 }, () => {
   it('a flagged agent that writes again is unflagged by itself; the note stays as the record', async () => {
     const id = ticket('Slow start', { model: 'nap' });
     await post(`/api/tickets/${id}/launch`);
-    await started(id);
+    await up(id);
     await until(() => t(id).flags.needs_human, 'the silence flag', 10_000);
     await until(() => !t(id).flags.needs_human, 'the flag cleared', 10_000);
     expect(notes(id, 'failure')).toHaveLength(1);
@@ -61,7 +63,7 @@ describe('silent agents', { timeout: 60_000 }, () => {
   it('a flag raised by a question is not cleared when the transcript grows', async () => {
     const id = ticket('Asks while slow', { model: 'nap' });
     await post(`/api/tickets/${id}/launch`);
-    await started(id);
+    await up(id);
     await until(() => t(id).flags.needs_human, 'the silence flag', 10_000);
     db.prepare("INSERT INTO notes (ticket_id, role, kind, body) VALUES (?, 'worker', 'question', 'Which colour?')").run(id); // as ask_operator writes it
     await new Promise((r) => setTimeout(r, 2500)); // the nap is over and the transcript grows

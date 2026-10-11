@@ -9,7 +9,7 @@ import { attachmentDir, attachments, MAX_ATTACHMENT, safeName, saveAttachment } 
 import { BRAIN_BODY_MAX, BRAIN_RANK, isConstraintError, SCOPES, type Brains, type Scope } from './db.js';
 import { hasBranch, ticketDiff } from './git.js';
 import { audit, revoke } from './grants.js';
-import { killGrantSession, sessions, sessionsOf, type Session } from './launcher.js';
+import { killGrantSession, killTree, sessions, sessionsOf, type Session } from './launcher.js';
 import { apply, brainstorm, changed, housekeeping, operator, pushBase, Refused, runner, runnerState, setRunner, type Board } from './lifecycle.js';
 import { BadConfig, CONFIGS, configPath, knownModels, preferencesPath, project, projectsPath, readPreferences, readProjects, uncatalogued, writeConfig, writePreferences, writeProjects, type ConfigName } from './settings.js';
 import { isStale, resetTemplate, templatePath, TEMPLATES, unknownVar, VARS, writeTemplate, type TemplateName } from './templates.js';
@@ -113,12 +113,16 @@ export function setDeps(db: DatabaseSync, id: number, deps: number[]) {
   if (cycle) throw new HttpError(400, `dependency cycle: ticket ${id} would end up depending on itself`);
 }
 
-/** Ends every live session of a ticket. The outcome is set before the kill, so exited() records it and flags nothing. */
+/**
+ * Ends every live session of a ticket. The outcome is set before the kill, so exited() records it and flags nothing. A session
+ * that already has one is already dying and keeps it.
+ */
 function endSessions(db: DatabaseSync, id: number, outcome: string) {
   for (const s of sessionsOf(id)) {
+    if (s.outcome) continue;
     s.outcome = outcome;
     revoke(db, s.grantId);
-    s.pty.kill();
+    killTree(s.pty);
   }
 }
 
@@ -424,7 +428,7 @@ const routes: [method: string, path: RegExp, mutation: string | null, handler: (
     if (!s) throw new HttpError(404, 'no such session');
     s.outcome = 'closed';
     revoke(db, s.grantId);
-    s.pty.kill();
+    killTree(s.pty);
     if (s.ticketId !== null) {
       try {
         apply(board, s.ticketId, 'exit', { note: { role: 'operator', kind: 'failure', body: 'ended by the operator from the terminal window' } });
