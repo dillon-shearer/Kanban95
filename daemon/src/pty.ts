@@ -50,9 +50,14 @@ export function spawnPty(cmd: string, args: string[], o: { cwd: string; env: Rec
   // later. By then (a bare kill, or killTree after a taskkill that timed out) Windows may have handed that pid to another
   // process, which node-pty would end (under a full npm test, other tickets' agents and git mid-merge). killTree ends the tree
   // itself, so the list is dropped.
-  // ponytail: reaches into node-pty internals; drop it once node-pty lists the processes before it closes the console.
-  const agent = (pty as unknown as { _agent?: { _getConsoleProcessList?: () => Promise<number[]> } })._agent;
+  // When the shell exits, node-pty drops its pseudoconsole handle without closing it, so its conhost.exe would live as long as
+  // the daemon. Closing our end of the console's input pipe makes conhost exit. node-pty reports the exit only after it has
+  // flushed the output, so nothing is lost.
+  // ponytail: reaches into node-pty internals; drop both once node-pty lists the processes before it closes the console and
+  // closes the pseudoconsole on exit.
+  const agent = (pty as unknown as { _agent?: { _getConsoleProcessList?: () => Promise<number[]>; _inSocket?: { destroy(): void } } })._agent;
   if (agent?._getConsoleProcessList) agent._getConsoleProcessList = () => Promise.resolve([]);
+  if (agent?._inSocket) pty.onExit(() => agent._inSocket!.destroy());
 
   // Raw terminal output, trimmed to the last SCROLLBACK_LINES lines whenever it grows to twice that.
   let buf = '';
