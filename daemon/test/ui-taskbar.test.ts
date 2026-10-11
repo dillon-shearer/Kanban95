@@ -236,13 +236,15 @@ describe('ui-taskbar', { timeout: 60_000 }, () => {
     const bar = () => page.evaluate<string>(`document.querySelector('.k95-board .status-bar').textContent`);
     const dialog = () => page.evaluate<string | null>(`[...document.querySelectorAll('dialog[open]')].find((d) => d.querySelector('.title-bar-text').textContent === 'Restart board')?.querySelector('.window-body').textContent ?? null`);
     expect(await badge()).toBe(false);
-    expect(await bar()).not.toContain('Restart the board');
+    expect(await bar()).not.toContain('restart pending');
+    const running = ticket('Still running', { status: 'in_progress' }); // one ticket left to finish
     try {
       for (const stale of ['daemon', 'shell'] as const) {
         srv.board.stale = stale;
         changed(null);
         await until(badge, 'the Restart badge');
-        expect(await bar()).toContain('Restart the board to use the merged changes.');
+        // No shell runs this daemon, so the operator restarts it.
+        expect(await bar()).toContain(`restart pending, 1 ticket to finish; then ${stale === 'shell' ? 'close Kanban95 and start it again' : 'Start → Restart board'}`);
         await click('#restart-badge');
         await until(dialog, 'the confirm');
         expect((await dialog())!.includes('A merge changed the shell itself')).toBe(stale === 'shell');
@@ -253,6 +255,8 @@ describe('ui-taskbar', { timeout: 60_000 }, () => {
       }
     } finally {
       srv.board.stale = false;
+      db.prepare('DELETE FROM tickets WHERE id = ?').run(running);
+      changed(null);
     }
   });
 });

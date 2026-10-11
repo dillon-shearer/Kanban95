@@ -305,8 +305,16 @@ async function newOperator() {
   if ((await dialog('New operator terminal', body, ['Start', 'Cancel'])) !== 'Start') return;
   await act(async () => openTerminal(await api('POST', '/operator', { mission: mission.value })), 'Operator terminal started.');
 }
+// runner.hold: a merge changed daemon/, templates/, shell/ or package.json since start, so the runner starts nothing new and the
+// board restarts once its running tickets finish (docs/OPERATOR.md → Restart after a merge). `restart` says who restarts it.
+const HOLD_THEN = {
+  self: '',
+  manual: '; then Start → Restart board',
+  failed: '; the board could not rebuild itself: Start → Restart board shows why',
+  relaunch: '; then close Kanban95 and start it again',
+};
+const holdLine = (h) => `restart pending, ${h.finish} ticket${h.finish === 1 ? '' : 's'} to finish${HOLD_THEN[h.restart]}`;
 /** Start → Restart board: the daemon rebuilds, exits 75, and the shell starts it again (docs/OPERATOR.md → Restart board). */
-const STALE = 'Restart the board to use the merged changes.'; // runner.stale: a merge changed daemon/, shell/ or package.json since start
 async function restartBoard() {
   const agents = sessions.filter((s) => s.ticket_id !== null).length;
   const terminals = sessions.length - agents;
@@ -504,7 +512,7 @@ function openBoard() {
     for (const c of cols.querySelectorAll('.col')) c.querySelector('.cards').scrollTop = scroll[c.dataset.status] ?? 0;
     if (focus) cols.querySelector(`.col[data-status="${focus[0]}"] .card[data-id="${focus[1]}"]`)?.focus();
     run.textContent = runner.on ? 'Stop' : 'Run';
-    runField.textContent = runField.title = runner.gitError ?? (runner.stale ? STALE : runnerLine(runner)); // gitError: GET /api/runner, set at start
+    runField.textContent = runField.title = runner.gitError ?? (runner.hold ? holdLine(runner.hold) : runnerLine(runner)); // gitError: GET /api/runner, set at start
     runField.hidden = !runField.textContent;
     const held = heldTickets().length;
     heldField.textContent = held ? `${held} waiting to launch by themselves` : '';

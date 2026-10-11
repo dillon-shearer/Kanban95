@@ -1,5 +1,4 @@
 // UI-facing REST under /api. Operator-only (no grant); every mutation writes an audit row.
-import { exec } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { dirname, extname, join, resolve } from 'node:path';
@@ -10,7 +9,7 @@ import { BRAIN_BODY_MAX, BRAIN_RANK, isConstraintError, SCOPES, type Brains, typ
 import { hasBranch, ticketDiff } from './git.js';
 import { audit, revoke } from './grants.js';
 import { killGrantSession, killTree, sessions, sessionsOf, type Session } from './launcher.js';
-import { apply, brainstorm, changed, housekeeping, operator, pushBase, Refused, runner, runnerState, setRunner, type Board } from './lifecycle.js';
+import { apply, brainstorm, changed, housekeeping, operator, pushBase, Refused, restartBoard, runner, runnerState, setRunner, type Board } from './lifecycle.js';
 import { BadConfig, CONFIGS, configPath, knownModels, preferencesPath, project, projectsPath, readPreferences, readProjects, uncatalogued, writeConfig, writePreferences, writeProjects, type ConfigName } from './settings.js';
 import { isStale, resetTemplate, templatePath, TEMPLATES, unknownVar, VARS, writeTemplate, type TemplateName } from './templates.js';
 import { trustStatus, untrustClaude } from './trust.js';
@@ -237,7 +236,6 @@ function ftsQuery(q: string): string {
 }
 
 const NOTEPAD_MAX = 256 * 1024;
-const BUILD_TIMEOUT = 120_000;
 const notepadPath = (board: Board) => join(board.repo, '.kanban95', 'notepad.md');
 const UI_MAX = 64 * 1024;
 const uiPath = (board: Board) => join(board.repo, '.kanban95', 'ui.json');
@@ -449,22 +447,12 @@ const routes: [method: string, path: RegExp, mutation: string | null, handler: (
     if (typeof body.mission !== 'string' || !body.mission.trim()) throw new HttpError(400, 'mission must be a non-empty string');
     return { status: 201, body: sessionView(operator(board, body.mission)) };
   }],
-  // Rebuild (from a repo checkout; an installed app/ has no daemon/src and nothing to build), then close and exit 75. The
-  // shell restarts the daemon on 75 and the window follows it to the new port (docs/ARCHITECTURE.md -> Restart board).
+  // Start → Restart board: rebuild, then close and exit 75 (restartBoard in lifecycle.ts, which the board's own restart after a
+  // merge uses too). 409 with the compiler output when the build fails.
   ['POST', /^\/api\/restart$/, 'board.restart', async ({ board }) => {
     if (board.closing || !board.shutdown) throw new HttpError(409, board.closing ? 'the board is already shutting down' : 'restart needs the daemon running as its own process');
-    const root = board.root ?? resolve(import.meta.dirname, '../..');
-    if (existsSync(join(root, 'daemon', 'src'))) {
-      const failed = await new Promise<string | null>((ok) => {
-        // Through a shell, since npm is npm.cmd on Windows. The command is fixed; nothing from the request reaches it.
-        exec('npm run build', { cwd: root, timeout: BUILD_TIMEOUT, windowsHide: true }, (e, out, err) =>
-          ok(e ? `${out}${err}`.trim() || e.message : null));
-      });
-      if (failed !== null) throw new HttpError(409, failed);
-    }
-    if (board.closing) throw new HttpError(409, 'the board is already shutting down');
-    const shutdown = board.shutdown;
-    setTimeout(() => shutdown(75), 50); // after the reply is on its way
+    const failed = await restartBoard(board);
+    if (failed !== null) throw new HttpError(409, failed);
     return { status: 202, body: { restarting: true, shell: board.shell === true } };
   }],
   // <repo>/.kanban95/notepad.md, the operator's scratch notes, whole file in `value` both ways ('' when absent).
