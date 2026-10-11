@@ -31,6 +31,7 @@ Living document. Update it in the same change that alters the shape described he
   - `limits.ts` asks each CLI for its account's usage limits and caches them 5 minutes (`docs/OPERATOR.md` → Limits).
   - `mcp.ts` is the agent-facing MCP server at `/mcp`: one table of tools, each with a description, a role access cell and a handler, enforced per grant and audited per call.
   - `mcp-doc.ts` renders `docs/MCP.md` from the `mcp.ts` tool table.
+  - `memlog.ts` appends free memory and each live session's process-tree working set to `.kanban95/memory.log` every 30 s, plus a line per launch, kill and merge (`docs/DATA.md`).
   - `merge.ts` is the one serialized merge queue.
   - `pty.ts` spawns the CLI in a pseudo-terminal with an env allowlist and keeps a 2000-line scrollback.
   - `server.ts` is the HTTP plumbing (bind, origin guard, static files, `/health`, routes `/api/*` to `api.ts`).
@@ -167,6 +168,7 @@ daemon/           src/ (see Daemon above):
                     limits.ts
                     mcp.ts
                     mcp-doc.ts
+                    memlog.ts
                     merge.ts
                     pty.ts
                     server.ts

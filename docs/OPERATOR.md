@@ -185,6 +185,10 @@ How much of each account's usage limits is spent: the Claude Code account and th
 
 The numbers come from the CLIs themselves, each with its own login: Claude Code's `/usage` command (`claude -p --safe-mode --no-session-persistence "/usage"`, no model call, no quota spent, about 10 s) and Codex's app server (`codex app-server`, request `account/rateLimits/read`, about 3 s). They are read when the board opens and every 5 minutes after, one CLI at a time; **Refresh** reads them now. A CLI that is not installed, not logged in, or whose output the board no longer understands shows "Not available:" and the reason instead of a table; the other CLI is unaffected. The executables are the ones in **Settings → Agents → Executables**, or `claude` and `codex` on PATH.
 
+## Memory log
+
+If the machine freezes or slows while the board runs, open `.kanban95/memory.log` in the repo (git-ignored, the last 24 h) with any text editor. Every 30 s it has a `mem` line with free and total memory in MB, the commit charge, the daemon's own memory, how many processes run, each running agent's whole process tree (`t130=1800MB/12` is ticket 130's agent and everything it started: 1800 MB over 12 processes) and the three heaviest process names on the machine; `launch`, `kill`, `merge-start` and `merge-end` lines, each naming the ticket, show what the board did in between. Look for the last `mem` line before the freeze and the one after: a `free=` near zero and which `t<id>` or `top=` entry grew tells you what took the memory. There is nothing to configure.
+
 ## Grants
 
 Every agent session runs on its own token, scoped to its role and ticket. **Settings → Grants** lists every live one; **Revoke** invalidates the token and stops that agent's terminal at once (the window stays, titled "(ended)"). A ticket's own grants are in its Grants tab.
