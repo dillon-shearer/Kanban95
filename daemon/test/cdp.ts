@@ -39,11 +39,31 @@ export async function browser(args: string[] = []) {
   // (home.ts); it then writes its Microsoft\ caches there, inside the throwaway home.
   if (process.platform === 'win32') mkdirSync(join(homedir(), 'AppData', 'Local'), { recursive: true });
   const proc = spawn(exe, argv, { stdio: 'ignore' });
+  let exited: string | undefined;
+  const gone = new Promise<void>((r) => {
+    proc.once('error', (e) => { exited = e.message; r(); });
+    proc.once('exit', (code, signal) => { exited = `exit ${code ?? signal}`; r(); });
+  });
+  /** Kills the browser, waits for it to go and deletes its profile: after the tests, or when the start fails. */
+  const stop = async () => {
+    if (!exited) proc.kill();
+    await gone;
+    rmSync(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  };
   const portFile = join(profile, 'DevToolsActivePort');
-  const port = await until(() => existsSync(portFile) && readFileSync(portFile, 'utf8').split('\n')[0], 'the DevTools port', 60_000); // slow when several ui-*.test.ts files start browsers at once
-  const targets = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json() as { type: string; webSocketDebuggerUrl: string }[];
-  const ws = new WebSocket(targets.find((t) => t.type === 'page')!.webSocketDebuggerUrl);
-  await new Promise((ok, fail) => { ws.onopen = ok; ws.onerror = fail; });
+  let ws: WebSocket;
+  try {
+    const port = await until(() => {
+      if (exited) throw new Error(`the browser quit before opening its DevTools port (${exited})`);
+      return existsSync(portFile) && readFileSync(portFile, 'utf8').split('\n')[0];
+    }, 'the DevTools port', 60_000); // slow when several ui-*.test.ts files start browsers at once
+    const targets = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json() as { type: string; webSocketDebuggerUrl: string }[];
+    ws = new WebSocket(targets.find((t) => t.type === 'page')!.webSocketDebuggerUrl);
+    await new Promise((ok, fail) => { ws.onopen = ok; ws.onerror = () => fail(new Error('could not connect to the DevTools page')); });
+  } catch (e) {
+    await stop(); // a failed start must not leave a headless browser running or its profile on disk
+    throw e;
+  }
 
   let seq = 0;
   const pending = new Map<number, { ok: (v: any) => void; fail: (e: Error) => void }>();
@@ -101,9 +121,7 @@ export async function browser(args: string[] = []) {
     },
     async close() {
       ws.close();
-      proc.kill();
-      await new Promise((r) => proc.once('exit', r));
-      rmSync(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+      await stop();
     },
   };
 }
