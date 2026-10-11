@@ -70,7 +70,7 @@ beforeEach(async () => {
   db.prepare("INSERT INTO tickets (id, title, body, criteria) VALUES (7, 'Fix the thing', 'body', 'it works')").run();
 });
 afterEach(async () => {
-  // A pty killed before its fake printed leaves the fake running, orphaned (board.ts): close() kills them all.
+  // A pty killed before its fake printed can crash node-pty or never exit (board.ts): close() kills them all.
   await waitFor(() => [...sessions.values()].every((s) => s.scrollback().includes('FAKE UP')));
   await srv.close();
   rmSync(repo, { recursive: true, force: true, maxRetries: 8, retryDelay: 400 }); // a killed agent can hold it for seconds under load

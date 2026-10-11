@@ -47,7 +47,7 @@ export function spawnPty(cmd: string, args: string[], o: { cwd: string; env: Rec
     : spawn(cmd, args, opts);
   // node-pty 1.1's Windows kill() closes the pseudoconsole, then forks a helper to list the processes on the shell's console and
   // kills each; when the helper fails (always, once the console is closed: "AttachConsole failed") it kills the shell's pid 5 s
-  // later. killTree calls kill() after taskkill has ended the shell, so by then Windows may have handed that pid to another
+  // later. By then (a bare kill, or killTree after a taskkill that timed out) Windows may have handed that pid to another
   // process, which node-pty would end (under a full npm test, other tickets' agents and git mid-merge). killTree ends the tree
   // itself, so the list is dropped.
   // ponytail: reaches into node-pty internals; drop it once node-pty lists the processes before it closes the console.
