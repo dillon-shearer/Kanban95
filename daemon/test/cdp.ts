@@ -41,15 +41,23 @@ export async function launch() {
   const home = join(dir, 'home');
   mkdirSync(join(home, 'AppData', 'Local'), { recursive: true });
   const proc = spawn(exe, argv, { stdio: 'ignore', env: { ...process.env, USERPROFILE: home, HOME: home } });
-  const exited = new Promise((r) => proc.once('exit', r));
+  let exited: string | undefined;
+  const gone = new Promise<void>((r) => {
+    proc.once('error', (e) => { exited = e.message; r(); });
+    proc.once('exit', (code, signal) => { exited = `exit ${code ?? signal}`; r(); });
+  });
   const close = async () => {
-    proc.kill();
-    await exited;
+    if (!exited) proc.kill();
+    await gone;
     rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   };
   const portFile = join(profile, 'DevToolsActivePort');
   try {
-    const port = await until(() => existsSync(portFile) && readFileSync(portFile, 'utf8').split('\n')[0], 'the DevTools port', 60_000);
+    const port = await until(() => {
+      // A browser that quit will never write the port: fail now with its exit code, not after 60 s.
+      if (exited) throw new Error(`the browser quit before opening its DevTools port (${exited})`);
+      return existsSync(portFile) && readFileSync(portFile, 'utf8').split('\n')[0];
+    }, 'the DevTools port', 60_000);
     return { port: Number(port), close };
   } catch (e) {
     await close();
