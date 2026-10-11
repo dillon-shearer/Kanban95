@@ -225,11 +225,11 @@ export function start(config: Config = {}): Promise<{
       board.port = addr.port;
       const unregister = register(repo, addr.port); // Start → Projects on the other boards sees this one running
       // Janitor and recovery on start, the janitor again once a day (docs/LIFECYCLE.md).
-      sweep(board);
+      sweep(board).catch(() => {});
       void countUnpushed(board); // the status bar's "N commits not pushed"
       recover(board);
       tick(board); // the runner picks up where it was
-      const daily = setInterval(() => sweep(board), SWEEP_MS).unref();
+      const daily = setInterval(() => sweep(board).catch(() => {}), SWEEP_MS).unref();
       const unwatch = watchSilence(board);
       ok({
         port: addr.port,
