@@ -48,17 +48,36 @@ export function openDb(repo: string, opts: { migrationsDir?: string } = {}): Dat
  * The global brain, ~/.kanban95/brain.db: only the brain tables (migrations/global/). Every board's daemon holds its own
  * connection at once, so WAL (readers never block the one writer) and a busy timeout (a writer waits for another's lock).
  */
-export function openGlobalBrain(home = boardHome()): DatabaseSync {
+export function openGlobalBrain(home = boardHome(), busyMs = BUSY_MS): DatabaseSync {
   mkdirSync(home, { recursive: true });
   const db = new DatabaseSync(join(home, 'brain.db'));
+  // Switching a fresh file to WAL upgrades a shared lock to an exclusive one, and SQLite can return SQLITE_BUSY there
+  // without calling the busy handler (another daemon opening the same new file at once). So the switch and the first
+  // migrate are retried until busyMs has passed, then the error is thrown. Both are safe to repeat.
+  const deadline = Date.now() + busyMs;
   try {
-    db.exec(`PRAGMA busy_timeout = ${BUSY_MS}; PRAGMA journal_mode = WAL;`);
-    migrate(db, GLOBAL_MIGRATIONS_DIR);
+    db.exec(`PRAGMA busy_timeout = ${busyMs}`);
+    for (;;) {
+      try {
+        db.exec('PRAGMA journal_mode = WAL');
+        migrate(db, GLOBAL_MIGRATIONS_DIR);
+        break;
+      } catch (e) {
+        if (!isBusyError(e) || Date.now() >= deadline) throw e;
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10 + Math.random() * 40);
+      }
+    }
   } catch (e) {
     db.close();
     throw e;
   }
   return db;
+}
+
+/** SQLITE_BUSY (primary result code 5), on its own or as the cause of a failed migration. */
+function isBusyError(e: unknown): boolean {
+  const err = e instanceof Error && !('errcode' in e) ? e.cause : e;
+  return err instanceof Error && 'errcode' in err && ((err.errcode as number) & 0xff) === 5;
 }
 
 /** Applies each unapplied *.sql in name order, one transaction per file. A failing file is rolled back and stops the run. */
