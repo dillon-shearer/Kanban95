@@ -13,7 +13,8 @@ import { git, landed, launchTogether, mergeInProgress, notes, post, repo, runs, 
 /** A path as a literal inside a RegExp. */
 const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-describe('lifecycle', { timeout: 60_000 }, () => {
+// 180 s: up to three of board.ts's 60 s waits per test, which a loaded machine needs (55 s alone for the file, up to 118 s).
+describe('lifecycle', { timeout: 180_000 }, () => {
   it('merge conflict: the worker merges the base in its kept worktree and both tickets land with no operator action', async () => {
     const one = ticket('Write shared one', { model: 'conflict' });
     const two = ticket('Write shared two', { model: 'conflict' });
