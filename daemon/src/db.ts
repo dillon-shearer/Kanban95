@@ -19,7 +19,7 @@ const GLOBAL_MIGRATIONS_DIR = join(MIGRATIONS_DIR, 'global');
 /** How long a write waits for another daemon's lock on the shared global brain before failing with SQLITE_BUSY. */
 const BUSY_MS = 5000;
 /** `.kanban95/.gitignore`: the board's own state, never committed. A plain folder's first `.gitignore` repeats it (git.ts `initRepo`). */
-export const INNER_GITIGNORE = 'board.db\nboard.db-*\nsessions/\nattachments/\nnotepad.md\nrunner.json\nui.json\n';
+export const INNER_GITIGNORE = 'board.db\nboard.db-*\nsessions/\nattachments/\nnotepad.md\nrunner.json\nui.json\ntemplates/*.replaced.md\n';
 
 export function openDb(repo: string, opts: { migrationsDir?: string } = {}): DatabaseSync {
   const dir = join(repo, '.kanban95');

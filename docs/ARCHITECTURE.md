@@ -147,7 +147,7 @@ Errors are `{ "error": "..." }`: 400 for bad input, a constraint violation or a 
 
 The template is read from disk on every render, so operator edits (by hand or in Settings → Prompts → Templates) apply without a restart.
 
-The copies follow the shipped defaults unless edited. Each copy or reset records the default's sha256 in `<repo>/.kanban95/templates/.shipped.json`. On daemon start (`initTemplates`), a copy whose sha256 still equals its record is unedited, so a changed default replaces it and the record moves on. An edited copy is never overwritten, nor is one with no record (a board from before the record, or a corrupt `.shipped.json`); a copy with no record that already equals the default is recorded. `GET /api/templates` marks any copy that differs from the current default `stale`, and Settings → Prompts shows it next to Reset. Template-to-role and template-to-phase mapping is the `TEMPLATES` table in `templates.ts`; agent-facing behaviour is in `docs/AGENTS.md`.
+The copies follow the shipped defaults unless edited. Each copy or reset records the default's sha256 in `<repo>/.kanban95/templates/.shipped.json`. On daemon start (`initTemplates`), a copy whose sha256 still equals its record is unedited, so a changed default replaces it and the record moves on. A copy with no record (written by a daemon from before the record, or under a corrupt `.shipped.json`) is replaced by the default and recorded too, unless it already equals it; its old text goes to `<name>.replaced.md` beside it (git-ignored) and a `[templates]` line on stderr names it, and the next start deletes that file. Settings → Prompts → Save leaves the record alone, so a copy edited after its record (its sha256 matches neither the record nor the default) is never overwritten. `GET /api/templates` marks any copy that differs from the current default `stale`, and Settings → Prompts shows it next to Reset. Template-to-role and template-to-phase mapping is the `TEMPLATES` table in `templates.ts`; agent-facing behaviour is in `docs/AGENTS.md`.
 
 ## Repo map
 
@@ -284,7 +284,7 @@ Gotchas collected while the board was built. Each one cost a phase some time.
 - The MCP SDK pulls in express, hono and ajv transitively. Nothing imports them; `node:http` is the only server.
 
 **Templates**
-- Operator edits to `<repo>/.kanban95/templates/` survive restarts. A changed default in `templates/` reaches a repo's copy on the next daemon start only if the copy is unedited and recorded in `.shipped.json` (Prompts above); anything else stays and shows as differing in Settings → Prompts, where Reset brings it back in step. A template that adds a `{{var}}` reaches copies only after the board restarts on the build that knows it, which is the order this gives for free.
+- Operator edits to `<repo>/.kanban95/templates/` survive restarts. A changed default in `templates/` reaches a repo's copy on the next daemon start if the copy is unedited or has no `.shipped.json` record (Prompts above); a copy edited after its record stays and shows as differing in Settings → Prompts, where Reset brings it back in step. A template that adds a `{{var}}` reaches copies only after the board restarts on the build that knows it, which is the order this gives for free.
 - Running the daemon on this repo creates `./.kanban95/templates/` (untracked, not ignored: in a target repo they are meant to be committed).
 
 **Windows**
