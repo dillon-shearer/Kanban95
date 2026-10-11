@@ -20,13 +20,15 @@ const desk = () => page.evaluate<[number, number]>(`(() => { const d = document.
 const wm = (call: string) => page.evaluate(`import('/wm.js').then((m) => m.${call})`);
 const api = (path: string, method = 'GET') => fetch(`${base}api${path}`, { method, headers: { cookie: `k95=${srv.secret}` } });
 // The table as the ticket gives it: terminals → [columns, rows].
-const GRID: Record<number, [number, number]> = { 1: [1, 1], 2: [2, 1], 3: [3, 1], 4: [2, 2], 5: [3, 2], 6: [3, 2], 9: [3, 3], 12: [4, 3] };
+const GRID: Record<number, [number, number]> = { 1: [1, 1], 2: [2, 1], 3: [3, 1], 4: [2, 2], 5: [3, 2], 6: [3, 2], 7: [4, 2], 8: [4, 2], 9: [3, 3], 12: [4, 3] };
 
-/** Slot `i` (0-based, reading order) of the grid for `n` terminals in a region from `L` to `R` and `H` high. */
+/** Slot `i` (0-based, reading order) of the grid for `n` terminals in a region from `L` to `R` and `H` high; the last row's
+ * members share the full width. */
 function slot(i: number, n: number, L: number, R: number, H: number): Box {
   const [cols, rows] = GRID[n];
   const [c, r] = [i % cols, Math.floor(i / cols)];
-  return [L + Math.round((c * (R - L)) / cols), Math.round((r * H) / rows), L + Math.round(((c + 1) * (R - L)) / cols), Math.round(((r + 1) * H) / rows)];
+  const k = Math.min(cols, n - r * cols);
+  return [L + Math.round((c * (R - L)) / k), Math.round((r * H) / rows), L + Math.round(((c + 1) * (R - L)) / k), Math.round(((r + 1) * H) / rows)];
 }
 /** The first `n` slots of the grid for `n` terminals. */
 const slots = (n: number, L: number, R: number, H: number) => Array.from({ length: n }, (_, i) => slot(i, n, L, R, H));
@@ -190,6 +192,39 @@ describe('ui-slots', { timeout: 120_000 }, () => {
       for (const { id } of db.prepare('SELECT id FROM grants WHERE revoked_at IS NULL AND ticket_id IS NOT NULL').all() as { id: number }[]) await api(`/grants/${id}`, 'DELETE');
       await until(() => sessions.size === 0, 'the agents to exit');
       db.prepare('DELETE FROM tickets').run();
+    }
+  });
+
+  it('stretches the last row across the region: 5 are 3 + 2 at half the width, 7 are 4 + 3 at a third, 4 and 6 are 2x2 and 3x2', async () => {
+    await fresh('stretch');
+    const ids = Array.from({ length: 7 }, (_, k) => `slot-${k}`);
+    const L = await left();
+    const R = await edge();
+    const [, H] = await desk();
+    try {
+      for (const k of ids.slice(0, 4)) await wm(`open('${k}', { title: '${k}', tile: true })`);
+      await at(Object.fromEntries(ids.slice(0, 4).map((k, i) => [k, i])), 4);
+      expect((await box(ids[3]))[2] - (await box(ids[2]))[0]).toBe(R - L);
+      await wm(`open('${ids[4]}', { title: 'x', tile: true })`);
+      await at(Object.fromEntries(ids.slice(0, 5).map((k, i) => [k, i])), 5);
+      // The bottom two each span half the region and together fill it: no desktop below the top row.
+      const [b3, b4] = [await box(ids[3]), await box(ids[4])];
+      expect([b3[0], b3[1], b4[2], b4[3]]).toEqual([L, Math.round(H / 2), R, H]);
+      expect(Math.abs(b3[2] - b3[0] - (R - L) / 2)).toBeLessThanOrEqual(1);
+      await wm(`open('${ids[5]}', { title: 'x', tile: true })`);
+      await at(Object.fromEntries(ids.slice(0, 6).map((k, i) => [k, i])), 6);
+      expect((await box(ids[5]))[2] - (await box(ids[3]))[0]).toBe(R - L);
+      await wm(`open('${ids[6]}', { title: 'x', tile: true })`);
+      await at(Object.fromEntries(ids.map((k, i) => [k, i])), 7);
+      // Two rows: 4 on top, 3 below, each a third of the region.
+      const top = await Promise.all(ids.slice(0, 4).map(box));
+      const low = await Promise.all(ids.slice(4).map(box));
+      expect(new Set(top.map((b) => b[1]))).toEqual(new Set([0]));
+      expect(new Set(low.map((b) => b[3]))).toEqual(new Set([H]));
+      expect([low[0][0], low[2][2]]).toEqual([L, R]);
+      for (const b of low) expect(Math.abs(b[2] - b[0] - (R - L) / 3)).toBeLessThanOrEqual(1);
+    } finally {
+      for (const k of ids) await wm(`close('${k}')`);
     }
   });
 
