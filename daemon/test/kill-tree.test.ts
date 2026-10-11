@@ -24,6 +24,7 @@ const SPAWNER = `
 import { spawn } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
 writeFileSync('fake.pid', String(process.pid));
+if (process.argv.includes('quiet')) await new Promise(() => setInterval(() => {}, 1000)); // up, but never prints
 console.log('FAKE UP');
 spawn(process.execPath, [${JSON.stringify(join(bin, 'grand.mjs'))}], { detached: process.platform === 'win32', stdio: 'ignore' });
 setInterval(() => {}, 1000);
@@ -88,6 +89,30 @@ describe('ending a session kills its process tree', { timeout: 30_000 }, () => {
       expect(r.status).toBe(204);
       await waitFor('the grandchild to die', () => !alive(pid));
       await s.done;
+    } finally {
+      await srv.close();
+    }
+  });
+
+  // The race (killSession in launcher.ts): cmd.exe, slow to start under load, creates the CLI after taskkill's snapshot of the
+  // tree. A kill in the first ~150 ms meets it in about one in fifty under a loaded run, rarely on an idle machine, so this test
+  // fails for it only now and then. The fake writes fake.pid as it starts and never prints.
+  it('sessions killed while their CLI is starting, before any output, leave no CLI running', { timeout: 60_000 }, async () => {
+    const srv = await start({ repo });
+    try {
+      const all: Session[] = [];
+      for (let id = 1; id <= 4; id++) {
+        srv.db.prepare("INSERT INTO tickets (id, title) VALUES (?, 'Fix the thing')").run(id);
+        const s = srv.launch({ ticketId: id, template: 'execute', cli: 'claude', model: 'quiet', effort: 'high' });
+        all.push(s);
+        await new Promise((r) => setTimeout(r, (id - 1) * 40));
+        await fetch(`http://127.0.0.1:${srv.port}/api/sessions/${s.key}`, { method: 'DELETE', headers: { cookie: `k95=${srv.secret}` } });
+      }
+      await Promise.all(all.map((s) => s.done));
+      for (const s of all) expect(s.scrollback()).not.toContain('FAKE UP');
+      // A fake killed before node ran never wrote its pid. One that did dies within a few seconds of its pty's exit.
+      const pids = all.map((s) => join(s.cwd, 'fake.pid')).filter((f) => existsSync(f)).map((f) => Number(readFileSync(f, 'utf8')));
+      await waitFor(`fakes ${pids} to die`, () => !pids.some(alive));
     } finally {
       await srv.close();
     }

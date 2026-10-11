@@ -9,7 +9,7 @@ import type { IPty } from 'node-pty';
 import { buildContext, startRun } from './context.js';
 import { createWorktree, git, worktreesRoot } from './git.js';
 import { mint, revoke, type Role } from './grants.js';
-import { childEnv, cmdSafe, spawnPty } from './pty.js';
+import { childEnv, cmdSafe, lastLines, spawnPty } from './pty.js';
 import { fill, loadTemplate, TEMPLATES, type TicketTemplate } from './templates.js';
 import { BadConfig, type Cli, type Effort } from './settings.js';
 import { preTrustClaude } from './trust.js';
@@ -115,7 +115,9 @@ export interface Session {
   dir: string;
   pty: IPty;
   scrollback: () => string;
-  /** Resolves once the run row is written, the grant revoked and the session dir gone. */
+  /** Set by killSession when the kill may have missed a CLI still starting (reapOrphans); `done` waits for it. */
+  reaped?: Promise<void>;
+  /** Resolves once the run row is written, the grant revoked, the session dir gone and any orphan reaped. */
   done: Promise<void>;
 }
 
@@ -317,12 +319,13 @@ function spawnSession(d: Daemon, o: RunSettings & { sessionId?: string; resume?:
       ...(o.cli === 'codex' ? { [TOKEN_ENV]: grant.token } : {}),
       ...(o.cli === 'claude' && unattended(r.role) ? { CLAUDE_CODE_PROMPT_CACHE_TTL: '5m' } : {}),
     });
+    const started = Date.now(); // before the spawn: reapOrphans takes it as the earliest the CLI can have been created
     const { pty, scrollback } = spawnPty(o.path || cmd, args, { cwd: r.cwd, env });
 
     let finished!: () => void;
     const s: Session = {
       key, runId: r.runId, grantId: grant.id, ticketId: r.ticketId, role: r.role, phase: r.phase, model: o.model, dir, pty, scrollback,
-      cli: o.cli, cwd: r.cwd, sessionId: o.sessionId, started: Date.now(),
+      cli: o.cli, cwd: r.cwd, sessionId: o.sessionId, started,
       done: new Promise((ok) => (finished = ok)),
     };
     sessions.set(key, s);
@@ -334,7 +337,7 @@ function spawnSession(d: Daemon, o: RunSettings & { sessionId?: string; resume?:
       } catch (e) {
         console.error('[launcher]', e); // an exit handler that throws must not leave `done` pending
       } finally {
-        finished();
+        void Promise.resolve(s.reaped).finally(finished);
       }
     });
     return s;
@@ -378,14 +381,47 @@ export function killTree(p: { pid?: number; kill(): unknown }) {
   p.kill();
 }
 
+/**
+ * Ends a session: its process tree (killTree), then on Windows, if the CLI had not printed yet, anything the tree walk missed.
+ * A kill that lands while cmd.exe is still starting the CLI can miss it: taskkill /T walks a snapshot, and the CLI created
+ * after it runs on, orphaned, holding its worktree (6 of 150 kills in the first 120 ms under load, with or without taskkill;
+ * node-pty 1.1.0, Windows 11, 2026-10-11). Once the CLI has printed visible text it was in that snapshot (cmd.exe /c prints
+ * none of its own), so only an earlier kill pays for the sweep, 1-5 s of PowerShell.
+ */
+export function killSession(s: Session) {
+  if (process.platform === 'win32' && lastLines(s.scrollback(), 1).length === 0) s.reaped ??= reapOrphans(s.pty, s.started);
+  killTree(s.pty);
+}
+
+/**
+ * An orphan keeps its dead parent's pid as ParentProcessId, so once the root is gone it can no longer start anything, and every
+ * process it started while it lived is found and its tree killed. The creation window skips children of another process that
+ * held that pid; one that holds it now (a reused pid) ends the window where it was created, so its own children are left alone.
+ * The sweep waits for node-pty to report the root's exit, however late. Under load each taskkill /T takes seconds and several
+ * queue up, which is when the CLI most often starts after the snapshot; an earlier 5 s cap on that wait skipped the sweep
+ * exactly then. Never rejects: `done` waits for it.
+ */
+const REAP_PS = `$from = [DateTimeOffset]::FromUnixTimeMilliseconds([long]$env:K95_FROM).LocalDateTime
+$to = [DateTimeOffset]::FromUnixTimeMilliseconds([long]$env:K95_TO).LocalDateTime
+$owner = Get-CimInstance Win32_Process -Filter "ProcessId=$([int]$env:K95_PID)"
+if ($owner -and $owner.CreationDate -lt $to) { $to = $owner.CreationDate }
+Get-CimInstance Win32_Process -Filter "ParentProcessId=$([int]$env:K95_PID)" | Where-Object { $_.CreationDate -ge $from -and $_.CreationDate -le $to } |
+  ForEach-Object { taskkill /T /F /PID $_.ProcessId *> $null }`;
+async function reapOrphans(pty: IPty, since: number) {
+  const pid = pty.pid;
+  await new Promise<void>((ok) => pty.onExit(() => ok()));
+  const env = { ...process.env, K95_PID: String(pid), K95_FROM: String(since), K95_TO: String(Date.now()) };
+  await new Promise((ok) => execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', REAP_PS], { env, windowsHide: true, timeout: 60_000 }, ok));
+}
+
 /** Revoking a grant ends its session: the process tree is killed and its exit handler tears the rest down. */
 export function killGrantSession(grantId: number) {
-  for (const s of sessions.values()) if (s.grantId === grantId) killTree(s.pty);
+  for (const s of sessions.values()) if (s.grantId === grantId) killSession(s);
 }
 
 /** Daemon shutdown: kill every session's process tree and wait until each session has written its run row and removed its dir. */
 export async function killAll() {
   const live = [...sessions.values()];
-  for (const s of live) killTree(s.pty);
+  for (const s of live) killSession(s);
   await Promise.all([...live.map((s) => s.done), ...killing]); // a pty reports its exit before taskkill is done with the rest of its tree
 }
