@@ -55,8 +55,9 @@ export function spawnPty(cmd: string, args: string[], o: { cwd: string; env: Rec
   // flushed the output, so nothing is lost.
   // ponytail: reaches into node-pty internals; drop both once node-pty lists the processes before it closes the console and
   // closes the pseudoconsole on exit.
-  const agent = (pty as unknown as { _agent?: { _getConsoleProcessList?: () => Promise<number[]>; _inSocket?: { destroy(): void } } })._agent;
+  const agent = (pty as unknown as { _agent?: { _getConsoleProcessList?: () => Promise<number[]>; _inSocket?: { destroy(): void; on(e: 'error', f: () => void): void } } })._agent;
   if (agent?._getConsoleProcessList) agent._getConsoleProcessList = () => Promise.resolve([]);
+  agent?._inSocket?.on('error', () => {});
   if (agent?._inSocket) pty.onExit(() => agent._inSocket!.destroy());
 
   // Raw terminal output, trimmed to the last SCROLLBACK_LINES lines whenever it grows to twice that.

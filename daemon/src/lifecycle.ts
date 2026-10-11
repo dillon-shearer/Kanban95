@@ -11,6 +11,7 @@ import { branchName, git, gitNotRun, isAncestor, notStarted, syncWorktree, workt
 import { revoke, type Role } from './grants.js';
 import { cleanTicket } from './janitor.js';
 import { killSession, launch, launchRoot, prepareWorktree, sessions, sessionsOf, transcriptSize, type Session } from './launcher.js';
+import { mark } from './memlog.js';
 import { ahead, enqueue, merge, push } from './merge.js';
 import { lastLines } from './pty.js';
 import { BadConfig, EFFORT, readConfig, runSettings, type Effort } from './settings.js';
@@ -523,7 +524,9 @@ async function mergeJob(b: Board, id: number, since: number) {
   const inBase = isAncestor(b.repo, branchName(id), 'HEAD');
   const s = inBase ? { ok: true as const } : syncWorktree(b.repo, id);
   if (!s.ok) return void (await Promise.all(apply(b, id, 'conflict', { note: { role: 'tester', kind: 'failure', body: s.reason }, auto: true }).pending));
+  mark('merge-start', `t${id}`);
   const r = inBase ? { ok: true as const } : await merge(b.repo, id, t.title, () => readTicket(b.db, id).status === 'done');
+  mark('merge-end', `t${id}`, !r ? 'skipped' : r.ok ? 'ok' : r.dirty ? 'dirty' : 'conflict');
   if (!r) return;
   // Rejected while git merge ran: the work landed, but the ticket is a worker's again and its next pass merges again.
   if (r.ok && readTicket(b.db, id).status !== 'done') return;

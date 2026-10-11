@@ -9,6 +9,7 @@ import type { IPty } from 'node-pty';
 import { buildContext, startRun } from './context.js';
 import { createWorktree, git, worktreesRoot } from './git.js';
 import { mint, revoke, type Role } from './grants.js';
+import { mark, who } from './memlog.js';
 import { childEnv, cmdSafe, lastLines, spawnPty } from './pty.js';
 import { fill, loadTemplate, TEMPLATES, type TicketTemplate } from './templates.js';
 import { BadConfig, type Cli, type Effort } from './settings.js';
@@ -332,6 +333,7 @@ function spawnSession(d: Daemon, o: RunSettings & { sessionId?: string; resume?:
       done: new Promise((ok) => (finished = ok)),
     };
     sessions.set(key, s);
+    mark('launch', who(s), r.phase);
     pty.onExit(({ exitCode }) => {
       s.exitCode = exitCode;
       sessions.delete(key);
@@ -393,6 +395,7 @@ export function killTree(p: { pid?: number; kill(): unknown }) {
  * none of its own), so only an earlier kill pays for the sweep, 1-5 s of PowerShell.
  */
 export function killSession(s: Session) {
+  mark('kill', who(s), s.phase);
   if (process.platform === 'win32' && lastLines(s.scrollback(), 1).length === 0) s.reaped ??= reapOrphans(s.pty, s.started);
   killTree(s.pty);
 }

@@ -14,6 +14,7 @@ import { sweep, SWEEP_MS } from './janitor.js';
 import { killAll, launch, sessions } from './launcher.js';
 import { countUnpushed, events, recover, tick, watchSilence, type Board } from './lifecycle.js';
 import { handleMcp } from './mcp.js';
+import { startMemoryLog } from './memlog.js';
 import { idle } from './merge.js';
 import { addProject } from './settings.js';
 import { initTemplates } from './templates.js';
@@ -231,6 +232,7 @@ export function start(config: Config = {}): Promise<{
       tick(board); // the runner picks up where it was
       const daily = setInterval(() => sweep(board).catch(() => {}), SWEEP_MS).unref();
       const unwatch = watchSilence(board);
+      const stopMemoryLog = startMemoryLog(repo, () => sessions.values());
       ok({
         port: addr.port,
         db,
@@ -243,6 +245,7 @@ export function start(config: Config = {}): Promise<{
           unwatch();
           await killAll(); // run rows and exit flags are written before the db closes
           await idle(); // and every queued merge has finished
+          stopMemoryLog();
           for (const c of wss.clients) c.terminate();
           const closed = new Promise<void>((r) => server.close(() => r()));
           // A keep-alive or preconnected socket the browser still holds would keep close() waiting for the server's own timeouts
