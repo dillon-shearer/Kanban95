@@ -209,10 +209,10 @@ export function apply(b: Board, id: number, event: Event, x: { note?: Note; answ
   const row = pick(facts(b, t), event);
   // The one gate on the board starting an agent by itself (`auto`: a released dependent, a conflict sent back): while the
   // runner is off it starts nothing. A backlog launch is not applied at all, so the ticket stays held; any other row is
-  // written without its spawn and kept in `held`, and tick() starts that agent when Run is turned on. A stale board starts
-  // no backlog ticket either (restartWhenIdle); a running ticket's conflict retry still goes ahead.
+  // written without its spawn and kept in `held`, and tick() starts that agent when Run is turned on. A board stale on
+  // daemon code starts no backlog ticket either (restartWhenIdle); a running ticket's conflict retry still goes ahead.
   const spawns = x.auto === true && row.effects.includes('spawn_execute');
-  if (spawns && t.status === 'backlog' && (b.stale || !runner(b).on)) return { ticket: t, noteId: undefined, pending: [] as Promise<void>[] };
+  if (spawns && t.status === 'backlog' && (b.stale === 'daemon' || !runner(b).on)) return { ticket: t, noteId: undefined, pending: [] as Promise<void>[] };
   const hold = spawns && !runner(b).on;
   if (hold) held.add(id);
   if (event === 'submit') {
@@ -582,7 +582,7 @@ ${p.reason}`;
  */
 function markStale(b: Board) {
   if (b.restart === 'failed') b.restart = undefined;
-  if (!b.startCommit || b.stale === 'shell') return;
+  if (!b.startCommit) return;
   let files: string[];
   try {
     files = git(b.repo, 'diff', '--name-only', b.startCommit, 'HEAD', '--', 'daemon/', 'templates/', 'shell/', 'package.json', 'package-lock.json').split('\n').filter(Boolean);
@@ -590,7 +590,7 @@ function markStale(b: Board) {
     return; // start commit gone (history rewritten): nothing to compare against
   }
   if (!files.length) return;
-  b.stale = files.some((f) => f.startsWith('shell/')) ? 'shell' : 'daemon';
+  b.stale = files.every((f) => f.startsWith('shell/')) ? 'shell' : 'daemon';
   changed(null);
 }
 
@@ -739,10 +739,10 @@ export function runnerState(b: Board) {
   const { n } = b.db.prepare("SELECT count(*) AS n FROM tickets WHERE status = 'backlog'").get() as { n: number };
   const cs = candidates(b);
   const waits = [...overlaps(b, cs)].map(([id, on]) => ({ id, on }));
-  const restart = b.stale === 'shell' ? 'relaunch' : b.restart === 'failed' ? 'failed' : b.shell && b.shutdown ? 'self' : 'manual';
+  const restart = b.restart === 'failed' ? 'failed' : b.shell && b.shutdown ? 'self' : 'manual';
   const r = runner(b);
   return { ...r, concurrency: limit(b), running: running(b), left: cs.length, backlog: n, waits, stale: b.stale ?? false, unpushed: b.unpushed ?? 0,
-    ...(b.stale && { hold: { finish: toFinish(b), restart } }), ...(b.gitError && { gitError: b.gitError }), ...(r.on && b.lowMemory && { lowMemory: b.lowMemory }) };
+    ...(b.stale === 'daemon' && { hold: { finish: toFinish(b), restart } }), ...(b.gitError && { gitError: b.gitError }), ...(r.on && b.lowMemory && { lowMemory: b.lowMemory }) };
 }
 
 /**
@@ -823,7 +823,7 @@ let ticking = false;
  * Runs after every apply and on daemon start: while the runner is on and fewer than `concurrency` (runner.json, default 3)
  * tickets are running, launch the next candidate that shares no file with a running ticket, or the first candidate when all
  * do (the merge sync resolves it; waiting forever would be worse). Nothing running and nothing to launch: it turns itself off.
- * A ticket held on a running one is not "nothing": the runner waits for that merge. A stale board launches no candidate.
+ * A ticket held on a running one is not "nothing": the runner waits for that merge. A board stale on daemon code launches no candidate.
  * Before each launch free memory is checked against a floor (roomFor): under it, nothing more starts this tick and a timer
  * ticks again in 30 s.
  */
@@ -845,7 +845,7 @@ export function tick(b: Board) {
       held.delete(id);
       if (go) apply(b, id, 'launch');
     }
-    while (!b.stale && !b.lowMemory && running(b).length < max) {
+    while (b.stale !== 'daemon' && !b.lowMemory && running(b).length < max) {
       const cs = candidates(b);
       if (!cs.length || !roomFor(b)) break;
       const busy = overlaps(b, cs);

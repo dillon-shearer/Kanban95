@@ -43,16 +43,15 @@ describe('restart after a merge', { timeout: 60_000 }, () => {
     await until(() => runs(b).length, 'the backlog ticket to launch after the restart');
   });
 
-  it('a shell change holds the backlog and never restarts by itself', async () => {
+  it('a shell-only change holds nothing and never restarts by itself', async () => {
     const shutdown = underShell();
     srv.board.stale = 'shell';
-    const b = ticket('Waiting');
-    expect(await setRun(true).then((r) => r.json())).toMatchObject({ on: true, running: [], left: 1, hold: { finish: 0, restart: 'relaunch' } });
-    tick(srv.board);
+    const b = ticket('Not held');
+    expect(await setRun(true).then((r) => r.json())).not.toHaveProperty('hold');
+    await until(() => runs(b).length, 'the backlog ticket to launch');
     await settle();
     expect(shutdown).not.toHaveBeenCalled();
-    expect(runs(b)).toEqual([]);
-    expect(await state()).toMatchObject({ on: true, hold: { finish: 0, restart: 'relaunch' } });
+    expect(await state()).toMatchObject({ stale: 'shell' });
   });
 
   it('an open operator terminal alone does not delay the restart', async () => {

@@ -306,13 +306,12 @@ async function newOperator() {
   if ((await dialog('New operator terminal', body, ['Start', 'Cancel'])) !== 'Start') return;
   await act(async () => openTerminal(await api('POST', '/operator', { mission: mission.value })), 'Operator terminal started.');
 }
-// runner.hold: a merge changed daemon/, templates/, shell/ or package.json since start, so the runner starts nothing new and the
+// runner.hold: a merge changed daemon/, templates/ or package.json since start, so the runner starts nothing new and the
 // board restarts once its running tickets finish (docs/OPERATOR.md → Restart after a merge). `restart` says who restarts it.
 const HOLD_THEN = {
   self: '',
   manual: '; then Start → Restart board',
   failed: '; the board could not rebuild itself: Start → Restart board shows why',
-  relaunch: '; then close Kanban95 and start it again',
 };
 const holdLine = (h) => `restart pending, ${h.finish} ticket${h.finish === 1 ? '' : 's'} to finish${HOLD_THEN[h.restart]}`;
 /** Start → Restart board: the daemon rebuilds, exits 75, and the shell starts it again (docs/OPERATOR.md → Restart board). */

@@ -243,8 +243,9 @@ describe('ui-taskbar', { timeout: 60_000 }, () => {
         srv.board.stale = stale;
         changed(null);
         await until(badge, 'the Restart badge');
-        // No shell runs this daemon, so the operator restarts it.
-        expect(await bar()).toContain(`restart pending, 1 ticket to finish; then ${stale === 'shell' ? 'close Kanban95 and start it again' : 'Start → Restart board'}`);
+        // No shell runs this daemon, so the operator restarts it. A shell-only change holds nothing.
+        if (stale === 'daemon') expect(await bar()).toContain('restart pending, 1 ticket to finish; then Start → Restart board');
+        else expect(await bar()).not.toContain('restart pending');
         await click('#restart-badge');
         await until(dialog, 'the confirm');
         expect((await dialog())!.includes('A merge changed the shell itself')).toBe(stale === 'shell');
