@@ -9,6 +9,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { buildContext } from '../src/context.ts';
+import { openGlobalBrain } from '../src/db.ts';
 import { mint } from '../src/grants.ts';
 import { start } from '../src/server.ts';
 
@@ -112,16 +113,39 @@ describe('global brain', () => {
 });
 
 describe('global brain file', () => {
-  it('several daemons opening a fresh brain.db at once all succeed and apply the migration once', async () => {
-    const home = mkdtempSync(join(tmpdir(), 'k95-gb-'));
+  it('8 daemons opening a fresh brain.db at once all succeed and apply the migration once, 5 times in a row', async () => {
     const db = resolve(import.meta.dirname, '../dist/db.js').replaceAll('\\', '/');
     const open = `import('file:///${db}').then((m) => m.openGlobalBrain(process.argv[1]).close())`;
+    for (let round = 0; round < 5; round++) {
+      const home = mkdtempSync(join(tmpdir(), 'k95-gb-'));
+      try {
+        await Promise.all(Array.from({ length: 8 }, () => promisify(execFile)(process.execPath, ['-e', open, home])));
+        const f = new DatabaseSync(join(home, 'brain.db'));
+        expect(f.prepare('SELECT version FROM schema_migrations').all()).toEqual([{ version: '001-brain.sql' }]);
+        f.close();
+      } finally {
+        rmSync(home, { recursive: true, force: true, maxRetries: 5 });
+      }
+    }
+  }, 60_000);
+
+  it('a lock that never clears makes the open throw SQLITE_BUSY once the busy time has passed', () => {
+    const home = mkdtempSync(join(tmpdir(), 'k95-gb-'));
+    const holder = new DatabaseSync(join(home, 'brain.db'));
     try {
-      await Promise.all(Array.from({ length: 4 }, () => promisify(execFile)(process.execPath, ['-e', open, home])));
-      const f = new DatabaseSync(join(home, 'brain.db'));
-      expect(f.prepare('SELECT version FROM schema_migrations').all()).toEqual([{ version: '001-brain.sql' }]);
-      f.close();
+      holder.exec('BEGIN EXCLUSIVE');
+      const t0 = Date.now();
+      let err: unknown;
+      try {
+        openGlobalBrain(home, 300).close();
+      } catch (e) {
+        err = e;
+      }
+      expect(err).toMatchObject({ errcode: 5 });
+      expect(Date.now() - t0).toBeGreaterThanOrEqual(290);
+      expect(Date.now() - t0).toBeLessThan(5000);
     } finally {
+      holder.close();
       rmSync(home, { recursive: true, force: true, maxRetries: 5 });
     }
   });

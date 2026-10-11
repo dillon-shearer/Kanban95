@@ -2,9 +2,9 @@
 // headless browser (cdp.ts) logged in to it. Importing this file registers the beforeAll/afterAll for the importing test file. Exports are live
 // bindings, so `page`, `db` and the rest are set once beforeAll has run. Only what the UI handoff asks to be automated;
 // the rest of the UI is checked by the dogfood cycle, not by DOM tests.
-import './home.ts'; // also here, not only in vitest.config.ts: a run from the repo root skips that config and wrote the real home
+import { removeTemp } from './home.ts'; // also here, not only in vitest.config.ts: a run from the repo root skips that config and wrote the real home
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, join, resolve } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
@@ -120,6 +120,6 @@ afterAll(async () => {
   await page?.close();
   await srv?.close();
   process.env.PATH = PATH0;
-  rmSync(bin, { recursive: true, force: true });
-  rmSync(repo, { recursive: true, force: true, maxRetries: 8, retryDelay: 400 }); // a killed agent can hold it for seconds under load
+  removeTemp(bin);
+  removeTemp(repo);
 }, 60_000);

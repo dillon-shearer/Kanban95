@@ -1,7 +1,7 @@
 // Reset to Backlog from a REST client (docs/LIFECYCLE.md → Reset to Backlog): the PATCH alone stops the ticket's agents; so does a move by hand to any other column.
-import './home.ts'; // also here, not only in vitest.config.ts: a run from the repo root skips that config and wrote the real home
+import { removeTemp } from './home.ts'; // also here, not only in vitest.config.ts: a run from the repo root skips that config and wrote the real home
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -48,8 +48,8 @@ beforeAll(async () => {
 afterAll(async () => {
   await srv.close();
   process.env.PATH = PATH0;
-  rmSync(repo, { recursive: true, force: true, maxRetries: 8, retryDelay: 400 }); // a killed agent can hold it for seconds under load
-  rmSync(bin, { recursive: true, force: true });
+  removeTemp(repo);
+  removeTemp(bin);
 });
 
 describe('reset to backlog', { timeout: 60_000 }, () => {
@@ -68,7 +68,8 @@ describe('reset to backlog', { timeout: 60_000 }, () => {
     expect((await request('PATCH', `/api/tickets/${id}`, { status: 'backlog' })).status).toBe(200);
     const t0 = Date.now();
     await until(async () => !(await live()).some((x) => x.ticket_id === id), 'the session to end', 10_000);
-    // killTree's taskkill /T takes ~300 ms (more under a full suite's load) before node-pty's own exit report (about a second).
+    // The bound: killTree's taskkill /T takes ~300 ms before node-pty's own exit report (about a second); 2 s was measured
+    // at 2034 ms while the board ran other agents. An agent the PATCH does not end stays up, so 5 s still fails that.
     expect(Date.now() - t0).toBeLessThan(5_000);
     await pty.done;
 
