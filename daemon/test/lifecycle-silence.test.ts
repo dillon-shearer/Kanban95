@@ -14,13 +14,19 @@ describe('silent agents', { timeout: 60_000 }, () => {
   const settingsFile = () => join(process.env.USERPROFILE!, '.kanban95', 'settings.json');
   beforeAll(() => Object.assign(SILENCE, { every: 50, minute: 400 }));
   afterAll(() => Object.assign(SILENCE, silence0));
-  beforeEach(() => writeFileSync(settingsFile(), JSON.stringify({ idle_minutes: 1 })));
+  // The fake's node can take over a second to start (the suite run from an agent's terminal, under load), longer than the
+  // limit, so the limit drops to 1 only once it has printed; until then the default 20 (8 s here) holds.
+  const up = async (id: number) => {
+    await until(() => sessionsOf(id)[0]?.scrollback().includes('FAKE'), 'the fake agent to start', 20_000);
+    writeFileSync(settingsFile(), JSON.stringify({ idle_minutes: 1 }));
+  };
   afterEach(() => rmSync(settingsFile(), { force: true }));
 
   it('a live agent whose transcript gains no line for idle_minutes is flagged once, with the minutes and its last terminal lines', async () => {
     const id = ticket('Frozen', { model: 'hang' });
     const at = Date.now();
     await post(`/api/tickets/${id}/launch`);
+    await up(id);
     await until(() => t(id).flags.needs_human, 'the silence flag', 10_000);
     expect(Date.now() - at).toBeGreaterThanOrEqual(400);
     const [note] = notes(id, 'failure');
@@ -36,7 +42,7 @@ describe('silent agents', { timeout: 60_000 }, () => {
   it('an agent that keeps writing to its transcript is not flagged, however long it runs', async () => {
     const id = ticket('Busy', { model: 'chatty' });
     await post(`/api/tickets/${id}/launch`);
-    await until(() => sessionsOf(id).length === 1, 'the agent');
+    await up(id);
     await new Promise((r) => setTimeout(r, 2000)); // five times the limit
     expect(t(id).flags.needs_human).toBe(false);
     expect(notes(id, 'failure')).toEqual([]);
@@ -46,6 +52,7 @@ describe('silent agents', { timeout: 60_000 }, () => {
   it('a flagged agent that writes again is unflagged by itself; the note stays as the record', async () => {
     const id = ticket('Slow start', { model: 'nap' });
     await post(`/api/tickets/${id}/launch`);
+    await up(id);
     await until(() => t(id).flags.needs_human, 'the silence flag', 10_000);
     await until(() => !t(id).flags.needs_human, 'the flag cleared', 10_000);
     expect(notes(id, 'failure')).toHaveLength(1);
@@ -55,6 +62,7 @@ describe('silent agents', { timeout: 60_000 }, () => {
   it('a flag raised by a question is not cleared when the transcript grows', async () => {
     const id = ticket('Asks while slow', { model: 'nap' });
     await post(`/api/tickets/${id}/launch`);
+    await up(id);
     await until(() => t(id).flags.needs_human, 'the silence flag', 10_000);
     db.prepare("INSERT INTO notes (ticket_id, role, kind, body) VALUES (?, 'worker', 'question', 'Which colour?')").run(id); // as ask_operator writes it
     await new Promise((r) => setTimeout(r, 2500)); // the nap is over and the transcript grows
