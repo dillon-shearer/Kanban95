@@ -721,7 +721,8 @@ function openNewTerminals() {
 
 /**
  * A run's terminal. The board opens one for every new session on its own (`auto`): behind the focused window, and closed
- * again shortly after its agent reports (submit, pass, fail). One that was revoked or died stays open, marked ended.
+ * again shortly after its agent reports (submit, pass, fail). One the operator moved closes too, whoever opened it. One that
+ * was revoked or died stays open, marked ended.
  */
 function openTerminal(s, auto = false) {
   seen.add(s.id);
@@ -769,13 +770,13 @@ function openTerminal(s, auto = false) {
     w.title(`${title} (ended)`, `${termLabel(s)} (ended)`);
     w.el.classList.add('ended');
     paint();
-    if (!auto || s.run_id === null) return;
+    if (s.run_id === null) return;
     // The run's outcome is written as its terminal closes; its output stays in Ticket → Runs. Every outcome the board itself
     // ends a run with closes it: after conflict and restart a new run is already open, and a stale "ended" window in front of
-    // it reads as a stuck ticket.
+    // it reads as a stuck ticket. `moved` closes it also when the operator opened it: they said Stop in the Move dialog.
     setTimeout(async () => {
       const run = (await api('GET', `/tickets/${s.ticket_id}/runs`).catch(() => [])).find((r) => r.id === s.run_id);
-      if (['submit', 'pass', 'fail', 'conflict', 'restart'].includes(run?.outcome)) setTimeout(w.close, 1500);
+      if (run?.outcome === 'moved' || (auto && ['submit', 'pass', 'fail', 'conflict', 'restart'].includes(run?.outcome))) setTimeout(w.close, 1500);
     }, 500);
   };
   // The zoom keys belong to the agent here. xterm sends nothing for them and lets them through to the webview's own zoom:
