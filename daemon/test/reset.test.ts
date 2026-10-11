@@ -1,4 +1,4 @@
-// Reset to Backlog from a REST client (docs/LIFECYCLE.md → Reset to Backlog): the PATCH alone stops the ticket's agents.
+// Reset to Backlog from a REST client (docs/LIFECYCLE.md → Reset to Backlog): the PATCH alone stops the ticket's agents; so does a move by hand to any other column.
 import './home.ts'; // also here, not only in vitest.config.ts: a run from the repo root skips that config and wrote the real home
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
@@ -88,5 +88,27 @@ describe('reset to backlog', { timeout: 60_000 }, () => {
     expect(sessions.has(pty.key)).toBe(true);
     expect((await request('PATCH', `/api/tickets/${id}`, { status: 'backlog' })).status).toBe(200);
     await pty.done;
+  });
+
+  it('a PATCH to another column ends the agent with outcome moved and clears the flag', async () => {
+    const { db } = srv;
+    const id = Number(db.prepare('INSERT INTO tickets (title) VALUES (?)').run('Moved by hand').lastInsertRowid);
+    expect((await request('POST', `/api/tickets/${id}/launch`)).status).toBe(200);
+    const pty = [...sessions.values()].find((x) => x.ticketId === id)!;
+    await until(() => pty.scrollback().includes('FAKE'), 'the fake agent');
+    db.prepare('UPDATE tickets SET needs_human = 1 WHERE id = ?').run(id);
+    expect((await request('PATCH', `/api/tickets/${id}`, { status: 'testing' })).status).toBe(200);
+    await pty.done;
+    expect(db.prepare('SELECT outcome FROM runs WHERE id = ?').get(pty.runId)).toEqual({ outcome: 'moved' });
+    expect(readTicket(db, id)).toMatchObject({ status: 'testing', flags: { needs_human: false } });
+    expect(sessions.has(pty.key)).toBe(false);
+  });
+
+  it('a PATCH into done with no branch closes the ticket as merged and unflagged', async () => {
+    const { db } = srv;
+    const id = Number(db.prepare("INSERT INTO tickets (title, status, needs_human) VALUES ('No branch', 'in_progress', 1)").run().lastInsertRowid);
+    expect((await request('PATCH', `/api/tickets/${id}`, { status: 'done' })).status).toBe(200);
+    expect(readTicket(db, id)).toMatchObject({ status: 'done', flags: { needs_human: false } });
+    expect(readTicket(db, id).merged_at).not.toBeNull();
   });
 });

@@ -80,6 +80,10 @@ Restart is for an agent that is live but stuck: idle, hung, or its CLI died with
 
 Reset to Backlog is not a lifecycle event: it is `PATCH /api/tickets/:id` with `status: backlog`, from any UI path (drag, card menu, Ticket window, Inbox) or a REST client. When the ticket was not already in Backlog, the handler ends the ticket's live sessions before the update the way a delete does (`endSessions` in `daemon/src/api.ts`: outcome `reset` first, then revoke the grant, then kill the pty), so the exit flags nothing. The UI closes every terminal window of a ticket it refreshes in Backlog.
 
+### Moves by hand
+
+A drag into any other column is the same PATCH with that `status`, and is not a lifecycle event either: the operator overrides the table. A PATCH that changes the status ends the ticket's live sessions (outcome `moved`), clears `needs_human` unless the body sets it, and starts no agent. Into Done when the ticket has no `merged_at`: if its branch exists, the merge queue takes it as after a pass (the `merge` row); with no branch there is nothing to land, so `merged_at` is set and the ticket is closed. A ticket moved by hand into In Progress or Testing has no agent; Launch starts the one for that column.
+
 ### Reject
 
 Reject is how the operator sends a Done ticket they do not accept back to a worker, with a reason, instead of Reset to Backlog, which loses both the reason and the work. The reason is required (the REST route refuses a missing or blank one with `400`, the dialog will not submit it) and is written as a `failure` note with role `operator`, so the worker sees it under "What failed on the last attempt" as `- [operator] …`. `retry` goes back to 0: a rejection starts a new cycle, it is not a failed test. No chord, nothing in the Inbox: the ticket is simply running again.

@@ -101,6 +101,15 @@ function checkedOut(repo: string, branch: string): string | undefined {
   return entry?.[0].replace(/^worktree /, '');
 }
 
+export function hasBranch(repo: string, ticketId: number): boolean {
+  try {
+    git(repo, 'rev-parse', '--verify', '-q', `refs/heads/${branchName(ticketId)}`);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function isAncestor(repo: string, a: string, b: string): boolean {
   try {
     git(repo, 'merge-base', '--is-ancestor', a, b);
