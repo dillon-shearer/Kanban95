@@ -1,7 +1,7 @@
 // The one merge queue: every job runs after the previous one has finished, so two tickets never merge at once.
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { branchName } from './git.js';
+import { branchName, gitNotRun } from './git.js';
 
 const run = promisify(execFile);
 const git = (repo: string, ...args: string[]) => run('git', args, { cwd: repo, encoding: 'utf8' });
@@ -37,6 +37,7 @@ export async function merge(repo: string, ticketId: number, title: string, wante
     return { ok: true };
   } catch (e) {
     await git(repo, 'merge', '--abort').catch(() => {}); // nothing to abort when the merge never started
+    if (gitNotRun(e)) throw e; // no conflict: the merge queue runs the job again
     const { stdout, stderr } = e as { stdout?: string; stderr?: string };
     return { ok: false, dirty: false, base, reason: `${stdout ?? ''}${stderr ?? ''}`.trim() || (e as Error).message };
   }

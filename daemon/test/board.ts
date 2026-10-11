@@ -22,10 +22,16 @@ import { start } from '../src/server.ts';
 const bin = mkdtempSync(join(tmpdir(), 'k95-bin-'));
 const FAKE = `
 import { execFileSync, spawn } from 'node:child_process';
-import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { basename, dirname } from 'node:path';
 const argv = process.argv.slice(2);
 const model = argv[argv.indexOf('--model') + 1];
+// unstarted: exits at once, printing nothing, with Windows' 0xC0000142, as a CLI that Windows failed to start does on a loaded
+// machine. unstarted-once: does that on its first launch in a worktree only (an untracked marker file), then works like 'work'.
+if (model === 'unstarted' || (model === 'unstarted-once' && !existsSync('.unstarted'))) {
+  writeFileSync('.unstarted', '');
+  process.exit(-1073741502);
+}
 const mcp = JSON.parse(readFileSync(argv[argv.indexOf('--mcp-config') + 1], 'utf8')).mcpServers.kanban95;
 let transcript;
 if (argv.includes('--session-id')) {

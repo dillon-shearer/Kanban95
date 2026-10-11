@@ -5,7 +5,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { readTicket, transaction, type Ticket } from './api.js';
-import { branchName, git, isAncestor, syncWorktree, worktreePath } from './git.js';
+import { branchName, git, gitNotRun, isAncestor, notStarted, syncWorktree, worktreePath } from './git.js';
 import { revoke, type Role } from './grants.js';
 import { cleanTicket } from './janitor.js';
 import { killTree, launch, launchRoot, prepareWorktree, sessions, sessionsOf, transcriptSize, type Session } from './launcher.js';
@@ -31,6 +31,7 @@ export type Event =
   | 'conflict' // the base would not merge into the worktree (on submit or in the merge queue), or the worktree was dirty
   | 'dirty' // the merge queue gave up waiting for the main checkout to be clean (DIRTY_WAIT)
   | 'unpushed' // the merge landed but git push of the base to its upstream failed
+  | 'unmerged' // the merge queue's git failed to run on every try (START_RETRY)
   | 'merge' // the operator retries a merge that failed
   | 'resume' // the operator restarts the agent of a flagged running ticket whose agent is gone
   | 'restart' // the operator replaces a running ticket's agent, live or not, with a fresh one in the same phase
@@ -110,6 +111,8 @@ export const TABLE: Row[] = [
     resolve: (id, repo) => `in ${worktreePath(repo, id)} run git merge with the base branch, fix the conflicting files keeping both sides' intent, run the tests, commit, then Retry merge.` },
   { from: ['done'], event: 'dirty', set: { needs_human: 1 }, effects: ['note', 'chord'],
     resolve: (_, repo) => `commit or stash those changes in the main checkout (${repo}), then Retry merge. While the board runs, work in a worktree, never in the main checkout.` },
+  { from: ['done'], event: 'unmerged', set: { needs_human: 1 }, effects: ['note', 'chord'],
+    resolve: (_, repo) => `check that git runs in the main checkout (${repo}), then Retry merge.` },
   // The merge stays in the base; Retry merge finds the branch already in it and only pushes again.
   { from: ['done'], event: 'unpushed', set: { needs_human: 1 }, effects: ['note', 'chord'],
     resolve: (_, repo) => `fix what git says in the main checkout (${repo}): when the remote has commits the base lacks, pull them and merge; when offline or signed out, reconnect or sign in to the remote with git. Then Retry merge; it pushes again.` },
@@ -310,15 +313,37 @@ function spawn(b: Board, id: number, template: 'execute' | 'housekeeping' | 'tes
   }
 }
 
+/** Agents that Windows failed to start, by ticket: how many times in a row (START_RETRY). */
+const unstarted = new Map<number, number>();
+
 function exited(b: Board, s: Session) {
-  b.db.prepare('UPDATE runs SET outcome = ? WHERE id = ?').run(s.outcome ?? 'exit', s.runId);
-  changed(s.ticketId);
+  const id = s.ticketId!;
+  // Its cmd.exe or CLI never ran (`notStarted`): nothing the agent did, so it is started again before anyone is asked.
+  const failedStart = !s.outcome && notStarted(s.exitCode);
+  b.db.prepare('UPDATE runs SET outcome = ? WHERE id = ?').run(s.outcome ?? (failedStart ? 'unstarted' : 'exit'), s.runId);
+  changed(id);
+  const tries = failedStart ? (unstarted.get(id) ?? 0) + 1 : 0;
+  if (tries) unstarted.set(id, tries);
+  else unstarted.delete(id);
   if (s.outcome || b.closing) return;
-  try {
-    apply(b, s.ticketId!, 'exit', { note: { role: s.role, kind: 'failure', body: 'agent exited without reporting' } });
-  } catch (e) {
-    if (!(e instanceof Refused)) throw e; // the ticket has moved on (operator edit); nothing to flag
-  }
+  const flag = (body: string) => {
+    try {
+      apply(b, id, 'exit', { note: { role: s.role, kind: 'failure', body } });
+    } catch (e) {
+      if (!(e instanceof Refused)) throw e; // the ticket has moved on (operator edit); nothing to flag
+    }
+  };
+  if (!failedStart) return flag('agent exited without reporting');
+  if (tries > START_RETRY.max) return flag(`agent could not start: Windows failed to start its process ${tries} times (0xC0000142)`);
+  setTimeout(() => {
+    try {
+      const t = b.closing ? undefined : readTicket(b.db, id);
+      // Launch on a running ticket with no agent starts its phase again; a ticket moved, flagged or relaunched meanwhile is left be.
+      if (t?.status === (s.phase === 'test' ? 'testing' : 'in_progress') && !t.flags.needs_human && !sessionsOf(id).length) apply(b, id, 'launch');
+    } catch (e) {
+      if (!(e instanceof Refused)) console.error('[lifecycle]', e); // deleted meanwhile, say: nothing to start
+    }
+  }, START_RETRY.every).unref();
 }
 
 // ---- the silence watch (docs/LIFECYCLE.md → Silent agents) ----
@@ -448,6 +473,11 @@ function listen(b: Board) {
 
 /** A merge refused for a dirty main checkout is tried again every `every` ms and flagged once it has waited `max`. Tests shorten it. */
 export const DIRTY_WAIT = { every: 30_000, max: 600_000 };
+/**
+ * A process Windows failed to start (`notStarted`, on a loaded machine): an agent whose pty never ran its CLI, or a merge job whose
+ * git did not run, is started again `every` ms later, up to `max` times, before the ticket is flagged. Tests shorten it.
+ */
+export const START_RETRY = { every: 2_000, max: 3 };
 const waiting = new Map<number, NodeJS.Timeout>();
 
 /**
@@ -455,49 +485,58 @@ const waiting = new Map<number, NodeJS.Timeout>();
  * operator's own edits in the main checkout, not the ticket's fault: the merge waits for them to be committed, and only a base
  * still dirty after DIRTY_WAIT.max is flagged.
  */
-function queueMerge(b: Board, id: number, since = Date.now()) {
+function queueMerge(b: Board, id: number, since = Date.now(), tries = 0) {
   clearTimeout(waiting.get(id)); // the operator's Retry merge restarts a wait
   waiting.delete(id);
-  void enqueue(async () => {
-    // A ticket rejected while it waited has a worker running now; waiting on that session would hold the whole queue.
-    if (readTicket(b.db, id).status !== 'done') return;
-    await Promise.all(sessionsOf(id).map((s) => s.done)); // the tester's pty is still closing
-    const t = readTicket(b.db, id);
-    if (t.status !== 'done' || t.merged_at) return; // reset, rejected or moved by hand while it waited
-    // Main is merged into the worktree first, so the merge into the main checkout is conflict-free by construction; merge.ts's
-    // abort stays as a safety net.
-    // ponytail: lands even when the sync brought in new commits (the worker merged and the tester tested at submit); upgrade is
-    // to send it back to testing when the sync touched files the ticket also touched.
-    // Retry merge after a failed push: the branch is already in the base, so only the push is left.
-    const inBase = isAncestor(b.repo, branchName(id), 'HEAD');
-    const s = inBase ? { ok: true as const } : syncWorktree(b.repo, id);
-    if (!s.ok) return void (await Promise.all(apply(b, id, 'conflict', { note: { role: 'tester', kind: 'failure', body: s.reason }, auto: true }).pending));
-    const r = inBase ? { ok: true as const } : await merge(b.repo, id, t.title, () => readTicket(b.db, id).status === 'done');
-    if (!r) return;
-    // Rejected while git merge ran: the work landed, but the ticket is a worker's again and its next pass merges again.
-    if (r.ok && readTicket(b.db, id).status !== 'done') return;
-    let out;
-    if (r.ok) {
-      if (!inBase) markStale(b);
-      // Published before it counts as merged: a failed push flags the ticket and leaves the merge in the base.
-      const p = readConfig('settings').push_after_merge ? await push(b.repo) : { ok: true as const, pushed: false };
-      if (!p.ok) {
-        const body = `merged into ${p.base}, but git push to ${p.remote} failed, so the ticket is not closed:
+  void enqueue(() => mergeJob(b, id, since).catch(async (e) => {
+    if (!gitNotRun(e) || b.closing) throw e; // the queue logs it
+    if (tries < START_RETRY.max) return void waiting.set(id, setTimeout(() => b.closing || queueMerge(b, id, since, tries + 1), START_RETRY.every).unref());
+    if (readTicket(b.db, id).status !== 'done') return; // moved on while it waited
+    const body = `merge did not run: git failed to run ${tries + 1} times: ${(e as Error).message.trim()}`;
+    await Promise.all(apply(b, id, 'unmerged', { note: { role: 'tester', kind: 'failure', body } }).pending);
+  }));
+}
+
+/** One try at landing a done ticket. Throws when a git it runs did not run at all (`gitNotRun`); queueMerge tries again. */
+async function mergeJob(b: Board, id: number, since: number) {
+  // A ticket rejected while it waited has a worker running now; waiting on that session would hold the whole queue.
+  if (readTicket(b.db, id).status !== 'done') return;
+  await Promise.all(sessionsOf(id).map((s) => s.done)); // the tester's pty is still closing
+  const t = readTicket(b.db, id);
+  if (t.status !== 'done' || t.merged_at) return; // reset, rejected or moved by hand while it waited
+  // Main is merged into the worktree first, so the merge into the main checkout is conflict-free by construction; merge.ts's
+  // abort stays as a safety net.
+  // ponytail: lands even when the sync brought in new commits (the worker merged and the tester tested at submit); upgrade is
+  // to send it back to testing when the sync touched files the ticket also touched.
+  // Retry merge after a failed push: the branch is already in the base, so only the push is left.
+  const inBase = isAncestor(b.repo, branchName(id), 'HEAD');
+  const s = inBase ? { ok: true as const } : syncWorktree(b.repo, id);
+  if (!s.ok) return void (await Promise.all(apply(b, id, 'conflict', { note: { role: 'tester', kind: 'failure', body: s.reason }, auto: true }).pending));
+  const r = inBase ? { ok: true as const } : await merge(b.repo, id, t.title, () => readTicket(b.db, id).status === 'done');
+  if (!r) return;
+  // Rejected while git merge ran: the work landed, but the ticket is a worker's again and its next pass merges again.
+  if (r.ok && readTicket(b.db, id).status !== 'done') return;
+  let out;
+  if (r.ok) {
+    if (!inBase) markStale(b);
+    // Published before it counts as merged: a failed push flags the ticket and leaves the merge in the base.
+    const p = readConfig('settings').push_after_merge ? await push(b.repo) : { ok: true as const, pushed: false };
+    if (!p.ok) {
+      const body = `merged into ${p.base}, but git push to ${p.remote} failed, so the ticket is not closed:
 ${p.reason}`;
-        return void apply(b, id, 'unpushed', { note: { role: 'tester', kind: 'failure', body } });
-      }
-      if (p.pushed) b.unpushed = 0;
-      out = apply(b, id, 'merged');
+      return void apply(b, id, 'unpushed', { note: { role: 'tester', kind: 'failure', body } });
     }
-    else if (r.dirty && Date.now() - since < DIRTY_WAIT.max) {
-      waiting.set(id, setTimeout(() => b.closing || queueMerge(b, id, since), DIRTY_WAIT.every).unref());
-      return;
-    } else if (r.dirty) {
-      const body = `merge did not run: the main checkout (${r.base}) still has uncommitted changes after the wait:\n${r.reason}`;
-      out = apply(b, id, 'dirty', { note: { role: 'tester', kind: 'failure', body } });
-    } else out = apply(b, id, 'conflict', { note: { role: 'tester', kind: 'failure', body: `merge conflict with ${r.base}: ${r.reason}` }, auto: true });
-    await Promise.all(out.pending);
-  });
+    if (p.pushed) b.unpushed = 0;
+    out = apply(b, id, 'merged');
+  }
+  else if (r.dirty && Date.now() - since < DIRTY_WAIT.max) {
+    waiting.set(id, setTimeout(() => b.closing || queueMerge(b, id, since), DIRTY_WAIT.every).unref());
+    return;
+  } else if (r.dirty) {
+    const body = `merge did not run: the main checkout (${r.base}) still has uncommitted changes after the wait:\n${r.reason}`;
+    out = apply(b, id, 'dirty', { note: { role: 'tester', kind: 'failure', body } });
+  } else out = apply(b, id, 'conflict', { note: { role: 'tester', kind: 'failure', body: `merge conflict with ${r.base}: ${r.reason}` }, auto: true });
+  await Promise.all(out.pending);
 }
 
 /** Daemon start, before recover(): with push_after_merge on, how far the base is ahead of its upstream (a crash, or a time the setting was off). */
