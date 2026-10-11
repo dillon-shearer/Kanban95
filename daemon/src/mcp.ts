@@ -75,7 +75,7 @@ const update = (db: DatabaseSync, id: number, cols: Record<string, unknown>) => 
 export const TOOLS: Record<string, Tool<z.ZodRawShape>> = {
   create_ticket: tool({
     description:
-      'Create a ticket in the backlog. Give it a title, a body that says what to build and why, and acceptance criteria a tester can check one by one. ' +
+      'Create a ticket in the backlog. Give it a title, a body that says what to build and why, and acceptance criteria a tester can check one by one (a test passes once, never "N runs in a row"). ' +
       'List depends_on ids when this work must wait for other tickets. Tags (lowercase a-z, 0-9, -) group related tickets on the board. Set model and effort only when the work clearly warrants it: trivial work gets effort low, hard work gets high. ' +
       'A worker files a follow-up or a manual touch it found this way instead of widening its own scope: it lands in Backlog, its body starts with "Filed by #<your ticket>", ' +
       'it runs on the operator\x27s default model and effort, and the worker may fix or delete it while it is still in Backlog. Returns the ticket.',
