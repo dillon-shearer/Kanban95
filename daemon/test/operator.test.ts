@@ -157,6 +157,15 @@ describe('operator template', () => {
     expect(render(repo, 'housekeeping', ctx)).toContain(`orphan directories under this repo's worktrees root \`${root}\``);
   });
 
+  it('the housekeeping brief never asks its worker grant for a brain move; it reports moves and still applies rewrites and merges', () => {
+    const ctx = buildContext(srv.db, repo, null, 'worker');
+    expect(ctx.tools).toContain('- brain_update (yes, not move_to)');
+    const [brief] = render(repo, 'housekeeping', ctx).split('## Tools you may call');
+    expect(brief).not.toContain('move_to');
+    expect(brief).toContain('name every row to move with its current scope, id, target scope and reason');
+    expect(brief).toContain('Apply rewrites and merges in place with `brain_update`');
+  });
+
   it('an unknown variable still fails', () => {
     writeFileSync(join(repo, '.kanban95', 'templates', 'operator.md'), '{{mission}} {{goal}}');
     try {
