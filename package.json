@@ -1,9 +1,13 @@
 {
   "name": "kanban95",
   "private": true,
-  "version": "0.0.0",
-  "engines": { "node": ">=24" },
-  "workspaces": ["daemon"],
+  "version": "1.0.0",
+  "engines": {
+    "node": ">=24"
+  },
+  "workspaces": [
+    "daemon"
+  ],
   "scripts": {
     "build": "npm run build -w daemon",
     "test": "npm test -w daemon",
