@@ -3,6 +3,7 @@ import { delimiter, dirname } from 'node:path';
 import { spawn, type IPty } from 'node-pty';
 
 const SCROLLBACK_LINES = 2000;
+const SCROLLBACK_BYTES = 2 * 1024 * 1024;
 
 /**
  * The only daemon variables a CLI inherits: what Windows and a shell need to run, where the user's home and temp are
@@ -66,18 +67,24 @@ export function spawnPty(cmd: string, args: string[], o: { cwd: string; env: Rec
   agent?._conoutSocketWorker?._worker?.on('error', () => {});
   if (agent?._inSocket) pty.onExit(() => agent._inSocket!.destroy());
 
-  // Raw terminal output, trimmed to the last SCROLLBACK_LINES lines whenever it grows to twice that.
+  // Raw terminal output, trimmed to the last SCROLLBACK_LINES lines and SCROLLBACK_BYTES characters whenever either grows to twice its cap.
   let buf = '';
   let lines = 0;
   const trim = () => {
-    const parts = buf.split('\n');
-    buf = parts.slice(-SCROLLBACK_LINES).join('\n');
-    lines = Math.min(parts.length, SCROLLBACK_LINES) - 1;
+    let parts = buf.split('\n').slice(-SCROLLBACK_LINES);
+    buf = parts.join('\n');
+    if (buf.length > SCROLLBACK_BYTES) {
+      const tail = buf.slice(-SCROLLBACK_BYTES);
+      const nl = tail.indexOf('\n');
+      buf = nl >= 0 ? tail.slice(nl + 1) : tail;
+      parts = buf.split('\n');
+    }
+    lines = parts.length - 1;
   };
   pty.onData((d) => {
     buf += d;
     for (const c of d) if (c === '\n') lines++;
-    if (lines >= 2 * SCROLLBACK_LINES) trim();
+    if (lines >= 2 * SCROLLBACK_LINES || buf.length > 2 * SCROLLBACK_BYTES) trim();
   });
   return {
     pty,
