@@ -87,7 +87,7 @@ If you review a Done ticket and it is not right, **Reject** it (card menu, or th
 
 What the Settings window holds, one subject per tab:
 
-- **Agents**: the default CLI, model and effort per phase, CLI paths, trusted folders (**Clear Claude trust**), runner concurrency, silent agents, housekeeping
+- **Agents**: the default CLI, model and effort per phase, CLI paths, trusted folders (**Clear Claude trust**), runner concurrency (Tickets running at once, `concurrency` in `settings.json`, default 3), silent agents, housekeeping
 - **Prompts**: preferences, templates
 - **Board**: zoom, sounds, which phases open a terminal by themselves, push after merge, voice (speech model, mic button mode)
 - **Projects**: the repos this board knows
@@ -166,9 +166,9 @@ At 100% and 200% the UI text is 98.css's pixel font. That font is drawn for whol
 
 ## Settings
 
-Models (`models.json`), board settings (`settings.json`) and preferences (`preferences.md`) live in `~/.kanban95/` and apply to every project. A project can have its own copy of any of them in `~/.kanban95/projects/<repo key>/`, outside the repo so nothing is committed. A copy starts as a copy of the global file and, while it exists, replaces that file whole for that project's board: keys are never mixed between the two. Delete the copy and the project follows the global file again. Runner concurrency is already per repo (`<repo>/.kanban95/runner.json`).
+Models (`models.json`), board settings (`settings.json`) and preferences (`preferences.md`) live in `~/.kanban95/` and apply to every project. A project can have its own copy of any of them in `~/.kanban95/projects/<repo key>/`, outside the repo so nothing is committed. A copy starts as a copy of the global file and, while it exists, replaces that file whole for that project's board: keys are never mixed between the two. Delete the copy and the project follows the global file again. Every operator setting follows this rule, runner concurrency included. Left per repo on purpose: Trusted folders (Claude Code's own file), Grants, the Projects list, window layout (`<repo>/.kanban95/ui.json`) and prompt templates.
 
-The top of the Settings window has a switch with two positions, **All projects** and **This project (<folder name>)**. It picks which file the Agents tab (models.json for Models; settings.json for Executables, Silent agents and Housekeeping), the Board tab (settings.json) and the Preferences editor on the Prompts tab edit. Templates, Projects and Grants are not affected. It starts on All projects each time the page loads.
+The top of the Settings window has a switch with two positions, **All projects** and **This project (<folder name>)**. It picks which file the Agents tab (models.json for Models; settings.json for Executables, Runner, Silent agents and Housekeeping), the Board tab (settings.json) and the Preferences editor on the Prompts tab edit. Templates, Projects and Grants are not affected. It starts on All projects each time the page loads.
 
 - **All projects** edits the global files in `~/.kanban95/`, as before.
 - **This project** with no copy yet shows the global values greyed, the line "Uses the global settings" and a **Customize for this project** button. The button starts this project's copy of that one file and shows it for editing. Each file has its own button, so a project can have its own models and keep the global sounds.

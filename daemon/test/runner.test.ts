@@ -96,7 +96,8 @@ const request = (method: string, path: string, body?: unknown) => fetch(`http://
   method, headers: { 'content-type': 'application/json', cookie: `k95=${srv.secret}` }, body: body === undefined ? undefined : JSON.stringify(body),
 });
 const setRun = async (on: boolean) => (await request('PUT', '/api/runner', { on })).json();
-const setMax = async (concurrency: unknown) => request('PUT', '/api/runner', { concurrency });
+const setMax = async (concurrency: unknown) => request('PUT', '/api/config/settings?scope=project', { concurrency });
+const state = async () => (await request('GET', '/api/runner')).json();
 /** Commits files at these repo paths, so a ticket naming one names an existing file. */
 const commit = (...files: string[]) => {
   for (const f of files) {
@@ -164,13 +165,13 @@ describe('runner', { timeout: 60_000 }, () => {
     await landed(a);
     await landed(b);
     expect(runs(b)[0].started_at >= t(a).merged_at!).toBe(true);
-    expect(runner(srv.board)).toEqual({ ...STOPPED, concurrency: 1 });
+    expect(runner(srv.board)).toEqual(STOPPED);
     expect(sounds.filter((s) => s.sound === 'ding')).toEqual([{ sound: 'ding', ticket: a }, { sound: 'ding', ticket: b }, { sound: 'ding', ticket: null }]);
     expect((await request('GET', '/api/runner')).status).toBe(200);
     expect((await request('POST', '/api/tickets/launch-all')).status).toBe(404);
   });
 
-  it('with no concurrency in runner.json keeps 3 running; config.json\'s runner_concurrency is ignored', async () => {
+  it('with no concurrency in settings.json keeps 3 running; config.json runner_concurrency is ignored', async () => {
     writeFileSync(join(repo, '.kanban95', 'config.json'), JSON.stringify({ runner_concurrency: 1 }));
     const ids = [1, 2, 3, 4].map((n) => ticket(`Hang ${n}`, { model: 'hang' }));
     const state = await setRun(true);
@@ -178,22 +179,25 @@ describe('runner', { timeout: 60_000 }, () => {
     expect(ids.map((id) => sessionsOf(id).length)).toEqual([1, 1, 1, 0]);
   });
 
-  it('PUT concurrency is validated and stored; a raise launches at once, a cut starts nothing new', async () => {
+  it('settings.json concurrency is validated; a saved raise launches at once, a cut starts nothing new', async () => {
     for (const bad of [0, 11, 1.5, '2', null]) expect((await setMax(bad)).status).toBe(400);
+    expect((await request('PUT', '/api/runner', { on: true, concurrency: 2 })).status).toBe(400);
     expect((await request('PUT', '/api/runner', {})).status).toBe(400);
-    expect(await (await setMax(1)).json()).toMatchObject({ on: false, concurrency: 1 });
-    expect(JSON.parse(readFileSync(join(repo, '.kanban95', 'runner.json'), 'utf8'))).toEqual({ on: false, concurrency: 1 });
-    expect(await (await request('GET', '/api/runner')).json()).toMatchObject({ concurrency: 1 });
+    expect(runner(srv.board)).toEqual({ on: false });
+    expect((await setMax(1)).status).toBe(200);
+    expect(await state()).toMatchObject({ on: false, concurrency: 1 });
 
     const [a, b, c] = ['A', 'B', 'C'].map((x) => ticket(x, { model: 'hang' }));
     expect((await setRun(true)).running).toEqual([a]);
-    expect((await (await setMax(2)).json()).running).toEqual([a, b]);
-    expect((await (await setMax(1)).json()).running).toEqual([a, b]);
+    await setMax(2);
+    expect((await state()).running).toEqual([a, b]);
+    await setMax(1);
+    expect((await state()).running).toEqual([a, b]);
     expect((await request('PATCH', `/api/tickets/${a}`, { status: 'backlog' })).status).toBe(200); // running drops to 1: not below 1
     await setMax(1);
     expect(runs(c)).toEqual([]);
     expect(runs(a)).toHaveLength(1);
-    expect(runner(srv.board)).toEqual({ on: true, concurrency: 1 });
+    expect(JSON.parse(readFileSync(join(repo, '.kanban95', 'runner.json'), 'utf8'))).toEqual({ on: true });
   });
 
   it('defers a candidate that shares a non-doc file with a running ticket and launches an unrelated one instead', async () => {
@@ -203,7 +207,7 @@ describe('runner', { timeout: 60_000 }, () => {
     const c = ticket('Unrelated', { model: 'hang', body: 'Edit src/y.ts, not missing.ts.' });
     await setMax(1);
     expect((await setRun(true)).running).toEqual([a]);
-    expect(await (await setMax(2)).json()).toMatchObject({ running: [a, c], waits: [{ id: b, on: a }] });
+    expect((await setMax(2), await state())).toMatchObject({ running: [a, c], waits: [{ id: b, on: a }] });
     expect(runs(b)).toEqual([]);
   });
 
@@ -214,7 +218,7 @@ describe('runner', { timeout: 60_000 }, () => {
     const c = ticket('Again x', { model: 'hang', body: 'src/x.ts' });
     await setMax(1);
     await setRun(true);
-    expect((await (await setMax(2)).json()).running).toEqual([a, b]);
+    expect((await setMax(2), await state()).running).toEqual([a, b]);
     expect(runs(c)).toEqual([]);
   });
 
@@ -229,7 +233,7 @@ describe('runner', { timeout: 60_000 }, () => {
     const wt = worktreePath(repo, a);
     writeFileSync(join(wt, 'src', 'x.ts'), 'changed\n');
     execFileSync('git', ['commit', '-qam', 'x'], { cwd: wt });
-    expect(await (await setMax(2)).json()).toMatchObject({ running: [a, c], waits: [{ id: b, on: a }] });
+    expect((await setMax(2), await state())).toMatchObject({ running: [a, c], waits: [{ id: b, on: a }] });
   });
 
   it('never launches a flagged ticket or one on an unmerged dependency, goes on past a failed launch, and waits for a running dependency', async () => {
@@ -270,7 +274,7 @@ describe('runner', { timeout: 60_000 }, () => {
     expect(runs(next)).toEqual([]);
     await landed(cut);
     await landed(next);
-    expect(runner(srv.board)).toEqual({ ...STOPPED, concurrency: 1 });
+    expect(runner(srv.board)).toEqual(STOPPED);
   });
 
   it('Stop starts nothing new and clears every hold while the running ticket finishes; a card\'s own Launch still works', async () => {
@@ -290,6 +294,6 @@ describe('runner', { timeout: 60_000 }, () => {
     expect(sounds.filter((s) => s.sound === 'ding')).toEqual([{ sound: 'ding', ticket: a }]); // no "nothing left" ding: the operator stopped it
     expect((await request('POST', `/api/tickets/${b}/launch`)).status).toBe(200);
     expect(sessionsOf(b)).toHaveLength(1);
-    expect(runner(srv.board)).toEqual({ on: false, concurrency: 1 });
+    expect(runner(srv.board)).toEqual({ on: false });
   });
 });

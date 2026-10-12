@@ -9,7 +9,7 @@ import { BRAIN_BODY_MAX, BRAIN_RANK, isConstraintError, SCOPES, type Brains, typ
 import { hasBranch, ticketDiff } from './git.js';
 import { audit, revoke } from './grants.js';
 import { killGrantSession, killSession, sessions, sessionsOf, type Session } from './launcher.js';
-import { apply, brainstorm, changed, housekeeping, operator, pushBase, Refused, restartBoard, runner, runnerState, setRunner, type Board } from './lifecycle.js';
+import { apply, brainstorm, changed, housekeeping, operator, pushBase, Refused, restartBoard, runnerState, setRunner, tick, type Board } from './lifecycle.js';
 import { addOverride, BadConfig, dropOverride, globalPath, isOverridable, knownModels, project, projectPath, projectsPath, readProjects, uncatalogued, writeConfig, writePreferences, writeProjects, type OverridableName } from './settings.js';
 import { isStale, resetTemplate, templatePath, TEMPLATES, unknownVar, VARS, writeTemplate, type TemplateName } from './templates.js';
 import { trustStatus, untrustClaude } from './trust.js';
@@ -372,17 +372,15 @@ const routes: [method: string, path: RegExp, mutation: string | null, handler: (
     if (typeof body.reason !== 'string' || !body.reason.trim()) throw new HttpError(400, 'reason must be a non-empty string');
     return { status: 200, body: apply(board, Number(params[0]), 'reject', { note: { role: 'operator', kind: 'failure', body: body.reason.trim() } }).ticket };
   }],
-  // The runner (docs/LIFECYCLE.md → The runner): `{on?, concurrency?}` turns it on or off and sets how many tickets it keeps
-  // running; both return what the status bar shows. A new concurrency while on launches at once if there is room.
+  // The runner (docs/LIFECYCLE.md → The runner): `{on}` turns it on or off and returns what the status bar shows, with the
+  // resolved `concurrency`. Concurrency is a settings.json value: a body carrying it is a 400 pointing there.
   // `{on: false}` (Stop) also clears every Backlog hold, so nothing staged starts later by itself, and says how many in `cleared`.
   ['GET', /^\/api\/runner$/, null, ({ board }) => ({ status: 200, body: runnerState(board) })],
   ['PUT', /^\/api\/runner$/, 'runner.set', ({ board, body }) => {
-    const { on, concurrency: c } = body;
-    if (on !== undefined && typeof on !== 'boolean') throw new HttpError(400, 'on must be a boolean');
-    if (c !== undefined && !(typeof c === 'number' && Number.isInteger(c) && c >= 1 && c <= 10)) throw new HttpError(400, 'concurrency must be an integer from 1 to 10');
-    if (on === undefined && c === undefined) throw new HttpError(400, 'send on, concurrency or both');
-    const cur = runner(board);
-    setRunner(board, on ?? cur.on, on === undefined ? cur.why : undefined, (c as number | undefined) ?? cur.concurrency);
+    const { on } = body;
+    if (body.concurrency !== undefined) throw new HttpError(400, 'concurrency is a settings.json value: PUT /api/config/settings');
+    if (typeof on !== 'boolean') throw new HttpError(400, 'on must be a boolean');
+    setRunner(board, on);
     if (on !== false) return { status: 200, body: runnerState(board) };
     const held = (board.db.prepare("UPDATE tickets SET blocked_on_deps = 0 WHERE status = 'backlog' AND blocked_on_deps = 1 RETURNING id").all() as { id: number }[]);
     for (const { id } of held) changed(id);
@@ -500,17 +498,20 @@ const routes: [method: string, path: RegExp, mutation: string | null, handler: (
     const name = configName(params[0]);
     const repo = configScope(url) === 'project' ? board.repo : undefined;
     const value = name === 'preferences' ? writePreferences(body.value, repo) : writeConfig(name, body, repo);
+    if (name === 'settings') settingsChanged(board);
     return { status: 200, body: { path: repo ? projectPath(name, repo) : globalPath(name), value } };
   }],
   // Starts this repo's copy as a copy of the global file (409 when one exists), or removes it (404 when none).
   ['POST', /^\/api\/config\/(\w+)\/override$/, 'config.write', ({ board, params, url }) => {
     const name = configName(params[0]);
     if (!addOverride(name, board.repo)) throw new HttpError(409, `${name} already has a project copy`);
+    if (name === 'settings') settingsChanged(board);
     return { status: 200, body: configView(board, name, url, 'project') };
   }],
   ['DELETE', /^\/api\/config\/(\w+)\/override$/, 'config.write', ({ board, params, url }) => {
     const name = configName(params[0]);
     if (!dropOverride(name, board.repo)) throw new HttpError(404, `${name} has no project copy`);
+    if (name === 'settings') settingsChanged(board);
     return { status: 200, body: configView(board, name, url, 'project') };
   }],
   // ~/.kanban95/projects.json (Settings → Projects): the whole list in `value` both ways. /api/project is this board's entry,
@@ -586,6 +587,11 @@ function attachmentFile(board: Board, params: string[]): { name: string; file: s
 
 function sessionView(s: Session) {
   return { id: s.key, ticket_id: s.ticketId, run_id: s.runId, grant_id: s.grantId, role: s.role, phase: s.phase, model: s.model };
+}
+
+function settingsChanged(board: Board) {
+  changed(null);
+  tick(board);
 }
 
 function configName(s: string): OverridableName {
