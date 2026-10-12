@@ -1,6 +1,6 @@
 // One git worktree per ticket: <board home>/worktrees/<repo key>/t-<id> on branch ticket/<id>, forked from the repo's current branch.
 import { execFileSync } from 'node:child_process';
-import { existsSync, lstatSync, mkdirSync, readdirSync, readlinkSync, realpathSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, readdirSync, readlinkSync, realpathSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { INNER_GITIGNORE } from './db.js';
 import { boardHome, repoKey } from './settings.js';
@@ -153,13 +153,16 @@ export function syncWorktree(repo: string, ticketId: number): { ok: true } | { o
 }
 
 /**
- * Removes the worktree and deletes the branch only if it is merged. Without `force` git refuses a worktree holding uncommitted
- * or untracked files; the janitor forces only once the branch has landed, when what is left is build output and test leftovers.
+ * Removes the worktree and deletes the branch only if it is merged. Without `force` a worktree holding uncommitted or untracked
+ * files is refused and left exactly as it was, links included: cleanliness is checked before anything is unlinked. The janitor
+ * forces only once the branch has landed, when what is left is build output and test leftovers.
  */
 export function removeWorktree(repo: string, ticketId: number, force = false, path = worktreePath(repo, ticketId)): { branchDeleted: boolean } {
   if (existsSync(path)) {
-    unlinkLinks(repo, path);
-    git(repo, 'worktree', 'remove', ...(force ? ['--force'] : []), path);
+    if (force) {
+      unlinkLinks(repo, path);
+      git(repo, 'worktree', 'remove', '--force', path);
+    } else removeIfClean(repo, path);
   }
   try {
     git(repo, 'branch', '-d', branchName(ticketId));
@@ -169,20 +172,64 @@ export function removeWorktree(repo: string, ticketId: number, force = false, pa
   }
 }
 
+function removeIfClean(repo: string, path: string): void {
+  if (!ownTree(path)) return void git(repo, 'worktree', 'remove', path);
+  const changes = () =>
+    execFileSync('git', ['status', '--porcelain', '-z', '--ignore-submodules=none'], { cwd: path, encoding: 'utf8', stdio: 'pipe' }).split('\0').filter(Boolean);
+  const dirty = () => new Error(`'${path}' contains modified or untracked files, use --force to delete it`);
+  if (changes().length) throw dirty();
+  const unlinked: Link[] = [];
+  try {
+    unlinkLinks(repo, path, unlinked);
+    const tracked = new Set(unlinked.map((l) => relative(path, l.path).replaceAll('\\', '/')));
+    const left = changes();
+    if (!left.every((c) => c.startsWith(' D ') && tracked.has(c.slice(3)))) throw dirty();
+    git(repo, 'worktree', 'remove', ...(left.length ? ['--force'] : []), path);
+  } catch (e) {
+    relink(path, unlinked);
+    throw e;
+  }
+}
+
+function ownTree(path: string): boolean {
+  try {
+    return realpathSync.native(git(path, 'rev-parse', '--show-toplevel')) === realpathSync.native(path);
+  } catch {
+    return false;
+  }
+}
+
+type Link = { path: string; target: string; dir: boolean };
+
+function relink(tree: string, links: Link[]): void {
+  for (const l of links) {
+    try {
+      if (lstatSync(l.path, { throwIfNoEntry: false })) continue;
+      try {
+        git(tree, 'checkout', '--', relative(tree, l.path));
+      } catch {
+        symlinkSync(l.target, l.path, l.dir ? 'junction' : 'file');
+      }
+    } catch {}
+  }
+}
+
 /**
- * Unlinks every junction and symlink under `dir` (and `dir` itself if it is one) without following it. Call it before deleting
- * a worktree: `git worktree remove --force` followed a worktree's `node_modules` junction to the main checkout's and
- * emptied main's `daemon/`, and `rmSync` is not trusted to stop at a junction either. Node's lstat reports a Windows junction
- * as a symbolic link and `unlinkSync` removes the junction, not its target. Throws, deleting nothing more, when a link that
- * resolves into the main checkout could not be unlinked.
+ * Unlinks every junction and symlink under `dir` (and `dir` itself if it is one) without following it, recording each in
+ * `unlinked`. Call it before deleting a worktree: `git worktree remove --force` followed a worktree's `node_modules` junction
+ * to the main checkout's and emptied main's `daemon/`, and `rmSync` is not trusted to stop at a junction either. Node's lstat
+ * reports a Windows junction as a symbolic link and `unlinkSync` removes the junction, not its target. Throws, deleting
+ * nothing more, when a link that resolves into the main checkout could not be unlinked.
  */
-export function unlinkLinks(repo: string, dir: string): void {
+export function unlinkLinks(repo: string, dir: string, unlinked: Link[] = []): Link[] {
   const stuck: string[] = [];
   const visit = (path: string) => {
     const st = lstatSync(path, { throwIfNoEntry: false });
     if (st?.isSymbolicLink()) {
       try {
+        const link = { path, target: readlinkSync(path), dir: statSync(path, { throwIfNoEntry: false })?.isDirectory() ?? false };
         unlinkSync(path);
+        unlinked.push(link);
       } catch (e) {
         if (intoMain(repo, path)) stuck.push(`${path}: ${(e as Error).message}`);
       }
@@ -192,6 +239,7 @@ export function unlinkLinks(repo: string, dir: string): void {
   };
   visit(dir);
   if (stuck.length) throw new Error(`refusing to remove ${dir}: a link into the main checkout could not be unlinked\n${stuck.join('\n')}`);
+  return unlinked;
 }
 
 /** Whether `link` resolves into `repo`. A link whose target cannot be read counts as in. */
