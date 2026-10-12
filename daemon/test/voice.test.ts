@@ -28,10 +28,10 @@ const manifest = (id: string, files: Manifest['files']): Manifest => ({ id: `tes
 const good = (path: string) => ({ path, size: FILES[path].length, sha256: sha(FILES[path]) });
 
 describe('voice model download', () => {
-  it('reports the model as missing without touching the network', () => {
+  it('reports the model as missing without touching the network', async () => {
     const m = manifest('idle', [good('config.json')]);
     const before = hits;
-    expect(status(m)).toMatchObject({ downloaded: false, received: null, size: FILES['config.json'].length });
+    expect(await status(m)).toMatchObject({ downloaded: false, received: null, size: FILES['config.json'].length });
     expect(hits).toBe(before);
   });
 
@@ -39,7 +39,7 @@ describe('voice model download', () => {
     const m = manifest('good', [good('config.json'), good('onnx/model.onnx')]);
     await download(m);
     expect(readFileSync(join(modelDir(m), 'onnx', 'model.onnx'))).toEqual(FILES['onnx/model.onnx']);
-    expect(status(m).downloaded).toBe(true);
+    expect((await status(m)).downloaded).toBe(true);
   });
 
   it('rejects a file with the wrong hash and deletes it, naming the file and both hashes', async () => {
@@ -49,7 +49,7 @@ describe('voice model download', () => {
     const file = join(modelDir(m), 'onnx', 'model.onnx');
     expect(existsSync(file)).toBe(false);
     expect(existsSync(`${file}.part`)).toBe(false);
-    expect(status(m).downloaded).toBe(false);
+    expect((await status(m)).downloaded).toBe(false);
   });
 
   it('stops reading a response larger than the pinned size', async () => {
@@ -67,11 +67,42 @@ describe('voice model download', () => {
     expect(readFileSync(file)).toEqual(FILES['config.json']);
   });
 
-  it('serves only paths the manifest lists', () => {
+  it('serves only paths the manifest lists', async () => {
     const m = manifest('serve', [good('config.json')]);
-    expect(voiceFile('/voice-model/test/serve/config.json', m)).toBe(join(modelDir(m), 'config.json'));
-    expect(voiceFile('/voice-model/test/serve/../../../.claude.json', m)).toBeNull();
-    expect(voiceFile('/voice-model/test/serve/tokenizer.json', m)).toBeNull();
-    expect(voiceFile('/voice-model/other/config.json', m)).toBeNull();
+    await download(m);
+    expect(await voiceFile('/voice-model/test/serve/config.json', m)).toBe(join(modelDir(m), 'config.json'));
+    expect(await voiceFile('/voice-model/test/serve/../../../.claude.json', m)).toBeNull();
+    expect(await voiceFile('/voice-model/test/serve/tokenizer.json', m)).toBeNull();
+    expect(await voiceFile('/voice-model/other/config.json', m)).toBeNull();
+  });
+
+  it('refuses a cached file corrupted at the same size, without fetching, until the operator downloads again', async () => {
+    const m = manifest('samesize', [good('config.json'), good('onnx/model.onnx')]);
+    await download(m);
+    const url = '/voice-model/test/samesize/onnx/model.onnx';
+    const file = join(modelDir(m), 'onnx', 'model.onnx');
+    expect((await status(m)).downloaded).toBe(true);
+    expect(await voiceFile(url, m)).toBe(file);
+
+    writeFileSync(file, Buffer.alloc(4096, 8));
+    const before = hits;
+    expect((await status(m)).downloaded).toBe(false);
+    expect(await voiceFile(url, m)).toBeNull();
+    expect(hits).toBe(before);
+    expect(readFileSync(file)).toEqual(Buffer.alloc(4096, 8));
+
+    await download(m);
+    expect(hits).toBe(before + 1);
+    expect((await status(m)).downloaded).toBe(true);
+    expect(await voiceFile(url, m)).toBe(file);
+  });
+
+  it('serves a verified cache with the model host offline', async () => {
+    const m = { ...manifest('offline', [good('config.json')]), source: 'http://127.0.0.1:9' };
+    mkdirSync(modelDir(m), { recursive: true });
+    writeFileSync(join(modelDir(m), 'config.json'), FILES['config.json']);
+    expect((await status(m)).downloaded).toBe(true);
+    expect(await voiceFile('/voice-model/test/offline/config.json', m)).toBe(join(modelDir(m), 'config.json'));
+    await download(m);
   });
 });

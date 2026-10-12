@@ -569,7 +569,7 @@ const routes: [method: string, path: RegExp, mutation: string | null, handler: (
   }],
   // The CLIs' account limits, cached 5 min; ?refresh=1 asks again (docs/OPERATOR.md → Limits). Per-CLI failures are in `errors`.
   ['GET', /^\/api\/limits$/, null, async ({ url }) => ({ status: 200, body: await limits(url.searchParams.has('refresh')) })],
-  ['GET', /^\/api\/voice$/, null, () => ({ status: 200, body: voiceStatus() })],
+  ['GET', /^\/api\/voice$/, null, async () => ({ status: 200, body: await voiceStatus() })],
   // The board's only network call, started by the operator's OK in the download dialog (docs/SECURITY.md → Voice model).
   ['POST', /^\/api\/voice\/download$/, 'voice.download', async () => {
     try {
@@ -577,7 +577,7 @@ const routes: [method: string, path: RegExp, mutation: string | null, handler: (
     } catch (e) {
       throw new HttpError(502, `voice model download failed: ${(e as Error).message}`);
     }
-    return { status: 200, body: voiceStatus() };
+    return { status: 200, body: await voiceStatus() };
   }],
 ];
 

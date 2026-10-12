@@ -163,7 +163,7 @@ Every `/api/*` request needs the `k95` cookie holding the shell secret, or gets 
 | GET | `/api/models` | `{claude: string[], codex: string[]}`: the model names each installed CLI knows (Codex's `~/.codex/models_cache.json`, Claude's `--help` and executable), for the model dropdowns in Settings → Agents |
 | GET, DELETE | `/api/trust` | Claude Code's trust entry for this repo root: status, or clear it (`docs/CLIS.md` → First-run prompts) |
 | GET | `/api/limits?refresh=` | `{rows: [{cli, window, used, limit, resets_at}], errors: {claude?, codex?}, fetched_at}`. `used` of `limit` (percent of 100); `resets_at` is ISO for Codex, Claude's own text (`Oct 8, 7:59pm (America/New_York)`) for Claude. Cached 5 min; `refresh` asks the CLIs now. A CLI that fails is in `errors` with why, never its output |
-| GET | `/api/voice` | speech model: id, source, revision, license, files with size and SHA-256, `downloaded`, `received` (bytes so far while downloading) |
+| GET | `/api/voice` | speech model: id, source, revision, license, files with size and SHA-256, `downloaded` (every file on disk matches its pinned hash), `received` (bytes so far while downloading) |
 | POST | `/api/voice/download` | downloads and verifies the model; `502` naming the file on any failure |
 
 Errors are `{ "error": "..." }`: 400 for bad input, a constraint violation or a dependency cycle, 404, 405, 409 for a lifecycle refusal, 413 for bodies over 1 MiB (10 MB for an attachment upload). Every POST/PUT/PATCH/DELETE writes an audit row, including failed ones.

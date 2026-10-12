@@ -21,23 +21,44 @@ export const MANIFEST: Manifest = JSON.parse(readFileSync(resolve(import.meta.di
 export const modelDir = (m: Manifest) => join(boardHome(), 'models', m.id.split('/').pop()!);
 const fileUrl = (m: Manifest, path: string) => `${m.source}/resolve/${m.revision}/${path}`;
 
-const present = (m: Manifest) => m.files.every((f) => statSync(join(modelDir(m), f.path), { throwIfNoEntry: false })?.size === f.size);
 let running: Promise<void> | null = null;
 let received = 0;
-
-/** What the download dialog shows. `received` is non-null while a download runs. */
-export const status = (m = MANIFEST) => ({
-  id: m.id, source: m.source, revision: m.revision, license: m.license, files: m.files,
-  size: m.files.reduce((n, f) => n + f.size, 0),
-  downloaded: present(m),
-  received: running ? received : null,
-});
 
 async function sha256(file: string) {
   const h = createHash('sha256');
   for await (const c of createReadStream(file)) h.update(c);
   return h.digest('hex');
 }
+
+const checked = new Map<string, { stamp: string; ok: Promise<boolean> }>();
+
+function stampOf(file: string, f: Manifest['files'][number]) {
+  const st = statSync(file, { throwIfNoEntry: false, bigint: true });
+  return st?.isFile() && st.size === BigInt(f.size) ? `${f.sha256}:${st.size}:${st.ino}:${st.mtimeNs}:${st.ctimeNs}` : null;
+}
+
+function verified(file: string, f: Manifest['files'][number]): Promise<boolean> {
+  const stamp = stampOf(file, f);
+  if (!stamp) {
+    checked.delete(file);
+    return Promise.resolve(false);
+  }
+  const hit = checked.get(file);
+  if (hit?.stamp === stamp) return hit.ok;
+  const ok = sha256(file).then((got) => got === f.sha256, () => false);
+  checked.set(file, { stamp, ok });
+  return ok;
+}
+
+const ready = async (m: Manifest) => (await Promise.all(m.files.map((f) => verified(join(modelDir(m), f.path), f)))).every(Boolean);
+
+/** What the download dialog shows. `downloaded` means every file is on disk and matches its pinned hash. `received` is non-null while a download runs. */
+export const status = async (m = MANIFEST) => ({
+  id: m.id, source: m.source, revision: m.revision, license: m.license, files: m.files,
+  size: m.files.reduce((n, f) => n + f.size, 0),
+  downloaded: await ready(m),
+  received: running ? received : null,
+});
 
 async function locked(m: Manifest, fn: () => Promise<void>) {
   const dir = modelDir(m);
@@ -79,7 +100,7 @@ export function download(m = MANIFEST): Promise<void> {
     for (const f of m.files) {
       const dest = join(modelDir(m), f.path);
       if (existsSync(dest)) {
-        if ((await sha256(dest)) === f.sha256) {
+        if (await verified(dest, f)) {
           received += f.size;
           continue;
         }
@@ -108,6 +129,8 @@ export function download(m = MANIFEST): Promise<void> {
         const got = h.digest('hex');
         if (n !== f.size || got !== f.sha256) throw new Error(`${f.path}: expected sha256 ${f.sha256} (${f.size} bytes), got ${got} (${n} bytes)`);
         renameSync(part, dest);
+        const stamp = stampOf(dest, f);
+        if (stamp) checked.set(dest, { stamp, ok: Promise.resolve(true) });
       } catch (e) {
         rmSync(part, { force: true });
         throw e;
@@ -117,10 +140,15 @@ export function download(m = MANIFEST): Promise<void> {
   return running;
 }
 
-/** `/voice-model/<id>/<path>` → the file on disk, only for a path the manifest lists. Anything else is null (404). */
-export function voiceFile(pathname: string, m = MANIFEST): string | null {
+/**
+ * `/voice-model/<id>/<path>` → the file on disk, only for a path the manifest lists and only while that file matches its
+ * pinned hash. Anything else is null (404). A mismatch is not fetched again here; that waits for the operator's OK.
+ */
+export async function voiceFile(pathname: string, m = MANIFEST): Promise<string | null> {
   const prefix = `/voice-model/${m.id}/`;
   if (!pathname.startsWith(prefix)) return null;
   const f = m.files.find((x) => x.path === pathname.slice(prefix.length));
-  return f ? join(modelDir(m), f.path) : null;
+  if (!f) return null;
+  const file = join(modelDir(m), f.path);
+  return (await verified(file, f)) ? file : null;
 }

@@ -29,7 +29,7 @@ describe('ui-voice', { timeout: 60_000 }, () => {
     // The daemon verifies every file's SHA-256, cached or not; a missing or tampered file is fetched again.
     const r = await fetch(`${base}api/voice/download`, { method: 'POST', headers: { cookie: `k95=${srv.secret}` } });
     expect(r.status, await r.clone().text()).toBe(200);
-    expect(status().downloaded).toBe(true);
+    expect((await status()).downloaded).toBe(true);
     if (!existsSync(CACHE)) cpSync(modelDir(MANIFEST), CACHE, { recursive: true });
 
     await page.goto(base);
