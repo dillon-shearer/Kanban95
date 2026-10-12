@@ -28,7 +28,7 @@ Empty values render as `(none)`, except `{{diff}}` outside a test session (empty
 |---|---|---|---|
 | `brainstorm.md` | planner | no run (no ticket) | interview the operator, create tickets |
 | `operator.md` | operator | no run (no ticket) | carry out the operator's typed mission with the operator's reach on the board |
-| `plan.md` | worker | plan | design pass for one ticket, write a `plan` note. The board does not launch it today: the lifecycle starts only `execute`, `housekeeping` and `test` sessions, and the `plan` phase settings in `models.json` are used by brainstorms and operator terminals |
+| `plan.md` | worker | plan | design pass for one ticket, write a `plan` note. The board does not launch it today: the lifecycle starts only `execute`, `housekeeping` and `test` sessions, and the `plan` phase settings in `models.json` are used by brainstorms (operator terminals use the `operator` phase) |
 | `execute.md` | worker | execute | build the ticket in its worktree |
 | `housekeeping.md` | worker | execute | clean stale docs, dead modules, leftover artefacts |
 | `test.md` | tester | test | check the work against the criteria |
