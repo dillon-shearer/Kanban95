@@ -147,6 +147,7 @@ Drag a card to any column to put it there by hand (docs/LIFECYCLE.md → Moves b
 | Ctrl+1 to Ctrl+9 | switch to the 1st to 9th hosted board |
 | Ctrl+L | Run / Stop the runner |
 | Ctrl+R | Restart the agent of the focused ticket window (after a confirm) |
+| Enter, Space, arrows | on a focused card (Tab to it): Enter opens the ticket, Space selects or deselects it (Shift+Space selects the range), Up/Down move to the card above or below, Left/Right to the next open column |
 | Ctrl+A | select every card the filter shows in an open column (on the Board, outside a text field) |
 | Ctrl+F | focus the Board's Filter box (Esc in the box clears it) |
 | Ctrl+N | New brainstorm |
