@@ -354,6 +354,7 @@ export const normal = (p: string) => {
     return resolve(p);
   }
 };
+export const gone = (path: string) => !statSync(path, { throwIfNoEntry: false })?.isDirectory();
 export const same = (a: string, b: string) => (process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b);
 
 /** A missing file is an empty list. Only the shape is checked on read: a repo deleted since does not break every board. */

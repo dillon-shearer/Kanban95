@@ -114,3 +114,20 @@ it('focus refuses a listed project that is not running with 409', async () => {
   expect(r.status).toBe(409);
   expect((await r.json()).error).toMatch(/not running/);
 });
+
+it('a listed project whose folder was deleted reads as missing, and open and start refuse it without recreating it', async () => {
+  const gone = repo();
+  writeProjects([{ path: own, colour: '#008080' }, { path: other, colour: 120 }, { path: gone, colour: 0 }], own);
+  rmSync(gone, { recursive: true, force: true });
+  expect((await (await call('GET', '/projects')).json()).missing).toEqual({ [own]: false, [other]: false, [gone]: true });
+  srv.board.shell = true;
+  for (const where of ['window', 'here']) {
+    const r = await call('POST', '/projects/open', { path: gone, where });
+    expect(r.status).toBe(409);
+    expect((await r.json()).error).toMatch(/missing/);
+  }
+  srv.board.shell = undefined;
+  expect(() => start({ repo: gone })).toThrow(/does not exist/);
+  expect(existsSync(gone)).toBe(false);
+  expect(started).toEqual([]);
+});

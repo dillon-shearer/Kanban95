@@ -17,7 +17,7 @@ import { countUnpushed, events, recover, releasePending, tick, watchSilence, typ
 import { handleMcp } from './mcp.js';
 import { startMemoryLog } from './memlog.js';
 import { idle } from './merge.js';
-import { addProject, readConfig } from './settings.js';
+import { addProject, gone, readConfig } from './settings.js';
 import { firstProject, handleSetup } from './setup.js';
 import { initTemplates } from './templates.js';
 import { askForCheck } from './update.js';
@@ -150,6 +150,7 @@ export function start(config: Config = {}): Promise<{
   const { host, port } = validateConfig(config);
   const repo = config.repo ?? process.cwd();
   const secret = config.secret ?? randomBytes(32).toString('hex');
+  if (gone(repo)) throw new Error(`project folder ${repo} does not exist: it was deleted or moved`);
   const db = openDb(repo);
   let brain: DatabaseSync;
   try {
@@ -343,7 +344,10 @@ if (import.meta.main) {
   }
   const repo = process.argv[2] ?? firstProject();
   const wanted = process.env.KANBAN95_PORT ? Number(process.env.KANBAN95_PORT) : 0;
-  const started = repo ? await start({ secret, port: wanted, repo, shellId, shell }) : await startSetup({ secret, port: wanted, done: () => process.exit(75) });
+  const started = await Promise.resolve().then(() => (repo ? start({ secret, port: wanted, repo, shellId, shell }) : startSetup({ secret, port: wanted, done: () => process.exit(75) }))).catch((e) => {
+    console.log((e as Error).message);
+    process.exit(1);
+  });
   const { port } = started;
   console.log(`KANBAN95 port=${port}`);
   if (repo) {

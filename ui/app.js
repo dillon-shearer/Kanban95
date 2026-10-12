@@ -1171,7 +1171,7 @@ const hex = (c) => {
 
 /** Settings → Projects: every repo with a board. Each change saves the whole list at once. */
 async function projectsPanel(p) {
-  const [own, { path, value }] = await Promise.all([api('GET', '/project'), api('GET', '/projects')]);
+  const [own, { path, value, missing }] = await Promise.all([api('GET', '/project'), api('GET', '/projects')]);
   let list = value;
   const save = (next, ok) => act(async () => {
     list = (await api('PUT', '/projects', { value: next })).value;
@@ -1182,7 +1182,7 @@ async function projectsPanel(p) {
   const draw = () => p.replaceChildren(h('p', {}, `${path}. A board's own project cannot be removed.`),
     table(['Project', 'Path', 'Colour', ''], list.map((x, i) => {
       const self = x.path === own.path; // both spelled by the daemon
-      return h('tr', { 'data-project': x.path }, h('td', {}, x.path.split(/[\\/]/).pop() + (self ? ' (this board)' : '')), h('td', {}, x.path),
+      return h('tr', { 'data-project': x.path }, h('td', {}, x.path.split(/[\\/]/).pop() + (self ? ' (this board)' : missing[x.path] ? ' (missing)' : '')), h('td', {}, x.path),
         h('td', {}, h('input', { type: 'color', value: hex(x.colour),
           onchange: (e) => save(list.map((y, j) => (j === i ? { ...y, colour: e.target.value } : y)), 'Colour saved.') })),
         h('td', {}, h('button', { disabled: self, onclick: () => save(list.filter((_, j) => j !== i), 'Project removed.') }, 'Remove')));
@@ -1201,14 +1201,14 @@ function addProjectBoard() {
   openSettings('Projects');
 }
 
-let projects = { own: null, value: [], running: {}, hosted: {}, agents: {}, attention: {} };
+let projects = { own: null, value: [], running: {}, missing: {}, hosted: {}, agents: {}, attention: {} };
 const folder = (path) => path.split(/[\\/]/).pop();
 async function loadProjectItems() {
   try {
-    const [own, { value, running, hosted, agents, attention }] = await Promise.all([api('GET', '/project'), api('GET', '/projects')]);
-    projects = { own: own.path, value, running, hosted, agents, attention };
+    const [own, { value, running, missing, hosted, agents, attention }] = await Promise.all([api('GET', '/project'), api('GET', '/projects')]);
+    projects = { own: own.path, value, running, missing, hosted, agents, attention };
   } catch (e) {
-    projects = { error: e.message, value: [], running: {}, hosted: {}, agents: {}, attention: {} };
+    projects = { error: e.message, value: [], running: {}, missing: {}, hosted: {}, agents: {}, attention: {} };
   }
 }
 const hostedProjects = () => projects.value.filter((p) => projects.hosted[p.path]);
@@ -1218,10 +1218,10 @@ function projectItems() {
   return projects.value.map((p) => {
     const name = folder(p.path);
     const self = p.path === projects.own;
-    const here = projects.hosted[p.path], live = projects.running[p.path];
-    return { label: name + (self ? ' (this board)' : live ? ' (running)' : ''), items: [
-      { label: 'Open here', disabled: self, run: () => (here ? askShell('switch', p.path) : askShell('open', p.path, { where: 'here' })) },
-      { label: 'Open in new window', disabled: self && !here, run: () => (here ? askShell('popout', p.path) : switchProject(p.path, name, live)) },
+    const here = projects.hosted[p.path], live = projects.running[p.path], gone = projects.missing[p.path] && !live;
+    return { label: name + (self ? ' (this board)' : live ? ' (running)' : gone ? ' (missing)' : ''), items: [
+      { label: 'Open here', disabled: self || gone, run: () => (here ? askShell('switch', p.path) : askShell('open', p.path, { where: 'here' })) },
+      { label: 'Open in new window', disabled: (self && !here) || gone, run: () => (here ? askShell('popout', p.path) : switchProject(p.path, name, live)) },
       ...(self && here && location.hash === '#own' ? [{ label: 'Dock', run: () => askShell('dock', p.path) }] : []),
       ...(here ? [{ label: 'Close board', run: () => closeBoard(p.path) }] : []),
     ] };
@@ -1271,6 +1271,7 @@ async function openSwitch() {
   const go = (p) => {
     closeSwitch();
     if (projects.hosted[p.path]) askShell('switch', p.path);
+    else if (projects.missing[p.path] && !projects.running[p.path]) say(`${folder(p.path)} is missing: its folder ${p.path} was deleted or moved`);
     else if (!projects.running[p.path]) askShell('open', p.path, { where: 'here' });
     else switchProject(p.path, folder(p.path), true);
   };
@@ -1278,6 +1279,7 @@ async function openSwitch() {
   const rows = list.map((p) => h('div', { class: 'k95-switch-row', role: 'menuitem', tabindex: -1, 'data-project': p.path, style: `background: ${cssColour(p.colour)}`,
     onclick: () => go(p) },
   h('span', { class: 'name' }, folder(p.path)),
+  projects.missing[p.path] && !projects.running[p.path] ? h('span', { class: 'gone', title: 'Folder deleted or moved' }, 'missing') : null,
   projects.running[p.path] ? h('span', { class: 'run', title: 'Running' }) : null,
   projects.attention[p.path] > 0 ? h('span', { class: 'attn', title: 'Needs you' }, String(projects.attention[p.path])) : null,
   projects.hosted[p.path] && projects.agents[p.path] === 0

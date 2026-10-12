@@ -61,6 +61,7 @@ body.k95-vector { --k95-font: Tahoma, sans-serif; }
 .k95-switch-row { display: flex; align-items: center; gap: 4px; height: 20px; padding: 0 2px 0 5px; color: #fff; cursor: default; }
 .k95-switch-row:hover, .k95-switch-row:focus { outline: 1px dotted #fff; outline-offset: -2px; }
 .k95-switch-row .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.k95-switch-row .gone { flex: none; padding: 0 2px; background: #c0c0c0; color: #000; font-size: 10px; line-height: 12px; }
 .k95-switch-row .run { flex: none; width: 6px; height: 6px; background: #0f0; border: 1px solid #000; }
 .k95-switch-row .attn { flex: none; padding: 0 2px; background: #fff; color: #c00000; font-size: 10px; font-weight: bold; line-height: 12px; }
 .k95-switch-row .x { flex: none; min-width: 0; min-height: 0; width: 16px; height: 14px; padding: 0; font-size: 9px; font-weight: bold; }
