@@ -3,7 +3,7 @@
 import { execFile, spawn } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { createInterface } from 'node:readline';
-import { childEnv } from './pty.js';
+import { childEnv, cmdSafe } from './pty.js';
 import { cliPath, CLIS, type Cli } from './settings.js';
 
 export interface Row { cli: Cli; window: string; used: number; limit: number; resets_at: string | null }
@@ -12,8 +12,6 @@ export interface Limits { rows: Row[]; errors: Partial<Record<Cli, string>>; fet
 const REFRESH_MS = 5 * 60_000;
 const TIMEOUT_MS = 30_000;
 const win = process.platform === 'win32';
-/** cmd.exe line for a `.cmd` shim (codex); Node refuses to spawn one without a shell. */
-const quote = (p: string) => (/\s/.test(p) ? `"${p}"` : p);
 
 /** `Current session: 5% used · resets Oct 8, 7:59pm (America/New_York)`. The breakdown after it is indented, so `^\S` skips it. */
 export function parseClaude(text: string): Row[] {
@@ -43,8 +41,10 @@ const claude = () => new Promise<unknown>((ok, fail) => {
 
 /** `codex app-server` speaks JSON-RPC over stdio, one message per line. */
 const codex = () => new Promise<unknown>((ok, fail) => {
+  const exe = cliPath('codex');
+  if (win && !cmdSafe(exe)) return fail(new Error('codex path from Settings cannot be run safely through cmd.exe (it has ", % or a newline, or ends in a backslash); fix it in Settings'));
   const o = { cwd: tmpdir(), env: childEnv(), windowsHide: true, stdio: ['pipe', 'pipe', 'ignore'] as ['pipe', 'pipe', 'ignore'] };
-  const child = win ? spawn(`${quote(cliPath('codex'))} app-server`, { ...o, shell: true }) : spawn(cliPath('codex'), ['app-server'], o);
+  const child = win ? spawn(`"${exe}" app-server`, { ...o, shell: true }) : spawn(exe, ['app-server'], o);
   const done = (e: Error | null, v?: unknown) => {
     clearTimeout(timer);
     child.stdin.end(); // app-server exits on EOF; kill() would only reach cmd.exe on Windows
