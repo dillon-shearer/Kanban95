@@ -67,7 +67,7 @@ describe('ui-projects', { timeout: 60_000 }, () => {
     await until(async () => (await wall()) === 'rgb(18, 52, 86)', 'the colour kept after a reload');
   });
 
-  it('Start → Projects lists every project, marks the running one, greys out its own, and opens or focuses on a click', async () => {
+  it('Start → Projects lists every project, marks the running one, and Open in new window opens or focuses it', async () => {
     const own = realpathSync.native(repo);
     const idle = realpathSync.native(mkdtempSync(join(tmpdir(), 'k95-idle-')));
     execFileSync('git', ['init', '-q'], { cwd: idle });
@@ -81,19 +81,19 @@ describe('ui-projects', { timeout: 60_000 }, () => {
     srv.board.root = root;
     writeProjects([{ path: own, colour: '#008080' }, { path: other, colour: 200 }, { path: idle, colour: 300 }], own);
     writeFileSync(entryPath(process.ppid), JSON.stringify({ pid: process.ppid, repo: other, port: 1, started: '' })); // a live pid serving `other`
-    const projects = () => page.evaluate<[string, boolean][]>(`[...[...document.querySelectorAll('.k95-menu > li.sub')]
-      .find((li) => li.firstChild.textContent === 'Projects').querySelectorAll('li')].map((li) => [li.textContent, li.hasAttribute('aria-disabled')])`);
-    const pick = (label: string) => page.evaluate(`[...document.querySelectorAll('.k95-menu li.sub li')].find((li) => li.textContent === ${JSON.stringify(label)}).click()`);
+    const projects = () => page.evaluate<string[]>(`[...[...document.querySelectorAll('.k95-menu > li.sub')]
+      .find((li) => li.firstChild.textContent === 'Projects').lastChild.children].map((li) => li.firstChild?.textContent ?? '')`);
+    const pick = (project: string) => page.evaluate(`[...document.querySelectorAll('.k95-menu > li.sub > ul > li.sub')]
+      .find((li) => li.firstChild.textContent === ${JSON.stringify(project)}).querySelectorAll('li').forEach((li) => li.textContent === 'Open in new window' && li.click())`);
     try {
       await page.goto(base); // the list is read at boot
       await board();
-      const want = [[`${basename(own)} (this board)`, true], [`${basename(other)} (running)`, false], [basename(idle), false], ['', false], ['Add project board…', false]];
+      const want = [`${basename(own)} (this board)`, `${basename(other)} (running)`, basename(idle), '', 'Add project board…'];
       await until(async () => {
         await page.evaluate(`document.getElementById('start').click()`);
         return JSON.stringify(await projects()) === JSON.stringify(want);
       }, 'the Projects submenu');
 
-      await pick(`${basename(own)} (this board)`); // disabled: nothing happens
       await pick(basename(idle));
       await until(async () => (await statusBar()) === `Opening ${basename(idle)}…`, 'the opening status');
       await until(() => started.length === 1, 'the start');

@@ -77,6 +77,7 @@ function listen() {
       return;
     }
     if (e.ticket != null) await refreshTicket(e.ticket);
+    else if (e.ticket === null) loadProjectItems();
     await refreshShared();
     redraw(e.ticket);
   };
@@ -782,6 +783,7 @@ function openTerminal(s, auto = false) {
   // The zoom keys belong to the agent here. xterm sends nothing for them and lets them through to the webview's own zoom:
   // Ctrl+- goes as 0x1f, as a native terminal sends it (Ctrl+_), and Ctrl+= and Ctrl+0, which have no byte, are swallowed.
   term.attachCustomKeyEventHandler((e) => {
+    if (projectKey(e) !== undefined) return false;
     if (!e.ctrlKey || e.altKey || !['-', '=', '+', '0'].includes(e.key)) return true;
     e.preventDefault();
     if (e.type === 'keydown' && e.key === '-') send({ data: '\x1f' });
@@ -988,25 +990,32 @@ function addProjectBoard() {
   openSettings('Projects');
 }
 
-/**
- * Start → Projects: every project by folder name, running ones marked, this board's own disabled. Read at boot, whenever
- * this window gets focus (coming back from another board) and as Start opens, so the menu itself opens at once.
- * ponytail: a board started or closed while this window kept focus shows from the second Start opening; a registry event would fix it.
- */
-let projectItems = [];
+let projects = { own: null, value: [], running: {}, hosted: {} };
+const folder = (path) => path.split(/[\\/]/).pop();
 async function loadProjectItems() {
   try {
-    const [own, { value, running }] = await Promise.all([api('GET', '/project'), api('GET', '/projects')]);
-    projectItems = value.map((p) => {
-      const name = p.path.split(/[\\/]/).pop();
-      const self = p.path === own.path; // both spelled by the daemon
-      return { label: name + (self ? ' (this board)' : running[p.path] ? ' (running)' : ''), disabled: self, run: () => switchProject(p.path, name, running[p.path]) };
-    });
+    const [own, { value, running, hosted }] = await Promise.all([api('GET', '/project'), api('GET', '/projects')]);
+    projects = { own: own.path, value, running, hosted };
   } catch (e) {
-    projectItems = [{ label: `Projects: ${e.message}`, disabled: true }];
+    projects = { error: e.message, value: [], running: {}, hosted: {} };
   }
+  drawSwitcher();
 }
-/** A running board's window comes to the front; any other project starts a new board (docs/OPERATOR.md → Start → Projects). */
+const hostedProjects = () => projects.value.filter((p) => projects.hosted[p.path]);
+
+function projectItems() {
+  if (projects.error) return [{ label: `Projects: ${projects.error}`, disabled: true }];
+  return projects.value.map((p) => {
+    const name = folder(p.path);
+    const self = p.path === projects.own;
+    const here = projects.hosted[p.path], live = projects.running[p.path];
+    return { label: name + (self ? ' (this board)' : live ? ' (running)' : ''), items: [
+      { label: 'Open here', disabled: self, run: () => (here ? askShell('switch', p.path) : askShell('open', p.path, { where: 'here' })) },
+      { label: 'Open in new window', disabled: self && !here, run: () => (here ? askShell('popout', p.path) : switchProject(p.path, name, live)) },
+      ...(here ? [{ label: 'Close board', run: () => closeBoard(p.path) }] : []),
+    ] };
+  });
+}
 async function switchProject(path, name, live) {
   say(live ? `Focusing ${name}…` : `Opening ${name}…`);
   try {
@@ -1015,6 +1024,54 @@ async function switchProject(path, name, live) {
   } catch (e) {
     say(`${name} not ${live ? 'focused' : 'opened'}: ${e.message}`);
   }
+}
+const ASKING = { open: 'Opening', switch: 'Switching to', popout: 'Popping out', dock: 'Docking', close: 'Closing' };
+async function askShell(verb, path, extra = {}) {
+  say(`${ASKING[verb]} ${folder(path)}…`);
+  try {
+    await api('POST', `/projects/${verb}`, { path, ...extra });
+  } catch (e) {
+    say(e.message);
+  }
+}
+async function closeBoard(path) {
+  const n = sessions.length;
+  const ask = path === projects.own ? `Close ${folder(path)}? ${n} agent${n === 1 ? '' : 's'} running here will stop.` : `Close ${folder(path)}?`;
+  if ((await dialog('Close board', ask, ['Close', 'Cancel'])) === 'Close') await askShell('close', path);
+}
+
+function drawSwitcher() {
+  const nav = document.getElementById('projects');
+  const list = hostedProjects();
+  nav.hidden = list.length < 2;
+  nav.replaceChildren(...list.map((p) => {
+    const name = folder(p.path), self = p.path === projects.own;
+    const items = () => [...(self ? [] : [{ label: 'Switch to', run: () => askShell('switch', p.path) }]),
+      { label: 'Pop out', run: () => askShell('popout', p.path) },
+      { label: 'Dock', run: () => askShell('dock', p.path) },
+      { label: 'Close board', run: () => closeBoard(p.path) }];
+    const b = h('button', { class: self ? 'active' : null, 'data-project': p.path, title: name, 'aria-label': name, style: `background: ${cssColour(p.colour)}`,
+      onclick: () => self || askShell('switch', p.path),
+      oncontextmenu: (e) => { e.preventDefault(); menu(e.clientX, e.clientY, items()); },
+      onkeydown: (e) => {
+        if (e.key !== 'ContextMenu' && !(e.key === 'F10' && e.shiftKey)) return;
+        e.preventDefault();
+        const r = b.getBoundingClientRect();
+        menu(r.left, r.top, items());
+      } }, h('span', {}, name));
+    return b;
+  }));
+}
+function projectKey(e) {
+  const list = hostedProjects();
+  if (!e.ctrlKey || e.altKey || e.metaKey || list.length < 2) return undefined;
+  const i = list.findIndex((p) => p.path === projects.own);
+  let n;
+  if (e.key === 'Tab') n = (i + (e.shiftKey ? -1 : 1) + list.length) % list.length;
+  else if (!e.shiftKey && /^[1-9]$/.test(e.key)) n = Number(e.key) - 1;
+  else return undefined;
+  const p = list[n];
+  return p && p.path !== projects.own ? p : null;
 }
 
 let settingsTabs = null;
@@ -1349,7 +1406,7 @@ const START = [
   { label: 'Settings', run: () => openSettings() },
   { label: 'Notepad', run: openNotepad },
   { label: 'Limits', run: openLimits },
-  { label: 'Projects', get items() { return [...projectItems, '-', { label: 'Add project board…', run: addProjectBoard }]; } },
+  { label: 'Projects', get items() { return [...projectItems(), '-', { label: 'Add project board…', run: addProjectBoard }]; } },
   '-',
   { label: 'New ticket', run: () => openTicket(null) },
   { label: 'New brainstorm', run: newBrainstorm },
@@ -1407,7 +1464,14 @@ addEventListener('keydown', (e) => {
     e.preventDefault();
     return toggleFullscreen();
   }
-  if (document.querySelector('dialog[open]') || e.target.closest?.('.xterm')) return;
+  if (document.querySelector('dialog[open]')) return;
+  const p = projectKey(e);
+  if (p !== undefined) {
+    e.preventDefault();
+    if (p) askShell('switch', p.path);
+    return;
+  }
+  if (e.target.closest?.('.xterm')) return;
   const plainCtrl = e.ctrlKey && !e.shiftKey && !e.altKey;
   if (e.key === 'Escape') {
     const m = document.querySelector('.k95-menu');
