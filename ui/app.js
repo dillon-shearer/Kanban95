@@ -1121,6 +1121,7 @@ async function switchProject(path, name, live) {
 const ASKING = { open: 'Opening', switch: 'Switching to', popout: 'Popping out', dock: 'Docking', close: 'Closing' };
 async function askShell(verb, path, extra = {}) {
   say(`${ASKING[verb]} ${folder(path)}…`);
+  await notepadSave?.();
   try {
     await api('POST', `/projects/${verb}`, { path, ...extra });
   } catch (e) {
@@ -1446,14 +1447,24 @@ function openLimits() {
 
 // ---- notepad ----
 
-/** The operator's scratch text, <repo>/.kanban95/notepad.md. Saved 500 ms after the last keystroke and on close. */
+let notepadSave = null;
+const KEEPALIVE_MAX = 64 * 1024;
+addEventListener('pagehide', () => notepadSave?.(true));
+
+/** The operator's scratch text, <repo>/.kanban95/notepad.md. Saved 500 ms after the last keystroke, on close and before the page leaves. */
 function openNotepad() {
   let timer = null;
   const text = h('textarea', { spellcheck: 'false', readonly: true });
   const status = h('p', { class: 'status-bar-field' }, 'Loading…');
-  const save = async () => {
+  const save = async (keepalive = false) => {
     clearTimeout(timer);
     timer = null;
+    notepadSave = null;
+    if (keepalive) {
+      const body = JSON.stringify({ value: text.value });
+      if (new Blob([body]).size < KEEPALIVE_MAX) fetch('/api/notepad', { method: 'PUT', headers: { 'content-type': 'application/json' }, body, keepalive }).catch(() => {});
+      return;
+    }
     try {
       await api('PUT', '/notepad', { value: text.value });
       status.textContent = 'Saved.';
@@ -1466,6 +1477,7 @@ function openNotepad() {
   text.addEventListener('input', () => {
     clearTimeout(timer);
     timer = setTimeout(save, 500);
+    notepadSave = save;
   });
   // The selection, or everything when nothing is selected.
   const picked = () => text.value.slice(text.selectionStart, text.selectionEnd) || text.value;
