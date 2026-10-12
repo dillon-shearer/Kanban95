@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { events } from '../src/lifecycle.ts';
 import { start } from '../src/server.ts';
-import { writeConfig } from '../src/settings.ts';
+import { normal, writeConfig } from '../src/settings.ts';
 import { askForCheck, VERSION } from '../src/update.ts';
 
 let repo: string;
@@ -42,6 +42,7 @@ const told = () => {
   return lines;
 };
 const offer = { state: 'available', version: '9.0.0', current: VERSION };
+const line = (verb: string) => `KANBAN95 ${verb}=${normal(srv.board.repo)}\n`;
 
 describe('the shell reports', () => {
   it('a newer release, which the UI reads and hears about', async () => {
@@ -83,7 +84,7 @@ describe('the operator answers', () => {
     expect((await refused.json()).error).toBe('Not updated: 2 agents are running. Update when they finish.');
     srv.db.exec("UPDATE tickets SET status = 'backlog'");
     expect((await answer('now')).status).toBe(202);
-    expect(lines).toEqual([`KANBAN95 update=${srv.board.repo}\n`]);
+    expect(lines).toEqual([line('update')]);
   });
 
   it('Update now with nothing offered, or without a shell, is refused', async () => {
@@ -100,7 +101,7 @@ describe('the operator answers', () => {
     srv.board.shell = true;
     const lines = told();
     expect((await answer('check')).status).toBe(202);
-    expect(lines).toEqual([`KANBAN95 checknow=${srv.board.repo}\n`]);
+    expect(lines).toEqual([line('checknow')]);
   });
 });
 
@@ -114,6 +115,6 @@ describe('the automatic check', () => {
     askForCheck(srv.board);
     writeFileSync(join(process.env.KANBAN95_HOME!, 'settings.json'), JSON.stringify({ updateCheck: true }));
     askForCheck(srv.board);
-    expect(lines).toEqual([`KANBAN95 check=${srv.board.repo}\n`, `KANBAN95 check=${srv.board.repo}\n`]);
+    expect(lines).toEqual([line('check'), line('check')]);
   });
 });
