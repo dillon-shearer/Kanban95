@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, lstatSync, mkdirSync, readdirSync, readlinkSync, realpathSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { INNER_GITIGNORE } from './db.js';
-import { boardHome, repoKey } from './settings.js';
+import { localHome, repoKey } from './settings.js';
 
 export const git = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: 'pipe' }).trim();
 
@@ -27,12 +27,12 @@ export function gitNotRun(e: unknown): boolean {
 }
 
 /**
- * Where a repo's ticket worktrees live: `<board home>/worktrees/<basename>-<hash of the canonical path>`, never under the
+ * Where a repo's ticket worktrees live: `<local home>/worktrees/<basename>-<hash of the canonical path>`, never under the
  * repo. A repo in a synced folder (OneDrive) would otherwise upload every worktree's `npm ci`, get throttled, and lock files
  * so a worktree could not be removed. The key is settings.ts `repoKey`.
  */
 export function worktreesRoot(repo: string): string {
-  return join(boardHome(), 'worktrees', repoKey(repo));
+  return join(localHome(), 'worktrees', repoKey(repo));
 }
 export const worktreePath = (repo: string, ticketId: number) => join(worktreesRoot(repo), `t-${ticketId}`);
 export const branchName = (ticketId: number) => `ticket/${ticketId}`;

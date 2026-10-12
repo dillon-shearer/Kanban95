@@ -4,6 +4,16 @@ Living document. How a person drives Kanban95, from an idea to merged work. Upda
 
 ## Before the first launch
 
+### First run
+
+The installed app started from the Start menu or the Dock has no project to open. When no project is listed yet it opens on **Kanban95 Setup**:
+- **Data folder**: where the board keeps settings, `models.json`, preferences, `projects.json` and the global brain. Defaults to `~/.kanban95`; type another full path (an SSD you carry between machines, say). Any other folder is recorded in `~/.kanban95/home` before anything is written there.
+- **Project folder**: the folder the first board works on. It must exist; a plain folder becomes a git repo on first start.
+
+**Next** adds the project to the list and starts its board. A folder that does not exist is refused with a message on the page. Later starts without a project open the first project in the list (Settings → Projects); there is no setup again. Ticket worktrees stay on this machine in `~/.kanban95/worktrees/` wherever the data folder is.
+
+Changing the data folder after first run is not supported: the page never comes back once a project is listed. To move it by hand, close every board, move the folder's contents and edit the one line in `~/.kanban95/home`.
+
 1. Log in to Claude Code and/or Codex CLI with their own commands. The board never asks for a key.
 2. For Claude Code, accept its one-time `--dangerously-skip-permissions` warning by hand once (`docs/CLIS.md`).
 3. Start the board: on Windows double-click `Kanban95.vbs` (no console window; a dialog says why if it cannot start) or `Kanban95.cmd` (keeps a console), on macOS `Kanban95.command`; drop the project folder you want it to work on onto it, or pass it as the argument (`README.md` → Quickstart). Open **Start → Settings → Agents**, pick the default CLI and a model and effort for each phase (type a model id, or press ▾ beside the box for every model that CLI knows) (plan is the brainstorm, execute does the work, test checks it), and press **Save**. That writes `~/.kanban95/models.json`; until it exists nothing can launch, and the Board's status bar says so.

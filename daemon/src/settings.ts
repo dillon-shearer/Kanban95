@@ -53,13 +53,35 @@ type Config<N extends ConfigName> = z.output<(typeof FILES)[N]>;
 const CONFIGS = Object.keys(FILES) as ConfigName[];
 
 /**
- * The board's own config directory: $KANBAN95_HOME, else ~/.kanban95. Every operator-level file (models.json, settings.json,
- * preferences.md, voice models) lives here and nowhere else. Under vitest the real one is refused, so no test can overwrite it.
+ * This machine's own board directory: $KANBAN95_HOME, else ~/.kanban95. It holds the data folder pointer and the worktrees,
+ * and is the data folder when there is no pointer. Under vitest the real one is refused, so no test can overwrite it.
  */
-export function boardHome(): string {
+export function localHome(): string {
   if (process.env.KANBAN95_HOME) return process.env.KANBAN95_HOME;
   if (process.env.VITEST) throw new Error('refusing the real ~/.kanban95 under vitest: set KANBAN95_HOME (test/home.ts does)');
   return join(homedir(), '.kanban95');
+}
+
+export const pointerPath = () => join(localHome(), 'home');
+
+/**
+ * The data folder: the path the pointer names, else the local home. Every operator-level file (models.json, settings.json,
+ * preferences.md, projects.json, the global brain, voice models) lives here and nowhere else.
+ */
+export function boardHome(): string {
+  try {
+    const dir = readFileSync(pointerPath(), 'utf8').trim();
+    if (isAbsolute(dir)) return dir;
+  } catch {}
+  return localHome();
+}
+
+export function setBoardHome(dir: string) {
+  if (!isAbsolute(dir)) throw new BadConfig(`data folder ${dir} is not an absolute path`);
+  mkdirSync(dir, { recursive: true });
+  if (same(normal(dir), normal(localHome()))) return rmSync(pointerPath(), { force: true });
+  mkdirSync(localHome(), { recursive: true });
+  writeFileSync(pointerPath(), normal(dir) + '\n');
 }
 
 /** FNV-1a, 32 bit, as hex: stable across Node releases, like the shell's per-repo WebView2 profile name. */
