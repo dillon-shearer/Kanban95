@@ -186,13 +186,14 @@ A merge that changes `daemon/`, `templates/`, `shell/`, `package.json` or `packa
 Start → Release board (`POST /api/release {bump}`, `release` in `daemon/src/lifecycle.ts`) cuts a release of Kanban95 from its own repo. Nothing releases on a push to main; only this button, or a `vX.Y.Z` tag pushed by hand, starts the release workflow (`docs/ARCHITECTURE.md` → Releases). It runs in the merge queue, so no merge lands in between, and refuses with `409` and the reason unless:
 
 - the repo is the Kanban95 repo (it has `shell/tauri.conf.json` and a `package.json` named `kanban95`);
+- `release` is true in `settings.json` (`releaseOn`, default false; Settings → Board → Updates → Show Release board). `GET /api/update` sends the same answer as `release`, and the UI shows the Start entry only when it is true;
 - nothing runs: the same count the restart hold waits for (To finish, above), and no brainstorm or operator terminal is open;
 - the main working tree has no uncommitted changes to tracked files;
 - the branch has an upstream and no commit it lacks (as last fetched or pushed).
 
 Then it runs `npm version <bump> --no-git-tag-version` in the main checkout, commits `package.json` and `package-lock.json` as "Release vX.Y.Z" by the operator's git identity (`user.useConfigOnly`, no trailer), tags `vX.Y.Z`, and pushes the branch and the tag in one `git push --atomic`, so the remote gets both or neither. If any step fails, the tag is deleted, the branch goes back to the commit it was on and the two package files are restored; the reply is `502` with npm's or git's message.
 
-**Release pending.** In the Kanban95 repo, at start and after each merge, the daemon counts the commits since the newest `v*` tag that touch `daemon/`, `shell/` or `templates/` (`releasePending`). When there are any, `GET /api/runner` adds `release: {pending: true, since, commits}` and the Board status bar shows "release pending (N commits since vA.B.C)" next to the runner or restart text. It never holds anything. With no `v*` tag yet, nothing is pending.
+**Release pending.** In the Kanban95 repo with `release` on, at start, on each settings change and after each merge, the daemon counts the commits since the newest `v*` tag that touch `daemon/`, `shell/` or `templates/` (`releasePending`). When there are any, `GET /api/runner` adds `release: {pending: true, since, commits}` and the Board status bar shows "release pending (N commits since vA.B.C)" next to the runner or restart text. It never holds anything. With no `v*` tag yet, nothing is pending.
 
 ### Stop holds every automatic launch
 
