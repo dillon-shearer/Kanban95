@@ -33,7 +33,7 @@ Living document. Update it in the same change that alters the shape described he
   - `mcp-doc.ts` renders `docs/MCP.md` from the `mcp.ts` tool table.
   - `memlog.ts` appends free memory and each live session's process-tree working set to `.kanban95/memory.log` every 30 s, plus a line per launch, kill and merge (`docs/DATA.md`).
   - `merge.ts` is the one serialized merge queue.
-  - `pty.ts` spawns the CLI in a pseudo-terminal with an env allowlist and keeps a 2000-line scrollback.
+  - `pty.ts` spawns the CLI in a pseudo-terminal with an env allowlist and keeps a scrollback capped at 2000 lines and 2 MiB.
   - `server.ts` is the HTTP plumbing (bind, origin guard, static files, `/health`, routes `/api/*` to `api.ts`).
   - `settings.ts` reads and writes the operator's `~/.kanban95/models.json`, `settings.json` (schema-checked), `projects.json` (adds the served repo on start) and `preferences.md`, resolves a repo's own copy of models.json, settings.json and preferences.md (`<board home>/projects/<repo key>/`, used whole when it exists, else the global file; `repoKey` is shared with the worktrees root), lists the models the installed CLIs know (`knownModels`, for the Settings dropdowns), and resolves a run's CLI, model, effort and executable.
   - `templates.ts` copies the default prompt templates from `templates/` into `<repo>/.kanban95/templates/`, keeps unedited copies in step with the defaults on start (see Prompts below) and renders them.

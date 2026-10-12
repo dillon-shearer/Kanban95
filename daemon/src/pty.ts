@@ -3,6 +3,7 @@ import { delimiter, dirname } from 'node:path';
 import { spawn, type IPty } from 'node-pty';
 
 const SCROLLBACK_LINES = 2000;
+const SCROLLBACK_BYTES = 2 * 1024 * 1024;
 
 /**
  * The only daemon variables a CLI inherits: what Windows and a shell need to run, where the user's home and temp are
@@ -77,7 +78,7 @@ export function spawnPty(cmd: string, args: string[], o: { cwd: string; env: Rec
   pty.onData((d) => {
     buf += d;
     for (const c of d) if (c === '\n') lines++;
-    if (lines >= 2 * SCROLLBACK_LINES) trim();
+    if (lines >= 2 * SCROLLBACK_LINES || buf.length > 2 * SCROLLBACK_BYTES) trim();
   });
   return {
     pty,
