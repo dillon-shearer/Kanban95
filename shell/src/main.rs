@@ -11,24 +11,6 @@ use std::time::{Duration, Instant};
 use tauri::webview::{PermissionKind, PermissionResponse};
 use tauri::{AppHandle, Manager, RunEvent, Runtime, Url, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent};
 
-const NODE_DOWNLOAD: &str = "https://nodejs.org/en/download";
-
-/// Says what is wrong with the Node on PATH, given the output of `node --version` (`None`: not found).
-fn node_problem(version: Option<&str>) -> Option<String> {
-    let Some(v) = version else {
-        return Some(format!("Node.js was not found on PATH.\n\nKanban95 needs Node 24 or newer: {NODE_DOWNLOAD}"));
-    };
-    let v = v.trim();
-    let major: u32 = v.trim_start_matches('v').split('.').next()?.parse().unwrap_or(0);
-    (major < 24).then(|| format!("Kanban95 needs Node 24 or newer; the Node on PATH is {v}.\n\nDownload it: {NODE_DOWNLOAD}"))
-}
-
-fn check_node() -> Result<(), String> {
-    let out = Command::new("node").arg("--version").stdin(Stdio::null()).output().ok();
-    let version = out.filter(|o| o.status.success()).map(|o| String::from_utf8_lossy(&o.stdout).into_owned());
-    node_problem(version.as_deref()).map_or(Ok(()), Err)
-}
-
 /// 32 random bytes from the OS, hex: the shell-to-daemon secret for one daemon run (docs/SECURITY.md).
 fn mint_secret() -> String {
     let mut b = [0u8; 32];
@@ -87,10 +69,16 @@ fn add_login_path() {
 #[cfg(not(target_os = "macos"))]
 fn add_login_path() {}
 
+/// The Node the installer put next to this exe (bundle.externalBin, shell/stage.mjs), else `node` from PATH (dev).
+fn node_exe(exe_dir: Option<&std::path::Path>) -> std::path::PathBuf {
+    let name = if cfg!(windows) { "node.exe" } else { "node" };
+    exe_dir.map(|d| d.join(name)).filter(|p| p.is_file()).unwrap_or_else(|| "node".into())
+}
+
 /// `node daemon/dist/server.js <repo>`; no repo (`""`): the daemon picks the first project, or serves first-run setup.
 fn node(repo: &str) -> Command {
-    // ponytail: runs `node` from PATH; shipping Node itself is open (docs/ARCHITECTURE.md -> Packaging).
-    let mut cmd = Command::new("node");
+    let exe = std::env::current_exe().ok();
+    let mut cmd = Command::new(node_exe(exe.as_deref().and_then(|e| e.parent())));
     cmd.arg(daemon_script());
     if !repo.is_empty() {
         cmd.arg(repo);
@@ -122,6 +110,7 @@ struct Started {
 /// environment, never on its command line, which other processes can read.
 fn spawn(mut cmd: Command) -> Result<(Child, String, ChildStdout), String> {
     let secret = mint_secret();
+    let program = cmd.get_program().to_string_lossy().into_owned();
     let mut child = cmd
         .env("KANBAN95_SECRET", &secret)
         .env("KANBAN95_SHELL", "1")
@@ -129,7 +118,7 @@ fn spawn(mut cmd: Command) -> Result<(Child, String, ChildStdout), String> {
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .spawn()
-        .map_err(|e| format!("Could not start Node.js: {e}.\n\nKanban95 needs Node 24 or newer: {NODE_DOWNLOAD}"))?;
+        .map_err(|e| format!("Could not start Node.js ({program}): {e}."))?;
     let out = child.stdout.take().expect("daemon stdout");
     Ok((child, secret, out))
 }
@@ -742,34 +731,9 @@ fn apply<R: Runtime>(app: &AppHandle<R>, ports: &Ports, fx: Effect) {
     }
 }
 
-/// A missing or old Node is the one first-run problem the operator fixes outside the board, so offer the page.
-#[cfg(windows)]
-fn node_dialog(text: &str) {
-    use windows_sys::Win32::UI::Shell::ShellExecuteW;
-    use windows_sys::Win32::UI::WindowsAndMessaging::*;
-    let wide = |s: &str| s.encode_utf16().chain([0]).collect::<Vec<u16>>();
-    let text = format!("{text}\n\nOpen the download page now?");
-    // SAFETY: as in error_dialog; ShellExecuteW gets NUL-terminated strings that outlive the call.
-    unsafe {
-        let style = MB_YESNO | MB_ICONERROR | MB_SETFOREGROUND;
-        if MessageBoxW(std::ptr::null_mut(), wide(&text).as_ptr(), wide("Kanban95").as_ptr(), style) == IDYES {
-            let (op, url) = (wide("open"), wide(NODE_DOWNLOAD));
-            ShellExecuteW(std::ptr::null_mut(), op.as_ptr(), url.as_ptr(), std::ptr::null(), std::ptr::null(), SW_SHOWNORMAL);
-        }
-    }
-}
-#[cfg(not(windows))]
-fn node_dialog(text: &str) {
-    error_dialog(text);
-}
-
 fn main() {
     kill_children_with_us();
     add_login_path();
-    if let Err(e) = check_node() {
-        node_dialog(&e);
-        std::process::exit(1);
-    }
     // The shell's first argument, if any, is the repo of its first board. Without one (Start menu, Dock) the daemon decides,
     // and the board is keyed "" (docs/ARCHITECTURE.md -> Startup without an argument).
     // ponytail: a board keyed "" that another board then opens by path gets a second daemon; re-keying on the handshake would fix it.
@@ -1119,13 +1083,15 @@ mod tests {
     }
 
     #[test]
-    fn node_older_than_24_or_missing_is_named_with_the_download_link() {
-        assert_eq!(node_problem(Some("v24.0.0\n")), None);
-        assert_eq!(node_problem(Some("v25.1.2")), None);
-        let old = node_problem(Some("v23.11.0\r\n")).unwrap();
-        assert!(old.contains("v23.11.0") && old.contains(NODE_DOWNLOAD), "{old}");
-        assert!(node_problem(Some("garbage")).unwrap().contains(NODE_DOWNLOAD));
-        assert!(node_problem(None).unwrap().contains("not found"));
+    fn the_bundled_node_next_to_the_exe_is_run_and_path_node_only_without_it() {
+        let dir = std::env::temp_dir().join(format!("k95-sidecar-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        assert_eq!(node_exe(Some(&dir)), std::path::PathBuf::from("node"));
+        assert_eq!(node_exe(None), std::path::PathBuf::from("node"));
+        let bundled = dir.join(if cfg!(windows) { "node.exe" } else { "node" });
+        std::fs::write(&bundled, "").unwrap();
+        assert_eq!(node_exe(Some(&dir)), bundled);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
