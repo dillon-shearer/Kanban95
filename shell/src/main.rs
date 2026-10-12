@@ -851,7 +851,7 @@ mod tests {
     #[cfg(not(windows))]
     const THEN: &str = ";";
     #[cfg(not(windows))]
-    const WAIT: &str = "exec cat >/dev/null";
+    const WAIT: &str = "exec cat";
     #[cfg(not(windows))]
     fn save_shell_id(file: &str) -> String {
         format!("echo \"$KANBAN95_SHELL_ID\" >\"{file}\"{THEN}")
