@@ -35,7 +35,7 @@ Living document. Update it in the same change that alters the shape described he
   - `merge.ts` is the one serialized merge queue.
   - `pty.ts` spawns the CLI in a pseudo-terminal with an env allowlist and keeps a scrollback capped at 2000 lines and 2 MiB.
   - `server.ts` is the HTTP plumbing (bind, origin guard, static files, `/health`, routes `/api/*` to `api.ts`).
-  - `settings.ts` reads and writes the operator's `~/.kanban95/models.json`, `settings.json` (schema-checked), `projects.json` (adds the served repo on start) and `preferences.md`, resolves a repo's own copy of models.json, settings.json and preferences.md (`<board home>/projects/<repo key>/`, used whole when it exists, else the global file; `repoKey` is shared with the worktrees root), lists the models the installed CLIs know (`knownModels`, for the Settings dropdowns), and resolves a run's CLI, model, effort and executable.
+  - `settings.ts` reads and writes the operator's `~/.kanban95/models.json`, `settings.json` (schema-checked), `projects.json` (adds the served repo on start) and `preferences.md`, resolves a repo's own copy of models.json, settings.json and preferences.md (`<board home>/projects/<repo key>/`, used whole when it exists, else the global file; `repoKey` is shared with the worktrees root), lists the models the installed CLIs know (`knownModels`, for the Settings dropdowns), and resolves a run's CLI, model, effort and executable. Every write of these files, and `addProject`'s read and write of projects.json, runs under one lock shared by every daemon on the board home (an IMMEDIATE transaction on `settings.lock`, waiting up to 10 s; the OS releases it when a daemon dies), and is written to a temp file named for the writer (`<file>.<pid>-<uuid>.tmp`) then renamed over the file; a failed write removes only its own temp file.
   - `templates.ts` copies the default prompt templates from `templates/` into `<repo>/.kanban95/templates/`, keeps unedited copies in step with the defaults on start (see Prompts below) and renders them.
   - `trust.ts` pre-trusts the repo root for Claude Code before a launch.
   - `voice.ts` downloads, verifies and serves the speech model (see Voice below).
@@ -230,6 +230,7 @@ docs/             this file, LEARNING.md (guided tour for newcomers), OPERATOR.m
                     projects/<repo key>/ (a repo's own models.json, settings.json, preferences.md, each used whole instead of the global one)
                     projects.json (every repo with a board and its wallpaper colour; the daemon adds its own repo on start)
                     running/ (one <pid>.json per live daemon: its repo, port and live session count)
+                    settings.lock (an empty SQLite file whose write lock serializes every daemon's writes of the files here)
                     settings.json (CLI paths, sounds, voice)
 ```
 
