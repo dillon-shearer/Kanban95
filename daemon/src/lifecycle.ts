@@ -389,7 +389,7 @@ const heard = new WeakMap<Session, { size: number; at: number; note?: number; pr
  * Matched on the text only. The countdown redraws just its changed digits and a dot blinks, so the menu is still up while no line
  * after "Esc to cancel" holds a letter. Group 1 is the menu, from "Do you want to proceed?" through "Esc to cancel".
  */
-export const CLAUDE_PROMPT = /(?:^|\n)(Do you want to proceed\?(?:(?!Do you want to proceed\?)[\s\S])*?Esc to cancel[^\n]*)(?:\n[^A-Za-z\n]*)*$/;
+const CLAUDE_PROMPT = /(?:^|\n)(Do you want to proceed\?(?:(?!Do you want to proceed\?)[\s\S])*?Esc to cancel[^\n]*)(?:\n[^A-Za-z\n]*)*$/;
 /** Heads the Inbox question raised for a CLAUDE_PROMPT; `menuChoice` knows such a question by it. */
 export const PROMPT_ASK = "Claude Code is waiting on its own prompt in the agent's terminal and denies it by itself in about two minutes. Answer with the option's number or its label; it is chosen in the terminal.";
 

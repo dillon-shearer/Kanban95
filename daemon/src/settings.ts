@@ -43,9 +43,9 @@ const FILES = {
     push_after_merge: z.boolean().default(true),
   }).strict(),
 };
-export type ConfigName = keyof typeof FILES;
+type ConfigName = keyof typeof FILES;
 type Config<N extends ConfigName> = z.output<(typeof FILES)[N]>;
-export const CONFIGS = Object.keys(FILES) as ConfigName[];
+const CONFIGS = Object.keys(FILES) as ConfigName[];
 
 /**
  * The board's own config directory: $KANBAN95_HOME, else ~/.kanban95. Every operator-level file (models.json, settings.json,
