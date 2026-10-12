@@ -519,8 +519,9 @@ fn window<R: Runtime, M: Manager<R>>(app: &M, label: &str, url: Url, title: Stri
         .build()
 }
 
-/// The page's fullscreen (Start -> Full screen, F11) only fills the webview; wry leaves WebView2's
-/// ContainsFullScreenElementChanged unhandled. Following it takes the whole monitor, over the Windows taskbar.
+/// The page's fullscreen (Start -> Full screen, F11) sets the window's, over the Windows taskbar. Tauri's own
+/// ContainsFullScreenElementChanged handler, registered just before this one, would also follow the false a
+/// navigation raises, so it is removed and this one is the only follower.
 #[cfg(windows)]
 fn follow_page_fullscreen<R: Runtime>(w: &WebviewWindow<R>) {
     use std::{cell::Cell, rc::Rc};
@@ -548,7 +549,9 @@ fn follow_page_fullscreen<R: Runtime>(w: &WebviewWindow<R>) {
                 Ok(())
             }));
             let mut token = 0;
-            let _ = core.add_ContainsFullScreenElementChanged(&handler, &mut token);
+            if core.add_ContainsFullScreenElementChanged(&handler, &mut token).is_ok() {
+                let _ = core.remove_ContainsFullScreenElementChanged(token - 1);
+            }
             let handler = NavigationStartingEventHandler::create(Box::new(move |_, _| {
                 starting.set(true);
                 Ok(())
