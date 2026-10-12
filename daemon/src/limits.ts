@@ -3,6 +3,7 @@
 import { execFile, spawn } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { createInterface } from 'node:readline';
+import { killTree } from './launcher.js';
 import { childEnv, cmdSafe } from './pty.js';
 import { cliPath, CLIS, type Cli } from './settings.js';
 
@@ -44,17 +45,24 @@ const codex = () => new Promise<unknown>((ok, fail) => {
   const exe = cliPath('codex');
   if (win && !cmdSafe(exe)) return fail(new Error('codex path from Settings cannot be run safely through cmd.exe (it has ", % or a newline, or ends in a backslash); fix it in Settings'));
   const o = { cwd: tmpdir(), env: childEnv(), windowsHide: true, stdio: ['pipe', 'pipe', 'ignore'] as ['pipe', 'pipe', 'ignore'] };
-  const child = win ? spawn(`"${exe}" app-server`, { ...o, shell: true }) : spawn(exe, ['app-server'], o);
-  const done = (e: Error | null, v?: unknown) => {
+  const child = win ? spawn(`"${exe}" app-server`, { ...o, shell: true }) : spawn(exe, ['app-server'], { ...o, detached: true });
+  const rl = createInterface({ input: child.stdout });
+  let settled = false;
+  const done = (e: Error | null, v?: unknown, kill = false) => {
+    if (settled) return;
+    settled = true;
     clearTimeout(timer);
+    rl.close();
     child.stdin.end(); // app-server exits on EOF; kill() would only reach cmd.exe on Windows
+    if (kill) void killTree(child);
     if (e) fail(e); else ok(v);
   };
-  const timer = setTimeout(() => done(new Error('codex app-server timed out')), TIMEOUT_MS);
-  const send = (m: object) => child.stdin.write(JSON.stringify(m) + '\n');
+  const timer = setTimeout(() => done(new Error('codex app-server timed out'), undefined, true), TIMEOUT_MS);
+  const send = (m: object) => { if (!settled) child.stdin.write(JSON.stringify(m) + '\n'); };
+  child.stdin.on('error', (e) => done(new Error(`codex app-server closed its input: ${e.message}`)));
   child.on('error', (e) => done(new Error(`codex app-server could not start: ${e.message}`)));
-  child.on('exit', (code) => done(new Error(`codex app-server exited (${code})`))); // a no-op once settled
-  createInterface({ input: child.stdout }).on('line', (line) => {
+  child.on('exit', (code) => done(new Error(`codex app-server exited (${code})`)));
+  rl.on('line', (line) => {
     let m: { id?: number; result?: unknown; error?: { message?: string } };
     try { m = JSON.parse(line); } catch { return; }
     if (m.id === 1) {
