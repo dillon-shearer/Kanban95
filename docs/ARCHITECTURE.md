@@ -97,6 +97,11 @@ Any other line, or a command for a board not in that state, changes nothing (a `
 
 Installed, the shell finds `app/daemon/dist/server.js` next to its exe and runs it with `node` from PATH, so **the installed app needs Node 24 on PATH**; without it the first run shows the download dialog (Port handshake, step 1). The board's repo is the shell's first argument, defaulting to the working directory, the same as in dev.
 
+**CI.** `.github/workflows/build.yml` runs on every push to any branch and on manual dispatch, caching npm and cargo:
+
+- `windows` (`windows-latest`): `npm ci`, `npm run build`, `npm test`, `npm run test:shell`, `npm run installer`; uploads `shell/target/release/bundle/nsis/*.exe` as the artifact `kanban95-windows`.
+- `macos` (`macos-latest`): `npm ci`, `npm run build`, `npm run test:shell`, then `npm run installer -- --target <triple> --bundles app,dmg` for `aarch64-apple-darwin` and `x86_64-apple-darwin` (npm appends the args to the `tauri build` call); uploads `shell/target/*/release/bundle/` as `kanban95-macos`. It is `continue-on-error` until ticket #181 fixes the Mac build.
+
 **Node single-executable applications (SEA), investigated, not implemented.** Node 24 can embed one script into a copy of `node.exe` (`node --experimental-sea-config`, then `postject` injects the blob). For this daemon that is not trivial:
 
 - Inside a SEA, `require` resolves only built-in modules. The daemon is ESM over `node_modules` (MCP SDK, ws, zod, node-pty and their dependencies), so it would first need a bundler producing one CommonJS file: a new dependency and a build step.

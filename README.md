@@ -54,6 +54,8 @@ On macOS, double-click `Kanban95.command` in Finder (a Terminal window opens and
 
 `npm run installer` (from a source checkout, Rust required) builds a per-user NSIS installer at `shell/target/release/bundle/nsis/Kanban95_<version>_x64-setup.exe`. It needs no admin prompt and installs a Start menu entry; the installed app needs only Node 24+ on PATH and the WebView2 runtime, and shows a download dialog when Node is missing. `Kanban95.exe` opens the board on the folder passed as its argument, else on its working directory. Details: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) → Packaging.
 
+To get a build without building it yourself: open the repo on GitHub → Actions → the `build` workflow, pick a green run on `main` (or your branch), and download the `kanban95-windows` artifact (the NSIS setup.exe) or `kanban95-macos` (the `.app` and `.dmg` for Apple silicon and Intel, when that job produced them). GitHub serves artifacts as a zip and keeps them 90 days.
+
 ## Developing Kanban95
 
 ```

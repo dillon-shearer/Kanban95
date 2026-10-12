@@ -9,8 +9,8 @@ jobs:
   windows:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: 24
           cache: npm
@@ -24,7 +24,7 @@ jobs:
       - run: npm test
       - run: npm run test:shell
       - run: npm run installer
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: kanban95-windows
           path: shell/target/release/bundle/nsis/*.exe
@@ -32,11 +32,11 @@ jobs:
 
   macos:
     runs-on: macos-latest
-    # The Mac build is not expected to pass yet; the follow-up ticket that fixes the Mac build (ticket #2 of this batch) removes this flag.
+    # Ticket #181 fixes the Mac build and removes this flag.
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: 24
           cache: npm
@@ -49,9 +49,11 @@ jobs:
       - run: npm ci
       - run: npm run build
       - run: npm run test:shell
-      - run: npm run installer -- --target aarch64-apple-darwin --bundles app,dmg
-      - run: npm run installer -- --target x86_64-apple-darwin --bundles app,dmg
-      - uses: actions/upload-artifact@v4
+      - if: ${{ !cancelled() }}
+        run: npm run installer -- --target aarch64-apple-darwin --bundles app,dmg
+      - if: ${{ !cancelled() }}
+        run: npm run installer -- --target x86_64-apple-darwin --bundles app,dmg
+      - uses: actions/upload-artifact@v5
         if: always()
         with:
           name: kanban95-macos
