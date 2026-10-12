@@ -432,14 +432,14 @@ export const isOpen = (id) => wins.has(id);
 /** A modal Win95 dialog. Resolves with the label of the button pressed, or null on Esc. `body` is a node or text. */
 export function dialog(title, body, buttons = ['OK']) {
   return new Promise((done) => {
-    const d = h('dialog', { class: 'window k95-dialog' },
+    const d = h('dialog', { class: 'window k95-dialog', tabindex: -1, 'aria-label': title },
       h('div', { class: 'title-bar' }, h('div', { class: 'title-bar-text' }, title)),
       h('div', { class: 'window-body' }, body,
         h('section', { class: 'field-row k95-buttons' }, buttons.map((b) => h('button', { onclick: () => d.close(b) }, b)))));
     d.addEventListener('close', () => { d.remove(); done(d.returnValue || null); });
     document.body.append(d);
     d.showModal();
-    (d.querySelector('input, textarea, select') ?? d.querySelector('.k95-buttons button')).focus();
+    (d.querySelector('input, textarea, select') ?? d.querySelector('.k95-buttons button') ?? d).focus();
   });
 }
 
