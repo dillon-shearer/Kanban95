@@ -1,6 +1,7 @@
 // The operator's own settings in ~/.kanban95/, edited in the Settings window. No secrets live here.
 // models.json: which CLI, and the model and effort per phase (docs/LIFECYCLE.md → Run settings). settings.json: CLI paths,
-// sounds, voice, housekeeping, auto-opened terminals, idle minutes, UI zoom, push after merge, sleep minutes. projects.json: every repo with a board and its wallpaper colour. All are read on every use, so an edit applies to the next run without a restart.
+// sounds, voice, housekeeping, auto-opened terminals, idle minutes, UI zoom, push after merge, sleep minutes,
+// runner concurrency. projects.json: every repo with a board and its wallpaper colour. All are read on every use, so an edit applies to the next run without a restart.
 // models.json, settings.json and preferences.md may have a per-project copy in projects/<repo key>/, used whole instead of the global file.
 import { execFile } from 'node:child_process';
 import { copyFileSync, createReadStream, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, rmdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
@@ -41,6 +42,7 @@ const FILES = {
     zoom: z.number().min(0.8).max(2).default(1),
     // On: the merge queue pushes the base to its upstream after each merge, before the ticket counts as merged.
     push_after_merge: z.boolean().default(true),
+    concurrency: z.number().int().min(1).max(10).default(3),
     sleepAfterMinutes: z.number().min(0).default(30),
   }).strict(),
 };

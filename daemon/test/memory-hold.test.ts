@@ -91,9 +91,9 @@ describe('memory hold', { timeout: 60_000 }, () => {
 
   it('keeps running tickets running and the runner on during a hold', async () => {
     const a = ticket('Running');
-    await request('PUT', '/api/runner', { concurrency: 1 });
+    await request('PUT', '/api/config/settings?scope=project', { concurrency: 1 });
     expect((await setRun(true)).running).toEqual([a]);
-    await request('PUT', '/api/runner', { concurrency: 3 }); // room for more, but memory is tight
+    await request('PUT', '/api/config/settings?scope=project', { concurrency: 3 }); // room for more, but memory is tight
     const b = ticket('Waiting');
     memory.free = () => LOW;
     tick(srv.board);

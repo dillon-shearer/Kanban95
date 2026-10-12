@@ -117,7 +117,7 @@ describe('git init', { timeout: 60_000 }, () => {
     expect(git('status', '--porcelain', '--untracked-files=no')).toBe('');
 
     const ids = [ticket('One'), ticket('Two')];
-    expect((await request('PUT', '/api/runner', { concurrency: 2 })).status).toBe(200);
+    expect((await request('PUT', '/api/config/settings?scope=project', { concurrency: 2 })).status).toBe(200);
     expect(await (await request('PUT', '/api/runner', { on: true })).json()).toMatchObject({ on: true, running: ids });
     for (const id of ids) {
       await until(() => readTicket(srv!.db, id).merged_at && !sessionsOf(id).length && !existsSync(worktreePath(dir, id)), `ticket ${id} merged`);
