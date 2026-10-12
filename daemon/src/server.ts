@@ -7,7 +7,7 @@ import { extname, resolve, sep } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { WebSocketServer } from 'ws';
 import { handleApi } from './api.js';
-import { entryPath, register } from './boards.js';
+import { countAgents, entryPath, register } from './boards.js';
 import { openDb, openGlobalBrain } from './db.js';
 import { git, initRepo } from './git.js';
 import { sweep, SWEEP_MS } from './janitor.js';
@@ -226,6 +226,8 @@ export function start(config: Config = {}): Promise<{
       self = `${LOOPBACK}:${addr.port}`;
       board.port = addr.port;
       const unregister = register(repo, addr.port, board.shellId ?? null); // Start → Projects on the other boards sees this one running
+      const count = () => countAgents(sessions.size);
+      events.on('change', count);
       // Janitor and recovery on start, the janitor again once a day (docs/LIFECYCLE.md).
       sweep(board).catch(() => {});
       void countUnpushed(board); // the status bar's "N commits not pushed"
@@ -254,6 +256,7 @@ export function start(config: Config = {}): Promise<{
           server.closeAllConnections();
           await closed;
           db.close();
+          events.off('change', count);
           unregister();
           brain.close();
         },
