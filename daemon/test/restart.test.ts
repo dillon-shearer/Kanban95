@@ -49,7 +49,7 @@ describe('POST /api/restart from an installed layout', () => {
     // walking up, with no link to clean up.
     const app = mkdtempSync(join(ROOT, 'node_modules', '.k95-app-'));
     temps.push(app);
-    for (const p of ['daemon/dist', 'daemon/migrations', 'daemon/package.json', 'daemon/voice-model.json', 'templates']) cpSync(join(ROOT, p), join(app, p), { recursive: true });
+    for (const p of ['package.json', 'daemon/dist', 'daemon/migrations', 'daemon/package.json', 'daemon/voice-model.json', 'templates']) cpSync(join(ROOT, p), join(app, p), { recursive: true });
     const secret = 'b'.repeat(64);
     const { KANBAN95_SHELL: _, ...env } = process.env;
     const child = spawn(process.execPath, [join(app, 'daemon/dist/server.js'), temp()], { stdio: ['pipe', 'pipe', 'inherit'], env: { ...env, KANBAN95_SECRET: secret } });
