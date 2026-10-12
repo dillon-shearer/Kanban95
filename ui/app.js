@@ -5,7 +5,7 @@ import { FitAddon } from './vendor/xterm/addon-fit.mjs';
 import { Terminal } from './vendor/xterm/xterm.mjs';
 import { configure, ensureModel, micButton, micEverywhere } from './voice.js';
 import * as ui from './state.js';
-import { close, dialog, focus, focused, forget, h, isOpen, menu, open, raise, scale, seed, setTiling, setZoom, snapshot } from './wm.js';
+import { close, dialog, dismiss, focus, focused, forget, h, isOpen, menu, open, raise, scale, seed, setTiling, setZoom, snapshot } from './wm.js';
 
 // ---- data ----
 
@@ -52,7 +52,7 @@ async function refreshTicket(id) {
     if (e.status !== 404) throw e;
     tickets.delete(id); // deleted: it leaves the board, and its windows close (its agents were stopped by the delete)
     selection.delete(id);
-    closeTicket(`ticket-${id}`);
+    dismiss(`ticket-${id}`);
     for (const [wid, term] of terms) if (term.s.ticket_id === id) close(wid);
   }
 }
@@ -628,14 +628,11 @@ function keepScroll(p, rebuild) {
   if (sp) sp.scrollTop = inner;
 }
 
-async function closeTicket(wid) {
-  if (forms.get(wid)?.changed() && (await dialog('Discard changes?', 'This ticket has unsaved changes.', ['Discard', 'Cancel'])) !== 'Discard') return;
-  close(wid);
-}
+const keepEdits = async (wid) => !forms.get(wid)?.changed() || (await dialog('Discard changes?', 'This ticket has unsaved changes.', ['Discard', 'Cancel'])) === 'Discard';
 
 function openTicket(id) {
   const wid = `ticket-${id ?? 'new'}`;
-  const w = open(wid, { title: id ? `Ticket #${id}` : 'New ticket', w: 680, h: 480, icon: 'ticket', onX: () => closeTicket(wid),
+  const w = open(wid, { title: id ? `Ticket #${id}` : 'New ticket', w: 680, h: 480, icon: 'ticket', guard: () => keepEdits(wid),
     onClose: () => { views.delete(wid); forms.delete(wid); } });
   if (id === null) {
     if (!w.body.firstChild) w.body.append(forms.set(wid, ticketForm(w, null)).get(wid));
@@ -1616,7 +1613,7 @@ addEventListener('keydown', (e) => {
     const m = document.querySelector('.k95-menu');
     if (m) return m.remove();
     const w = focused();
-    if (w) forms.has(w.el.dataset.win) ? closeTicket(w.el.dataset.win) : close(w.el.dataset.win);
+    if (w) dismiss(w.el.dataset.win);
   } else if (plainCtrl && e.key.toLowerCase() === 'l') {
     e.preventDefault();
     toggleRunner();

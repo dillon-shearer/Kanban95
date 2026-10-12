@@ -180,7 +180,7 @@ export function raise(id) {
  * `label`: the short text beside that icon (default the title); `api.title(text, label)` changes both.
  * `tile`: takes a terminal slot (`SLOTS`) instead of a place of its own, until the operator drags or resizes it.
  */
-export function open(id, { title, w = 480, h: height = 320, persist = false, tile = false, background = false, onClose, onX, extra = [], items = [], icon = 'window', label = title }) {
+export function open(id, { title, w = 480, h: height = 320, persist = false, tile = false, background = false, onClose, onX, guard, extra = [], items = [], icon = 'window', label = title }) {
   if (wins.has(id)) {
     focus(id);
     return wins.get(id).api;
@@ -195,7 +195,7 @@ export function open(id, { title, w = 480, h: height = 320, persist = false, til
     h('div', { class: 'title-bar' }, text, h('div', { class: 'title-bar-controls' }, ...extra,
       h('button', { 'aria-label': 'Minimize', onclick: () => minimize(id) }),
       h('button', { 'aria-label': saved?.max ? 'Restore' : 'Maximize', onclick: () => toggleMax() }),
-      h('button', { 'aria-label': 'Close', onclick: () => (onX ? onX() : close(id)) }))),
+      h('button', { 'aria-label': 'Close', onclick: () => (onX ? onX() : dismiss(id)) }))),
     body);
   el.classList.toggle('max', !!saved?.max);
   Object.assign(el.style, { left: `${r.x}px`, top: `${r.y}px`, width: `${r.w}px`, height: `${r.h}px` });
@@ -210,7 +210,7 @@ export function open(id, { title, w = 480, h: height = 320, persist = false, til
   dragTask(task);
   const api = { el, body, title: (t, l = t) => { text.textContent = t; task.title = t; task.setAttribute('aria-label', t); task.lastChild.textContent = l; }, close: () => close(id) };
   let last; // the geometry last saved
-  const win = { el, task, onClose, api, toggleMax, items, tile, packed: false, rebase: () => { last = JSON.stringify(rect(el)); } };
+  const win = { el, task, onClose, guard, api, toggleMax, items, tile, packed: false, rebase: () => { last = JSON.stringify(rect(el)); } };
   wins.set(id, win);
   desktop.append(el);
   tasks.append(task);
@@ -367,8 +367,8 @@ function restore(id) {
 /** The button's menu; on a selected button, the bulk menu for the whole selection. */
 function taskMenu(id, x, y) {
   if (sel.has(id) && sel.size > 1) {
-    const each = (f) => () => { const ids = [...sel]; sel.clear(); paint(); ids.forEach(f); };
-    return menu(x, y, [{ label: 'Restore', run: each(restore) }, { label: 'Minimize', run: each(minimize) }, '-', { label: 'Close', run: each(close) }]);
+    const each = (f) => async () => { const ids = [...sel]; sel.clear(); paint(); for (const i of ids) await f(i); };
+    return menu(x, y, [{ label: 'Restore', run: each(restore) }, { label: 'Minimize', run: each(minimize) }, '-', { label: 'Close', run: each(dismiss) }]);
   }
   sel.clear();
   paint();
@@ -380,7 +380,7 @@ function taskMenu(id, x, y) {
     { label: 'Maximize', disabled: max, run: () => { toggleMax(); focus(id); } },
     ...(items.length ? ['-', ...items] : []),
     '-',
-    { label: 'Close', run: () => close(id) },
+    { label: 'Close', run: () => dismiss(id) },
   ]);
 }
 
@@ -425,6 +425,12 @@ export function close(id) {
   overflow();
   if (w.tile || ACTION.includes(id)) retileSoon();
   w.onClose?.();
+}
+
+export async function dismiss(id) {
+  const w = wins.get(id);
+  if (!w || (w.guard && !(await w.guard()))) return;
+  close(id);
 }
 
 export const isOpen = (id) => wins.has(id);
