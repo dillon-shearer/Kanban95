@@ -33,6 +33,7 @@ Living document. Update it in the same change that alters the schema.
   - `idle_minutes` (a positive integer, default 20: how long a running agent's transcript may gain no line before its ticket is flagged, `docs/LIFECYCLE.md` → Silent agents)
   - `paths` (`claude`, `codex`: an absolute path to the executable, empty for PATH)
   - `push_after_merge` (boolean, default true: the merge queue pushes the base to its upstream before a ticket counts as merged, `docs/LIFECYCLE.md` → Push)
+  - `sleepAfterMinutes` (a number of minutes, 0 or more, default 30; 0 never: how long a board under the shell may have no live session and no `/events` client before it asks the shell to close it, `docs/ARCHITECTURE.md` → Daemon lifetime)
   - `sounds` (`merge`, `attention`, `done`: booleans, default true; an old single boolean applies to all three)
   - `terminals` (`auto`: the phases among `plan`, `execute`, `test` whose sessions open a terminal on their own, default `["plan", "execute", "test"]`; `tile`: terminals take slots left of the action column, default `true`)
   - `voice` (`backend`: `local`; `mode`: `push` or `toggle`)

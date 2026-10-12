@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { sessions } from '../src/launcher.ts';
 import { until } from './cdp.ts';
-import { srv, db, page, base, ticket, column, statusOf } from './ui.ts';
+import { srv, db, page, base, ticket, column, statusBar, statusOf } from './ui.ts';
 
 const launch = (id: number) => fetch(`${base}api/tickets/${id}/launch`, { method: 'POST', headers: { cookie: `k95=${srv.secret}` } });
 const live = async () => (await (await fetch(`${base}api/sessions`, { headers: { cookie: `k95=${srv.secret}` } })).json()) as { id: number; ticket_id: number; phase: string; grant_id: number }[];
@@ -67,6 +67,7 @@ describe('ui-hidden-terminals', { timeout: 60_000 }, () => {
     expect(await page.evaluate(`['plan', 'execute', 'test'].map((p) => document.querySelector('#term-auto-' + p).checked)`)).toEqual([true, true, true]);
     await page.evaluate(`document.querySelector('#term-auto-execute').click()`);
     await until(() => { try { return JSON.parse(readFileSync(settings, 'utf8')).terminals.auto.join() === 'plan,test'; } catch { return false; } }, 'settings.json');
+    await until(async () => (await statusBar()) === 'Saved.', 'the save to settle');
     await page.evaluate(`document.querySelector('#term-auto-test').click()`);
     await until(() => { try { return JSON.parse(readFileSync(settings, 'utf8')).terminals.auto.join() === 'plan'; } catch { return false; } }, 'settings.json');
 
