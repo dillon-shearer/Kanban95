@@ -1173,7 +1173,7 @@ mod tests {
     /// The UI calls no Tauri command, so none may answer it: core plugin commands and unknown names alike.
     #[test]
     fn webview_cannot_call_any_tauri_command() {
-        let app = mock_builder().build(tauri::generate_context!()).unwrap();
+        let app = mock_builder().build(tauri::generate_context!(test = true)).unwrap();
         let origin: tauri::Url = "http://127.0.0.1:41234/".parse().unwrap();
         let w = window(&app, MAIN, origin.clone(), "Kanban95".into(), Arc::new(Mutex::new(vec![41234]))).unwrap();
         for cmd in [
