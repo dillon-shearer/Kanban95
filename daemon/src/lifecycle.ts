@@ -639,7 +639,10 @@ export function housekeeping(b: Board, body: string, launchNow = true): Ticket {
 /** A session in the repo root without a ticket. It touches no ticket, so the lifecycle has no row for it. */
 function rootSession(b: Board, o: Parameters<typeof launchRoot>[1]): Session {
   if (b.closing) throw new Error('the daemon is shutting down');
-  const s = launchRoot({ ...b, onExit: () => changed(null) }, o);
+  const s = launchRoot({ ...b, onExit: () => {
+    changed(null);
+    restartWhenIdle(b); // the last open brainstorm or operator terminal can be what a restart after a merge waits for
+  } }, o);
   changed(null);
   return s;
 }
@@ -749,7 +752,7 @@ export function runnerState(b: Board) {
   const restart = b.restart === 'failed' ? 'failed' : b.shell && b.shutdown ? 'self' : 'manual';
   const r = runner(b);
   return { ...r, concurrency: limit(b), running: running(b), left: cs.length, backlog: n, waits, stale: b.stale ?? false, unpushed: b.unpushed ?? 0,
-    ...(b.stale === 'daemon' && { hold: { finish: toFinish(b), restart } }), ...(b.gitError && { gitError: b.gitError }), ...(r.on && b.lowMemory && { lowMemory: b.lowMemory }) };
+    ...(b.stale === 'daemon' && { hold: { finish: toFinish(b), terminals: terminals(), restart } }), ...(b.gitError && { gitError: b.gitError }), ...(r.on && b.lowMemory && { lowMemory: b.lowMemory }) };
 }
 
 /**
@@ -785,6 +788,9 @@ function toFinish(b: Board) {
   return ids.size;
 }
 
+/** Open brainstorm and operator terminals: a restart after a merge waits for the operator to close them, since it would end them. */
+const terminals = () => [...sessions.values()].filter((s) => s.ticketId === null).length;
+
 const BUILD_TIMEOUT = 120_000;
 
 /**
@@ -810,11 +816,11 @@ export async function restartBoard(b: Board): Promise<string | null> {
 
 /**
  * A stale board (b.stale 'daemon') under the shell restarts itself once no ticket is left to finish, the same way as Restart
- * board; runner.json survives it, so the runner carries on as it was. Brainstorm and operator terminals are not waited for. A
+ * board; runner.json survives it, so the runner carries on as it was. Open brainstorm and operator terminals hold it too. A
  * failed build keeps the hold and logs the compiler output; Restart board shows it to the operator.
  */
 function restartWhenIdle(b: Board) {
-  if (b.stale !== 'daemon' || !b.shell || !b.shutdown || b.closing || b.restart || toFinish(b)) return;
+  if (b.stale !== 'daemon' || !b.shell || !b.shutdown || b.closing || b.restart || toFinish(b) || terminals()) return;
   b.restart = 'running';
   void restartBoard(b).then((failed) => {
     if (failed === null) return;

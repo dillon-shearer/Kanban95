@@ -314,7 +314,7 @@ const HOLD_THEN = {
   manual: '; then Start → Restart board',
   failed: '; the board could not rebuild itself: Start → Restart board shows why',
 };
-const holdLine = (h) => `restart pending, ${h.finish} ticket${h.finish === 1 ? '' : 's'} to finish${HOLD_THEN[h.restart]}`;
+const holdLine = (h) => `restart pending, ${h.finish} ticket${h.finish === 1 ? '' : 's'} to finish${h.terminals ? `, ${h.terminals} terminal${h.terminals === 1 ? '' : 's'} to close` : ''}${HOLD_THEN[h.restart]}`;
 /** Start → Restart board: the daemon rebuilds, exits 75, and the shell starts it again (docs/OPERATOR.md → Restart board). */
 async function restartBoard() {
   const agents = sessions.filter((s) => s.ticket_id !== null).length;

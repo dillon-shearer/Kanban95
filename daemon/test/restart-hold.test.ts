@@ -54,7 +54,7 @@ describe('restart after a merge', { timeout: 60_000 }, () => {
     expect(await state()).toMatchObject({ stale: 'shell' });
   });
 
-  it('an open operator terminal alone does not delay the restart', async () => {
+  it('an open operator terminal holds the restart until the operator closes it', async () => {
     writeFileSync(join(process.env.USERPROFILE!, '.kanban95', 'models.json'), JSON.stringify({
       cli: 'claude', claude: { execute: { model: 'work', effort: 'low' }, test: { model: 'pass', effort: 'low' }, operator: { model: 'hang', effort: 'low' } },
     }));
@@ -62,8 +62,12 @@ describe('restart after a merge', { timeout: 60_000 }, () => {
     await until(() => [...sessions.values()].some((s) => s.ticketId === null && s.scrollback().includes('FAKE')), 'the operator terminal');
     const shutdown = underShell();
     srv.board.stale = 'daemon';
-    expect(await state()).toMatchObject({ on: false, hold: { finish: 0, restart: 'self' } });
+    expect(await state()).toMatchObject({ on: false, hold: { finish: 0, terminals: 1, restart: 'self' } });
     tick(srv.board); // what the merge that set stale does next
+    await settle();
+    expect(shutdown).not.toHaveBeenCalled();
+    const op = [...sessions.values()].find((s) => s.ticketId === null)!;
+    expect((await send('DELETE')(`/api/sessions/${op.key}`)).status).toBe(204);
     await until(() => shutdown.mock.calls.length, 'the restart');
     await settle();
     expect(shutdown.mock.calls).toEqual([[75]]);
