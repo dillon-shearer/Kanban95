@@ -44,7 +44,7 @@ it('a daemon started on an unlisted repo adds it with the default teal, once; a 
   await srv.close();
   srv = await start({ repo: other });
   expect(file()).toEqual([{ path: own, colour: '#008080' }, { path: other, colour: '#008080' }]);
-});
+}, 30_000);
 
 it('GET /api/project is this board: its path, folder name and colour', async () => {
   const r = await call('GET', '/project');

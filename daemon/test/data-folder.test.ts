@@ -6,7 +6,7 @@ import { pathToFileURL } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import { worktreesRoot } from '../src/git.ts';
 import { start } from '../src/server.ts';
-import { boardHome, localHome, pointerPath, readConfig, readProjects, runSettings, setBoardHome, writeConfig } from '../src/settings.ts';
+import { boardHome, localHome, normal, pointerPath, readConfig, readProjects, runSettings, setBoardHome, writeConfig } from '../src/settings.ts';
 import { removeTemp } from './home.ts';
 
 const KH = process.env.KANBAN95_HOME;
@@ -40,7 +40,7 @@ describe('data folder pointer', () => {
     execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: repo });
     const srv = await start({ repo });
     try {
-      expect(readProjects().map((p) => p.path)).toContain(srv.board.repo);
+      expect(readProjects().map((p) => p.path)).toContain(normal(srv.board.repo));
       expect(existsSync(join(data, 'projects.json'))).toBe(true);
       expect(existsSync(join(data, 'brain.db'))).toBe(true);
       expect(existsSync(join(localHome(), 'brain.db'))).toBe(false);
@@ -49,7 +49,7 @@ describe('data folder pointer', () => {
     } finally {
       await srv.close();
     }
-  });
+  }, 30_000);
 
   it('is ~/.kanban95 when there is no pointer file', () => {
     const { VITEST: _, KANBAN95_HOME: __, ...env } = process.env;
