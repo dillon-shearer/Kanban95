@@ -13,6 +13,8 @@ export interface Grant {
 }
 
 const hash = (token: string) => createHash('sha256').update(token).digest('hex');
+const COLS = 'id, ticket_id, role, expires_at, revoked_at, created_at';
+const alive = (g: Grant | undefined) => (g && g.revoked_at === null && g.expires_at > new Date().toISOString() ? g : null);
 
 export function mint(db: DatabaseSync, g: { ticket: number | null; role: Role; ttlMs: number }): { id: number; token: string } {
   const token = randomBytes(32).toString('base64url');
@@ -25,11 +27,11 @@ export function mint(db: DatabaseSync, g: { ticket: number | null; role: Role; t
 
 /** Null for unknown, expired or revoked tokens. Callers never learn which. */
 export function verify(db: DatabaseSync, token: string): Grant | null {
-  const g = db
-    .prepare('SELECT id, ticket_id, role, expires_at, revoked_at, created_at FROM grants WHERE token_hash = ?')
-    .get(hash(token)) as Grant | undefined;
-  if (!g || g.revoked_at !== null || g.expires_at <= new Date().toISOString()) return null;
-  return g;
+  return alive(db.prepare(`SELECT ${COLS} FROM grants WHERE token_hash = ?`).get(hash(token)) as Grant | undefined);
+}
+
+export function live(db: DatabaseSync, id: number): Grant | null {
+  return alive(db.prepare(`SELECT ${COLS} FROM grants WHERE id = ?`).get(id) as Grant | undefined);
 }
 
 export function revoke(db: DatabaseSync, id: number): boolean {
