@@ -990,16 +990,15 @@ function addProjectBoard() {
   openSettings('Projects');
 }
 
-let projects = { own: null, value: [], running: {}, hosted: {} };
+let projects = { own: null, value: [], running: {}, hosted: {}, agents: {} };
 const folder = (path) => path.split(/[\\/]/).pop();
 async function loadProjectItems() {
   try {
-    const [own, { value, running, hosted }] = await Promise.all([api('GET', '/project'), api('GET', '/projects')]);
-    projects = { own: own.path, value, running, hosted };
+    const [own, { value, running, hosted, agents }] = await Promise.all([api('GET', '/project'), api('GET', '/projects')]);
+    projects = { own: own.path, value, running, hosted, agents };
   } catch (e) {
-    projects = { error: e.message, value: [], running: {}, hosted: {} };
+    projects = { error: e.message, value: [], running: {}, hosted: {}, agents: {} };
   }
-  drawSwitcher();
 }
 const hostedProjects = () => projects.value.filter((p) => projects.hosted[p.path]);
 
@@ -1040,27 +1039,54 @@ async function closeBoard(path) {
   if ((await dialog('Close board', ask, ['Close', 'Cancel'])) === 'Close') await askShell('close', path);
 }
 
-function drawSwitcher() {
-  const nav = document.getElementById('projects');
-  const list = hostedProjects();
-  nav.hidden = list.length < 2;
-  nav.replaceChildren(...list.map((p) => {
-    const name = folder(p.path), self = p.path === projects.own;
-    const items = () => [...(self ? [] : [{ label: 'Switch to', run: () => askShell('switch', p.path) }]),
-      { label: 'Pop out', run: () => askShell('popout', p.path) },
-      { label: 'Dock', run: () => askShell('dock', p.path) },
-      { label: 'Close board', run: () => closeBoard(p.path) }];
-    const b = h('button', { class: self ? 'active' : null, 'data-project': p.path, title: name, 'aria-label': name, style: `background: ${cssColour(p.colour)}`,
-      onclick: () => self || askShell('switch', p.path),
-      oncontextmenu: (e) => { e.preventDefault(); menu(e.clientX, e.clientY, items()); },
-      onkeydown: (e) => {
-        if (e.key !== 'ContextMenu' && !(e.key === 'F10' && e.shiftKey)) return;
+function closeSwitch() {
+  const m = document.querySelector('.k95-switch');
+  if (!m) return false;
+  m.remove();
+  removeEventListener('pointerdown', switchOff, true);
+  return true;
+}
+function switchOff(e) {
+  if (!e.target.closest('.k95-switch, #switch')) closeSwitch();
+}
+async function openSwitch() {
+  if (closeSwitch()) return;
+  document.querySelector('.k95-menu')?.remove();
+  await loadProjectItems();
+  closeSwitch();
+  document.querySelector('.k95-menu')?.remove();
+  const go = (p) => {
+    closeSwitch();
+    if (projects.hosted[p.path]) askShell('switch', p.path);
+    else if (!projects.running[p.path]) askShell('open', p.path, { where: 'here' });
+    else switchProject(p.path, folder(p.path), true);
+  };
+  const list = projects.value.filter((p) => p.path !== projects.own);
+  const rows = list.map((p) => h('div', { class: 'k95-switch-row', role: 'menuitem', tabindex: -1, 'data-project': p.path, style: `background: ${cssColour(p.colour)}`,
+    onclick: () => go(p) },
+  h('span', { class: 'name' }, folder(p.path)),
+  projects.running[p.path] ? h('span', { class: 'run', title: 'Running' }) : null,
+  projects.hosted[p.path] && projects.agents[p.path] === 0
+    ? h('button', { class: 'x', title: 'Close board', 'aria-label': `Close ${folder(p.path)}`, onclick: (e) => { e.stopPropagation(); closeSwitch(); closeBoard(p.path); } }, 'X')
+    : null));
+  const body = projects.error ? [h('div', { class: 'k95-switch-none' }, `Projects: ${projects.error}`)]
+    : rows.length ? rows : [h('div', { class: 'k95-switch-none' }, 'No other boards')];
+  const m = h('div', { class: 'window k95-switch', role: 'menu', 'aria-label': 'Switch board', tabindex: -1,
+    onkeydown: (e) => {
+      const i = rows.indexOf(document.activeElement);
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
         e.preventDefault();
-        const r = b.getBoundingClientRect();
-        menu(r.left, r.top, items());
-      } }, h('span', {}, name));
-    return b;
-  }));
+        rows[(i + (e.key === 'ArrowDown' ? 1 : rows.length - 1)) % rows.length]?.focus();
+      } else if (e.key === 'Enter' && i >= 0) {
+        e.preventDefault();
+        go(list[i]);
+      }
+    } }, h('div', { class: 'window-body' }, ...body));
+  document.body.append(m);
+  const r = document.getElementById('switch').getBoundingClientRect();
+  Object.assign(m.style, { left: `${Math.min(r.left, innerWidth - m.offsetWidth * scale()) / scale()}px`, top: `${r.top / scale() - m.offsetHeight}px` });
+  addEventListener('pointerdown', switchOff, true);
+  (rows[0] ?? m).focus();
 }
 function projectKey(e) {
   const list = hostedProjects();
@@ -1479,6 +1505,7 @@ addEventListener('keydown', (e) => {
   if (e.target.closest?.('.xterm')) return;
   const plainCtrl = e.ctrlKey && !e.shiftKey && !e.altKey;
   if (e.key === 'Escape') {
+    if (closeSwitch()) return;
     const m = document.querySelector('.k95-menu');
     if (m) return m.remove();
     const w = focused();
@@ -1522,11 +1549,13 @@ addEventListener('paste', (e) => {
 async function boot() {
   const start = document.getElementById('start');
   start.addEventListener('click', () => {
+    closeSwitch();
     loadProjectItems(); // for the next opening; this one shows the list as last read
     const m = menu(0, 0, START);
     const r = start.getBoundingClientRect();
     Object.assign(m.style, { left: `${r.left / scale()}px`, top: `${r.top / scale() - m.offsetHeight}px` });
   });
+  document.getElementById('switch').addEventListener('click', openSwitch);
   document.getElementById('inbox-count').addEventListener('click', openInbox);
   document.getElementById('restart-badge').addEventListener('click', restartBoard);
   document.getElementById('limits').addEventListener('click', openLimits);
