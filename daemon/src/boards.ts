@@ -5,16 +5,16 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync
 import { basename, dirname, join, resolve } from 'node:path';
 import { boardHome, normal, readProjects, same } from './settings.js';
 
-export interface Entry { pid: number; repo: string; port: number; started: string }
+export interface Entry { pid: number; repo: string; port: number; started: string; shell: number | null }
 
 const runningDir = () => join(boardHome(), 'running');
 export const entryPath = (pid: number) => join(runningDir(), `${pid}.json`);
 
 /** On daemon start, once it has its port. Returns the removal, which close() calls. */
-export function register(repo: string, port: number): () => void {
+export function register(repo: string, port: number, shell: number | null): () => void {
   const file = entryPath(process.pid);
   mkdirSync(runningDir(), { recursive: true });
-  const entry: Entry = { pid: process.pid, repo: normal(repo), port, started: new Date().toISOString() };
+  const entry: Entry = { pid: process.pid, repo: normal(repo), port, started: new Date().toISOString(), shell };
   writeFileSync(file, JSON.stringify(entry) + '\n');
   return () => rmSync(file, { force: true });
 }
@@ -63,6 +63,31 @@ export function running(): Entry[] {
 export function runningMap(): Record<string, boolean> {
   const live = running();
   return Object.fromEntries(readProjects().map((p) => [p.path, live.some((e) => same(e.repo, p.path))]));
+}
+
+export function hostedMap(shell: number | null | undefined): Record<string, boolean> {
+  const live = running();
+  return Object.fromEntries(readProjects().map((p) => [p.path, shell != null && live.some((e) => same(e.repo, p.path) && e.shell === shell)]));
+}
+
+export type Verb = 'open' | 'switch' | 'popout' | 'dock' | 'close';
+
+export function tellShell(verb: Verb, path: string): void {
+  process.stdout.write(`KANBAN95 ${verb}=${normal(path)}\n`);
+}
+
+export function askShell(board: { shell?: boolean; shellId?: number | null }, verb: Verb, path: unknown): { name: string } {
+  const repo = listed(path);
+  const name = basename(repo);
+  if (!board.shell) throw new Error('this board does not run under a shell');
+  const live = running().filter((e) => same(e.repo, repo));
+  const hosted = board.shellId != null && live.some((e) => e.shell === board.shellId);
+  if (verb === 'open') {
+    if (hosted) verb = 'switch';
+    else if (live.length) throw new Error(`${name} is running in another window`);
+  } else if (!hosted) throw new Error(`${name} is not hosted by this shell`);
+  tellShell(verb, repo);
+  return { name };
 }
 
 export class NotListed extends Error {}
