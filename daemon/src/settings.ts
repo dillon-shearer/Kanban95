@@ -4,9 +4,11 @@
 // runner concurrency. projects.json: every repo with a board and its wallpaper colour. All are read on every use, so an edit applies to the next run without a restart.
 // models.json, settings.json and preferences.md may have a per-project copy in projects/<repo key>/, used whole instead of the global file.
 import { execFile } from 'node:child_process';
-import { copyFileSync, createReadStream, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, rmdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import { copyFileSync, createReadStream, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, rmdirSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, delimiter, dirname, isAbsolute, join, resolve } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import * as z from 'zod';
 import type { Ticket } from './api.js';
 
@@ -118,6 +120,37 @@ export function dropOverride(name: OverridableName, repo: string): boolean {
   return true;
 }
 
+const LOCK_MS = 10_000;
+
+function locked<T>(fn: () => T): T {
+  const home = boardHome();
+  mkdirSync(home, { recursive: true });
+  const db = new DatabaseSync(join(home, 'settings.lock'));
+  try {
+    db.exec(`PRAGMA busy_timeout = ${LOCK_MS}`);
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      return fn();
+    } finally {
+      db.exec('COMMIT');
+    }
+  } finally {
+    db.close();
+  }
+}
+
+function replace(file: string, data: string) {
+  mkdirSync(dirname(file), { recursive: true });
+  const tmp = `${file}.${process.pid}-${randomUUID()}.tmp`;
+  try {
+    writeFileSync(tmp, data);
+    renameSync(tmp, file);
+  } catch (e) {
+    rmSync(tmp, { force: true });
+    throw e;
+  }
+}
+
 /** A file that does not pass its schema. REST answers it with 400. */
 export class BadConfig extends Error {}
 
@@ -144,9 +177,7 @@ export function readConfig<N extends ConfigName>(name: N, repo?: string): Config
 export function writeConfig<N extends ConfigName>(name: N, value: unknown, repo?: string): Config<N> {
   const file = repo ? projectPath(name, repo) : globalPath(name);
   const data = check(name, value, `${name}.json`);
-  mkdirSync(dirname(file), { recursive: true });
-  writeFileSync(`${file}.tmp`, JSON.stringify(data, null, 2) + '\n');
-  renameSync(`${file}.tmp`, file);
+  locked(() => replace(file, JSON.stringify(data, null, 2) + '\n'));
   return data;
 }
 
@@ -275,9 +306,7 @@ export function writePreferences(value: unknown, repo?: string): string {
   if (typeof value !== 'string') throw new BadConfig('preferences.md: value must be a string');
   if (Buffer.byteLength(value) > PREFERENCES_MAX) throw new BadConfig(`preferences.md: over ${PREFERENCES_MAX / 1024} KB`);
   const file = repo ? projectPath('preferences', repo) : globalPath('preferences');
-  mkdirSync(dirname(file), { recursive: true });
-  writeFileSync(`${file}.tmp`, value);
-  renameSync(`${file}.tmp`, file);
+  locked(() => replace(file, value));
   return value;
 }
 
@@ -314,10 +343,7 @@ export function readProjects(): Project[] {
 }
 
 function saveProjects(list: Project[]) {
-  const file = projectsPath();
-  mkdirSync(dirname(file), { recursive: true });
-  writeFileSync(`${file}.tmp`, JSON.stringify(list, null, 2) + '\n');
-  renameSync(`${file}.tmp`, file);
+  replace(projectsPath(), JSON.stringify(list, null, 2) + '\n');
 }
 
 /**
@@ -333,14 +359,16 @@ export function writeProjects(value: unknown, keep: string): Project[] {
     if (list.findIndex((q) => same(q.path, p.path)) !== i) throw new BadConfig(`projects.json: ${p.path} is listed twice`);
   }
   if (!list.some((p) => same(p.path, normal(keep)))) throw new BadConfig(`projects.json: this board's own project ${normal(keep)} cannot be removed`);
-  saveProjects(list);
+  locked(() => saveProjects(list));
   return list;
 }
 
 /** On daemon start: list the repo it serves, with the default colour, unless it is listed already. */
 export function addProject(repo: string) {
-  const list = readProjects();
-  if (!list.some((p) => same(p.path, normal(repo)))) saveProjects([...list, { path: normal(repo), colour: DEFAULT_COLOUR }]);
+  locked(() => {
+    const list = readProjects();
+    if (!list.some((p) => same(p.path, normal(repo)))) saveProjects([...list, { path: normal(repo), colour: DEFAULT_COLOUR }]);
+  });
 }
 
 /** This board's project. Unlisted (a broken file) reads as the default colour. */
