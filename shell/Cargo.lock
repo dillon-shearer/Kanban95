@@ -1641,6 +1641,7 @@ name = "kanban95-shell"
 version = "0.0.0"
 dependencies = [
  "getrandom 0.3.4",
+ "serde_json",
  "tauri",
  "tauri-build",
  "webview2-com",
