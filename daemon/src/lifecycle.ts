@@ -174,6 +174,7 @@ export interface Board {
   /** The 30 s timer that ticks again during a memory hold. */
   memoryWait?: NodeJS.Timeout;
   files?: Map<number, { key: string; files: string[] }>;
+  update?: { version: string; current: string };
 }
 
 /**
@@ -811,6 +812,8 @@ function toFinish(b: Board) {
 
 /** Open brainstorm and operator terminals: a restart after a merge waits for the operator to close them, since it would end them. */
 const terminals = () => [...sessions.values()].filter((s) => s.ticketId === null).length;
+
+export const holding = (b: Board) => toFinish(b) + terminals();
 
 const BUILD_TIMEOUT = 120_000;
 

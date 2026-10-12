@@ -10,6 +10,7 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant};
 use tauri::webview::{PermissionKind, PermissionResponse};
 use tauri::{AppHandle, Manager, RunEvent, Runtime, Url, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent};
+use tauri_plugin_updater::{Update, Updater, UpdaterExt};
 
 /// 32 random bytes from the OS, hex: the shell-to-daemon secret for one daemon run (docs/SECURITY.md).
 fn mint_secret() -> String {
@@ -18,12 +19,19 @@ fn mint_secret() -> String {
     b.iter().map(|x| format!("{x:02x}")).collect()
 }
 
+fn exe_dir() -> Option<std::path::PathBuf> {
+    std::env::current_exe().ok().and_then(|e| Some(e.parent()?.to_path_buf()))
+}
+
 /// The daemon the installer staged (`app/`, shell/stage.mjs): next to this exe on Windows, in the bundle's
-/// `Contents/Resources` on macOS (the exe is in `Contents/MacOS`). Else the repo's build (dev).
+/// `Contents/Resources` on macOS (the exe is in `Contents/MacOS`). None in dev.
+fn staged(exe_dir: Option<&std::path::Path>) -> Option<std::path::PathBuf> {
+    exe_dir.into_iter().flat_map(|d| [d.join("app"), d.join("../Resources/app")]).map(|a| a.join("daemon/dist/server.js")).find(|p| p.is_file())
+}
+
+/// The staged daemon, else the repo's build (dev).
 fn daemon_script() -> std::path::PathBuf {
-    let dir = std::env::current_exe().ok().and_then(|e| Some(e.parent()?.to_path_buf()));
-    let installed = dir.into_iter().flat_map(|d| [d.join("app"), d.join("../Resources/app")]).map(|a| a.join("daemon/dist/server.js")).find(|p| p.is_file());
-    installed.unwrap_or_else(|| concat!(env!("CARGO_MANIFEST_DIR"), "/../daemon/dist/server.js").into())
+    staged(exe_dir().as_deref()).unwrap_or_else(|| concat!(env!("CARGO_MANIFEST_DIR"), "/../daemon/dist/server.js").into())
 }
 
 #[cfg(any(target_os = "macos", test))]
@@ -164,6 +172,8 @@ const STOP_WAIT: Duration = Duration::from_secs(15);
 
 const MAIN: &str = "main";
 
+const CHECK_EVERY: Duration = Duration::from_secs(60 * 60);
+
 /// A command a daemon prints on stdout after its port line (docs/ARCHITECTURE.md -> Hosted boards).
 #[derive(Debug, PartialEq, Clone, Copy)]
 enum Verb {
@@ -172,6 +182,9 @@ enum Verb {
     Popout,
     Dock,
     Close,
+    Check,
+    CheckNow,
+    Update,
 }
 
 fn parse(line: &str) -> Option<(Verb, &str)> {
@@ -182,12 +195,21 @@ fn parse(line: &str) -> Option<(Verb, &str)> {
         "popout" => Verb::Popout,
         "dock" => Verb::Dock,
         "close" => Verb::Close,
+        "check" => Verb::Check,
+        "checknow" => Verb::CheckNow,
+        "update" => Verb::Update,
         _ => return None,
     };
     (!path.is_empty()).then_some((verb, path))
 }
 
-/// What the host asks of the windows, applied by `apply` in the app and recorded in tests.
+#[derive(Debug, PartialEq, Clone)]
+struct Daemon {
+    port: u16,
+    secret: String,
+}
+
+/// What the host asks of the windows and the updater, applied by `apply` in the app and recorded in tests.
 #[derive(Debug, PartialEq)]
 enum Effect {
     Show { label: String, url: Url, title: String },
@@ -196,6 +218,9 @@ enum Effect {
     Close(String),
     Error(String),
     Exit(i32),
+    Check { to: Daemon, manual: bool },
+    Install(Daemon),
+    Tell(Daemon, String),
 }
 
 #[derive(Debug, PartialEq, Clone, Copy)]
@@ -223,6 +248,7 @@ struct Table {
     done: bool,
     restarts: u64,
     failed: bool,
+    checked: Option<Instant>,
 }
 
 /// The ports the navigation lock allows: every hosted daemon's. Kept apart from the table so the lock, which runs on
@@ -236,6 +262,7 @@ struct Host {
     ports: Ports,
     launch: Box<dyn Fn(&str) -> Command + Send + Sync>,
     ui: OnceLock<Box<dyn Fn(Effect) + Send + Sync>>,
+    installed: bool,
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -252,8 +279,8 @@ fn show(label: &str, repo: &str, b: &Board) -> Effect {
 }
 
 impl Host {
-    fn new(launch: impl Fn(&str) -> Command + Send + Sync + 'static) -> Arc<Self> {
-        Arc::new(Host { table: Mutex::default(), ports: Ports::default(), launch: Box::new(launch), ui: OnceLock::new() })
+    fn new(launch: impl Fn(&str) -> Command + Send + Sync + 'static, installed: bool) -> Arc<Self> {
+        Arc::new(Host { table: Mutex::default(), ports: Ports::default(), launch: Box::new(launch), ui: OnceLock::new(), installed })
     }
 
     fn start(&self, repo: &str) -> Result<Started, String> {
@@ -271,24 +298,29 @@ impl Host {
     }
 
     /// Reads the daemon's stdout to EOF, which also keeps the pipe from filling, and acts on its commands.
-    fn board(self: &Arc<Self>, s: Started, place: Place, crashed: bool) -> Board {
+    fn board(self: &Arc<Self>, s: Started, place: Place, crashed: bool, fresh: bool) -> Board {
         let host = self.clone();
         let lines = s.lines;
+        let me = Daemon { port: s.port, secret: s.secret.clone() };
         std::thread::spawn(move || {
+            let mut fresh = fresh;
             for line in lines.map_while(Result::ok) {
                 eprintln!("[daemon] {line}");
-                if let Some((verb, path)) = parse(&line) {
-                    host.command(verb, path);
+                match parse(&line) {
+                    Some((Verb::Check, _)) => host.updates(Verb::Check, &me, std::mem::take(&mut fresh)),
+                    Some((verb @ (Verb::CheckNow | Verb::Update), _)) => host.updates(verb, &me, false),
+                    Some((verb, path)) => host.command(verb, path),
+                    None => {}
                 }
             }
         });
         Board { child: s.child, port: s.port, secret: s.secret, place, crashed, restarting: None, pending: None }
     }
 
-    fn restart(self: &Arc<Self>, repo: String, gen: u64) {
+    fn restart(self: &Arc<Self>, repo: String, gen: u64, requested: bool) {
         let (child, secret, out) = match spawn((self.launch)(&repo)) {
             Ok(s) => s,
-            Err(e) => return self.restarted(&repo, gen, Err(e)),
+            Err(e) => return self.restarted(&repo, gen, requested, Err(e)),
         };
         let parked = {
             let mut t = lock(&self.table);
@@ -306,10 +338,10 @@ impl Host {
             return;
         }
         let shake = handshake(out).map(|(port, lines)| (port, secret, lines));
-        self.restarted(&repo, gen, shake);
+        self.restarted(&repo, gen, requested, shake);
     }
 
-    fn restarted(self: &Arc<Self>, repo: &str, gen: u64, shake: Result<(u16, String, Lines), String>) {
+    fn restarted(self: &Arc<Self>, repo: &str, gen: u64, requested: bool, shake: Result<(u16, String, Lines), String>) {
         let mut fx = vec![];
         let mut t = lock(&self.table);
         let Some(old) = t.boards.get_mut(repo).filter(|b| b.restarting == Some(gen)) else {
@@ -319,7 +351,7 @@ impl Host {
         match (shake, child) {
             (Ok((port, secret, lines)), Some(child)) => {
                 let (place, crashed) = (old.place, old.crashed);
-                let b = self.board(Started { child, port, secret, lines }, place, crashed);
+                let b = self.board(Started { child, port, secret, lines }, place, crashed, requested);
                 match place {
                     Place::Own => fx.push(show(&label(repo), repo, &b)),
                     Place::Docked if t.main == repo => fx.push(show(MAIN, repo, &b)),
@@ -344,7 +376,7 @@ impl Host {
 
     fn first(self: &Arc<Self>, repo: &str, s: Started) {
         let mut t = lock(&self.table);
-        let b = self.board(s, Place::Docked, false);
+        let b = self.board(s, Place::Docked, false, true);
         t.boards.insert(repo.into(), b);
         t.main = repo.into();
         self.sync(&t);
@@ -397,6 +429,31 @@ impl Host {
         self.emit(fx);
     }
 
+    fn updates(&self, verb: Verb, to: &Daemon, fresh: bool) {
+        let fx = {
+            let mut t = lock(&self.table);
+            if t.done {
+                return;
+            }
+            match verb {
+                _ if !self.installed => {
+                    eprintln!("[shell] not the installed app: no update check");
+                    (verb == Verb::CheckNow).then(|| Effect::Tell(to.clone(), failed("Only the installed Kanban95 app checks for updates.")))
+                }
+                Verb::Update => Some(Effect::Install(to.clone())),
+                Verb::Check if !fresh && t.checked.is_some_and(|at| at.elapsed() < CHECK_EVERY) => {
+                    eprintln!("[shell] update check skipped: the last one was under an hour ago");
+                    None
+                }
+                _ => {
+                    t.checked = Some(Instant::now());
+                    Some(Effect::Check { to: to.clone(), manual: verb == Verb::CheckNow })
+                }
+            }
+        };
+        self.emit(fx.into_iter().collect());
+    }
+
     fn open(self: &Arc<Self>, repo: String) {
         let started = self.start(&repo);
         let mut fx = vec![];
@@ -408,7 +465,7 @@ impl Host {
                 let _ = s.child.wait();
             }
             Ok(s) => {
-                let b = self.board(s, Place::Docked, false);
+                let b = self.board(s, Place::Docked, false, false);
                 fx.push(show(MAIN, &repo, &b));
                 t.boards.insert(repo.clone(), b);
                 t.main = repo;
@@ -514,7 +571,7 @@ impl Host {
             b.crashed = crashed || !requested;
             b.restarting = Some(gen);
             let host = self.clone();
-            std::thread::spawn(move || host.restart(repo, gen));
+            std::thread::spawn(move || host.restart(repo, gen, requested));
         }
         self.sync(&t);
         let failed = std::mem::take(&mut t.failed);
@@ -576,11 +633,152 @@ fn kill_children_with_us() {
             && AssignProcessToJobObject(job, GetCurrentProcess()) != 0;
         if !ok {
             eprintln!("[shell] could not set up the kill-on-close job: {}", std::io::Error::last_os_error());
+        } else {
+            let _ = JOB.set(job as usize);
         }
     }
 }
 #[cfg(not(windows))]
 fn kill_children_with_us() {}
+
+#[cfg(windows)]
+static JOB: OnceLock<usize> = OnceLock::new();
+
+#[cfg(windows)]
+fn let_installer_outlive_us() {
+    use windows_sys::Win32::System::JobObjects::*;
+    let Some(&job) = JOB.get() else { return };
+    unsafe {
+        let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
+        info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK;
+        let size = std::mem::size_of_val(&info) as u32;
+        if SetInformationJobObject(job as _, JobObjectExtendedLimitInformation, &info as *const _ as _, size) == 0 {
+            eprintln!("[shell] could not let the installer out of the kill-on-close job: {}", std::io::Error::last_os_error());
+        }
+    }
+}
+#[cfg(not(windows))]
+fn let_installer_outlive_us() {}
+
+const UPDATE_URL: &str = "KANBAN95_UPDATE_URL";
+
+fn endpoint(var: Option<String>) -> Result<Option<Url>, String> {
+    let Some(var) = var else { return Ok(None) };
+    let url: Url = var.parse().map_err(|e| format!("{UPDATE_URL} is not a URL: {e}"))?;
+    let ok = url.scheme() == "https" || (url.scheme() == "http" && url.host_str() == Some("127.0.0.1"));
+    ok.then_some(Some(url)).ok_or_else(|| format!("{UPDATE_URL} must be an https URL, or http on 127.0.0.1"))
+}
+
+fn updater<R: Runtime>(app: &AppHandle<R>) -> Result<Updater, String> {
+    let mut b = app.updater_builder().timeout(Duration::from_secs(30));
+    if let Some(url) = endpoint(std::env::var(UPDATE_URL).ok())? {
+        b = b.endpoints(vec![url]).map_err(|e| e.to_string())?;
+    }
+    let a = app.clone();
+    b.on_before_exit(move || {
+        let_installer_outlive_us();
+        a.state::<Arc<Host>>().shutdown();
+        a.cleanup_before_exit();
+    })
+    .build()
+    .map_err(|e| e.to_string())
+}
+
+fn failed(error: &str) -> String {
+    serde_json::json!({ "state": "failed", "error": error }).to_string()
+}
+
+fn outcome(found: &Result<Option<String>, String>, current: &str, manual: bool) -> (String, Option<String>) {
+    match found {
+        Ok(Some(version)) => (
+            format!("[shell] Kanban95 v{version} is available (this is v{current})"),
+            Some(serde_json::json!({ "state": "available", "version": version, "current": current }).to_string()),
+        ),
+        Ok(None) => (
+            format!("[shell] Kanban95 v{current} is up to date"),
+            manual.then(|| serde_json::json!({ "state": "current", "current": current }).to_string()),
+        ),
+        Err(e) => (format!("[shell] update check failed: {e}"), manual.then(|| failed(&format!("Could not check for updates: {e}")))),
+    }
+}
+
+fn tell(to: &Daemon, body: &str) {
+    use std::io::{Read, Write};
+    let sent = std::net::TcpStream::connect(("127.0.0.1", to.port)).and_then(|mut s| {
+        s.set_read_timeout(Some(Duration::from_secs(10)))?;
+        let port = to.port;
+        let secret = &to.secret;
+        let len = body.len();
+        write!(s, "POST /api/update/shell HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nCookie: k95={secret}\r\nContent-Type: application/json\r\nContent-Length: {len}\r\nConnection: close\r\n\r\n{body}")?;
+        let mut status = [0u8; 12];
+        s.read_exact(&mut status)?;
+        Ok(status)
+    });
+    match sent {
+        Ok(status) if status.starts_with(b"HTTP/1.1 2") => {}
+        Ok(status) => eprintln!("[shell] the daemon on port {} refused an update report: {}", to.port, String::from_utf8_lossy(&status)),
+        Err(e) => eprintln!("[shell] could not tell the daemon on port {} about the update: {e}", to.port),
+    }
+}
+
+#[derive(Default)]
+struct Pending(Mutex<Option<Update>>);
+
+async fn find<R: Runtime>(app: &AppHandle<R>) -> Result<Option<Update>, String> {
+    updater(app)?.check().await.map_err(|e| e.to_string())
+}
+
+fn check<R: Runtime>(app: AppHandle<R>, to: Daemon, manual: bool) {
+    let found = tauri::async_runtime::block_on(find(&app));
+    let current = app.package_info().version.to_string();
+    let (line, report) = outcome(&found.as_ref().map(|u| u.as_ref().map(|u| u.version.clone())).map_err(Clone::clone), &current, manual);
+    eprintln!("{line}");
+    if let Ok(Some(update)) = found {
+        *lock(&app.state::<Pending>().0) = Some(update);
+    }
+    if let Some(report) = report {
+        tell(&to, &report);
+    }
+}
+
+fn install<R: Runtime>(app: AppHandle<R>, to: Daemon) {
+    let pending = lock(&app.state::<Pending>().0).take();
+    let update = match pending {
+        Some(u) => u,
+        None => match tauri::async_runtime::block_on(find(&app)) {
+            Ok(Some(u)) => u,
+            Ok(None) => return tell(&to, &failed("No newer release is available now.")),
+            Err(e) => return tell(&to, &failed(&format!("Could not check for updates: {e}"))),
+        },
+    };
+    let (mut done, mut shown) = (0u64, 0u64);
+    let bytes = tauri::async_runtime::block_on(update.download(
+        |chunk, total| {
+            done += chunk as u64;
+            let step = total.map_or(done >> 20, |t| done * 20 / t.max(1));
+            if step > shown {
+                shown = step;
+                tell(&to, &serde_json::json!({ "state": "downloading", "done": done, "total": total }).to_string());
+            }
+        },
+        || {},
+    ));
+    let bytes = match bytes {
+        Ok(b) => b,
+        Err(e) => return tell(&to, &failed(&format!("The download failed: {e}"))),
+    };
+    tell(&to, &serde_json::json!({ "state": "installing" }).to_string());
+    match update.install(bytes) {
+        Ok(()) => app.restart(),
+        Err(e) if lock(&app.state::<Arc<Host>>().table).done => {
+            error_dialog(&format!("The update did not install: {e}
+
+Start Kanban95 again."));
+            app.exit(1);
+        }
+        Err(e) => tell(&to, &failed(&format!("The install failed: {e}"))),
+    }
+}
 
 /// The daemon swaps `?k95=` for an HttpOnly cookie and redirects to `/`, so the page never holds the secret.
 fn url(port: u16, secret: &str, place: Place) -> Url {
@@ -728,6 +926,17 @@ fn apply<R: Runtime>(app: &AppHandle<R>, ports: &Ports, fx: Effect) {
         }
         Effect::Error(e) => error_dialog(&e),
         Effect::Exit(code) => app.exit(code),
+        Effect::Check { to, manual } => {
+            let app = app.clone();
+            std::thread::spawn(move || check(app, to, manual));
+        }
+        Effect::Install(to) => {
+            let app = app.clone();
+            std::thread::spawn(move || install(app, to));
+        }
+        Effect::Tell(to, body) => {
+            std::thread::spawn(move || tell(&to, &body));
+        }
     }
 }
 
@@ -738,7 +947,8 @@ fn main() {
     // and the board is keyed "" (docs/ARCHITECTURE.md -> Startup without an argument).
     // ponytail: a board keyed "" that another board then opens by path gets a second daemon; re-keying on the handshake would fix it.
     let repo = std::env::args().nth(1).map(|a| key(&a)).unwrap_or_default();
-    let host = Host::new(node);
+    let installed = staged(exe_dir().as_deref()).is_some();
+    let host = Host::new(node, installed);
     let first = match host.start(&repo) {
         Ok(started) => started,
         Err(e) => {
@@ -748,8 +958,13 @@ fn main() {
     };
     let setup = host.clone();
 
-    tauri::Builder::default()
+    let mut builder = tauri::Builder::default();
+    if installed {
+        builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
+    }
+    builder
         .manage(host)
+        .manage(Pending::default())
         .setup(move |app| {
             let host = setup;
             let (handle, ports) = (app.handle().clone(), host.ports.clone());
@@ -828,16 +1043,23 @@ mod tests {
     /// A host whose daemons are `cmd` (Windows) or `sh` stand-ins: `script(repo, n)` is the n-th start's command line for
     /// that repo.
     fn host(script: impl Fn(&str, usize) -> String + Send + Sync + 'static) -> (Arc<Host>, Arc<Mutex<Vec<Effect>>>) {
+        host_of(false, script)
+    }
+
+    fn host_of(installed: bool, script: impl Fn(&str, usize) -> String + Send + Sync + 'static) -> (Arc<Host>, Arc<Mutex<Vec<Effect>>>) {
         let starts = Mutex::new(BTreeMap::<String, usize>::new());
-        let host = Host::new(move |repo| {
-            let n = {
-                let mut s = lock(&starts);
-                let n = s.entry(repo.into()).or_default();
-                *n += 1;
-                *n
-            };
-            stand_in(script(repo, n))
-        });
+        let host = Host::new(
+            move |repo| {
+                let n = {
+                    let mut s = lock(&starts);
+                    let n = s.entry(repo.into()).or_default();
+                    *n += 1;
+                    *n
+                };
+                stand_in(script(repo, n))
+            },
+            installed,
+        );
         let seen = Arc::new(Mutex::new(vec![]));
         let rec = seen.clone();
         let _ = host.ui.set(Box::new(move |fx| lock(&rec).push(fx)));
@@ -892,6 +1114,9 @@ mod tests {
         assert_eq!(parse("KANBAN95 popout=x"), Some((Verb::Popout, "x")));
         assert_eq!(parse("KANBAN95 dock=x"), Some((Verb::Dock, "x")));
         assert_eq!(parse("KANBAN95 close=x=y"), Some((Verb::Close, "x=y")));
+        assert_eq!(parse("KANBAN95 check=x"), Some((Verb::Check, "x")));
+        assert_eq!(parse("KANBAN95 checknow=x"), Some((Verb::CheckNow, "x")));
+        assert_eq!(parse("KANBAN95 update=x"), Some((Verb::Update, "x")));
         for bad in ["KANBAN95 open=", "KANBAN95 port=41234", "KANBAN95 fly=x", "KANBAN95 open", "kanban95 open=x", " KANBAN95 open=x", "listening"] {
             assert_eq!(parse(bad), None, "{bad}");
         }
@@ -1075,6 +1300,186 @@ mod tests {
         assert!(!host.tick());
     }
 
+    fn updates(seen: &Mutex<Vec<Effect>>) -> Vec<(u16, &'static str)> {
+        lock(seen)
+            .iter()
+            .filter_map(|f| match f {
+                Effect::Check { to, manual } => Some((to.port, if *manual { "now" } else { "auto" })),
+                Effect::Install(to) => Some((to.port, "install")),
+                Effect::Tell(to, body) => Some((to.port, if body.contains("installed") { "dev" } else { "tell" })),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_installed_app_is_told_from_dev_by_the_staged_daemon() {
+        let dir = std::env::temp_dir().join(format!("k95-staged-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("app/daemon/dist")).unwrap();
+        assert_eq!(staged(Some(&dir)), None);
+        assert_eq!(staged(None), None);
+        let script = dir.join("app/daemon/dist/server.js");
+        std::fs::write(&script, "").unwrap();
+        assert_eq!(staged(Some(&dir)), Some(script));
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(staged(exe_dir().as_deref()), None, "a test runs as dev");
+    }
+
+    #[test]
+    fn the_installed_app_checks_at_start_and_after_a_restart_and_otherwise_at_most_hourly() {
+        let (host, seen) = host_of(true, |repo, n| match (repo, n) {
+            ("k95-a", _) => up(41001, &format!("echo KANBAN95 check=k95-a{THEN}echo KANBAN95 open=k95-b{THEN}")),
+            (_, 1) => format!("echo KANBAN95 port=41002{THEN}echo KANBAN95 check=k95-b{THEN}exit 75"),
+            _ => up(41003, &format!("echo KANBAN95 check=k95-b{THEN}echo KANBAN95 checknow=k95-b{THEN}echo KANBAN95 update=k95-b{THEN}")),
+        });
+        host.first("k95-a", host.start("k95-a").unwrap());
+        until("the restarted board's update lines", || {
+            host.tick();
+            updates(&seen).len() == 4
+        });
+        assert_eq!(updates(&seen), [(41001, "auto"), (41003, "auto"), (41003, "now"), (41003, "install")]);
+        host.shutdown();
+    }
+
+    #[test]
+    fn dev_never_checks_and_says_so_to_check_for_updates() {
+        let (host, seen) = host(|_, _| up(41001, &format!("echo KANBAN95 check=k95-a{THEN}echo KANBAN95 checknow=k95-a{THEN}echo KANBAN95 open=k95-a{THEN}")));
+        host.first("k95-a", host.start("k95-a").unwrap());
+        until("the board's last line", || shown(&seen).len() == 1);
+        assert_eq!(updates(&seen), [(41001, "dev")]);
+        host.shutdown();
+    }
+
+    #[test]
+    fn a_failed_check_is_one_stderr_line_and_reaches_the_ui_only_when_asked_for() {
+        let offline = Err("error sending request".to_string());
+        assert_eq!(outcome(&offline, "0.1.0", false), ("[shell] update check failed: error sending request".into(), None));
+        let (_, told) = outcome(&offline, "0.1.0", true);
+        assert_eq!(serde_json::from_str::<serde_json::Value>(&told.unwrap()).unwrap()["state"], "failed");
+        assert_eq!(outcome(&Ok(None), "0.1.0", false).1, None);
+        assert_eq!(outcome(&Ok(None), "0.1.0", true).1.unwrap(), r#"{"current":"0.1.0","state":"current"}"#);
+        for manual in [false, true] {
+            assert_eq!(outcome(&Ok(Some("0.2.0".into())), "0.1.0", manual).1.unwrap(), r#"{"current":"0.1.0","state":"available","version":"0.2.0"}"#);
+        }
+    }
+
+    #[test]
+    fn the_update_url_override_is_https_or_http_on_loopback() {
+        assert_eq!(endpoint(None), Ok(None));
+        for ok in ["https://example.com/latest.json", "http://127.0.0.1:8123/latest.json"] {
+            assert_eq!(endpoint(Some(ok.into())), Ok(Some(ok.parse().unwrap())), "{ok}");
+        }
+        for bad in ["http://example.com/latest.json", "http://localhost:8123/latest.json", "file:///C:/latest.json", "latest.json"] {
+            assert!(endpoint(Some(bad.into())).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn a_report_reaches_the_daemon_with_its_secret_and_no_origin() {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = std::thread::spawn(move || {
+            let (mut s, _) = listener.accept().unwrap();
+            let mut req = String::new();
+            let mut buf = [0u8; 1024];
+            while !req.contains(r#""state":"installing"}"#) {
+                let n = s.read(&mut buf).unwrap();
+                req.push_str(&String::from_utf8_lossy(&buf[..n]));
+            }
+            s.write_all(b"HTTP/1.1 204 No Content\r\n\r\n").unwrap();
+            req
+        });
+        tell(&Daemon { port, secret: "s3cret".into() }, r#"{"state":"installing"}"#);
+        let req = server.join().unwrap();
+        assert!(req.starts_with("POST /api/update/shell HTTP/1.1\r\n"), "{req}");
+        assert!(req.contains(&format!("Host: 127.0.0.1:{port}\r\n")) && req.contains("Cookie: k95=s3cret\r\n"), "{req}");
+        assert!(!req.to_lowercase().contains("origin:"), "{req}");
+    }
+
+    fn with_updater() -> tauri::App<tauri::test::MockRuntime> {
+        let mut ctx = tauri::generate_context!(test = true);
+        let bundle: serde_json::Value = serde_json::from_str(include_str!("../tauri.bundle.json")).unwrap();
+        ctx.config_mut().plugins.0.insert("updater".into(), bundle["plugins"]["updater"].clone());
+        mock_builder().plugin(tauri_plugin_updater::Builder::new().build()).manage(Pending::default()).build(ctx).unwrap()
+    }
+
+    fn serve(listener: std::net::TcpListener, reply: String) {
+        use std::io::{Read, Write};
+        std::thread::spawn(move || {
+            for mut s in listener.incoming().map_while(Result::ok) {
+                let mut buf = [0u8; 4096];
+                let _ = s.read(&mut buf);
+                let _ = s.write_all(reply.as_bytes());
+            }
+        });
+    }
+
+    #[test]
+    fn the_real_check_reports_a_newer_release_from_a_local_manifest_and_an_unreachable_one_to_nobody() {
+        use std::io::Read;
+        let app = with_updater();
+        let manifest = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://127.0.0.1:{}/latest.json", manifest.local_addr().unwrap().port());
+        let entry = serde_json::json!({ "url": "http://127.0.0.1:9/Kanban95_9.9.9_x64-setup.exe", "signature": "unsigned" });
+        let platforms: serde_json::Map<_, _> = ["windows-x86_64", "windows-aarch64", "darwin-aarch64", "darwin-x86_64", "linux-x86_64"].iter().map(|p| (p.to_string(), entry.clone())).collect();
+        let body = serde_json::json!({ "version": "9.9.9", "notes": "", "pub_date": "2026-10-01T00:00:00Z", "platforms": platforms }).to_string();
+        serve(manifest, format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()));
+        let daemon = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let to = Daemon { port: daemon.local_addr().unwrap().port(), secret: "s".into() };
+
+        std::env::set_var(UPDATE_URL, &url);
+        let told = std::thread::spawn(move || {
+            let (mut s, _) = daemon.accept().unwrap();
+            let mut req = String::new();
+            let mut buf = [0u8; 4096];
+            while !req.ends_with('}') {
+                let n = s.read(&mut buf).unwrap();
+                req.push_str(&String::from_utf8_lossy(&buf[..n]));
+            }
+            std::io::Write::write_all(&mut s, b"HTTP/1.1 204 No Content\r\n\r\n").unwrap();
+            (req, daemon)
+        });
+        check(app.handle().clone(), to.clone(), false);
+        let (req, daemon) = told.join().unwrap();
+        assert!(req.ends_with(r#"{"current":"0.0.0","state":"available","version":"9.9.9"}"#), "{req}");
+        assert_eq!(lock(&app.state::<Pending>().0).as_ref().map(|u| u.version.clone()), Some("9.9.9".into()));
+
+        let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        std::env::set_var(UPDATE_URL, format!("http://127.0.0.1:{}/latest.json", closed.local_addr().unwrap().port()));
+        drop(closed);
+        check(app.handle().clone(), to, false);
+        std::env::remove_var(UPDATE_URL);
+        daemon.set_nonblocking(true).unwrap();
+        assert!(daemon.accept().is_err(), "a failed automatic check tells the daemon nothing");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_process_started_after_the_breakaway_is_outside_the_kill_on_close_job() {
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::System::JobObjects::IsProcessInJob;
+        kill_children_with_us();
+        let job = *JOB.get().expect("the job") as windows_sys::Win32::Foundation::HANDLE;
+        let start = || Command::new("cmd").args(["/d", "/c", WAIT]).stdin(Stdio::piped()).spawn().unwrap();
+        let inside = |c: &Child| {
+            let mut r = 0;
+            unsafe { IsProcessInJob(c.as_raw_handle() as _, job, &mut r) };
+            r != 0
+        };
+        let mut before = start();
+        let_installer_outlive_us();
+        let mut after = start();
+        let (was, is) = (inside(&before), inside(&after));
+        for c in [&mut before, &mut after] {
+            drop(c.stdin.take());
+            let _ = c.kill();
+            let _ = c.wait();
+        }
+        assert!(was, "a child started before is in the job");
+        assert!(!is, "a child started after is not");
+    }
+
     #[test]
     fn a_login_path_is_added_after_the_path_the_app_got() {
         assert_eq!(merge_path("/fnm/node24/bin:/usr/bin:/bin", "/opt/homebrew/bin:/usr/bin:/usr/local/bin"), "/fnm/node24/bin:/usr/bin:/bin:/opt/homebrew/bin:/usr/local/bin");
@@ -1139,7 +1544,7 @@ mod tests {
     /// The UI calls no Tauri command, so none may answer it: core plugin commands and unknown names alike.
     #[test]
     fn webview_cannot_call_any_tauri_command() {
-        let app = mock_builder().build(tauri::generate_context!(test = true)).unwrap();
+        let app = with_updater();
         let origin: tauri::Url = "http://127.0.0.1:41234/".parse().unwrap();
         let w = window(&app, MAIN, origin.clone(), "Kanban95".into(), Arc::new(Mutex::new(vec![41234]))).unwrap();
         for cmd in [
@@ -1148,6 +1553,8 @@ mod tests {
             "plugin:webview|create_webview_window",
             "plugin:event|emit",
             "plugin:path|resolve_directory",
+            "plugin:updater|check",
+            "plugin:updater|download_and_install",
             "spawn_daemon",
         ] {
             let err = get_ipc_response(

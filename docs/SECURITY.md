@@ -48,7 +48,7 @@ Without it any local process (a script in another terminal, an agent in a worktr
 
 The shell (`shell/src/main.rs`) opens its main window, and any popped-out window, on a hosted daemon's origin and locks every window to the origins of the daemons it hosts.
 
-- **No Tauri command is reachable.** The UI never calls Tauri, so the shell has no `capabilities/` dir and grants nothing; to Tauri the window is a remote URL, and a remote URL may only call what a capability lists for it. `cargo test` in `shell/` builds the real window on the mock runtime and checks that core commands (`app`, `window`, `webview`, `event`, `path`) and an unknown one are each refused with Tauri's ACL error. Adding a capability that grants the daemon origin anything fails it.
+- **No Tauri command is reachable.** The UI never calls Tauri, so the shell has no `capabilities/` dir and grants nothing; to Tauri the window is a remote URL, and a remote URL may only call what a capability lists for it. `cargo test` in `shell/` builds the real window on the mock runtime and checks that core commands (`app`, `window`, `webview`, `event`, `path`), the updater plugin's `check` and `download_and_install`, and an unknown one are each refused with Tauri's ACL error. Adding a capability that grants the daemon origin anything fails it.
 - **No navigation off the hosted origins.** Any top-level navigation whose origin is not `http://127.0.0.1:<port>` of a daemon this shell hosts is cancelled (`on_navigation`), including any other port on loopback. The set of ports changes as boards open, close and restart, and the shell updates it before it navigates a window. A page may therefore navigate its window to another board the same shell hosts; that board is the operator's own, behind its own secret, so the lock still keeps every window on boards the shell itself started. `window.open` is refused (wry denies new windows when the app sets no handler). Frames are held to the origin by the CSP.
 - **Microphone only.** The shell answers WebView2's permission requests itself: microphone allowed, every other kind (camera, location, notifications, clipboard read, …) denied, so nothing prompts. Navigation is pinned to the hosted daemons' origins, so the allowed request can only come from one of them; answering in code also means no prompt when the random port gives a new origin each start.
 - Checked in the real shell (WebView2 154, a fresh profile, remote debugging): `__TAURI_INTERNALS__.invoke('plugin:app|version')` and friends rejected with "not allowed"; `getUserMedia({audio})` granted with no prompt; `{video}` `NotAllowedError`; geolocation denied; `window.open('https://example.com/')` returned `null`; `location.href = 'https://example.com/'`, `http://127.0.0.1:1/` and a DevTools `Page.navigate` all left the page on the daemon origin.
@@ -187,6 +187,21 @@ Permissions are off and the agent is the operator's user, so the worktree is whe
 - **Plant code the board runs**: what it writes into the main checkout (`daemon/`, `package.json` scripts) runs at the next Start → Restart board (`npm run build`, then the rebuilt daemon), as it would at the next `Kanban95.cmd`.
 
 Ceiling and upgrade path: run worker and tester CLIs as a separate low-privilege Windows account (or an AppContainer) with only its worktree ACL'd to it, and an egress allowlist for the provider's API. Then owner-only session dirs, `board.db` and the WebView2 profile become real boundaries and the rows above are the whole reach.
+
+## Updates
+
+The installed app updates itself from GitHub Releases (`docs/ARCHITECTURE.md` → Packaging → Updates).
+
+- **Signed.** Every update bundle (the Windows setup.exe, each Mac `.app.tar.gz`) is signed with a minisign key when a release is cut. The app carries the public key (`plugins.updater.pubkey` in `shell/tauri.bundle.json`) and refuses a download whose signature does not verify against it, before anything is installed. The private key and its password are only GitHub repository secrets, used by `release.yml`, plus the operator's offline copy.
+- **Asked first.** Nothing installs without the operator pressing Update now, and Update now is refused while agents run, so a bad release never lands mid-work.
+- **Shell-side only.** The updater runs in the shell. The webview gets a relayed event and answers over the existing REST API; it has no Tauri capability, so the updater plugin's own IPC commands are refused for it like every other (tested). The shell's report route takes the shell secret and refuses a request with an `Origin` header, so the page cannot fake an offer.
+- **Override.** `KANBAN95_UPDATE_URL` replaces the manifest URL: https anywhere, plain http only on `127.0.0.1`. Signatures are checked the same way. Setting it needs the shell's environment, the same-user ceiling below.
+
+What an attacker who controls the GitHub repo or its releases could and could not do:
+- **Could not** get a build of their own installed by editing `latest.json` or uploading assets: without the private key the signature fails and the app refuses it.
+- **Could** sign anything by running a workflow that reads the signing secrets, if they can push workflows or run them with secrets. The secrets are the boundary; rotate the key (new pair, new `pubkey` in a release) if the repo is compromised.
+- **Could** point `latest.json` at an older genuine release under a higher version number, and the app would offer and install that older signed build (the manifest itself is not signed and `requireSignedVersion` is off; turning it on needs every release to carry its version in the signature).
+- **Could** withhold updates, by removing releases or serving a manifest with no newer version.
 
 ## Threats this does not address yet
 
