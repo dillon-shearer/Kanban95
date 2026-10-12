@@ -1048,14 +1048,14 @@ function addProjectBoard() {
   openSettings('Projects');
 }
 
-let projects = { own: null, value: [], running: {}, hosted: {}, agents: {} };
+let projects = { own: null, value: [], running: {}, hosted: {}, agents: {}, attention: {} };
 const folder = (path) => path.split(/[\\/]/).pop();
 async function loadProjectItems() {
   try {
-    const [own, { value, running, hosted, agents }] = await Promise.all([api('GET', '/project'), api('GET', '/projects')]);
-    projects = { own: own.path, value, running, hosted, agents };
+    const [own, { value, running, hosted, agents, attention }] = await Promise.all([api('GET', '/project'), api('GET', '/projects')]);
+    projects = { own: own.path, value, running, hosted, agents, attention };
   } catch (e) {
-    projects = { error: e.message, value: [], running: {}, hosted: {}, agents: {} };
+    projects = { error: e.message, value: [], running: {}, hosted: {}, agents: {}, attention: {} };
   }
 }
 const hostedProjects = () => projects.value.filter((p) => projects.hosted[p.path]);
@@ -1125,6 +1125,7 @@ async function openSwitch() {
     onclick: () => go(p) },
   h('span', { class: 'name' }, folder(p.path)),
   projects.running[p.path] ? h('span', { class: 'run', title: 'Running' }) : null,
+  projects.attention[p.path] > 0 ? h('span', { class: 'attn', title: 'Needs you' }, String(projects.attention[p.path])) : null,
   projects.hosted[p.path] && projects.agents[p.path] === 0
     ? h('button', { class: 'x', title: 'Close board', 'aria-label': `Close ${folder(p.path)}`, onclick: (e) => { e.stopPropagation(); closeSwitch(); closeBoard(p.path); } }, 'X')
     : null));

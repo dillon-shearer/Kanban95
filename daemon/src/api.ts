@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync 
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { dirname, extname, join, resolve } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
-import { agentsMap, askShell, focusProject, hostedMap, NotListed, openProject, runningMap } from './boards.js';
+import { agentsMap, askShell, attentionMap, focusProject, hostedMap, NotListed, openProject, runningMap } from './boards.js';
 import { attachmentDir, attachments, MAX_ATTACHMENT, safeName, saveAttachment } from './attachments.js';
 import { BRAIN_BODY_MAX, BRAIN_RANK, isConstraintError, SCOPES, type Brains, type Scope } from './db.js';
 import { hasBranch, ticketDiff } from './git.js';
@@ -519,7 +519,7 @@ const routes: [method: string, path: RegExp, mutation: string | null, handler: (
   ['GET', /^\/api\/project$/, null, ({ board }) => ({ status: 200, body: project(board.repo) })],
   // `running` maps each listed path to whether a live board serves it (~/.kanban95/running/), apart from `value` so a PUT
   // can send `value` back as it came.
-  ['GET', /^\/api\/projects$/, null, ({ board }) => ({ status: 200, body: { path: projectsPath(), value: readProjects(), running: runningMap(), hosted: hostedMap(board.shellId), agents: agentsMap() } })],
+  ['GET', /^\/api\/projects$/, null, ({ board }) => ({ status: 200, body: { path: projectsPath(), value: readProjects(), running: runningMap(), hosted: hostedMap(board.shellId), agents: agentsMap(), attention: attentionMap() } })],
   ['PUT', /^\/api\/projects$/, 'config.write', ({ board, body }) => ({ status: 200, body: { path: projectsPath(), value: writeProjects(body.value, board.repo) } })],
   // Start → Projects: start a board on a listed project that is not running, or bring a running one's window to the front.
   // A path not in projects.json is 400; open on a running one, or focus on one that is not, is 409.

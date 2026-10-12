@@ -5,7 +5,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync
 import { basename, dirname, join, resolve } from 'node:path';
 import { boardHome, normal, readProjects, same } from './settings.js';
 
-export interface Entry { pid: number; repo: string; port: number; started: string; shell: number | null; agents: number }
+export interface Entry { pid: number; repo: string; port: number; started: string; shell: number | null; agents: number; attention: number }
 
 const runningDir = () => join(boardHome(), 'running');
 export const entryPath = (pid: number) => join(runningDir(), `${pid}.json`);
@@ -15,7 +15,7 @@ let own: Entry | null = null;
 export function register(repo: string, port: number, shell: number | null): () => void {
   const file = entryPath(process.pid);
   mkdirSync(runningDir(), { recursive: true });
-  own = { pid: process.pid, repo: normal(repo), port, started: new Date().toISOString(), shell, agents: 0 };
+  own = { pid: process.pid, repo: normal(repo), port, started: new Date().toISOString(), shell, agents: 0, attention: 0 };
   writeFileSync(file, JSON.stringify(own) + '\n');
   return () => {
     own = null;
@@ -23,9 +23,10 @@ export function register(repo: string, port: number, shell: number | null): () =
   };
 }
 
-export function countAgents(n: number): void {
-  if (!own || own.agents === n) return;
-  own.agents = n;
+export function countBoard(agents: number, attention: number): void {
+  if (!own || (own.agents === agents && own.attention === attention)) return;
+  own.agents = agents;
+  own.attention = attention;
   try { writeFileSync(entryPath(own.pid), JSON.stringify(own) + '\n'); } catch {}
 }
 
@@ -75,13 +76,15 @@ export function runningMap(): Record<string, boolean> {
   return Object.fromEntries(readProjects().map((p) => [p.path, live.some((e) => same(e.repo, p.path))]));
 }
 
-export function agentsMap(): Record<string, number> {
+function sumMap(key: 'agents' | 'attention'): Record<string, number> {
   const live = running();
   return Object.fromEntries(readProjects().flatMap((p) => {
     const on = live.filter((e) => same(e.repo, p.path));
-    return on.length ? [[p.path, on.reduce((n, e) => n + (Number.isInteger(e.agents) ? e.agents : 0), 0)]] : [];
+    return on.length ? [[p.path, on.reduce((n, e) => n + (Number.isInteger(e[key]) ? e[key] : 0), 0)]] : [];
   }));
 }
+export const agentsMap = () => sumMap('agents');
+export const attentionMap = () => sumMap('attention');
 
 export function hostedMap(shell: number | null | undefined): Record<string, boolean> {
   const live = running();
