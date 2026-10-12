@@ -586,7 +586,7 @@ function attachmentFile(board: Board, params: string[]): { name: string; file: s
 }
 
 function sessionView(s: Session) {
-  return { id: s.key, ticket_id: s.ticketId, run_id: s.runId, grant_id: s.grantId, role: s.role, phase: s.phase, model: s.model };
+  return { id: s.key, ticket_id: s.ticketId, run_id: s.runId, grant_id: s.grantId, role: s.role, phase: s.phase, model: s.model, started_at: new Date(s.started).toISOString() };
 }
 
 function settingsChanged(board: Board) {
