@@ -103,6 +103,7 @@ body.k95-vector { --k95-font: Tahoma, sans-serif; }
 .card { background: #fff; padding: 3px 4px; cursor: default; user-select: none; touch-action: none;
   box-shadow: inset -1px -1px #fff, inset 1px 1px grey, inset -2px -2px #dfdfdf, inset 2px 2px #0a0a0a; }
 .card.selected { outline: 1px dotted #000; outline-offset: -4px; background: #e8e8ff; }
+.card:focus { outline: 1px dotted #000; outline-offset: -2px; }
 .card.alert { background: #fff0f0; }
 .card.dragging { opacity: 0.4; }
 .card.ghost { position: fixed; z-index: 100001; pointer-events: none; opacity: 0.85; }
