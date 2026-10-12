@@ -59,5 +59,5 @@ export function renderMcpDoc(): string {
 
 if (import.meta.main) {
   writeFileSync(MCP_DOC, renderMcpDoc());
-  console.log(`wrote ${MCP_DOC}`);
+  console.error(`wrote ${MCP_DOC}`);
 }

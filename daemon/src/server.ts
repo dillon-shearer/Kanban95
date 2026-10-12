@@ -47,6 +47,7 @@ export interface Config {
   repo?: string;
   /** Shell-to-daemon secret required on /api, /events and /pty (docs/SECURITY.md). Random when not given. */
   secret?: string;
+  shellId?: number | null;
 }
 
 /** Rejects any bind address other than loopback. The daemon is never reachable off-host. */
@@ -158,7 +159,7 @@ export function start(config: Config = {}): Promise<{
     console.error(`projects.json not updated: ${(e as Error).message}`); // stderr: stdout's first line is the handshake
   }
   let self = '';
-  const board: Board = { db, brain, repo, port: 0 };
+  const board: Board = { db, brain, repo, port: 0, shellId: config.shellId ?? null };
   try {
     initRepo(repo); // a plain folder becomes a local repo with one commit (docs/ARCHITECTURE.md → Daemon lifetime)
   } catch (e) {
@@ -224,7 +225,7 @@ export function start(config: Config = {}): Promise<{
       if (!addr || typeof addr === 'string') return fail(new Error('no address'));
       self = `${LOOPBACK}:${addr.port}`;
       board.port = addr.port;
-      const unregister = register(repo, addr.port); // Start → Projects on the other boards sees this one running
+      const unregister = register(repo, addr.port, board.shellId ?? null); // Start → Projects on the other boards sees this one running
       // Janitor and recovery on start, the janitor again once a day (docs/LIFECYCLE.md).
       sweep(board).catch(() => {});
       void countUnpushed(board); // the status bar's "N commits not pushed"
@@ -266,8 +267,10 @@ if (import.meta.main) {
   // nothing we spawn (git, hooks, agent CLIs) inherits it.
   const secret = process.env.KANBAN95_SECRET;
   const shell = process.env.KANBAN95_SHELL === '1';
+  const shellId = /^\d+$/.test(process.env.KANBAN95_SHELL_ID ?? '') ? Number(process.env.KANBAN95_SHELL_ID) : null;
   delete process.env.KANBAN95_SECRET;
   delete process.env.KANBAN95_SHELL;
+  delete process.env.KANBAN95_SHELL_ID;
   if (!secret || secret.length < 32) {
     console.error('KANBAN95_SECRET is missing or shorter than 32 characters: start the board through the shell (Kanban95.cmd)');
     process.exit(1);
@@ -276,6 +279,7 @@ if (import.meta.main) {
     secret,
     port: process.env.KANBAN95_PORT ? Number(process.env.KANBAN95_PORT) : 0,
     repo: process.argv[2],
+    shellId,
   });
   console.log(`KANBAN95 port=${port}`);
   board.shell = shell;

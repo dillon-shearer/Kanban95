@@ -158,6 +158,7 @@ export interface Board {
   shutdown?: (code: number) => void;
   /** The Tauri shell started this daemon and restarts it on exit code 75. */
   shell?: boolean;
+  shellId?: number | null;
   /** Why the repo could not be made a git repo with a commit on start (git.ts `initRepo`); every ticket launch fails with it. */
   gitError?: string;
   /** `git rev-parse HEAD` in the repo when the daemon started; unset in a repo with no commits. */

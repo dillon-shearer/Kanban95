@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync 
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { dirname, extname, join, resolve } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
-import { focusProject, NotListed, openProject, runningMap } from './boards.js';
+import { askShell, focusProject, hostedMap, NotListed, openProject, runningMap } from './boards.js';
 import { attachmentDir, attachments, MAX_ATTACHMENT, safeName, saveAttachment } from './attachments.js';
 import { BRAIN_BODY_MAX, BRAIN_RANK, isConstraintError, SCOPES, type Brains, type Scope } from './db.js';
 import { hasBranch, ticketDiff } from './git.js';
@@ -518,12 +518,19 @@ const routes: [method: string, path: RegExp, mutation: string | null, handler: (
   ['GET', /^\/api\/project$/, null, ({ board }) => ({ status: 200, body: project(board.repo) })],
   // `running` maps each listed path to whether a live board serves it (~/.kanban95/running/), apart from `value` so a PUT
   // can send `value` back as it came.
-  ['GET', /^\/api\/projects$/, null, () => ({ status: 200, body: { path: projectsPath(), value: readProjects(), running: runningMap() } })],
+  ['GET', /^\/api\/projects$/, null, ({ board }) => ({ status: 200, body: { path: projectsPath(), value: readProjects(), running: runningMap(), hosted: hostedMap(board.shellId) } })],
   ['PUT', /^\/api\/projects$/, 'config.write', ({ board, body }) => ({ status: 200, body: { path: projectsPath(), value: writeProjects(body.value, board.repo) } })],
   // Start → Projects: start a board on a listed project that is not running, or bring a running one's window to the front.
   // A path not in projects.json is 400; open on a running one, or focus on one that is not, is 409.
-  ['POST', /^\/api\/projects\/open$/, 'projects.open', ({ board, body }) =>
-    other(() => openProject(body.path, board.root ?? resolve(import.meta.dirname, '../..')), 202)],
+  ['POST', /^\/api\/projects\/open$/, 'projects.open', ({ board, body }) => {
+    if (body.where === 'here') return other(async () => askShell(board, 'open', body.path), 202);
+    if (body.where !== undefined && body.where !== 'window') throw new HttpError(400, "where must be 'here' or 'window'");
+    return other(() => openProject(body.path, board.root ?? resolve(import.meta.dirname, '../..')), 202);
+  }],
+  ['POST', /^\/api\/projects\/switch$/, 'projects.switch', ({ board, body }) => other(async () => askShell(board, 'switch', body.path), 202)],
+  ['POST', /^\/api\/projects\/popout$/, 'projects.popout', ({ board, body }) => other(async () => askShell(board, 'popout', body.path), 202)],
+  ['POST', /^\/api\/projects\/dock$/, 'projects.dock', ({ board, body }) => other(async () => askShell(board, 'dock', body.path), 202)],
+  ['POST', /^\/api\/projects\/close$/, 'projects.close', ({ board, body }) => other(async () => askShell(board, 'close', body.path), 202)],
   ['POST', /^\/api\/projects\/focus$/, null, ({ body }) => other(() => focusProject(body.path), 200)],
   // <repo>/.kanban95/templates/*.md, the prompt sources. `vars` is the only list of allowed {{variables}}; the UI shows it.
   ['GET', /^\/api\/templates$/, null, ({ board }) => ({ status: 200, body: { vars: VARS, templates: Object.keys(TEMPLATES).map((n) => templateView(board, n as TemplateName)) } })],
