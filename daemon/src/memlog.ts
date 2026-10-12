@@ -4,10 +4,10 @@ import { freemem, totalmem } from 'node:os';
 import { join } from 'node:path';
 
 export type Proc = { pid: number; ppid: number; name: string; ws: number };
-export type Snapshot = { procs: Proc[]; commit?: { used: number; limit: number } };
+type Snapshot = { procs: Proc[]; commit?: { used: number; limit: number } };
 export type Live = { key: number; ticketId: number | null; pty: { pid: number } };
 
-export const MEMLOG_EVERY = 30_000;
+const MEMLOG_EVERY = 30_000;
 export const MEMLOG_KEEP = 24 * 60 * 60 * 1000;
 const TRIM_EVERY = 120;
 const MB = 1024 * 1024;

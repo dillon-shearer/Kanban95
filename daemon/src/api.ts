@@ -165,7 +165,7 @@ export function brainSearch(b: Brains, q: string, limit: number, only?: Scope, r
   return rows.slice(0, limit).map(({ rank: _, ...r }) => r);
 }
 
-export type BrainRow = { scope: Scope; id: number; title: string; body: string; tags: string; ticket_id: number | null; created_at: string };
+type BrainRow = { scope: Scope; id: number; title: string; body: string; tags: string; ticket_id: number | null; created_at: string };
 type BrainFields = { title?: string; body?: string; tags?: string };
 
 export function brainGet(b: Brains, scope: Scope, id: number): BrainRow | undefined {
