@@ -58,7 +58,7 @@ When the board restarts, every agent it was running is killed. Tickets that were
 
 ![Inbox](img/inbox.png)
 
-For anything else, open the ticket (double-click the card): the Notes tab has the failure notes, Runs has each run's exact prompt and terminal output, Diff shows what the worktree changed.
+For anything else, open the ticket (double-click the card): the Notes tab has the failure notes, Runs has each run's exact prompt and terminal output, Diff shows what the worktree changed. Text you type in the Ticket tab stays while you look at other tabs and when the ticket changes underneath; it is only kept once you press **Save**. Closing a ticket window (Esc, X, or the ticket being deleted) with unsaved edits asks "Discard changes?": **Cancel** keeps the window and your text, **Discard** closes it. A New ticket window asks the same.
 
 ![Ticket window, Runs tab](img/ticket-runs.png)
 
@@ -141,7 +141,7 @@ Drag a card to any column to put it there by hand (docs/LIFECYCLE.md → Moves b
 
 | Key | Does |
 |---|---|
-| Esc | closes the focused window (or an open menu) |
+| Esc | closes the focused window (or an open menu); a ticket window with unsaved edits asks first |
 | Ctrl+Tab | switch to the next board hosted in this window (wrapping) |
 | Ctrl+Shift+Tab | switch to the previous hosted board |
 | Ctrl+1 to Ctrl+9 | switch to the 1st to 9th hosted board |
