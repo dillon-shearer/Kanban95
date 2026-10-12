@@ -16,4 +16,5 @@ if ! node24; then
   node24 || fail "Kanban95 needs Node 24 or newer. Install it, for example: fnm install 24"
 fi
 [ -d node_modules ] || npm install || fail "Kanban95 did not start. The messages above say why."
+chmod +x node_modules/node-pty/prebuilds/darwin-*/spawn-helper 2>/dev/null
 npm run dev -- "$REPO" || fail "Kanban95 did not start. The messages above say why."

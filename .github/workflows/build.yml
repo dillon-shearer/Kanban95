@@ -32,8 +32,6 @@ jobs:
 
   macos:
     runs-on: macos-latest
-    # Ticket #181 fixes the Mac build and removes this flag.
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
@@ -53,9 +51,14 @@ jobs:
         run: npm run installer -- --target aarch64-apple-darwin --bundles app,dmg
       - if: ${{ !cancelled() }}
         run: npm run installer -- --target x86_64-apple-darwin --bundles app,dmg
+      - if: ${{ !cancelled() }}
+        working-directory: shell/target/app
+        run: node -e "const p = require('node-pty').spawn('/bin/echo', ['pty ok'], {}); p.onData((d) => process.stdout.write(d)); p.onExit((e) => process.exit(e.exitCode))"
       - uses: actions/upload-artifact@v5
         if: always()
         with:
           name: kanban95-macos
-          path: shell/target/*/release/bundle/
-          if-no-files-found: warn
+          path: |
+            shell/target/*/release/bundle/macos/*.app
+            shell/target/*/release/bundle/dmg/*.dmg
+          if-no-files-found: error
