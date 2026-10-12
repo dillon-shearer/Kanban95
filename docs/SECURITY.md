@@ -4,7 +4,7 @@ Living document. Update it in the same change that moves a boundary described he
 
 ## What the board holds, and does not
 
-- **No provider API keys.** Claude Code and Codex CLI authenticate themselves in their own config. The board never asks for, reads, or stores a provider key, and never reads a `.env`.
+- **No provider API keys.** Claude Code and Codex CLI authenticate themselves in their own config. The board never asks for, reads, or stores a provider key, and never reads a `.env`. The first commit the board makes on a plain folder or a repo with no commit (`docs/ARCHITECTURE.md` → Daemon lifetime → First start on a plain folder) leaves out every `.env` and `.env.*` file by name (not `.env.example`, `.env.sample`, `.env.template`), whatever `.gitignore` says, and stops instead of committing one the operator already staged.
 - **Its own grant tokens, hashed.** The only secrets the board creates are per-session bearer tokens. The database stores a SHA-256 of each; the raw token exists in memory at mint time and in the agent's session: Claude Code reads it from `sessions/<run-id>/mcp.json` (owner-only, deleted at teardown), Codex from `KANBAN95_TOKEN` in its own pty environment. It is never put on a command line and must never appear in logs, audit rows, or REST responses.
 - **Everything else is plain project data** (tickets, notes, brain, runs, audit) in `<repo>/.kanban95/board.db`, gitignored, never uploaded, plus the global brain `~/.kanban95/brain.db` (facts shared by every board, `docs/DATA.md`).
 
