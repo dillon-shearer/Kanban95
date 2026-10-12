@@ -7,7 +7,7 @@ import * as z from 'zod';
 import { brainAdd, brainDelete, brainGet, brains, brainSearch, brainUpdate, deleteTicket, normaliseTags, readTicket, setDeps, transaction } from './api.js';
 import { BRAIN_BODY_MAX, SCOPES } from './db.js';
 import { attachments } from './attachments.js';
-import { audit, verify, type Grant, type Role } from './grants.js';
+import { audit, live, verify, type Grant, type Role } from './grants.js';
 import { apply, changed, Refused, type Board } from './lifecycle.js';
 import { EFFORT, uncatalogued } from './settings.js';
 
@@ -413,6 +413,7 @@ function registerTools(server: McpServer, board: Board, grant: Grant) {
       let outcome: 'ok' | 'denied' | 'error' = 'ok';
       let text: string;
       try {
+        if (!live(db, grant.id)) throw new Deny('unauthorized: this grant was revoked or has expired');
         if (!(grant.role in t.access)) throw new Deny(`${an(grant.role)} may not call ${name}`);
         text = JSON.stringify(t.run(c, a), null, 2);
       } catch (e) {
