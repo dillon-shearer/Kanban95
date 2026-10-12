@@ -816,6 +816,14 @@ function openTerminal(s, auto = false) {
   const title = s.ticket_id === null ? `${s.role === 'operator' ? 'Operator' : 'Brainstorm'} — ${s.model || 'CLI default'}` : `#${s.ticket_id} — ${s.phase} — ${s.model}`;
   const ws = new WebSocket(`ws://${location.host}/pty/${s.id}`);
   const send = (msg) => ws.readyState === WebSocket.OPEN && ws.send(JSON.stringify(msg));
+  const type = (d) => {
+    for (let i = 0; i < d.length;) {
+      let j = Math.min(i + 8192, d.length);
+      if (j < d.length && d.charCodeAt(j - 1) >= 0xd800 && d.charCodeAt(j - 1) < 0xdc00) j--;
+      send({ data: d.slice(i, j) });
+      i = j;
+    }
+  };
   const term = new Terminal({ fontFamily: 'Consolas, "Courier New", monospace', fontSize: 13, scrollback: 5000 });
   const fit = new FitAddon();
   const ro = new ResizeObserver(() => fit.fit());
@@ -832,7 +840,7 @@ function openTerminal(s, auto = false) {
       say(e.message);
     }
   };
-  const w = open(wid, { title, w: 760, h: 440, tile: true, background: auto, onX, extra: [micButton((text) => send({ data: text }))],
+  const w = open(wid, { title, w: 760, h: 440, tile: true, background: auto, onX, extra: [micButton(type)],
     icon: termIcon(s), label: termLabel(s),
     items: s.ticket_id === null ? [] : [{ label: 'Open ticket', run: () => openTicket(s.ticket_id) }], onClose: () => { terms.delete(wid); ro.disconnect(); ws.close(); term.dispose(); } });
   let was = null;
@@ -873,7 +881,7 @@ function openTerminal(s, auto = false) {
     if (e.type === 'keydown' && e.key === '-') send({ data: '\x1f' });
     return false;
   });
-  term.onData((d) => send({ data: d }));
+  term.onData(type);
   term.onResize(({ cols, rows }) => send({ resize: [cols, rows] }));
   ro.observe(w.body);
 }
