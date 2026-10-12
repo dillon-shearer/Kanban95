@@ -1,10 +1,10 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { statSync } from 'node:fs';
 import { isAbsolute } from 'node:path';
-import { addProject, BadConfig, boardHome, normal, readProjects, setBoardHome } from './settings.js';
+import { addProject, BadConfig, boardHome, gone, normal, readProjects, setBoardHome } from './settings.js';
 
 export function firstProject(): string | undefined {
-  return readProjects()[0]?.path;
+  return readProjects().find((p) => !gone(p.path))?.path;
 }
 
 function json(res: ServerResponse, status: number, body: unknown) {

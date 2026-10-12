@@ -3,7 +3,7 @@
 import { execFile, spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
-import { boardHome, normal, readProjects, same } from './settings.js';
+import { boardHome, gone, normal, readProjects, same } from './settings.js';
 
 interface Entry { pid: number; repo: string; port: number; started: string; shell: number | null; agents: number; attention: number }
 
@@ -76,6 +76,10 @@ export function runningMap(): Record<string, boolean> {
   return Object.fromEntries(readProjects().map((p) => [p.path, live.some((e) => same(e.repo, p.path))]));
 }
 
+export function missingMap(): Record<string, boolean> {
+  return Object.fromEntries(readProjects().map((p) => [p.path, gone(p.path)]));
+}
+
 function sumMap(key: 'agents' | 'attention'): Record<string, number> {
   const live = running();
   return Object.fromEntries(readProjects().flatMap((p) => {
@@ -105,6 +109,7 @@ export function askShell(board: { shell?: boolean; shellId?: number | null }, ve
   const hosted = board.shellId != null && live.some((e) => e.shell === board.shellId);
   if (verb === 'open') {
     if (hosted) verb = 'switch';
+    else if (gone(repo)) throw new Error(`${name} is missing: its folder ${repo} was deleted or moved`);
     else if (live.length) throw new Error(`${name} is running in another window`);
   } else if (!hosted) throw new Error(`${name} is not hosted by this shell`);
   tellShell(verb, repo);
@@ -132,6 +137,7 @@ export const boards = { start: startDetached };
 export async function openProject(path: unknown, root: string): Promise<{ name: string }> {
   const repo = listed(path);
   if (running().some((e) => same(e.repo, repo))) throw new Error(`${basename(repo)} is already running`);
+  if (gone(repo)) throw new Error(`${basename(repo)} is missing: its folder ${repo} was deleted or moved`);
   const win = process.platform === 'win32';
   if (existsSync(join(root, 'daemon', 'src'))) {
     // ponytail: the dev build `cargo run` makes; a board run from a release build in a checkout is not looked for.
