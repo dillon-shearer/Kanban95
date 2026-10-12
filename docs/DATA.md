@@ -47,6 +47,7 @@ Living document. Update it in the same change that alters the schema.
 - `~/.kanban95/worktrees/<repo key>/t-<id>/`: the ticket's git worktree on branch `ticket/<id>`. The repo key is the repo folder's name, a dash and the 8-hex-digit FNV-1a hash of its canonical path (lower-cased on Windows), so two repos with the same name never share a folder (`repoKey` in `daemon/src/settings.ts`, used by `worktreesRoot` in `daemon/src/git.ts`). Outside the repo so a synced repo folder never uploads it. Removed with the branch once the ticket merges (`docs/LIFECYCLE.md` → Janitor). The operator terminal's own worktrees (`op-<time>`) go in the same folder.
 - `~/.kanban95/models/whisper-base.en/`: the speech model, downloaded on the operator's OK and hash-checked (`docs/SECURITY.md` → Voice model). Not data; delete it to free 80 MB, the mic will offer the download again.
 - Nothing in the database leaves the machine. There is no sync, no telemetry, no export yet (export is explicit when it arrives).
+- Backup and restore: the board's state is the `.kanban95/` folder in the repo (`board.db` and its `-wal` file, `templates/`, `ui.json`, attachments). Copying it while the daemon is stopped is a complete backup, and copying it back is a complete restore.
 - The daemon is the only writer. The UI goes through REST, agents go through MCP (`docs/MCP.md`).
 
 ## Migrations

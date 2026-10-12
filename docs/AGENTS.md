@@ -33,7 +33,7 @@ Empty values render as `(none)`, except `{{diff}}` outside a test session (empty
 | `housekeeping.md` | worker | execute | clean stale docs, dead modules, leftover artefacts |
 | `test.md` | tester | test | check the work against the criteria |
 
-A repo renders its own copies in `.kanban95/templates/`, copied once from `templates/` and never overwritten. When a ticket adds a template variable, the running board is still the old build and refuses every launch whose template names it. Order: merge, restart the board, then copy `templates/*.md` over the repo's copies (diff first; only safe while they are unedited).
+A repo renders its own copies in `.kanban95/templates/`, copied from `templates/`. On daemon start an unedited copy is replaced by a changed default; a copy edited in Settings → Prompts is kept and shown stale (`docs/ARCHITECTURE.md` describes the `.shipped.json` record). When a ticket adds a template variable, the running board is still the old build and refuses every launch whose template names it. Order: merge, then restart the board, which refreshes the unedited copies. Never write the new variable into `.kanban95/templates/` by hand before that restart.
 
 ## Expected behaviour
 
@@ -93,7 +93,7 @@ Load it for a session with `claude --plugin-dir <kanban95 repo>/skills`; the ski
 
 ## Editing templates
 
-The defaults live in `templates/` in the Kanban95 repo. On every start the daemon copies any default missing from `<repo>/.kanban95/templates/` (committed with the project) and never overwrites one that exists, so an operator's edits stick. Every render reads the file again, so an edit applies to the next launch without a restart. A template that uses any variable outside the table above is refused, naming the variable and the template, before anything is launched.
+The defaults live in `templates/` in the Kanban95 repo. On every start the daemon copies any default missing from `<repo>/.kanban95/templates/` (committed with the project) and replaces an unedited one when its default changed; one the operator edited is never overwritten, so their edits stick. Every render reads the file again, so an edit applies to the next launch without a restart. A template that uses any variable outside the table above is refused, naming the variable and the template, before anything is launched.
 
 ## The brain
 
