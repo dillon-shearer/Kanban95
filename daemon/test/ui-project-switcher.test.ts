@@ -6,7 +6,7 @@ import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from '
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import { entryPath } from '../src/boards.ts';
+import { entryPath, register } from '../src/boards.ts';
 import { sessions } from '../src/launcher.ts';
 import { changed } from '../src/lifecycle.ts';
 import { writeProjects } from '../src/settings.ts';
@@ -15,7 +15,7 @@ import { base, click, column, menuItems, menuPick, page, repo, rightClick, srv, 
 
 const dir = (p: string) => realpathSync.native(mkdtempSync(join(tmpdir(), p)));
 let own: string, other: string, third: string, idle: string;
-let ownEntry: string;
+let ownEntry: { repo: string; port: number; shell: number | null };
 const sleepers: ChildProcess[] = [];
 const fake = (repo: string) => {
   const c = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
@@ -31,13 +31,13 @@ beforeAll(() => {
   writeProjects([{ path: other, colour: 200 }, { path: own, colour: '#123456' }, { path: third, colour: 300 }, { path: idle, colour: 100 }], own);
   srv.board.shellId = 123;
   srv.board.shell = true;
-  ownEntry = readFileSync(entryPath(process.pid), 'utf8');
-  writeFileSync(entryPath(process.pid), JSON.stringify({ ...JSON.parse(ownEntry), shell: 123 }));
+  ownEntry = JSON.parse(readFileSync(entryPath(process.pid), 'utf8'));
+  register(ownEntry.repo, ownEntry.port, 123);
   vi.spyOn(process.stdout, 'write').mockImplementation((chunk, ...rest) => (String(chunk).startsWith('KANBAN95 ') ? true : write(chunk, ...(rest as []))));
 });
 afterAll(() => {
   vi.restoreAllMocks();
-  writeFileSync(entryPath(process.pid), ownEntry);
+  register(ownEntry.repo, ownEntry.port, ownEntry.shell);
   for (const c of sleepers) {
     rmSync(entryPath(c.pid!), { force: true });
     c.kill();
