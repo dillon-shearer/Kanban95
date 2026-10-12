@@ -7,6 +7,7 @@ Generated from `daemon/src/mcp.ts` by `npm run docs:mcp`. Do not edit by hand; t
 Endpoint: `POST http://127.0.0.1:<port>/mcp`, Streamable HTTP, stateless (no session id, JSON responses). The host must be `127.0.0.1`, never `localhost`.
 Every request carries `Authorization: Bearer <token>` where the token is the grant minted for this agent session. A missing, malformed, unknown, expired or revoked token
 gets `401` before any tool runs and leaves no audit row. A live token resolves to a grant `{ role, ticket }` that scopes every tool below.
+Each tool call rechecks the grant when it runs: one revoked or expired after the headers arrived returns a tool error and does nothing.
 
 Every tool call, allowed or not, writes one `audit` row with the grant id, tool name, a 200-character argument summary and `ok | denied | error`.
 A refused call returns a tool error whose text says why and, for `move_ticket`, which targets the role may use. Results are JSON text.
