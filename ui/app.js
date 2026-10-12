@@ -648,7 +648,7 @@ function openTicket(id) {
     w.title(`Ticket #${id} — ${t.title}`);
     if (tab === 'Ticket') {
       if (!forms.has(wid)) forms.set(wid, ticketForm(w, t));
-      if (first) p.replaceChildren(forms.get(wid), h('fieldset', { class: 'k95-attachments' }));
+      if (!p.contains(forms.get(wid))) p.replaceChildren(forms.get(wid), h('fieldset', { class: 'k95-attachments' }));
       p.querySelector('.k95-facts')?.replaceWith(facts(t));
       const list = await attachmentList(id);
       p.querySelector('.k95-attachments')?.replaceWith(list);
@@ -746,6 +746,7 @@ function ticketForm(w, t) {
         say(`#${t.id} saved.`);
       } else {
         const n = await api('POST', '/tickets', fields);
+        tickets.set(n.id, n);
         w.close();
         openTicket(n.id);
         say(`#${n.id} created.`);
