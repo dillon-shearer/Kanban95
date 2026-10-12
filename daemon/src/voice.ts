@@ -1,9 +1,11 @@
 // The speech model behind the UI's mic button. Pinned by daemon/voice-model.json (source, revision, size and SHA-256 per file),
 // downloaded only when the operator clicks OK in the UI's download dialog, checked file by file, stored under
 // ~/.kanban95/models/ and served same-origin to transformers.js. This download is the only network call the board makes.
-import { createHash } from 'node:crypto';
-import { createReadStream, createWriteStream, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync } from 'node:fs';
+import { createHash, randomUUID } from 'node:crypto';
+import { createReadStream, createWriteStream, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync } from 'node:fs';
 import { once } from 'node:events';
+import { setTimeout as sleep } from 'node:timers/promises';
+import { DatabaseSync } from 'node:sqlite';
 import { boardHome } from './settings.js';
 import { dirname, join, resolve } from 'node:path';
 
@@ -37,22 +39,54 @@ async function sha256(file: string) {
   return h.digest('hex');
 }
 
+async function locked(m: Manifest, fn: () => Promise<void>) {
+  const dir = modelDir(m);
+  mkdirSync(dirname(dir), { recursive: true });
+  const db = new DatabaseSync(`${dir}.lock`);
+  try {
+    db.exec('PRAGMA busy_timeout = 0');
+    for (;;) {
+      try {
+        db.exec('BEGIN IMMEDIATE');
+        break;
+      } catch (e) {
+        if ((e as { errcode?: number }).errcode !== 5) throw e;
+        await sleep(200);
+      }
+    }
+    try {
+      await fn();
+    } finally {
+      db.exec('COMMIT');
+    }
+  } finally {
+    db.close();
+  }
+}
+
 /**
- * Fetches each file the manifest pins into `<file>.part`, refusing more bytes than the manifest says, then checks size and
- * SHA-256 and renames it into place. A mismatch deletes the file and fails the download, naming the file and both hashes.
- * A file already in place is kept only if its hash still matches. Concurrent calls share one download.
+ * Fetches each file the manifest pins into its own `<file>.<pid>-<uuid>.part`, refusing more bytes than the manifest says,
+ * then checks size and SHA-256 and renames it into place. A mismatch deletes that part file and fails the download, naming
+ * the file and both hashes. A file already in place is kept only if its hash still matches, else it is deleted before the
+ * fetch. Concurrent calls in one daemon share one download. Daemons sharing the home take turns on `<modelDir>.lock`, so a
+ * part file found while holding it was left by a dead attempt and is deleted.
  */
 export function download(m = MANIFEST): Promise<void> {
-  running ??= (async () => {
+  running ??= locked(m, async () => {
     received = 0;
+    const dir = modelDir(m);
+    if (existsSync(dir)) for (const f of readdirSync(dir, { recursive: true, encoding: 'utf8' })) if (f.endsWith('.part')) rmSync(join(dir, f), { force: true });
     for (const f of m.files) {
       const dest = join(modelDir(m), f.path);
-      if (existsSync(dest) && (await sha256(dest)) === f.sha256) {
-        received += f.size;
-        continue;
+      if (existsSync(dest)) {
+        if ((await sha256(dest)) === f.sha256) {
+          received += f.size;
+          continue;
+        }
+        rmSync(dest, { force: true });
       }
       mkdirSync(dirname(dest), { recursive: true });
-      const part = `${dest}.part`;
+      const part = `${dest}.${process.pid}-${randomUUID()}.part`;
       try {
         const res = await fetch(fileUrl(m, f.path), { redirect: 'follow' });
         if (!res.ok || !res.body) throw new Error(`${f.path}: HTTP ${res.status}`);
@@ -76,11 +110,10 @@ export function download(m = MANIFEST): Promise<void> {
         renameSync(part, dest);
       } catch (e) {
         rmSync(part, { force: true });
-        rmSync(dest, { force: true });
         throw e;
       }
     }
-  })().finally(() => (running = null));
+  }).finally(() => (running = null));
   return running;
 }
 
