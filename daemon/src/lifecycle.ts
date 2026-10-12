@@ -10,7 +10,7 @@ import { readTicket, transaction, type Ticket } from './api.js';
 import { branchName, git, gitNotRun, isAncestor, notStarted, syncWorktree, worktreePath } from './git.js';
 import { revoke, type Role } from './grants.js';
 import { cleanTicket } from './janitor.js';
-import { killSession, launch, launchRoot, prepareWorktree, sessions, sessionsOf, transcriptSize, type Session } from './launcher.js';
+import { cancelSetup, killSession, launch, launchRoot, prepareWorktree, SetupCancelled, sessions, sessionsOf, settingUp, transcriptSize, type Session } from './launcher.js';
 import { mark } from './memlog.js';
 import { ahead, enqueue, merge, push } from './merge.js';
 import { lastLines } from './pty.js';
@@ -196,7 +196,7 @@ function facts(b: Board, t: Ticket): Facts {
     merged: t.merged_at !== null,
     depsMerged: t.depends_on.every(merged),
     passReported: pass !== undefined,
-    live: sessionsOf(t.id).length > 0 || settingUp.has(t.id),
+    live: sessionsOf(t.id).length > 0 || settingUp(t.id),
   };
 }
 
@@ -257,6 +257,7 @@ export function apply(b: Board, id: number, event: Event, x: { note?: Note; answ
           revoke(b.db, s.grantId);
           killSession(s);
         }
+        void cancelSetup(id);
         break;
       case 'enqueue_merge': queueMerge(b, id); break;
       case 'note': break; // written above, in the transaction
@@ -288,8 +289,9 @@ const held = new Set<number>();
 /** An answer is typed into a terminal: a newline would submit half of it, so it becomes one line. */
 const oneLine = (s: string) => s.replace(/\s*[\r\n]+\s*/g, ' ').trim();
 
-/** Tickets whose new worktree is running `worktree_setup`. They count as live, so a second launch is refused meanwhile. */
-const settingUp = new Set<number>();
+/** The latest spawn of each ticket. A setup that finishes after a newer spawn of its ticket starts nothing and flags nothing. */
+const spawns = new Map<number, number>();
+let spawnCount = 0;
 
 /**
  * Launches the phase's agent, after the repo's `worktree_setup` when its worktree is new. A launch that fails is an agent that
@@ -303,21 +305,18 @@ function spawn(b: Board, id: number, template: 'execute' | 'housekeeping' | 'tes
     if (b.gitError) throw new Error(b.gitError);
     const settings = runSettings(readTicket(b.db, id), template === 'test' ? 'test' : 'execute', b.repo);
     const go = () => void launch({ ...b, onExit: (s) => exited(b, s) }, { ticketId: id, template, resume, ...settings });
+    const me = ++spawnCount;
+    spawns.set(id, me);
     const setup = prepareWorktree(b.repo, id, worktreeSetup(b.repo));
     if (!setup) return go();
-    settingUp.add(id);
     const after = async () => {
-      try {
-        await setup;
-      } finally {
-        settingUp.delete(id);
-      }
+      await setup;
       const t = readTicket(b.db, id);
-      if (!b.closing && t.status === status && !t.flags.needs_human && !sessionsOf(id).length) go();
+      if (spawns.get(id) === me && !b.closing && t.status === status && !t.flags.needs_human && !sessionsOf(id).length) go();
     };
     void after().catch((e) => {
       try {
-        if (!b.closing && readTicket(b.db, id).status === status) fail(e);
+        if (spawns.get(id) === me && !(e instanceof SetupCancelled) && !b.closing && readTicket(b.db, id).status === status) fail(e);
       } catch (x) {
         console.error('[lifecycle]', x); // deleted or moved on meanwhile: nothing to flag
       }

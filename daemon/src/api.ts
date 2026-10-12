@@ -8,7 +8,7 @@ import { attachmentDir, attachments, MAX_ATTACHMENT, safeName, saveAttachment } 
 import { BRAIN_BODY_MAX, BRAIN_RANK, isConstraintError, SCOPES, type Brains, type Scope } from './db.js';
 import { hasBranch, ticketDiff } from './git.js';
 import { audit, revoke } from './grants.js';
-import { killGrantSession, killSession, sessions, sessionsOf, type Session } from './launcher.js';
+import { cancelSetup, killGrantSession, killSession, sessions, sessionsOf, type Session } from './launcher.js';
 import { apply, brainstorm, changed, housekeeping, operator, pushBase, Refused, restartBoard, runnerState, setRunner, tick, type Board } from './lifecycle.js';
 import { addOverride, BadConfig, dropOverride, globalPath, isOverridable, knownModels, project, projectPath, projectsPath, readProjects, uncatalogued, writeConfig, writePreferences, writeProjects, type OverridableName } from './settings.js';
 import { isStale, resetTemplate, templatePath, TEMPLATES, unknownVar, VARS, writeTemplate, type TemplateName } from './templates.js';
@@ -113,7 +113,7 @@ export function setDeps(db: DatabaseSync, id: number, deps: number[]) {
 }
 
 /**
- * Ends every live session of a ticket. The outcome is set before the kill, so exited() records it and flags nothing. A session
+ * Ends every live session of a ticket and cancels its worktree_setup. The outcome is set before the kill, so exited() records it and flags nothing. A session
  * that already has one is already dying and keeps it.
  */
 function endSessions(db: DatabaseSync, id: number, outcome: string) {
@@ -123,6 +123,7 @@ function endSessions(db: DatabaseSync, id: number, outcome: string) {
     revoke(db, s.grantId);
     killSession(s);
   }
+  void cancelSetup(id);
 }
 
 /** Deletes a ticket with its sessions and attachments. The UI's DELETE route and the delete_ticket tool both come here. */

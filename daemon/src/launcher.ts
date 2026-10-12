@@ -1,5 +1,5 @@
 // Launches an agent CLI on a ticket: worktree, run row, grant, session dir, argv, pty. Tears it all down on exit or revoke.
-import { execFile, execFileSync, spawn } from 'node:child_process';
+import { execFile, execFileSync, spawn, type ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir, userInfo } from 'node:os';
@@ -146,24 +146,62 @@ type RunSettings = { cli: Cli; model: string; effort: Effort; path?: string };
 const SETUP_TAIL = 20;
 const SETUP_TIMEOUT_MS = 15 * 60 * 1000;
 
+type Setup = { child?: ChildProcess; cancelled: boolean; closed: Promise<void> };
+const setups = new Map<number, Setup>();
+
+export class SetupCancelled extends Error {}
+
+export const settingUp = (ticketId: number) => setups.get(ticketId)?.cancelled === false;
+
+export function cancelSetup(ticketId: number): Promise<void> {
+  const s = setups.get(ticketId);
+  if (!s) return Promise.resolve();
+  if (!s.cancelled) {
+    s.cancelled = true;
+    if (s.child) void killTree(s.child);
+  }
+  return s.closed;
+}
+
 /**
  * Creates the ticket's worktree and runs the repo's `worktree_setup` command in it once (`npm ci` for this repo), in the same
  * environment an agent gets. Null when there is nothing to run: no command, or it already succeeded in this worktree (a
  * marker in the worktree's git dir, gone with the worktree). Asynchronous so a minute of `npm ci` does not stall the daemon.
- * Rejects with the command and its last output lines.
+ * Rejects with the command and its last output lines, or SetupCancelled. A setup still running for the ticket is cancelled
+ * and this one waits for its shell to close, so two never run in one worktree.
  */
 export function prepareWorktree(repo: string, ticketId: number, command?: string, timeoutMs = SETUP_TIMEOUT_MS): Promise<void> | null {
+  const prev = setups.get(ticketId);
+  if (!prev && (!command || setupDone(repo, ticketId, command).done)) return null;
+  const me: Setup = { cancelled: false, closed: Promise.resolve() };
+  const run = (prev ? cancelSetup(ticketId) : Promise.resolve()).then(() => {
+    if (me.cancelled) throw new SetupCancelled('worktree_setup was cancelled');
+    const { done, marker, path } = setupDone(repo, ticketId, command);
+    if (done || !command) return;
+    return runSetup(me, command, path, marker, timeoutMs);
+  });
+  me.closed = run.then(() => {}, () => {}).finally(() => {
+    if (setups.get(ticketId) === me) setups.delete(ticketId);
+  });
+  setups.set(ticketId, me);
+  return run;
+}
+
+function setupDone(repo: string, ticketId: number, command?: string) {
   const wt = createWorktree(repo, ticketId);
-  if (!command) return null;
   const marker = resolve(wt.path, git(wt.path, 'rev-parse', '--git-path', 'kanban95-setup-done'));
-  if (existsSync(marker)) return null;
-  return new Promise((ok, fail) => {
+  return { done: !command || existsSync(marker), marker, path: wt.path };
+}
+
+function runSetup(me: Setup, command: string, cwd: string, marker: string, timeoutMs: number) {
+  return new Promise<void>((ok, fail) => {
     // Detached on POSIX so the shell leads its own process group, which killTree ends whole.
-    const child = spawn(command, { cwd: wt.path, env: childEnv({ KANBAN95_AGENT: '1' }), shell: true, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, detached: process.platform !== 'win32' });
+    const child = spawn(command, { cwd, env: childEnv({ KANBAN95_AGENT: '1' }), shell: true, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, detached: process.platform !== 'win32' });
+    me.child = child;
     let timedOut = false;
     const timer = setTimeout(() => {
       timedOut = true;
-      killTree(child);
+      void killTree(child);
     }, timeoutMs);
     let out = '';
     const take = (d: Buffer) => (out = (out + d).slice(-65536));
@@ -175,12 +213,13 @@ export function prepareWorktree(repo: string, ticketId: number, command?: string
     });
     child.on('close', (code, signal) => {
       clearTimeout(timer);
+      if (me.cancelled) return fail(new SetupCancelled('worktree_setup was cancelled'));
       if (code === 0 && !timedOut) {
         writeFileSync(marker, command);
         return ok();
       }
       const tail = out.split(/\r?\n/).filter((l) => l.trim()).slice(-SETUP_TAIL).join('\n');
-      fail(new Error(`worktree_setup "${command}" failed (${timedOut ? `timed out after ${timeoutMs / 1000} s` : code ?? signal}) in ${wt.path}; last output:\n${tail || '(none)'}`));
+      fail(new Error(`worktree_setup "${command}" failed (${timedOut ? `timed out after ${timeoutMs / 1000} s` : code ?? signal}) in ${cwd}; last output:\n${tail || '(none)'}`));
     });
   });
 }
@@ -370,8 +409,8 @@ const killing = new Set<Promise<void>>();
  * run from an agent's terminal, the agent itself, even behind a check that the pid was still alive: a reused pid is alive
  * (node-pty 1.1.0, 2026-10-11).
  */
-export function killTree(p: { pid?: number; kill(): unknown }) {
-  if (!p.pid) return void p.kill();
+export function killTree(p: { pid?: number; kill(): unknown }): Promise<void> {
+  if (!p.pid) return (p.kill(), Promise.resolve());
   if (process.platform === 'win32') {
     const done = new Promise<void>((ok) => execFile('taskkill', ['/T', '/F', '/PID', String(p.pid)], { windowsHide: true, timeout: 10_000 }, (e) => {
       if (e?.killed) p.kill();
@@ -379,12 +418,13 @@ export function killTree(p: { pid?: number; kill(): unknown }) {
     }))
       .finally(() => killing.delete(done));
     killing.add(done);
-    return;
+    return done;
   }
   try {
     process.kill(-p.pid, 'SIGKILL');
   } catch { /* already gone, or not a group leader: kill() below still ends the root */ }
   p.kill();
+  return Promise.resolve();
 }
 
 /**
@@ -426,9 +466,13 @@ export function killGrantSession(grantId: number) {
   for (const s of sessions.values()) if (s.grantId === grantId) killSession(s);
 }
 
-/** Daemon shutdown: kill every session's process tree and wait until each session has written its run row and removed its dir. */
+/**
+ * Daemon shutdown: kill every session's and every worktree_setup's process tree and wait until each session has written its run
+ * row and removed its dir, and each setup's shell has closed.
+ */
 export async function killAll() {
   const live = [...sessions.values()];
   for (const s of live) killSession(s);
-  await Promise.all([...live.map((s) => s.done), ...killing]); // a pty reports its exit before taskkill is done with the rest of its tree
+  const setup = [...setups.keys()].map(cancelSetup);
+  await Promise.all([...live.map((s) => s.done), ...setup, ...killing]); // a pty reports its exit before taskkill is done with the rest of its tree
 }
