@@ -77,11 +77,11 @@ const ctrl = async (key: keyof typeof KEYS, shift = false) => {
 const dialogButton = (label: string) => page.evaluate(`[...document.querySelectorAll('dialog[open] button')].find((b) => b.textContent === ${JSON.stringify(label)}).click()`);
 
 describe('ui-project-switcher', { timeout: 90_000 }, () => {
-  it('has no taskbar switcher, shows the Switch board button first in the tray with one project hosted, and lists the other projects', async () => {
+  it('has no taskbar switcher, shows the Switch board button first in the pinned row with one project hosted, and lists the other projects', async () => {
     await load();
     expect(await page.evaluate(`!!document.getElementById('projects')`)).toBe(false);
-    expect(await page.evaluate(`(() => { const b = document.querySelector('#tray > :first-child');
-      return [b.id, b.title, b.getAttribute('aria-label'), getComputedStyle(b).display !== 'none', !!b.querySelector('svg')]; })()`)).toEqual(['switch', 'Switch board', 'Switch board', true, true]);
+    expect(await page.evaluate(`(() => { const b = document.querySelector('#pinned > :first-child');
+      return [b.id, b.title, b.getAttribute('aria-label'), getComputedStyle(b).display !== 'none', !!b.querySelector('svg'), b.nextElementSibling?.title, !!document.querySelector('#tray #switch'), b.offsetWidth === b.nextElementSibling.offsetWidth, b.offsetHeight === b.nextElementSibling.offsetHeight, getComputedStyle(b).boxShadow]; })()`)).toEqual(['switch', 'Switch board', 'Switch board', true, true, 'Board', false, true, true, 'none']);
     expect(await openPopup()).toEqual([
       { path: other, label: basename(other), bg: 'rgb(0, 85, 128)', run: false, x: false },
       { path: third, label: basename(third), bg: 'rgb(128, 0, 128)', run: false, x: false },

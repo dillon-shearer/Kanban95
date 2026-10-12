@@ -116,7 +116,7 @@ describe('ui-taskbar', { timeout: 60_000 }, () => {
   it("pins the desktop items after Start as one-click icons; each window's button is its kind's icon and a label, the title as tooltip", async () => {
     await page.goto(base);
     await until(() => page.evaluate(`!!document.querySelector('[data-win="board"]')`), 'the board');
-    const pins = await page.evaluate<string[]>(`[...document.querySelectorAll('#pinned button')].map((b) => b.title)`);
+    const pins = await page.evaluate<string[]>(`[...document.querySelectorAll('#pinned [data-pin]')].map((b) => b.title)`);
     expect(pins).toEqual(await page.evaluate(`[...document.querySelectorAll('#icons .k95-icon')].map((e) => e.textContent)`));
     await until(() => page.evaluate(`[...document.querySelectorAll('#pinned img')].every((i) => i.complete && i.naturalWidth > 0)`), 'the pinned icons');
     const order = await page.evaluate<number[]>(`['#start', '#pinned', '#tasks'].map((s) => document.querySelector(s).getBoundingClientRect().left)`);
@@ -125,7 +125,7 @@ describe('ui-taskbar', { timeout: 60_000 }, () => {
     await page.evaluate(`document.querySelector('[data-win="brain"] [aria-label="Close"]')?.click()`);
     await click('#pinned [data-pin="Brain"]');
     await until(() => page.evaluate(`!!document.querySelector('[data-win="brain"]')`), 'the Brain window');
-    expect(await page.evaluate(`[...document.querySelectorAll('#pinned button')].map((b) => b.textContent).join('')`)).toBe('');
+    expect(await page.evaluate(`[...document.querySelectorAll('#pinned [data-pin]')].map((b) => b.textContent).join('')`)).toBe('');
     const task = (id: string) => page.evaluate<{ text: string; title: string; icon: string; loaded: boolean }>(`(() => {
       const b = document.querySelector('[data-task="${id}"]'), i = b.querySelector('img');
       return { text: b.textContent, title: b.title, icon: i.getAttribute('src'), loaded: i.complete && i.naturalWidth > 0 };
