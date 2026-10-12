@@ -212,6 +212,18 @@ If something cannot be done, the status bar says why. Below the projects, after 
 
 **Switch board.** One Kanban95 window can host several boards, like virtual desktops. The first button right of Start, before the pinned icons, two overlapping squares like the Windows Task View button, is always there, even with one project. Click it for a small popup above it with one row per project in Settings → Projects order, except this board. Each row shows the folder name on the project's wallpaper colour, a small green mark when the board is running, a small red number when that board has tickets waiting on you (its count of flagged tickets, hidden at zero), and an **X** on the right when the board is hosted in this window and runs no agent. Click a row: a board hosted here is switched to ("Switching to <name>…"), one not running starts and takes this window ("Opening <name>…"), one running in another window comes to the front. The **X** closes that board after a confirm. Arrow keys move between rows and Enter picks one. Esc, a click outside or the button again closes the popup; it and the Start menu are never open together. The list is read fresh each time the popup opens. Pop out and open in a new window stay in Start → Projects. The keys Ctrl+Tab, Ctrl+Shift+Tab and Ctrl+1 to Ctrl+9 switch too (Keyboard above). The project list behind those keys and Start → Projects is read at start, when this window gets focus, each time Start or the popup opens and when the board changes.
 
+## Updates
+
+The installed app looks for a newer GitHub Release when it starts and each time a board comes back from Restart board; a board opened later checks only if the last check was an hour ago or more. `npm run dev` never checks. A check that cannot reach GitHub (offline, rate limited) shows nothing.
+
+When there is a newer release, a dialog says "Kanban95 vX.Y.Z is available (you have vA.B.C)" with two buttons:
+- **Update now** downloads it, with progress in the same dialog, then installs it and starts Kanban95 again on the new version. On Windows the installer closes the app and opens it again; on macOS the app is replaced and relaunched. It is refused, with the number, while any agent, brainstorm or operator terminal runs on a board in this window, as Restart board waits for them: let them finish, or end them, and press it again.
+- **Later** closes the dialog; it comes back only with the next check.
+
+**Settings → Board → Updates** has **Check for updates**, which checks now and says "up to date" or opens the dialog, and the box "Check for a new release when Kanban95 starts" (`updateCheck` in `settings.json`), which turns the automatic check off. The running version is the last line of the Start menu.
+
+Updates are signed: the app installs only a download signed with the project's key (`docs/SECURITY.md` → Updates).
+
 ## Preferences
 
 Standing instructions for every agent, for example "No em dashes or non-ASCII characters in output" or "Keep responses brief". Write them in **Settings → Prompts → Preferences** and press **Save**; that writes `~/.kanban95/preferences.md` (the path is shown on the tab), up to 16 KB. Every prompt rendered after that (brainstorm, operator, plan, execute, test, housekeeping) carries them under "Operator preferences"; sessions already running keep the prompt they started with. They are yours, not the repo's, so they apply to every project the board works on. Never put a key or token in them: they are copied into every session's prompt.

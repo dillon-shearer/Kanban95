@@ -91,7 +91,7 @@ export function hostedMap(shell: number | null | undefined): Record<string, bool
   return Object.fromEntries(readProjects().map((p) => [p.path, shell != null && live.some((e) => same(e.repo, p.path) && e.shell === shell)]));
 }
 
-type Verb = 'open' | 'switch' | 'popout' | 'dock' | 'close';
+type Verb = 'open' | 'switch' | 'popout' | 'dock' | 'close' | 'check' | 'checknow' | 'update';
 
 export function tellShell(verb: Verb, path: string): void {
   process.stdout.write(`KANBAN95 ${verb}=${normal(path)}\n`);

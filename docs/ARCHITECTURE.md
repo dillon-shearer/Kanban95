@@ -39,6 +39,7 @@ Living document. Update it in the same change that alters the shape described he
   - `settings.ts` resolves the data folder through the pointer (`boardHome`, Data folder pointer below), reads and writes the operator's `~/.kanban95/models.json`, `settings.json` (schema-checked), `projects.json` (adds the served repo on start) and `preferences.md`, resolves a repo's own copy of models.json, settings.json and preferences.md (`<board home>/projects/<repo key>/`, used whole when it exists, else the global file; `repoKey` is shared with the worktrees root), lists the models the installed CLIs know (`knownModels`, for the Settings dropdowns), and resolves a run's CLI, model, effort and executable. Every write of these files, and `addProject`'s read and write of projects.json, runs under one lock shared by every daemon on the board home (an IMMEDIATE transaction on `settings.lock`, waiting up to 10 s; the OS releases it when a daemon dies), and is written to a temp file named for the writer (`<file>.<pid>-<uuid>.tmp`) then renamed over the file; a failed write removes only its own temp file.
   - `templates.ts` copies the default prompt templates from `templates/` into `<repo>/.kanban95/templates/`, keeps unedited copies in step with the defaults on start (see Prompts below) and renders them.
   - `trust.ts` pre-trusts the repo root for Claude Code before a launch.
+  - `update.ts` passes updates between the shell and the UI: asks the shell to check, relays its reports, refuses Update now while agents run (see Updates below).
   - `voice.ts` downloads, verifies and serves the speech model (see Voice below).
 - **UI** (`ui/`): plain files served by the daemon, ES modules, no bundler (see UI below). 98.css, xterm.js and transformers.js are vendored in `ui/vendor/` so nothing loads from a CDN at runtime.
 
@@ -82,12 +83,15 @@ After its port line, every line a daemon prints is a command when it matches one
 - `KANBAN95 popout=<path>`: open a second window on it with the main window's options (title, profile, fullscreen follow, navigation lock) and mark it `own`. The window opens on the daemon URL with `#own`, which survives the `?k95=` redirect, so the page knows it is popped out and offers Dock in Start → Projects. If the main window showed it, the main window moves to another docked daemon; when there is none, nothing happens and a `[shell]` stderr line says so.
 - `KANBAN95 dock=<path>`: close its own window, mark it docked and show it in the main window.
 - `KANBAN95 close=<path>`: close its stdin, so it shuts down as on Stdin EOF, drop it from the table and, if the main window showed it, show another board there (a docked one, else an own one docked back). The supervisor kills it if it still runs after 15 s. Closing the last one exits the shell once it has stopped.
+- `KANBAN95 check=<path>`: check for a newer release (Packaging → Updates). The shell answers the daemon that printed the line, by its own port and secret, so the path is not looked up.
+- `KANBAN95 checknow=<path>`: the same, from Settings → Board → Check for updates: never skipped, and "up to date" or a failure is reported too.
+- `KANBAN95 update=<path>`: download and install the release found by the last check (Update now).
 
 Any other line, or a command for a board not in that state, changes nothing (a `[shell]` line says why).
 
 - A hosted board that is not on screen and runs no session writes `close=` for itself after `sleepAfterMinutes` (Daemon lifetime → Sleep). It then shows as not running; Open here starts it again.
 - Closing a popped-out window stops its daemon as `close=` does. Closing the main window exits the shell and stops every hosted daemon (Kill on exit).
-- Threads: one reader per daemon, which ends at that daemon's stdout EOF; one short-lived thread per `open=` while the daemon starts; the one 250 ms supervisor. A command changes the table under its lock and touches the windows only after releasing it, so a window call never waits on a daemon starting.
+- Threads: one reader per daemon, which ends at that daemon's stdout EOF; one short-lived thread per `open=` while the daemon starts; one per update check, install or report (Packaging → Updates); the one 250 ms supervisor. A command changes the table under its lock and touches the windows only after releasing it, so a window call never waits on a daemon starting.
 - `cargo test --manifest-path shell/Cargo.toml` drives the table with stand-in daemons (`cmd` on Windows, `sh` elsewhere) that print a port line and commands, recording what the windows are asked to do instead of opening them.
 
 ## Packaging
@@ -145,6 +149,27 @@ The Release holds:
 
 **Signing.** Update bundles are signed with a minisign key pair made once with `npx tauri signer generate`. The public key is `plugins.updater.pubkey` in `shell/tauri.bundle.json`; the app checks every update against it. Any `plugins` entry makes `tauri::generate_context!` emit code that calls `serde_json`, so `shell/Cargo.toml` lists `serde_json` as a direct dependency; without it the installer build fails with `cannot find serde_json in the list of imported crates`. The private key and its password are the repository secrets `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`, and the operator keeps the key file offline. They never go in the repo, a ticket, the brain or `~/.kanban95`, and only a release build gets them (branch builds see empty values and make no update bundles). `tauri build` refuses to sign with a key that does not match the public key. Losing the private key means installed apps can never take another update; a new key pair needs a release signed with the old key that ships the new public key. This signature is only for the updater: the installers themselves are not code-signed (Windows SmartScreen and macOS Gatekeeper still warn).
 
+### Updates
+
+The installed app updates itself from the GitHub Releases (Releases above) through `tauri-plugin-updater`, registered in the shell only when it is installed: `staged()` in `shell/src/main.rs` finds the staged daemon next to the exe, the same lookup that picks the daemon to run. `npm run dev` and `cargo run` never check. The plugin's config is in `shell/tauri.bundle.json`, so only installer builds carry it:
+- `endpoints`: `https://github.com/dillon-shearer/Kanban95/releases/latest/download/latest.json`
+- `pubkey`: the minisign public key (Releases → Signing)
+- `dangerousInsecureTransportProtocol: true`, so the override below can be plain http on loopback
+
+`KANBAN95_UPDATE_URL` in the shell's environment replaces the endpoint: an https URL, or `http://127.0.0.1:<port>/...` for a local test manifest; anything else fails the check. To try the dialog on Windows, serve a `latest.json` with a higher `version` from a temp HTTP server and start the installed `Kanban95.exe` with the variable set.
+
+**When it checks.** A daemon under the shell prints `KANBAN95 check=<repo>` right after its port line, unless `updateCheck` in its `settings.json` is false (`askForCheck` in `daemon/src/update.ts`). The shell checks for the first board at shell start and for a daemon back from exit 75 (Restart board) every time; any other `check=` (a board opened later, a crash restart) only if the last check was an hour ago or more. Settings → Board → **Check for updates** prints `checknow=`, which always checks. A check that fails (offline, rate limited) is one `[shell] update check failed: ...` stderr line; the UI hears about it only after the button.
+
+**Shell to daemon.** The shell posts each report to `POST /api/update/shell` on the daemon that asked, with its secret as the `k95` cookie and no `Origin` header (`tell`, plain HTTP over a `TcpStream`). The daemon keeps an `available` offer on the board (`board.update`) and relays every report as an `update` event; the UI shows the dialog from the event or, after a reload, from `GET /api/update`. Later posts `later`, which drops the offer, so the dialog returns only with the next check. The webview still calls no Tauri command: the updater's IPC commands are refused like every other (Network boundary).
+
+**Install.** Update now posts `now`. The daemon refuses it while agents run: the restart hold's tickets to finish plus its open terminals (`docs/LIFECYCLE.md` → Restart after a merge), plus the live agents of other boards this shell hosts (their `running/` entries), since the install closes them too. Else it prints `update=`, and the shell downloads the update it kept from the check (or checks again), posting `downloading` about every 5 percent, then `installing`, then installs:
+- Windows: the plugin runs the NSIS setup.exe in passive mode with `/UPDATE` and exits; the installer relaunches the app. The shell's kill-on-close job (Daemon lifetime) would kill the installer with the shell, so the updater's `on_before_exit` first sets `JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK` on the job (`let_installer_outlive_us`), which starts every later child outside it, then kills the hosted daemons (`Host::shutdown`).
+- macOS: the plugin replaces the `.app` and the shell relaunches itself (`app.restart()`).
+
+A download or install that fails is reported as `failed` and shown in the same dialog. On Windows a setup.exe that will not start after the daemons were shut down shows the error dialog and exits the app.
+
+`cargo test` in `shell/` covers the installed/dev decision, when a check runs, the report a finished check sends (a real check against a local `latest.json` and against a closed port), the override's rules, the request `tell` sends, and that a process started after the breakaway is outside the job.
+
 ## Network boundary
 
 - `validateConfig` rejects any bind host other than `127.0.0.1`. There is no flag, env var or config key that can widen it; a different host is a code change, and the tests fail on it.
@@ -170,6 +195,9 @@ Every `/api/*` request needs the `k95` cookie holding the shell secret, or gets 
 | DELETE | `/api/grants/:id` | revoke and kill the session's pty; 404 if not live |
 | POST | `/api/tickets/:id/launch` `/api/tickets/:id/answer` `/api/tickets/:id/merge` `/api/tickets/:id/resume` | lifecycle events (`docs/LIFECYCLE.md`); `409` when the state machine has no such transition |
 | POST | `/api/restart` | Restart board: rebuild when running from a checkout, then exit 75 (Daemon lifetime → Restart board). `409` with the build output, or when already shutting down. Audited as `board.restart` |
+| GET | `/api/update` | `{version, offer}`: the running version (root `package.json`) and the newer release the shell reported, `{version, current}`, or `null` (Packaging → Updates) |
+| POST | `/api/update` | `{answer}`: `later` drops the offer; `check` asks the shell to check now (`202`); `now` asks it to install (`202`), `409` naming the count while agents run, with no offer, or without a shell. Audited as `update.answer` |
+| POST | `/api/update/shell` | the shell's report, `{state}`: `available` (`version`, `current`), `current`, `failed` (`error`), `downloading` (`done`, `total`), `installing`. `403` with an `Origin` header (a page always sends one on a POST, the shell never does) or on a board started without the shell. Relayed to the UI as an `update` event |
 | GET | `/api/release` | the Release board dialog: `{version, next: {patch, minor, major}}`, the version in `package.json` and what each bump makes of it; `409` outside the Kanban95 repo |
 | POST | `/api/release` | `{bump}` (`patch`, `minor` or `major`): Release board, run in the merge queue, audited `board.release`. `409` with the reason when it may not start, `502` with npm's or git's message when a step fails (the commit and tag are taken back), else `{tag, runner}` (`docs/LIFECYCLE.md` → Release board) |
 | POST | `/api/tickets/housekeeping` | creates a housekeeping ticket and launches it (the Housekeeping button) |
@@ -247,6 +275,7 @@ daemon/           src/ (see Daemon above):
                     settings.ts
                     templates.ts
                     trust.ts
+                    update.ts
                     voice.ts
                   voice-model.json (the pinned speech model)
                   migrations/*.sql (the repo's board.db)
@@ -297,7 +326,7 @@ Any failure after the run row is written revokes the grant and removes the sessi
 
 ## Events
 
-`/events` is a same-origin websocket that only sends. `{"sound": "ding" | "chord" | "done", "ticket": n}` when a ticket merges, needs the operator, or passes its test and lands in Done (`done`, sent by the `pass` transition before the merge queue takes the ticket; a `ding` with `ticket: null` when the runner stops itself); `{"ticket": n}` whenever something about ticket `n` changed (any lifecycle transition, an operator REST mutation, an agent's successful MCP call, a session of that ticket ending); `{"ticket": null}` when the set of live sessions changed without a ticket (a brainstorm or operator terminal started or ended) or the runner changed. The UI never polls the board: it refetches what an event names.
+`/events` is a same-origin websocket that only sends. `{"sound": "ding" | "chord" | "done", "ticket": n}` when a ticket merges, needs the operator, or passes its test and lands in Done (`done`, sent by the `pass` transition before the merge queue takes the ticket; a `ding` with `ticket: null` when the runner stops itself); `{"ticket": n}` whenever something about ticket `n` changed (any lifecycle transition, an operator REST mutation, an agent's successful MCP call, a session of that ticket ending); `{"ticket": null}` when the set of live sessions changed without a ticket (a brainstorm or operator terminal started or ended) or the runner changed. `{"update": {"state": ...}}` relays a report of the shell's updater (Packaging → Updates). The UI never polls the board: it refetches what an event names.
 
 ## UI
 
@@ -343,7 +372,7 @@ Gotchas collected while the board was built. Each one cost a phase some time.
 **Node and the daemon**
 - Agents need no Node setup: their pty `PATH` starts with the daemon's Node 24, and a new worktree has already run `npm ci` (`worktree_setup`, `docs/LIFECYCLE.md` → Worktree setup). Run `npm run test:changed` in the worktree as it is. Never junction main's `node_modules` into a worktree.
 - Outside the board, `node` on PATH may still be an older Node. On Node 22 `import.meta.main` is `undefined`, so the daemon prints nothing and the shell fails with `bad daemon handshake ""`, and tests fail with `no such module: fts5`. `Kanban95.cmd` finds Node 24 through fnm; in a bare shell run `fnm env --use-on-cd | Out-String | Invoke-Expression` first, or put the Node 24 install dir first on PATH. `fnm exec` cannot start `npm` (a `.cmd` shim), and Node 24 throws on `process.exit(true)`.
-- The daemon's first stdout line is the handshake. Anything printed before it breaks the shell; log to stderr. After it, a stdout line starting `KANBAN95 open=`, `switch=`, `popout=`, `dock=` or `close=` is a command to the shell (Hosted boards). Only `tellShell()` in `daemon/src/boards.ts` writes those; nothing else in `daemon/src` writes to stdout (`console.log`, `process.stdout`), and `daemon/test/shell-commands.test.ts` checks it.
+- The daemon's first stdout line is the handshake. Anything printed before it breaks the shell; log to stderr. After it, a stdout line starting `KANBAN95 open=`, `switch=`, `popout=`, `dock=`, `close=`, `check=`, `checknow=` or `update=` is a command to the shell (Hosted boards). Only `tellShell()` in `daemon/src/boards.ts` writes those; nothing else in `daemon/src` writes to stdout (`console.log`, `process.stdout`), and `daemon/test/shell-commands.test.ts` checks it.
 - A daemon started with stdin closed exits right after printing its port (Daemon lifetime). Spawn it with a held-open stdin pipe.
 - `DatabaseSync.exec` with several statements leaves a transaction open if a middle one throws. `migrate` and `api.ts`'s `transaction()` use explicit `BEGIN` / `COMMIT` / `ROLLBACK`; do the same anywhere else.
 - `audit.ticket_id` is a foreign key: attributing an audit row to a ticket that does not exist throws. Check existence or pass `null`.
@@ -376,6 +405,7 @@ Gotchas collected while the board was built. Each one cost a phase some time.
 - `cargo run` / `cargo build` of the shell always relinks `kanban95-shell.exe`: tauri-build tells cargo to watch `shell/capabilities`, which does not exist (on purpose), and a missing watched path reruns the build script every time. On Windows the relink fails with `Access is denied` while any board runs from that exe, so a second `Kanban95.cmd` from the same checkout fails; Start → Projects starts the built exe directly instead.
 - Shell tests stand in for a daemon with a `cmd` line (`tests::host` in `shell/src/main.rs`). Pass it with `raw_arg`, not `args`, so Rust's quoting does not change it; `findstr x` holds it open until stdin EOF, as a daemon waits; and write an env var to a file as `>"file" echo %VAR%`, because in `echo 1234>file` cmd takes the digit before `>` as a handle number. Killing the `cmd` leaves `findstr` running until the test drops the child's stdin, so stop stand-ins through `Host::shutdown` or `close=`.
 - A process started by the daemon stays in its shell's kill-on-close job, also with `detached: true`. To outlive the board, create it through WMI (`boards.ts` `startDetached`); it gets a fresh environment unless one is passed in `Win32_ProcessStartup.EnvironmentVariables`.
+- The same job would kill the update installer the shell starts (`ShellExecuteW` in tauri-plugin-updater) when the shell exits a moment later. `let_installer_outlive_us` in `shell/src/main.rs` sets silent breakaway on the job just before; anything that has to outlive the shell needs the same (Packaging → Updates).
 - In PowerShell, `$null` passed to a P/Invoke `string` parameter arrives as `""`: `FindWindowW($null, title)` looks for a class named `""` and finds nothing. Pass `[NullString]::Value`.
 - Never rebuild or run the installer while the operator's board is live: a rebuild replaces `daemon/dist` under the running daemon, and NSIS closes the app. Test on a second instance.
 

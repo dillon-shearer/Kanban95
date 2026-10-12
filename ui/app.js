@@ -33,7 +33,7 @@ let runner = { on: false, concurrency: 3, running: [], left: 0, backlog: 0, wait
 let models = null; // models.json this board runs on (this repo's copy, else the global file), for the cards' default model and effort
 // Sounds stay off until /config/settings loads: listen() starts first, and a ding in that gap ignored the operator's choice.
 // `terminals` is absent until then too, so no session is opened or passed over before the operator's phases are known.
-const SETTINGS = { paths: {}, sounds: { merge: false, attention: false, done: false }, voice: { backend: 'local', mode: 'push' }, housekeeping: { auto: true, every: 10 }, idle_minutes: 20, zoom: 1, push_after_merge: true, sleepAfterMinutes: 30, concurrency: 3 };
+const SETTINGS = { paths: {}, sounds: { merge: false, attention: false, done: false }, voice: { backend: 'local', mode: 'push' }, housekeeping: { auto: true, every: 10 }, idle_minutes: 20, zoom: 1, push_after_merge: true, sleepAfterMinutes: 30, concurrency: 3, updateCheck: true };
 let settings = { ...SETTINGS };
 let limits = null; // GET /api/limits: { rows, errors, fetched_at }, null until the first answer
 const views = new Map(); // open window id → redraw(Set of changed ticket ids | undefined)
@@ -78,6 +78,7 @@ function listen() {
       else if (e.sound === 'done' && e.ticket != null) say(`#${e.ticket} passed, in Done.`);
       return;
     }
+    if (e.update) return onUpdate(e.update);
     if (e.ticket != null) dirty.add(e.ticket);
     else if (e.ticket === null) projectDirty = true;
     schedule();
@@ -410,6 +411,93 @@ async function restartBoard() {
     if (e.status === 409) await dialog('Board not restarted', h('pre', { class: 'k95-pre' }, e.message));
   }
 }
+let appVersion = '';
+let checking = false;
+let updating = null;
+const updateStatus = (text) => {
+  const el = document.getElementById('update-status');
+  if (el) el.textContent = text;
+  if (text) say(text);
+};
+async function checkForUpdates() {
+  checking = true;
+  updateStatus('Checking for updates...');
+  try {
+    await api('POST', '/update', { answer: 'check' });
+  } catch (e) {
+    checking = false;
+    updateStatus(e.message);
+  }
+}
+function onUpdate(r) {
+  if (r.state === 'available') {
+    if (checking) updateStatus('');
+    checking = false;
+    return offerUpdate(r);
+  }
+  if (r.state === 'current' && checking) updateStatus(`Kanban95 v${r.current} is up to date.`);
+  if (r.state === 'failed' && updating?.busy) updating.fail(r.error);
+  else if (r.state === 'failed' && checking) updateStatus(r.error);
+  if (r.state === 'downloading') updating?.progress(r.done, r.total);
+  if (r.state === 'installing') updating?.installing();
+  if (r.state !== 'downloading' && r.state !== 'installing') checking = false;
+}
+function offerUpdate({ version, current }) {
+  if (updating) return;
+  const text = h('p', { id: 'update-text' }, `Kanban95 v${version} is available (you have v${current}).`);
+  const bar = h('span', { class: 'progress-indicator-bar', style: 'width: 0%' });
+  const meter = h('div', { class: 'progress-indicator' }, bar);
+  meter.hidden = true;
+  const note = h('p', { id: 'update-note' });
+  const now = h('button', { onclick: () => install() }, 'Update now');
+  const later = h('button', { onclick: () => skip() }, 'Later');
+  const d = h('dialog', { class: 'window k95-dialog', id: 'update-dialog', tabindex: -1, 'aria-label': 'Update Kanban95' },
+    h('div', { class: 'title-bar' }, h('div', { class: 'title-bar-text' }, 'Update Kanban95')),
+    h('div', { class: 'window-body' }, text, meter, note, h('section', { class: 'field-row k95-buttons' }, now, later)));
+  const skip = () => {
+    api('POST', '/update', { answer: 'later' }).catch(() => {});
+    d.close();
+  };
+  const hold = (on) => {
+    updating.busy = on;
+    now.disabled = later.disabled = on;
+  };
+  const install = async () => {
+    note.textContent = '';
+    try {
+      await api('POST', '/update', { answer: 'now' });
+    } catch (e) {
+      note.textContent = e.message;
+      return;
+    }
+    hold(true);
+    text.textContent = `Downloading Kanban95 v${version}...`;
+    meter.hidden = false;
+  };
+  updating = {
+    busy: false,
+    progress: (done, total) => { bar.style.width = total ? `${Math.min(100, Math.round(done / total * 100))}%` : '100%'; },
+    installing: () => { bar.style.width = '100%'; text.textContent = 'Installing. Kanban95 closes and starts again on the new version.'; },
+    fail: (error) => {
+      hold(false);
+      meter.hidden = true;
+      text.textContent = `Kanban95 v${version} is available (you have v${current}).`;
+      note.textContent = error;
+    },
+  };
+  d.addEventListener('cancel', (e) => {
+    e.preventDefault();
+    if (!updating.busy) skip();
+  });
+  d.addEventListener('close', () => {
+    d.remove();
+    updating = null;
+  });
+  document.body.append(d);
+  d.showModal();
+  now.focus();
+}
+
 const ACTIONS = 'https://github.com/dillon-shearer/Kanban95/actions';
 const BUMP_LABEL = { patch: 'Patch', minor: 'Minor', major: 'Major' };
 async function releaseBoard() {
@@ -1414,7 +1502,12 @@ function openSettings(tab) {
             h('div', { class: 'field-row' }, h('label', { for: 'sleep-after' }, 'Stop a board with no agents and no window after (minutes, 0 never)'), sleep),
             h('button', { onclick: () => put({ sleepAfterMinutes: Number(sleep.value) }) }, 'Save')),
           h('fieldset', {}, h('legend', {}, 'Voice'),
-            mode('push', 'Mic button: push to talk (hold the button)'), mode('toggle', 'Mic button: toggle (click to start, click to stop)'))];
+            mode('push', 'Mic button: push to talk (hold the button)'), mode('toggle', 'Mic button: toggle (click to start, click to stop)')),
+          h('fieldset', {}, h('legend', {}, 'Updates'),
+            h('div', { class: 'field-row' }, h('input', { type: 'checkbox', id: 'update-check', checked: s.updateCheck,
+              onchange: (e) => put({ updateCheck: e.target.checked }) }), h('label', { for: 'update-check' }, 'Check for a new release when Kanban95 starts')),
+            h('div', { class: 'field-row' }, h('button', { id: 'update-now', onclick: checkForUpdates }, 'Check for updates'),
+              h('span', { id: 'update-status' }, appVersion ? `This is Kanban95 v${appVersion}.` : '')))];
       }, redraw)]);
       p.replaceChildren(...part,
         h('fieldset', {}, h('legend', {}, 'Speech model'),
@@ -1588,6 +1681,8 @@ const START = [
   { get label() { return document.fullscreenElement ? 'Exit full screen' : 'Full screen'; }, run: toggleFullscreen },
   { label: 'Restart board', run: restartBoard },
   { label: 'Release board…', run: releaseBoard },
+  '-',
+  { get label() { return `Kanban95 v${appVersion}`; }, disabled: true },
 ];
 
 /** Desktop icons for the Start menu's first entries, under every window: click selects, double-click or Enter opens. The same
@@ -1706,7 +1801,8 @@ async function boot() {
   setInterval(refreshLimits, 5 * 60_000); // the daemon's cache lives as long, so this reads fresh numbers
   listen();
   paintProject().catch((e) => say(e.message));
-  const [list] = await Promise.all([api('GET', '/tickets'), loadSettings(), loadModels().catch(() => { models = null; }), ui.load()]);
+  const [list, update] = await Promise.all([api('GET', '/tickets'), api('GET', '/update'), loadSettings(), loadModels().catch(() => { models = null; }), ui.load()]);
+  appVersion = update.version;
   for (const s of ui.get('k95.collapsed') ?? ['done']) collapsed.add(s); // nothing saved: Done starts folded
   loadView(ui.get('k95.view'));
   for (const t of list) tickets.set(t.id, t);
@@ -1719,6 +1815,7 @@ async function boot() {
   }
   await refreshShared();
   redraw();
+  if (update.offer) offerUpdate(update.offer);
   if (!models) say('No model catalog yet: Start → Settings → Agents, then Save, before launching.');
 }
 

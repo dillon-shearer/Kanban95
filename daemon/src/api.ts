@@ -15,6 +15,7 @@ import { isStale, resetTemplate, templatePath, TEMPLATES, unknownVar, VARS, writ
 import { trustStatus, untrustClaude } from './trust.js';
 import { download, status as voiceStatus } from './voice.js';
 import { limits } from './limits.js';
+import { checkNow, installNow, relay, REPORT, VERSION } from './update.js';
 
 type Json = Record<string, unknown>;
 type Reply = { status: number; body?: unknown; headers?: Record<string, string> };
@@ -466,6 +467,29 @@ const routes: [method: string, path: RegExp, mutation: string | null, handler: (
     const failed = await restartBoard(board);
     if (failed !== null) throw new HttpError(409, failed);
     return { status: 202, body: { restarting: true, shell: board.shell === true } };
+  }],
+  ['GET', /^\/api\/update$/, null, ({ board }) => ({ status: 200, body: { version: VERSION, offer: board.update ?? null } })],
+  ['POST', /^\/api\/update$/, 'update.answer', ({ board, body }) => {
+    if (body.answer === 'later') {
+      board.update = undefined;
+      return { status: 204 };
+    }
+    if (!board.shell) throw new HttpError(409, 'Updates come through the Kanban95 app; this board was started without it.');
+    if (body.answer === 'check') {
+      checkNow(board);
+      return { status: 202, body: { asked: 'check' } };
+    }
+    if (body.answer !== 'now') throw new HttpError(400, 'answer must be now, later or check');
+    const refused = installNow(board);
+    if (refused) throw new HttpError(409, refused);
+    return { status: 202, body: { asked: 'update' } };
+  }],
+  ['POST', /^\/api\/update\/shell$/, null, ({ board, body, req }) => {
+    if (req.headers.origin !== undefined || !board.shell) throw new HttpError(403, 'only the shell reports updates');
+    const r = REPORT.safeParse(body);
+    if (!r.success) throw new HttpError(400, `bad update report: ${r.error.issues[0]?.message}`);
+    relay(board, r.data);
+    return { status: 204 };
   }],
   ['GET', /^\/api\/release$/, null, ({ board }) => ({ status: 200, body: releaseInfo(board) })],
   ['POST', /^\/api\/release$/, 'board.release', async ({ board, body }) => {

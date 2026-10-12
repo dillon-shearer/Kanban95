@@ -131,7 +131,7 @@ describe('daemon process', () => {
     return { child, post, stop, out: () => out };
   };
 
-  it('under shell 123 writes shell:123 to its entry and exactly one open line for open here', async () => {
+  it('under shell 123 writes shell:123 to its entry, asks for an update check, and exactly one open line for open here', async () => {
     const [own, other] = [repo(), repo()];
     writeProjects([{ path: own, colour: '#008080' }, { path: other, colour: '#008080' }], own);
     const d = await boot(own, { KANBAN95_SHELL: '1', KANBAN95_SHELL_ID: '123' });
@@ -140,7 +140,7 @@ describe('daemon process', () => {
       const r = await d.post('/projects/open', { path: other, where: 'here' });
       expect(r.status).toBe(202);
       await new Promise((ok) => setTimeout(ok, 200));
-      expect(d.out().split('\n').slice(1)).toEqual([`KANBAN95 open=${other}`, '']);
+      expect(d.out().split('\n').slice(1)).toEqual([`KANBAN95 check=${own}`, `KANBAN95 open=${other}`, '']);
     } finally {
       await d.stop();
     }

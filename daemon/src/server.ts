@@ -20,6 +20,7 @@ import { idle } from './merge.js';
 import { addProject, readConfig } from './settings.js';
 import { firstProject, handleSetup } from './setup.js';
 import { initTemplates } from './templates.js';
+import { askForCheck } from './update.js';
 import { voiceFile } from './voice.js';
 
 const UI_DIR = resolve(import.meta.dirname, '../../ui');
@@ -359,6 +360,7 @@ if (import.meta.main) {
     // on Windows the shell's job object would end them too, on macOS nothing would.
     process.stdin.on('end', () => board.shutdown!(0));
     process.on('exit', () => rmSync(entryPath(process.pid), { force: true })); // the running entry, also without close()
+    askForCheck(board);
   } else {
     process.stdin.on('end', () => process.exit(0));
   }
