@@ -99,7 +99,7 @@ Any other line, or a command for a board not in that state, changes nothing (a `
 
 Installed on macOS, the resource is `Kanban95.app/Contents/Resources/app/` and the exe is in `Contents/MacOS/`, so `daemon_script()` in `shell/src/main.rs` looks in `../Resources/app` as well as next to the exe. An app started from Finder or the Dock gets launchd's PATH (`/usr/bin:/bin:/usr/sbin:/sbin`), without Homebrew's, fnm's or the nodejs.org installer's Node and without the agent CLIs, so on macOS the shell first runs `$SHELL -ilc` (zsh by default) to print the login PATH and appends its entries that are missing (`add_login_path`). Appending keeps a Node 24 that Kanban95.command put first in front. A login shell that has not answered in 5 s is killed and PATH stays as it was.
 
-The Mac app is not signed or notarized, so the first launch needs a right-click → Open (README → Install without Rust). There are two Mac builds, `aarch64-apple-darwin` (Apple silicon) and `x86_64-apple-darwin` (Intel), each with its own `.dmg` named by architecture (`Kanban95_<version>_aarch64.dmg`, `Kanban95_<version>_x64.dmg`). A universal build (`--target universal-apple-darwin`) would be one download for both; it is not set up.
+The Mac app is not signed or notarized, so the first launch needs a right-click → Open (README → Install). There are two Mac builds, `aarch64-apple-darwin` (Apple silicon) and `x86_64-apple-darwin` (Intel), each with its own `.dmg` named by architecture (`Kanban95_<version>_aarch64.dmg`, `Kanban95_<version>_x64.dmg`). A universal build (`--target universal-apple-darwin`) would be one download for both; it is not set up.
 
 **Icons.** `shell/icons/` holds what `bundle.icon` in `shell/tauri.conf.json` lists:
 - `32x32.png`
@@ -115,10 +115,34 @@ The PNGs and `icon.icns` were made from the 32 px image in `icon.ico`, scaled up
 
 Installed, the shell finds `app/daemon/dist/server.js` (next to its exe, or in the bundle's Resources on macOS) and runs it on the `node` next to its exe (`node_exe` in `shell/src/main.rs`), never on a `node` from PATH. Without that file, as in `npm run dev` and `cargo run` (`shell/tauri.conf.json` lists no sidecar), it runs `node` from PATH, which must be Node 24. Agents get the same Node: `childEnv` in `daemon/src/pty.ts` puts `dirname(process.execPath)`, the sidecar's directory, first on their PATH, so `node` and an npm shim such as `codex.cmd` (which runs `node.exe` from its own dir if there, else `node` from PATH) resolve to it; that directory also holds the shell exe, which is harmless. If the sidecar cannot start, the error dialog names the path it tried. The board's repo is the shell's first argument; the Start menu gives none, so the daemon opens the first listed project, or first-run setup on a new machine (Daemon lifetime → Startup without an argument).
 
-**CI.** `.github/workflows/build.yml` runs on every push to any branch and on manual dispatch, caching npm and cargo:
+**CI.** `.github/workflows/build.yml` runs on every push to any branch (never on a tag push) and on manual dispatch, caching npm and cargo. `release.yml` also calls it (`workflow_call`) with `release: true` (see Releases):
 
-- `windows` (`windows-latest`): `npm ci`, `npm run build`, `npm test`, `npm run test:shell`, `npm run installer`, then lists the setup.exe with `7z l` and fails unless it holds `node.exe`; uploads `shell/target/release/bundle/nsis/*.exe` as the artifact `kanban95-windows`.
-- `macos` (`macos-latest`, Apple silicon): `npm ci`, `npm run build`, `npm run test:shell`, then `npm run installer -- --target <triple> --bundles app,dmg` for `aarch64-apple-darwin` and `x86_64-apple-darwin` (npm appends the args to the `tauri build` call), then checks each `.app` holds an executable `Contents/MacOS/node` of its own architecture (`file`), then a smoke step that spawns `/bin/echo` through node-pty with the arm64 app's own Node from its `Contents/Resources/app` (it fails on a non-executable `spawn-helper`). It uploads every `.app` and `.dmg` under `shell/target/*/release/bundle/` as `kanban95-macos`. The daemon's `npm test` runs on Windows only; `daemon/test/darwin-no-powershell.test.ts` checks the macOS branches there by mocking `process.platform`.
+- `windows` (`windows-latest`): `npm ci`, `npm run build`, `npm test`, `npm run test:shell`, `npm run installer`, then lists the setup.exe with `7z l` and fails unless it holds `node.exe`; uploads `shell/target/release/bundle/nsis/*.exe` (and its `.sig` in a release build) as the artifact `kanban95-windows`.
+- `macos` (`macos-latest`, Apple silicon): `npm ci`, `npm run build`, `npm run test:shell`, then `npm run installer -- --target <triple> --bundles app,dmg` for `aarch64-apple-darwin` and `x86_64-apple-darwin` (npm appends the args to the `tauri build` call), then checks each `.app` holds an executable `Contents/MacOS/node` of its own architecture (`file`), then a smoke step that spawns `/bin/echo` through node-pty with the arm64 app's own Node from its `Contents/Resources/app` (it fails on a non-executable `spawn-helper`). It uploads every `.app` and `.dmg` under `shell/target/*/release/bundle/` (and in a release build each `Kanban95.app.tar.gz` and its `.sig`) as `kanban95-macos`. The daemon's `npm test` runs on Windows only; `daemon/test/darwin-no-powershell.test.ts` checks the macOS branches there by mocking `process.platform`.
+
+### Releases
+
+A GitHub Release is cut only by pushing a tag `vX.Y.Z` (a prerelease such as `v0.2.0-rc.1` works too). Pushes to a branch, `main` included, never release anything.
+
+**Version.** The app version lives in one place: `version` in the root `package.json`. `shell/tauri.conf.json` reads it (`"version": "../package.json"`), the MCP server reports it (`daemon/src/mcp.ts`), and no other file carries one (`daemon/test/version-source.test.ts`). `shell/Cargo.toml` keeps `0.0.0` as a placeholder; Tauri takes the config version over it, so it is never bumped. To release: set `package.json` to the new version (and run `npm install` so `package-lock.json` matches), commit and merge to `main`, then `git tag vX.Y.Z` on that commit and `git push origin vX.Y.Z`.
+
+**Workflow.** `.github/workflows/release.yml` runs on tags matching `v*`:
+
+1. `version` fails with a clear error unless the tag is `v` + `package.json`'s version, before anything is built.
+2. `build` runs `build.yml`'s Windows and macOS jobs (tests included) with `release: true`, which sets `TAURI_CONFIG={"bundle":{"createUpdaterArtifacts":true}}` and the signing secrets for `tauri build`. Tauri then writes a `.sig` next to the NSIS setup.exe (the Windows update bundle is the setup.exe itself) and builds `Kanban95.app.tar.gz` plus `.sig` for each Mac target.
+3. `release` downloads both artifacts, renames the Mac update bundles to carry version and arch, writes `latest.json`, and runs `gh release create` for the tag (`--prerelease` when the version has a `-`).
+
+The Release holds:
+- `Kanban95_<version>_x64-setup.exe` and `.sig`
+- `Kanban95_<version>_aarch64.dmg`
+- `Kanban95_<version>_x64.dmg`
+- `Kanban95_<version>_aarch64.app.tar.gz` and `.sig`
+- `Kanban95_<version>_x64.app.tar.gz` and `.sig`
+- `latest.json`
+
+`latest.json` is the Tauri updater plugin's static manifest: `version`, `notes`, `pub_date` and `platforms` with one entry each for `windows-x86_64`, `darwin-aarch64` and `darwin-x86_64`, each a download `url` on this Release and the `signature` (the content of its `.sig`). `https://github.com/dillon-shearer/Kanban95/releases/latest/download/latest.json` always points at the newest full release; GitHub skips prereleases for `latest`.
+
+**Signing.** Update bundles are signed with a minisign key pair made once with `npx tauri signer generate`. The public key is `plugins.updater.pubkey` in `shell/tauri.bundle.json`; the app checks every update against it. The private key and its password are the repository secrets `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`, and the operator keeps the key file offline. They never go in the repo, a ticket, the brain or `~/.kanban95`, and only a release build gets them (branch builds see empty values and make no update bundles). `tauri build` refuses to sign with a key that does not match the public key. Losing the private key means installed apps can never take another update; a new key pair needs a release signed with the old key that ships the new public key. This signature is only for the updater: the installers themselves are not code-signed (Windows SmartScreen and macOS Gatekeeper still warn).
 
 ## Network boundary
 
