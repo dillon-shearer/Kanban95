@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { bumped, installed, restartBoard } from '../src/lifecycle.ts';
+import { writeConfig } from '../src/settings.ts';
 import { removeTemp } from './home.ts';
 import { git, landed, models, post, repo, send, srv, ticket } from './board.ts';
 
@@ -19,8 +20,9 @@ const bare = () => {
 afterAll(() => remotes.forEach(removeTemp));
 const version = () => JSON.parse(readFileSync(join(repo, 'package.json'), 'utf8')).version;
 
-/** Makes the test repo look like Kanban95's at v0.1.0, pushed to a fresh bare remote. Returns the remote. */
-function kanban95() {
+/** Makes the test repo look like Kanban95's at v0.1.0, pushed to a fresh bare remote, with `release` set to `on`. Returns the remote. */
+function kanban95(on = true) {
+  writeConfig('settings', { release: on }, repo);
   writeFileSync(join(repo, 'package.json'), JSON.stringify({ name: 'kanban95', version: '0.1.0', private: true }, null, 2) + '\n');
   mkdirSync(join(repo, 'shell'), { recursive: true });
   writeFileSync(join(repo, 'shell', 'tauri.conf.json'), '{}\n');
@@ -66,6 +68,28 @@ describe('POST /api/release', { timeout: 60_000 }, () => {
     expect((await r.json()).error).toMatch(/^only the Kanban95 repo releases/);
   });
 
+  it('is refused on the Kanban95 repo while the release setting is off, naming it', async () => {
+    kanban95(false);
+    const r = await release();
+    expect(r.status).toBe(409);
+    expect((await r.json()).error).toMatch(/^Release board is off: turn on "release" in settings.json/);
+    expect(version()).toBe('0.1.0');
+    expect(git('tag')).toBe('v0.1.0');
+  });
+
+  it('GET /api/update says release only on the Kanban95 repo with the setting on', async () => {
+    const flags = async () => {
+      const u = await (await send('GET')('/api/update')).json();
+      return [u.kanban95, u.release];
+    };
+    writeConfig('settings', { release: true }, repo);
+    expect(await flags()).toEqual([false, false]);
+    kanban95(false);
+    expect(await flags()).toEqual([true, false]);
+    writeConfig('settings', { release: true }, repo);
+    expect(await flags()).toEqual([true, true]);
+  });
+
   it('bumps, commits as the operator, tags and pushes main and the tag', async () => {
     const remote = kanban95();
     expect(await (await send('GET')('/api/release')).json()).toEqual({ version: '0.1.0', next: { patch: '0.1.1', minor: '0.2.0', major: '1.0.0' } });
@@ -99,6 +123,16 @@ describe('POST /api/release', { timeout: 60_000 }, () => {
 });
 
 describe('release pending', { timeout: 60_000 }, () => {
+  it('is not counted while the release setting is off', async () => {
+    kanban95(false);
+    srv.board.root = undefined;
+    models({ execute: 'touch-daemon' });
+    const id = ticket('Touch the daemon');
+    expect((await post(`/api/tickets/${id}/launch`)).status).toBe(200);
+    await landed(id);
+    expect(await (await send('GET')('/api/runner')).json()).not.toHaveProperty('release');
+  });
+
   it('counts commits since the last tag after a merge touching daemon/', async () => {
     kanban95();
     srv.board.root = undefined;

@@ -9,7 +9,7 @@ import { BRAIN_BODY_MAX, BRAIN_RANK, isConstraintError, SCOPES, type Brains, typ
 import { hasBranch, ticketDiff } from './git.js';
 import { audit, revoke } from './grants.js';
 import { cancelSetup, killGrantSession, killSession, sessions, sessionsOf, type Session } from './launcher.js';
-import { apply, brainstorm, BUMPS, changed, housekeeping, operator, pushBase, Refused, release, releaseInfo, restartBoard, runnerState, setRunner, tick, type Board, type Bump } from './lifecycle.js';
+import { apply, brainstorm, BUMPS, changed, housekeeping, isKanban95, operator, pushBase, Refused, release, releaseInfo, releaseOn, releasePending, restartBoard, runnerState, setRunner, tick, type Board, type Bump } from './lifecycle.js';
 import { addOverride, BadConfig, dropOverride, globalPath, isOverridable, knownModels, project, projectPath, projectsPath, readProjects, uncatalogued, writeConfig, writePreferences, writeProjects, type OverridableName } from './settings.js';
 import { isStale, resetTemplate, templatePath, TEMPLATES, unknownVar, VARS, writeTemplate, type TemplateName } from './templates.js';
 import { trustStatus, untrustClaude } from './trust.js';
@@ -468,7 +468,7 @@ const routes: [method: string, path: RegExp, mutation: string | null, handler: (
     if (failed !== null) throw new HttpError(409, failed);
     return { status: 202, body: { restarting: true, shell: board.shell === true } };
   }],
-  ['GET', /^\/api\/update$/, null, ({ board }) => ({ status: 200, body: { version: VERSION, offer: board.update ?? null } })],
+  ['GET', /^\/api\/update$/, null, ({ board }) => ({ status: 200, body: { version: VERSION, offer: board.update ?? null, release: releaseOn(board.repo), kanban95: isKanban95(board.repo) } })],
   ['POST', /^\/api\/update$/, 'update.answer', ({ board, body }) => {
     if (body.answer === 'later') {
       board.update = undefined;
@@ -635,6 +635,7 @@ function sessionView(s: Session) {
 }
 
 function settingsChanged(board: Board) {
+  releasePending(board);
   changed(null);
   tick(board);
 }

@@ -952,15 +952,25 @@ export function bumped(v: string, bump: Bump) {
   return `${x}.${y}.${pre ? z : z + 1}`;
 }
 
+export function releaseOn(repo: string) {
+  if (!isKanban95(repo)) return false;
+  try {
+    return readConfig('settings', repo).release;
+  } catch {
+    return false;
+  }
+}
+
 export function releaseInfo(b: Board) {
   if (!isKanban95(b.repo)) throw new Refused(NOT_KANBAN95);
+  if (!releaseOn(b.repo)) throw new Refused(RELEASE_OFF);
   const v = version(b.repo);
   return { version: v, next: Object.fromEntries(BUMPS.map((k) => [k, bumped(v, k)])) };
 }
 
 export function releasePending(b: Board) {
   b.release = undefined;
-  if (!isKanban95(b.repo)) return;
+  if (!releaseOn(b.repo)) return;
   try {
     const since = git(b.repo, 'describe', '--tags', '--abbrev=0', '--match', 'v*');
     const commits = Number(git(b.repo, 'rev-list', '--count', `${since}..HEAD`, '--', ...RELEASE_PATHS));
@@ -971,10 +981,12 @@ export function releasePending(b: Board) {
 }
 
 const NOT_KANBAN95 = 'only the Kanban95 repo releases (it has shell/tauri.conf.json and a package.json named kanban95)';
+const RELEASE_OFF = 'Release board is off: turn on "release" in settings.json (Settings -> Board -> Show Release board)';
 const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? '' : 's'}`;
 
 async function releaseRefusal(b: Board): Promise<string | null> {
   if (!isKanban95(b.repo)) return NOT_KANBAN95;
+  if (!releaseOn(b.repo)) return RELEASE_OFF;
   const [n, m] = [toFinish(b), terminals()];
   if (n || m) return `${plural(n, 'ticket')} running and ${plural(m, 'terminal')} open; release once nothing runs`;
   const dirty = git(b.repo, 'status', '--porcelain', '--untracked-files=no');

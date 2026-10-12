@@ -47,6 +47,7 @@ const FILES = {
     concurrency: z.number().int().min(1).max(10).default(3),
     sleepAfterMinutes: z.number().min(0).default(30),
     updateCheck: z.boolean().default(true),
+    release: z.boolean().default(false),
   }).strict(),
 };
 type ConfigName = keyof typeof FILES;

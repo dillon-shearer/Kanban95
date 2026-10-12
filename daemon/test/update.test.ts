@@ -53,7 +53,7 @@ describe('the shell reports', () => {
     expect((await report(offer)).status).toBe(204);
     events.off('event', on);
     expect(heard).toEqual([offer]);
-    expect(await (await call('GET', '/api/update')).json()).toEqual({ version: VERSION, offer: { version: '9.0.0', current: VERSION } });
+    expect(await (await call('GET', '/api/update')).json()).toEqual({ version: VERSION, offer: { version: '9.0.0', current: VERSION }, release: false, kanban95: false });
   });
 
   it('only from the shell: a page sends Origin, a board started by hand has no shell, and a bad report is refused', async () => {

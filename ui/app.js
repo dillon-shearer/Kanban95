@@ -33,7 +33,7 @@ let runner = { on: false, concurrency: 3, running: [], left: 0, backlog: 0, wait
 let models = null; // models.json this board runs on (this repo's copy, else the global file), for the cards' default model and effort
 // Sounds stay off until /config/settings loads: listen() starts first, and a ding in that gap ignored the operator's choice.
 // `terminals` is absent until then too, so no session is opened or passed over before the operator's phases are known.
-const SETTINGS = { paths: {}, sounds: { merge: false, attention: false, done: false }, voice: { backend: 'local', mode: 'push' }, housekeeping: { auto: true, every: 10 }, idle_minutes: 20, zoom: 1, push_after_merge: true, sleepAfterMinutes: 30, concurrency: 3, updateCheck: true };
+const SETTINGS = { paths: {}, sounds: { merge: false, attention: false, done: false }, voice: { backend: 'local', mode: 'push' }, housekeeping: { auto: true, every: 10 }, idle_minutes: 20, zoom: 1, push_after_merge: true, sleepAfterMinutes: 30, concurrency: 3, updateCheck: true, release: false };
 let settings = { ...SETTINGS };
 let limits = null; // GET /api/limits: { rows, errors, fetched_at }, null until the first answer
 const views = new Map(); // open window id → redraw(Set of changed ticket ids | undefined)
@@ -412,6 +412,8 @@ async function restartBoard() {
   }
 }
 let appVersion = '';
+let canRelease = false;
+let kanban95 = false;
 let checking = false;
 let updating = null;
 const updateStatus = (text) => {
@@ -1508,6 +1510,9 @@ function openSettings(tab) {
           h('fieldset', {}, h('legend', {}, 'Updates'),
             h('div', { class: 'field-row' }, h('input', { type: 'checkbox', id: 'update-check', checked: s.updateCheck,
               onchange: (e) => put({ updateCheck: e.target.checked }) }), h('label', { for: 'update-check' }, 'Check for a new release when Kanban95 starts')),
+            kanban95 && h('div', { class: 'field-row' }, h('input', { type: 'checkbox', id: 'release-board', checked: s.release,
+              onchange: (e) => put({ release: e.target.checked }, 'Saved.', async () => { canRelease = (await api('GET', '/update')).release; }) }),
+            h('label', { for: 'release-board' }, 'Show Release board')),
             h('div', { class: 'field-row' }, h('button', { id: 'update-now', onclick: checkForUpdates }, 'Check for updates'),
               h('span', { id: 'update-status' }, appVersion ? `This is Kanban95 v${appVersion}.` : '')))];
       }, redraw)]);
@@ -1786,7 +1791,7 @@ async function boot() {
   start.addEventListener('click', () => {
     closeSwitch();
     loadProjectItems(); // for the next opening; this one shows the list as last read
-    const m = menu(0, 0, START);
+    const m = menu(0, 0, START.filter((s) => s.run !== releaseBoard || canRelease));
     const r = start.getBoundingClientRect();
     Object.assign(m.style, { left: `${r.left / scale()}px`, top: `${r.top / scale() - m.offsetHeight}px` });
   });
@@ -1805,6 +1810,8 @@ async function boot() {
   paintProject().catch((e) => say(e.message));
   const [list, update] = await Promise.all([api('GET', '/tickets'), api('GET', '/update'), loadSettings(), loadModels().catch(() => { models = null; }), ui.load()]);
   appVersion = update.version;
+  canRelease = update.release;
+  kanban95 = update.kanban95;
   for (const s of ui.get('k95.collapsed') ?? ['done']) collapsed.add(s); // nothing saved: Done starts folded
   loadView(ui.get('k95.view'));
   for (const t of list) tickets.set(t.id, t);
