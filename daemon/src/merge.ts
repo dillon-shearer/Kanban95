@@ -44,7 +44,7 @@ export async function merge(repo: string, ticketId: number, title: string, wante
 }
 
 /** The main checkout's branch, its upstream remote and the branch there; `null` when the branch tracks nothing. */
-async function upstream(repo: string): Promise<{ base: string; remote: string; ref: string } | null> {
+export async function upstream(repo: string): Promise<{ base: string; remote: string; ref: string } | null> {
   try {
     const base = (await git(repo, 'rev-parse', '--abbrev-ref', 'HEAD')).stdout.trim();
     const remote = (await git(repo, 'config', `branch.${base}.remote`)).stdout.trim();
@@ -73,11 +73,15 @@ type PushResult = { ok: true; pushed: boolean } | { ok: false; base: string; rem
  * missing credential fails instead of hanging the queue. `pushed: false`: the base has no upstream, nothing was run.
  * ponytail: a 2-minute timeout holds the merge queue that long on a stalled network; upgrade is a push queue of its own.
  */
-export async function push(repo: string): Promise<PushResult> {
+export const push = (repo: string) => pushRefs(repo, []);
+
+export const pushRelease = (repo: string, tag: string) => pushRefs(repo, ['--atomic'], `refs/tags/${tag}`);
+
+async function pushRefs(repo: string, flags: string[], ...refs: string[]): Promise<PushResult> {
   const u = await upstream(repo);
   if (!u) return { ok: true, pushed: false };
   try {
-    await run('git', ['push', u.remote, `${u.base}:${u.ref}`], {
+    await run('git', ['push', ...flags, u.remote, `${u.base}:${u.ref}`, ...refs], {
       cwd: repo, encoding: 'utf8', timeout: 120_000, windowsHide: true, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
     });
     return { ok: true, pushed: true };

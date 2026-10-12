@@ -13,7 +13,7 @@ import { openDb, openGlobalBrain } from './db.js';
 import { git, initRepo } from './git.js';
 import { sweep, SWEEP_MS } from './janitor.js';
 import { killAll, launch, sessions } from './launcher.js';
-import { countUnpushed, events, recover, tick, watchSilence, type Board } from './lifecycle.js';
+import { countUnpushed, events, recover, releasePending, tick, watchSilence, type Board } from './lifecycle.js';
 import { handleMcp } from './mcp.js';
 import { startMemoryLog } from './memlog.js';
 import { idle } from './merge.js';
@@ -265,6 +265,7 @@ export function start(config: Config = {}): Promise<{
       // Janitor and recovery on start, the janitor again once a day (docs/LIFECYCLE.md).
       sweep(board).catch(() => {});
       void countUnpushed(board); // the status bar's "N commits not pushed"
+      releasePending(board);
       recover(board);
       tick(board); // the runner picks up where it was
       const daily = setInterval(() => sweep(board).catch(() => {}), SWEEP_MS).unref();
