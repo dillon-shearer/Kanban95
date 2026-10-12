@@ -188,6 +188,7 @@ Each board works on one repo, so with several boards open they are told apart by
 
 - **Open here**: the project's board takes this window, as in the Switch board popup below; one already hosted here is switched to, one running in another window is refused and the status bar says so. Greyed out on this board's own.
 - **Open in new window**: a project not running starts a new board on it, without a console window, next to this one, which keeps running ("Opening <name>…"; the new window appears once its daemon is up). One running in another window comes to the front, restored if it was minimized ("Focused <name>"). One hosted here pops out into its own window.
+- **Dock**: only on this board's own project, when the board is popped out into its own window; that window closes and the board goes back into the main Kanban95 window ("Docking <name>…").
 - **Close board**: only on a project hosted in this window; closes its board after a confirm.
 
 If something cannot be done, the status bar says why. Below the projects, after a separator, **Add project board…** opens Settings on the Projects tab (switching to it if Settings is already open on another tab) with **Folder** focused: type the path and press **Add**. From a repo checkout the new board runs the shell as last built (Kanban95.cmd builds it); on macOS a running board is not brought forward, switch to it from the Dock.

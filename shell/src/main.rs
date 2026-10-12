@@ -183,7 +183,7 @@ fn label(repo: &str) -> String {
 }
 
 fn show(label: &str, repo: &str, b: &Board) -> Effect {
-    Effect::Show { label: label.into(), url: url(b.port, &b.secret), title: title(Some(repo.into())) }
+    Effect::Show { label: label.into(), url: url(b.port, &b.secret, b.place), title: title(Some(repo.into())) }
 }
 
 impl Host {
@@ -259,7 +259,7 @@ impl Host {
                 }
                 let b = t.boards.get_mut(&repo).expect("hosted");
                 b.place = Place::Own;
-                fx.push(Effect::Open { label: label(&repo), url: url(b.port, &b.secret), title: title(Some(repo.clone())) });
+                fx.push(Effect::Open { label: label(&repo), url: url(b.port, &b.secret, b.place), title: title(Some(repo.clone())) });
             }
             (Verb::Dock, Some(Place::Own)) => {
                 let b = t.boards.get_mut(&repo).expect("hosted");
@@ -459,8 +459,9 @@ fn kill_children_with_us() {
 fn kill_children_with_us() {}
 
 /// The daemon swaps `?k95=` for an HttpOnly cookie and redirects to `/`, so the page never holds the secret.
-fn url(port: u16, secret: &str) -> Url {
-    format!("http://127.0.0.1:{port}/?k95={secret}").parse().expect("daemon url")
+fn url(port: u16, secret: &str, place: Place) -> Url {
+    let own = if place == Place::Own { "#own" } else { "" };
+    format!("http://127.0.0.1:{port}/?k95={secret}{own}").parse().expect("daemon url")
 }
 
 /// Whether `to` is on a hosted daemon's origin, `http://127.0.0.1:<port>`.
@@ -648,7 +649,7 @@ fn main() {
             let host = setup;
             let (handle, ports) = (app.handle().clone(), host.ports.clone());
             let _ = host.ui.set(Box::new(move |fx| apply(&handle, &ports, fx)));
-            let main = url(first.port, &first.secret);
+            let main = url(first.port, &first.secret, Place::Docked);
             host.first(&repo, first);
             follow_page_fullscreen(&window(app, MAIN, main, title(Some(repo)), host.ports.clone())?);
             std::thread::spawn(move || {
@@ -786,7 +787,7 @@ mod tests {
 
         host.command(Verb::Popout, "k95-a");
         let fx = effects(&seen);
-        assert!(matches!(&fx[..], [Effect::Show { label: main, .. }, Effect::Open { label: own, url, .. }] if main == MAIN && *own == label("k95-a") && url.port() == Some(41001)), "{fx:?}");
+        assert!(matches!(&fx[..], [Effect::Show { label: main, .. }, Effect::Open { label: own, url, .. }] if main == MAIN && *own == label("k95-a") && url.port() == Some(41001) && url.fragment() == Some("own")), "{fx:?}");
         assert_eq!(lock(&host.table).main, "k95-b");
 
         host.command(Verb::Popout, "k95-b");
@@ -795,7 +796,7 @@ mod tests {
 
         host.command(Verb::Dock, "k95-a");
         let fx = effects(&seen);
-        assert!(matches!(&fx[..], [Effect::Close(own), Effect::Show { label: main, url, .. }] if *own == label("k95-a") && main == MAIN && url.port() == Some(41001)), "{fx:?}");
+        assert!(matches!(&fx[..], [Effect::Close(own), Effect::Show { label: main, url, .. }] if *own == label("k95-a") && main == MAIN && url.port() == Some(41001) && url.fragment().is_none()), "{fx:?}");
         assert_eq!(hosted(&host), [("k95-a".into(), Place::Docked), ("k95-b".into(), Place::Docked)]);
 
         host.command(Verb::Popout, "k95-b");

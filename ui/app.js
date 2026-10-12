@@ -1011,6 +1011,7 @@ function projectItems() {
     return { label: name + (self ? ' (this board)' : live ? ' (running)' : ''), items: [
       { label: 'Open here', disabled: self, run: () => (here ? askShell('switch', p.path) : askShell('open', p.path, { where: 'here' })) },
       { label: 'Open in new window', disabled: self && !here, run: () => (here ? askShell('popout', p.path) : switchProject(p.path, name, live)) },
+      ...(self && here && location.hash === '#own' ? [{ label: 'Dock', run: () => askShell('dock', p.path) }] : []),
       ...(here ? [{ label: 'Close board', run: () => closeBoard(p.path) }] : []),
     ] };
   });
