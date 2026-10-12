@@ -179,6 +179,20 @@ A merge that changes `daemon/`, `templates/`, `shell/`, `package.json` or `packa
 - **Self-restart** (`stale: 'daemon'`, the daemon run by the shell): once nothing is left to finish and no brainstorm or operator terminal is open, checked after every `apply` and every agent or terminal exit, the board restarts through `restartBoard`, the same path as Start → Restart board (build, then exit 75). It runs once; `recover` and `tick` on the next start carry on. `runner.json` is untouched, so a runner that was on launches the backlog again and one that was off stays off. A failed build keeps the hold, logs `[restart] ...` with the compiler output, and waits for the operator's Restart board (which shows the output) or the next merge, which tries again.
 - **`stale: 'shell'`** (every changed path is under `shell/`) holds nothing and never restarts by itself: the runner carries on, and the Restart badge stays up until the operator relaunches (close Kanban95 and start it again). A later merge that also touches `daemon/`, `templates/` or a package file turns it into `daemon`. A daemon started by hand, without the shell, does not restart itself either; the operator uses Restart board.
 - **`GET /api/runner`** adds `hold: {finish, terminals, restart}` while `stale` is `daemon`: `finish` is the count above, `terminals` the open brainstorm and operator terminals, `restart` is `self`, `manual` (no shell), or `failed` (the build failed). The Board status bar shows it in place of the runner line: "restart pending, N tickets to finish", then ", M terminals to close" when M is not 0, plus what the operator has to do when the board cannot restart by itself.
+- **Installed app**: a daemon run from an installed `app/` (its install root, the folder beside the exe, has no `daemon/src`; `installed()` in `daemon/src/lifecycle.ts`) runs the installer's code, not the repo's. A merge never makes it stale, so nothing is held and it never restarts by itself; in the Kanban95 repo the merge shows up as release pending instead (Release board, below). Restart board there skips `npm run build` and just restarts.
+
+### Release board
+
+Start → Release board (`POST /api/release {bump}`, `release` in `daemon/src/lifecycle.ts`) cuts a release of Kanban95 from its own repo. Nothing releases on a push to main; only this button, or a `vX.Y.Z` tag pushed by hand, starts the release workflow (`docs/ARCHITECTURE.md` → Releases). It runs in the merge queue, so no merge lands in between, and refuses with `409` and the reason unless:
+
+- the repo is the Kanban95 repo (it has `shell/tauri.conf.json` and a `package.json` named `kanban95`);
+- nothing runs: the same count the restart hold waits for (To finish, above), and no brainstorm or operator terminal is open;
+- the main working tree has no uncommitted changes to tracked files;
+- the branch has an upstream and no commit it lacks (as last fetched or pushed).
+
+Then it runs `npm version <bump> --no-git-tag-version` in the main checkout, commits `package.json` and `package-lock.json` as "Release vX.Y.Z" by the operator's git identity (`user.useConfigOnly`, no trailer), tags `vX.Y.Z`, and pushes the branch and the tag in one `git push --atomic`, so the remote gets both or neither. If any step fails, the tag is deleted, the branch goes back to the commit it was on and the two package files are restored; the reply is `502` with npm's or git's message.
+
+**Release pending.** In the Kanban95 repo, at start and after each merge, the daemon counts the commits since the newest `v*` tag that touch `daemon/`, `shell/` or `templates/` (`releasePending`). When there are any, `GET /api/runner` adds `release: {pending: true, since, commits}` and the Board status bar shows "release pending (N commits since vA.B.C)" next to the runner or restart text. It never holds anything. With no `v*` tag yet, nothing is pending.
 
 ### Stop holds every automatic launch
 

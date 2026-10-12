@@ -498,6 +498,35 @@ function offerUpdate({ version, current }) {
   now.focus();
 }
 
+const ACTIONS = 'https://github.com/dillon-shearer/Kanban95/actions';
+const BUMP_LABEL = { patch: 'Patch', minor: 'Minor', major: 'Major' };
+async function releaseBoard() {
+  let info;
+  try {
+    info = await api('GET', '/release');
+  } catch (e) {
+    return void (await dialog('Release board', h('p', {}, e.message)));
+  }
+  let bump = 'patch';
+  const body = h('div', { class: 'k95-release' },
+    h('p', {}, `Current version: ${info.version}`),
+    Object.entries(BUMP_LABEL).map(([k, label]) => h('div', { class: 'field-row' },
+      h('input', { type: 'radio', id: `bump-${k}`, name: 'bump', checked: k === bump, onchange: () => { bump = k; } }),
+      h('label', { for: `bump-${k}` }, `${label} (${info.next[k]})`))));
+  if ((await dialog('Release board', body, ['Release', 'Cancel'])) !== 'Release') return;
+  say('Releasing…');
+  try {
+    const r = await api('POST', '/release', { bump });
+    runner = r.runner;
+    drawBoard();
+    say(`Released ${r.tag}.`);
+    await dialog('Release board', h('div', {}, h('p', {}, `Tag ${r.tag} was pushed. The release workflow builds the installers:`),
+      h('p', {}, h('a', { href: ACTIONS, target: '_blank', rel: 'noopener' }, ACTIONS))));
+  } catch (e) {
+    say(`Not released: ${e.message.split('\n')[0]}`);
+    await dialog('Board not released', h('pre', { class: 'k95-pre' }, e.message));
+  }
+}
 const pushBase = () => act(async () => {
   say('Pushing…');
   runner = await api('POST', '/push');
@@ -635,6 +664,7 @@ function openBoard() {
       run: () => { view.sort[s] = k; saveView(); drawBoard(); } })));
   } }, '▾');
   const heldField = h('p', { class: 'status-bar-field k95-held' });
+  const releaseField = h('p', { class: 'status-bar-field k95-release-pending' });
   // runner.unpushed: commits on the base its upstream lacks, counted on start; Push runs the merge queue's push.
   const unpushedText = h('span');
   const unpushedField = h('p', { class: 'status-bar-field k95-unpushed' }, unpushedText, ' ', h('button', { onclick: pushBase }, 'Push'));
@@ -649,7 +679,7 @@ function openBoard() {
       h('button', { onclick: newBrainstorm, title: 'Ctrl+N' }, 'New brainstorm'),
       h('button', { onclick: housekeeping }, 'Housekeeping')),
     cols,
-    h('div', { class: 'status-bar' }, status, runField, unpushedField, heldField, h('p', { class: 'status-bar-field k95-filter-field' }, filter)));
+    h('div', { class: 'status-bar' }, status, runField, releaseField, unpushedField, heldField, h('p', { class: 'status-bar-field k95-filter-field' }, filter)));
   say = (msg) => { status.textContent = msg; status.title = msg; };
   views.set('board', () => {
     const all = [...tickets.values()];
@@ -678,6 +708,9 @@ function openBoard() {
     heldField.hidden = !held;
     unpushedText.textContent = `${runner.unpushed} commit${runner.unpushed === 1 ? '' : 's'} not pushed`;
     unpushedField.hidden = !runner.unpushed;
+    const rel = runner.release;
+    releaseField.textContent = rel ? `release pending (${rel.commits} commit${rel.commits === 1 ? '' : 's'} since ${rel.since})` : '';
+    releaseField.hidden = !rel;
   });
   drawBoard();
 }
@@ -1647,6 +1680,7 @@ const START = [
   { label: 'Reset startup layout', run: resetLayout },
   { get label() { return document.fullscreenElement ? 'Exit full screen' : 'Full screen'; }, run: toggleFullscreen },
   { label: 'Restart board', run: restartBoard },
+  { label: 'Release board…', run: releaseBoard },
   '-',
   { get label() { return `Kanban95 v${appVersion}`; }, disabled: true },
 ];

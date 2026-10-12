@@ -9,7 +9,7 @@ import { BRAIN_BODY_MAX, BRAIN_RANK, isConstraintError, SCOPES, type Brains, typ
 import { hasBranch, ticketDiff } from './git.js';
 import { audit, revoke } from './grants.js';
 import { cancelSetup, killGrantSession, killSession, sessions, sessionsOf, type Session } from './launcher.js';
-import { apply, brainstorm, changed, housekeeping, operator, pushBase, Refused, restartBoard, runnerState, setRunner, tick, type Board } from './lifecycle.js';
+import { apply, brainstorm, BUMPS, changed, housekeeping, operator, pushBase, Refused, release, releaseInfo, restartBoard, runnerState, setRunner, tick, type Board, type Bump } from './lifecycle.js';
 import { addOverride, BadConfig, dropOverride, globalPath, isOverridable, knownModels, project, projectPath, projectsPath, readProjects, uncatalogued, writeConfig, writePreferences, writeProjects, type OverridableName } from './settings.js';
 import { isStale, resetTemplate, templatePath, TEMPLATES, unknownVar, VARS, writeTemplate, type TemplateName } from './templates.js';
 import { trustStatus, untrustClaude } from './trust.js';
@@ -490,6 +490,13 @@ const routes: [method: string, path: RegExp, mutation: string | null, handler: (
     if (!r.success) throw new HttpError(400, `bad update report: ${r.error.issues[0]?.message}`);
     relay(board, r.data);
     return { status: 204 };
+  }],
+  ['GET', /^\/api\/release$/, null, ({ board }) => ({ status: 200, body: releaseInfo(board) })],
+  ['POST', /^\/api\/release$/, 'board.release', async ({ board, body }) => {
+    if (!BUMPS.includes(body.bump as Bump)) throw new HttpError(400, `bump must be one of ${BUMPS.join(', ')}`);
+    const r = await release(board, body.bump as Bump);
+    if ('failed' in r) throw new HttpError(502, r.failed);
+    return { status: 200, body: { tag: r.tag, runner: runnerState(board) } };
   }],
   // <repo>/.kanban95/notepad.md, the operator's scratch notes, whole file in `value` both ways ('' when absent).
   // Not audited: it autosaves every pause in typing and is nothing an agent reads.
