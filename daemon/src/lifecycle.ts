@@ -12,7 +12,7 @@ import { revoke, type Role } from './grants.js';
 import { cleanTicket } from './janitor.js';
 import { cancelSetup, killSession, launch, launchRoot, prepareWorktree, SetupCancelled, sessions, sessionsOf, settingUp, transcriptSize, type Session } from './launcher.js';
 import { mark } from './memlog.js';
-import { ahead, enqueue, merge, push } from './merge.js';
+import { ahead, enqueue, merge, push, pushRelease, upstream } from './merge.js';
 import { lastLines } from './pty.js';
 import { BadConfig, EFFORT, readConfig, runSettings, type Effort } from './settings.js';
 import { TEMPLATES } from './templates.js';
@@ -167,6 +167,7 @@ export interface Board {
   stale?: false | 'daemon' | 'shell';
   /** The board's own restart after a merge (restartWhenIdle): under way, or its build failed and it waits for the operator or the next merge. */
   restart?: 'running' | 'failed';
+  release?: { since: string; commits: number };
   /** Commits on the base its upstream lacks, counted on start (push_after_merge on) and zeroed by a push; the status bar's Push button. */
   unpushed?: number;
   /** Set while tick() holds launches because free memory is under the floor (The runner → Memory hold); runnerState reports it. */
@@ -534,7 +535,10 @@ async function mergeJob(b: Board, id: number, since: number) {
   if (r.ok && readTicket(b.db, id).status !== 'done') return;
   let out;
   if (r.ok) {
-    if (!inBase) markStale(b);
+    if (!inBase) {
+      markStale(b);
+      releasePending(b);
+    }
     // Published before it counts as merged: a failed push flags the ticket and leaves the merge in the base.
     const p = readConfig('settings', b.repo).push_after_merge ? await push(b.repo) : { ok: true as const, pushed: false };
     if (!p.ok) {
@@ -584,7 +588,7 @@ ${p.reason}`;
  */
 function markStale(b: Board) {
   if (b.restart === 'failed') b.restart = undefined;
-  if (!b.startCommit) return;
+  if (!b.startCommit || installed(rootOf(b))) return;
   let files: string[];
   try {
     files = git(b.repo, 'diff', '--name-only', b.startCommit, 'HEAD', '--', 'daemon/', 'templates/', 'shell/', 'package.json', 'package-lock.json').split('\n').filter(Boolean);
@@ -773,7 +777,7 @@ export function runnerState(b: Board) {
   const restart = b.restart === 'failed' ? 'failed' : b.shell && b.shutdown ? 'self' : 'manual';
   const r = runner(b);
   return { ...r, concurrency: limit(b), running: running(b), left: cs.length, backlog: n, waits, stale: b.stale ?? false, unpushed: b.unpushed ?? 0,
-    ...(b.stale === 'daemon' && { hold: { finish: toFinish(b), terminals: terminals(), restart } }), ...(b.gitError && { gitError: b.gitError }), ...(r.on && b.lowMemory && { lowMemory: b.lowMemory }) };
+    ...(b.release && { release: { pending: true, ...b.release } }), ...(b.stale === 'daemon' && { hold: { finish: toFinish(b), terminals: terminals(), restart } }), ...(b.gitError && { gitError: b.gitError }), ...(r.on && b.lowMemory && { lowMemory: b.lowMemory }) };
 }
 
 /**
@@ -813,6 +817,8 @@ function toFinish(b: Board) {
 const terminals = () => [...sessions.values()].filter((s) => s.ticketId === null).length;
 
 const BUILD_TIMEOUT = 120_000;
+const rootOf = (b: Board) => b.root ?? resolve(import.meta.dirname, '../..');
+export const installed = (root: string) => !existsSync(join(root, 'daemon', 'src'));
 
 /**
  * Start → Restart board, and the board's own restart after a merge: rebuild (from a repo checkout; an installed app/ has no
@@ -820,8 +826,8 @@ const BUILD_TIMEOUT = 120_000;
  * the new port (docs/ARCHITECTURE.md -> Restart board). Resolves to why it did not restart (the compiler output), or null.
  */
 export async function restartBoard(b: Board): Promise<string | null> {
-  const root = b.root ?? resolve(import.meta.dirname, '../..');
-  if (existsSync(join(root, 'daemon', 'src'))) {
+  const root = rootOf(b);
+  if (!installed(root)) {
     const failed = await new Promise<string | null>((ok) => {
       // Through a shell, since npm is npm.cmd on Windows. The command is fixed; nothing from a request reaches it.
       exec('npm run build', { cwd: root, timeout: BUILD_TIMEOUT, windowsHide: true }, (e, out, err) =>
@@ -918,4 +924,95 @@ export function recover(b: Board) {
   for (const { id } of b.db.prepare("SELECT id FROM tickets WHERE status = 'done' AND merged_at IS NULL AND needs_human = 0").all() as { id: number }[]) {
     queueMerge(b, id);
   }
+}
+
+export const BUMPS = ['patch', 'minor', 'major'] as const;
+export type Bump = (typeof BUMPS)[number];
+const RELEASE_PATHS = ['daemon/', 'shell/', 'templates/'];
+
+export function isKanban95(repo: string) {
+  try {
+    return existsSync(join(repo, 'shell', 'tauri.conf.json')) && JSON.parse(readFileSync(join(repo, 'package.json'), 'utf8')).name === 'kanban95';
+  } catch {
+    return false;
+  }
+}
+
+const version = (repo: string) => String(JSON.parse(readFileSync(join(repo, 'package.json'), 'utf8')).version);
+
+export function bumped(v: string, bump: Bump) {
+  const m = /^(\d+)\.(\d+)\.(\d+)(-.+)?$/.exec(v);
+  const [x, y, z] = m ? [Number(m[1]), Number(m[2]), Number(m[3])] : [0, 0, 0];
+  const pre = m?.[4];
+  if (bump === 'major') return `${pre && !y && !z ? x : x + 1}.0.0`;
+  if (bump === 'minor') return `${x}.${pre && !z ? y : y + 1}.0`;
+  return `${x}.${y}.${pre ? z : z + 1}`;
+}
+
+export function releaseInfo(b: Board) {
+  if (!isKanban95(b.repo)) throw new Refused(NOT_KANBAN95);
+  const v = version(b.repo);
+  return { version: v, next: Object.fromEntries(BUMPS.map((k) => [k, bumped(v, k)])) };
+}
+
+export function releasePending(b: Board) {
+  b.release = undefined;
+  if (!isKanban95(b.repo)) return;
+  try {
+    const since = git(b.repo, 'describe', '--tags', '--abbrev=0', '--match', 'v*');
+    const commits = Number(git(b.repo, 'rev-list', '--count', `${since}..HEAD`, '--', ...RELEASE_PATHS));
+    if (commits) b.release = { since, commits };
+  } catch {
+    b.release = undefined;
+  }
+}
+
+const NOT_KANBAN95 = 'only the Kanban95 repo releases (it has shell/tauri.conf.json and a package.json named kanban95)';
+const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? '' : 's'}`;
+
+async function releaseRefusal(b: Board): Promise<string | null> {
+  if (!isKanban95(b.repo)) return NOT_KANBAN95;
+  const [n, m] = [toFinish(b), terminals()];
+  if (n || m) return `${plural(n, 'ticket')} running and ${plural(m, 'terminal')} open; release once nothing runs`;
+  const dirty = git(b.repo, 'status', '--porcelain', '--untracked-files=no');
+  if (dirty) return `the main working tree has uncommitted changes:
+${dirty}`;
+  if (!(await upstream(b.repo))) return 'the main branch tracks no remote branch, so there is nowhere to push the release';
+  const a = await ahead(b.repo);
+  if (a) return `main has ${plural(a, 'commit')} not pushed; push first`;
+  return null;
+}
+
+export async function release(b: Board, bump: Bump): Promise<{ tag: string } | { failed: string }> {
+  let out = { failed: 'the release did not run' } as { tag: string } | { failed: string } | { refused: string };
+  await enqueue(async () => {
+    const why = await releaseRefusal(b);
+    if (why) return void (out = { refused: why });
+    const head = git(b.repo, 'rev-parse', 'HEAD');
+    const files = ['package.json', 'package-lock.json'].filter((f) => existsSync(join(b.repo, f)));
+    let tag = '';
+    try {
+      await new Promise<void>((ok, fail) =>
+        exec(`npm version ${bump} --no-git-tag-version`, { cwd: b.repo, timeout: BUILD_TIMEOUT, windowsHide: true }, (e, o, err) =>
+          (e ? fail(new Error(`${o}${err}`.trim() || e.message)) : ok())));
+      tag = `v${version(b.repo)}`;
+      git(b.repo, 'add', '--', ...files);
+      git(b.repo, '-c', 'user.useConfigOnly=true', 'commit', '-q', '-m', `Release ${tag}`);
+      git(b.repo, 'tag', tag);
+      const p = await pushRelease(b.repo, tag);
+      if (!p.ok) throw new Error(`git push to ${p.remote} failed:
+${p.reason}`);
+      out = { tag };
+    } catch (e) {
+      if (tag) try { git(b.repo, 'tag', '-d', tag); } catch { /* not made */ }
+      git(b.repo, 'reset', '-q', '--soft', head);
+      git(b.repo, 'checkout', head, '--', ...files);
+      const x = e as { stderr?: string; message: string };
+      out = { failed: String(x.stderr ?? '').trim() || x.message };
+    }
+    releasePending(b);
+  });
+  changed(null);
+  if ('refused' in out) throw new Refused(out.refused);
+  return out;
 }
