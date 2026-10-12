@@ -134,6 +134,7 @@ export function deleteTicket(board: Board, id: number) {
   // Its agents stop with it. The outcome makes their exit expected, so it flags nothing on a ticket that is gone.
   endSessions(db, id, 'deleted');
   rmSync(attachmentDir(board.repo, id), { recursive: true, force: true });
+  tick(board);
 }
 
 export function transaction<T>(db: DatabaseSync, fn: () => T): T {

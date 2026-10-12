@@ -259,6 +259,15 @@ describe('runner', { timeout: 60_000 }, () => {
     expect(runner(srv.board)).toEqual(STOPPED);
   });
 
+  it('fills the slot of a running ticket the operator deletes', async () => {
+    const a = ticket('Unwanted', { model: 'hang' });
+    const b = ticket('Next', { model: 'hang' });
+    await setMax(1);
+    expect((await setRun(true)).running).toEqual([a]);
+    expect((await request('DELETE', `/api/tickets/${a}`)).status).toBe(204);
+    expect(await state()).toMatchObject({ on: true, running: [b] });
+  });
+
   it('survives a restart: the flag stays on, recover resumes the running ticket, then the runner goes on', async () => {
     const cut = ticket('Cut off', { status: 'in_progress' });
     createWorktree(repo, cut);
