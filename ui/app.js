@@ -36,7 +36,7 @@ let models = null; // models.json this board runs on (this repo's copy, else the
 const SETTINGS = { paths: {}, sounds: { merge: false, attention: false, done: false }, voice: { backend: 'local', mode: 'push' }, housekeeping: { auto: true, every: 10 }, idle_minutes: 20, zoom: 1, push_after_merge: true, sleepAfterMinutes: 30, concurrency: 3 };
 let settings = { ...SETTINGS };
 let limits = null; // GET /api/limits: { rows, errors, fetched_at }, null until the first answer
-const views = new Map(); // open window id → redraw(ticketId | null)
+const views = new Map(); // open window id → redraw(Set of changed ticket ids | undefined)
 
 async function refreshTicket(id) {
   try {
@@ -60,7 +60,7 @@ async function refreshShared() {
   openNewTerminals();
   taskbar();
 }
-const redraw = (ticket) => views.forEach((f) => f(ticket));
+const redraw = (ids) => views.forEach((f) => f(ids));
 
 const SOUND_SETTING = { ding: 'merge', chord: 'attention', done: 'done' };
 
@@ -76,10 +76,9 @@ function listen() {
       else if (e.sound === 'done' && e.ticket != null) say(`#${e.ticket} passed, in Done.`);
       return;
     }
-    if (e.ticket != null) await refreshTicket(e.ticket);
-    else if (e.ticket === null) loadProjectItems();
-    await refreshShared();
-    redraw(e.ticket);
+    if (e.ticket != null) dirty.add(e.ticket);
+    else if (e.ticket === null) projectDirty = true;
+    schedule();
   };
   // Only Restart board reconnects: the shell navigates this window to the new daemon, which reloads the page.
   ws.onclose = () => {
@@ -89,6 +88,32 @@ function listen() {
   };
 }
 let restarting = false;
+
+const dirty = new Set();
+let projectDirty = false;
+let queued = false;
+let passing = false;
+function schedule() {
+  queued = true;
+  if (!passing) setTimeout(pass, 50);
+  passing = true;
+}
+async function pass() {
+  queued = false;
+  const ids = new Set(dirty);
+  dirty.clear();
+  const project = projectDirty;
+  projectDirty = false;
+  try {
+    await Promise.all([...ids].map(refreshTicket));
+    if (project) loadProjectItems();
+    await refreshShared();
+    redraw(ids);
+  } finally {
+    if (queued) setTimeout(pass, 50);
+    else passing = false;
+  }
+}
 
 // ---- board ----
 
@@ -604,7 +629,7 @@ function openTicket(id) {
     }
   });
   w.body.append(...tb.el);
-  views.set(wid, (tid) => tid === id && tb.redraw());
+  views.set(wid, (ids) => ids?.has(id) && tb.redraw());
   w.el.addEventListener('dragover', (e) => e.dataTransfer.types.includes('Files') && e.preventDefault());
   w.el.addEventListener('drop', (e) => {
     if (!e.dataTransfer.files.length) return;
@@ -1581,7 +1606,7 @@ async function boot() {
     LAYOUT[id]();
   }
   await refreshShared();
-  redraw(null);
+  redraw();
   if (!models) say('No model catalog yet: Start → Settings → Agents, then Save, before launching.');
 }
 

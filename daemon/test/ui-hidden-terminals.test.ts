@@ -40,9 +40,11 @@ describe('ui-hidden-terminals', { timeout: 60_000 }, () => {
       expect(await page.evaluate(`!!document.querySelector('[data-win="term-${test.id}"]')`)).toBe(false);
       expect(statusOf(id)).toBe('testing');
 
-      await page.evaluate(`document.querySelector('.card[data-id="${id}"]').dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 50, clientY: 50 }))`);
       const sub = `[...document.querySelectorAll('.k95-menu li.sub')].find((li) => li.firstChild?.textContent === 'Terminal').querySelectorAll('li')`;
-      expect(await page.evaluate(`[...${sub}].map((li) => li.textContent)`)).toEqual(['test · hold']);
+      const items = () => page.evaluate<string[]>(`(() => { document.querySelector('.k95-menu')?.remove();
+        document.querySelector('.card[data-id="${id}"]').dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 50, clientY: 50 }));
+        return [...${sub}].map((li) => li.textContent); })()`);
+      await until(async () => (await items()).join() === 'test · hold', 'only the live test session under Terminal');
       await page.evaluate(`${sub}[0].click()`);
       await until(() => page.evaluate(`!!document.querySelector('[data-win="term-${test.id}"] .xterm')`), 'the tester\'s terminal');
 
