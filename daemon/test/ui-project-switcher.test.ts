@@ -1,4 +1,4 @@
-// In headless Edge or Chrome against a running daemon (setup in ui.ts): the taskbar project switcher, Start → Projects
+// In headless Edge or Chrome against a running daemon (setup in ui.ts): the tray's Switch board popup, Start → Projects
 // submenus and the switch keys, with the board posing as one of several hosted by shell 123.
 import './home.ts'; // also here, not only in vitest.config.ts: a run from the repo root skips that config and wrote the real home
 import { spawn, type ChildProcess } from 'node:child_process';
@@ -8,19 +8,18 @@ import { basename, join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { entryPath, register } from '../src/boards.ts';
 import { sessions } from '../src/launcher.ts';
-import { changed } from '../src/lifecycle.ts';
 import { writeProjects } from '../src/settings.ts';
 import { until } from './cdp.ts';
-import { base, click, column, menuItems, menuPick, page, repo, rightClick, srv, statusBar, ticket } from './ui.ts';
+import { base, click, column, page, repo, srv, statusBar, ticket } from './ui.ts';
 
 const dir = (p: string) => realpathSync.native(mkdtempSync(join(tmpdir(), p)));
 let own: string, other: string, third: string, idle: string;
 let ownEntry: { repo: string; port: number; shell: number | null };
 const sleepers: ChildProcess[] = [];
-const fake = (repo: string) => {
+const fake = (repo: string, agents = 0) => {
   const c = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
   sleepers.push(c);
-  writeFileSync(entryPath(c.pid!), JSON.stringify({ pid: c.pid, repo, port: 1, started: '', shell: 123 }));
+  writeFileSync(entryPath(c.pid!), JSON.stringify({ pid: c.pid, repo, port: 1, started: '', shell: 123, agents }));
   return c.pid!;
 };
 const write = process.stdout.write.bind(process.stdout);
@@ -51,13 +50,25 @@ const board = () => until(() => page.evaluate(`!!document.querySelector('[data-w
 const load = async () => {
   await page.goto(base);
   await board();
-  await page.evaluate(`(() => { window.posts = []; const f = window.fetch;
-    window.fetch = (u, o) => { if (o?.method === 'POST' && u.startsWith('/api/projects/')) window.posts.push([u, JSON.parse(o.body)]); return f(u, o); }; })()`);
+  await page.evaluate(`(() => { window.posts = []; window.lists = 0; const f = window.fetch;
+    window.fetch = (u, o) => {
+      if (o?.method === 'POST' && u.startsWith('/api/projects/')) window.posts.push([u, JSON.parse(o.body)]);
+      if (o?.method === 'GET' && u === '/api/projects') window.lists++;
+      return f(u, o); }; })()`);
 };
 const posts = () => page.evaluate<[string, Record<string, string>][]>('window.posts');
-const buttons = () => page.evaluate<{ path: string; label: string; active: boolean; bg: string }[]>(`[...document.querySelectorAll('#projects button')].map((b) =>
-  ({ path: b.dataset.project, label: b.textContent, active: b.classList.contains('active'), bg: getComputedStyle(b).backgroundColor }))`);
-const shown = () => page.evaluate<boolean>(`getComputedStyle(document.getElementById('projects')).display !== 'none'`);
+const popup = () => page.evaluate<boolean>(`!!document.querySelector('.k95-switch')`);
+const rows = () => page.evaluate<{ path: string; label: string; bg: string; run: boolean; x: boolean }[]>(`[...document.querySelectorAll('.k95-switch-row')].map((r) =>
+  ({ path: r.dataset.project, label: r.querySelector('.name').textContent, bg: getComputedStyle(r).backgroundColor, run: !!r.querySelector('.run'), x: !!r.querySelector('.x') }))`);
+const openPopup = async () => {
+  await click('#switch');
+  await until(popup, 'the popup');
+  return rows();
+};
+const row = (path: string) => `.k95-switch-row[data-project="${path.replace(/\\/g, '\\\\')}"]`;
+const key = async (key: string, code: string, vk: number) => {
+  for (const type of ['rawKeyDown', 'keyUp']) await page.send('Input.dispatchKeyEvent', { type, key, code, windowsVirtualKeyCode: vk });
+};
 const KEYS = { Tab: ['Tab', 9], '1': ['Digit1', 49], '2': ['Digit2', 50] } as const;
 const ctrl = async (key: keyof typeof KEYS, shift = false) => {
   const [code, vk] = KEYS[key];
@@ -66,59 +77,95 @@ const ctrl = async (key: keyof typeof KEYS, shift = false) => {
 const dialogButton = (label: string) => page.evaluate(`[...document.querySelectorAll('dialog[open] button')].find((b) => b.textContent === ${JSON.stringify(label)}).click()`);
 
 describe('ui-project-switcher', { timeout: 90_000 }, () => {
-  it('is hidden while only this board is hosted, and the taskbar keeps its layout', async () => {
+  it('has no taskbar switcher, shows the Switch board button first in the tray with one project hosted, and lists the other projects', async () => {
     await load();
-    const gap = await page.evaluate<number>(`document.getElementById('pinned').getBoundingClientRect().left - document.getElementById('start').getBoundingClientRect().right`);
-    expect(await shown()).toBe(false);
-    expect(gap).toBe(3);
+    expect(await page.evaluate(`!!document.getElementById('projects')`)).toBe(false);
+    expect(await page.evaluate(`(() => { const b = document.querySelector('#tray > :first-child');
+      return [b.id, b.title, b.getAttribute('aria-label'), getComputedStyle(b).display !== 'none', !!b.querySelector('svg')]; })()`)).toEqual(['switch', 'Switch board', 'Switch board', true, true]);
+    expect(await openPopup()).toEqual([
+      { path: other, label: basename(other), bg: 'rgb(0, 85, 128)', run: false, x: false },
+      { path: third, label: basename(third), bg: 'rgb(128, 0, 128)', run: false, x: false },
+      { path: idle, label: basename(idle), bg: 'rgb(43, 128, 0)', run: false, x: false },
+    ]);
     await ctrl('Tab');
     expect(await posts()).toEqual([]);
   });
 
-  it('shows a coloured button per hosted project in order, this board pressed in, and switches on a click', async () => {
-    fake(other);
+  it('fetches the project list on each opening and not while closed', async () => {
     await load();
-    await until(async () => (await buttons()).length === 2, 'two switcher buttons');
-    expect(await shown()).toBe(true);
-    expect(await buttons()).toEqual([
-      { path: other, label: basename(other), active: false, bg: 'rgb(0, 85, 128)' },
-      { path: own, label: basename(own), active: true, bg: 'rgb(18, 52, 86)' },
-    ]);
-    const left = await page.evaluate<number[]>(`['#start', '#projects', '#pinned'].map((q) => document.querySelector(q).getBoundingClientRect().left)`);
-    expect(left[0] < left[1] && left[1] < left[2]).toBe(true);
-    await click('#projects button:first-child');
-    await until(async () => (await statusBar()) === `Switching to ${basename(other)}…`, 'the switching status');
-    await until(async () => (await posts()).length === 1, 'the switch request');
-    expect(await posts()).toEqual([['/api/projects/switch', { path: other }]]);
-    await click('#projects button:last-child');
-    expect(await posts()).toHaveLength(1);
+    await new Promise((r) => setTimeout(r, 500));
+    expect(await page.evaluate('window.lists')).toBe(0);
+    await openPopup();
+    expect(await page.evaluate('window.lists')).toBe(1);
+    await click('#switch');
+    await until(async () => !(await popup()), 'the popup closed by its button');
+    await new Promise((r) => setTimeout(r, 500));
+    expect(await page.evaluate('window.lists')).toBe(1);
   });
 
-  it('right-click offers Switch to, Pop out, Dock and Close board, each sends its route, Close board after a confirm', async () => {
+  it('marks running rows, offers X only on a hosted board with no agents, and switches or opens here on a click', async () => {
+    fake(other);
+    fake(third, 2);
     await load();
-    await until(async () => (await buttons()).length === 2, 'two switcher buttons');
-    await rightClick('#projects button:last-child');
-    expect(await menuItems()).toEqual(['Pop out', 'Dock', 'Close board']);
-    for (const label of ['Switch to', 'Pop out', 'Dock']) {
-      await rightClick('#projects button:first-child');
-      expect(await menuItems()).toEqual(['Switch to', 'Pop out', 'Dock', 'Close board']);
-      await menuPick(label);
-    }
-    await until(async () => (await posts()).length === 3, 'three requests');
-    expect(await posts()).toEqual([['/api/projects/switch', { path: other }], ['/api/projects/popout', { path: other }], ['/api/projects/dock', { path: other }]]);
-    await rightClick('#projects button:last-child');
-    await menuPick('Close board');
+    expect(await openPopup()).toEqual([
+      { path: other, label: basename(other), bg: 'rgb(0, 85, 128)', run: true, x: true },
+      { path: third, label: basename(third), bg: 'rgb(128, 0, 128)', run: true, x: false },
+      { path: idle, label: basename(idle), bg: 'rgb(43, 128, 0)', run: false, x: false },
+    ]);
+    await click(`${row(other)} .name`);
+    await until(async () => (await posts()).length === 1, 'the switch request');
+    expect(await popup()).toBe(false);
+    await openPopup();
+    await click(`${row(idle)} .name`);
+    await until(async () => (await posts()).length === 2, 'the open request');
+    expect(await popup()).toBe(false);
+    expect(await posts()).toEqual([['/api/projects/switch', { path: other }], ['/api/projects/open', { path: idle, where: 'here' }]]);
+    await until(async () => (await statusBar()) === `Opening ${basename(idle)}…`, 'the opening status');
+  });
+
+  it('X closes the board after a confirm', async () => {
+    await load();
+    await openPopup();
+    await click(`${row(other)} .x`);
     await until(() => page.evaluate(`!!document.querySelector('dialog[open]')`), 'the confirm');
-    expect(await page.evaluate(`document.querySelector('dialog[open] .window-body').textContent`)).toContain(`Close ${basename(own)}? 0 agents running here will stop.`);
-    await dialogButton('Cancel');
-    await rightClick('#projects button:first-child');
-    await menuPick('Close board');
-    await until(() => page.evaluate(`!!document.querySelector('dialog[open]')`), 'the confirm');
+    expect(await popup()).toBe(false);
     expect(await page.evaluate(`document.querySelector('dialog[open] .window-body').textContent`)).toBe(`Close ${basename(other)}?CloseCancel`);
     await dialogButton('Close');
-    await until(async () => (await posts()).length === 4, 'the close request');
-    expect((await posts())[3]).toEqual(['/api/projects/close', { path: other }]);
-    await until(async () => (await statusBar()) === `Closing ${basename(other)}…`, 'the closing status');
+    await until(async () => (await posts()).length === 1, 'the close request');
+    expect(await posts()).toEqual([['/api/projects/close', { path: other }]]);
+  });
+
+  it('closes on Esc and on a click outside, and only one of it and the Start menu is open at a time', async () => {
+    await load();
+    await openPopup();
+    await key('Escape', 'Escape', 27);
+    await until(async () => !(await popup()), 'the popup closed by Esc');
+    await openPopup();
+    await click('#clock');
+    await until(async () => !(await popup()), 'the popup closed by a click outside');
+    await openPopup();
+    await click('#start');
+    await until(() => page.evaluate(`!!document.querySelector('.k95-menu')`), 'the Start menu');
+    expect(await popup()).toBe(false);
+    await openPopup();
+    expect(await page.evaluate(`!!document.querySelector('.k95-menu')`)).toBe(false);
+    expect(await posts()).toEqual([]);
+  });
+
+  it('arrow keys move between rows and Enter activates', async () => {
+    await load();
+    await openPopup();
+    const at = () => page.evaluate<string>(`document.activeElement.dataset.project`);
+    expect(await at()).toBe(other);
+    await key('ArrowDown', 'ArrowDown', 40);
+    expect(await at()).toBe(third);
+    await key('ArrowUp', 'ArrowUp', 38);
+    await key('ArrowUp', 'ArrowUp', 38);
+    expect(await at()).toBe(idle);
+    await key('Enter', 'Enter', 13);
+    await until(async () => (await posts()).length === 1, 'the open request');
+    expect(await posts()).toEqual([['/api/projects/open', { path: idle, where: 'here' }]]);
+    expect(await popup()).toBe(false);
   });
 
   it('Start → Projects has a submenu per project, Open here disabled on this board, and Open here sends where: here', async () => {
@@ -130,7 +177,7 @@ describe('ui-project-switcher', { timeout: 90_000 }, () => {
     const want = [
       [`${basename(other)} (running)`, [['Open here', false], ['Open in new window', false], ['Close board', false]]],
       [`${basename(own)} (this board)`, [['Open here', true], ['Open in new window', false], ['Close board', false]]],
-      [basename(third), [['Open here', false], ['Open in new window', false]]],
+      [`${basename(third)} (running)`, [['Open here', false], ['Open in new window', false], ['Close board', false]]],
       [basename(idle), [['Open here', false], ['Open in new window', false]]],
       ['', []],
       ['Add project board…', []],
@@ -142,26 +189,17 @@ describe('ui-project-switcher', { timeout: 90_000 }, () => {
     await pick(basename(idle), 'Open here');
     await until(async () => (await posts()).length === 1, 'the open request');
     expect(await posts()).toEqual([['/api/projects/open', { path: idle, where: 'here' }]]);
-    await until(async () => (await statusBar()) === `Opening ${basename(idle)}…`, 'the opening status');
     await click('#start');
     await pick(`${basename(other)} (running)`, 'Open in new window');
     await until(async () => (await posts()).length === 2, 'the pop out request');
     expect((await posts())[1]).toEqual(['/api/projects/popout', { path: other }]);
   });
 
-  it('redraws on a { ticket: null } event without a reload', async () => {
-    await load();
-    await until(async () => (await buttons()).length === 2, 'two switcher buttons');
-    fake(third);
-    changed(null);
-    await until(async () => (await buttons()).length === 3, 'the third button');
-    expect((await buttons()).map((b) => b.path)).toEqual([other, own, third]);
-  });
-
   it('Ctrl+Tab, Ctrl+Shift+Tab and Ctrl+1 switch to the right project, also inside a terminal', async () => {
     const id = ticket('Switch keys');
     await load();
-    await until(async () => (await buttons()).length === 3, 'three switcher buttons');
+    await openPopup();
+    await key('Escape', 'Escape', 27);
     await ctrl('Tab');
     await ctrl('Tab', true);
     await ctrl('1');

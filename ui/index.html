@@ -12,12 +12,12 @@
   <main id="desktop"></main>
   <footer id="taskbar">
     <button id="start"><b>Start</b></button>
-    <nav id="projects" aria-label="Projects" hidden></nav>
     <nav id="pinned" aria-label="Pinned"></nav>
     <button id="tasks-left" class="task-scroll" aria-label="Scroll taskbar left" hidden>&#9664;</button>
     <div id="tasks"></div>
     <button id="tasks-right" class="task-scroll" aria-label="Scroll taskbar right" hidden>&#9654;</button>
     <div id="tray" class="status-bar-field">
+      <button id="switch" class="tray-button" title="Switch board" aria-label="Switch board"><svg width="13" height="11" viewBox="0 0 13 11" aria-hidden="true"><rect x="0.5" y="0.5" width="8" height="6" fill="#fff" stroke="#000"/><rect x="4.5" y="4.5" width="8" height="6" fill="#fff" stroke="#000"/></svg></button>
       <button id="inbox-count" class="tray-button">Inbox 0</button>
       <button id="restart-badge" class="tray-button flag" title="Restart the board to use the merged changes" hidden>Restart</button>
       <button id="limits" class="tray-button">Limits</button>

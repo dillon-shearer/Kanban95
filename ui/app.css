@@ -39,11 +39,6 @@ body.k95-vector { --k95-font: Tahoma, sans-serif; }
 #taskbar { position: fixed; left: 0; right: 0; bottom: 0; height: 28px; display: flex; align-items: center; gap: 3px; padding: 0 2px;
   background: silver; box-shadow: inset 0 1px #dfdfdf, inset 0 2px #fff; }
 #start { min-width: 54px; }
-#projects { flex: none; display: flex; gap: 2px; padding-left: 3px; border-left: 1px solid grey; box-shadow: inset 1px 0 #fff; }
-#projects[hidden] { display: none; }
-#projects button { min-width: 0; max-width: 72px; height: 22px; padding: 0 5px; color: #fff; font-size: 10px; }
-#projects button span { display: block; max-width: 60px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; pointer-events: none; }
-#projects button.active { box-shadow: inset -1px -1px #fff, inset 1px 1px #0a0a0a, inset -2px -2px #dfdfdf, inset 2px 2px grey; font-weight: bold; }
 /* Pinned launchers (Quick Launch), then one icon button per open window; past the bar's width #tasks scrolls (arrows, wheel),
    its scrollbar hidden. A window's button is its icon and a short label, cut with an ellipsis; the full title is the tooltip. */
 #pinned { flex: none; display: flex; gap: 1px; padding: 0 4px 0 3px; border-left: 1px solid grey; box-shadow: inset 1px 0 #fff; }
@@ -60,6 +55,15 @@ body.k95-vector { --k95-font: Tahoma, sans-serif; }
 .task-scroll { flex: none; min-width: 0; width: 16px; padding: 0; font-size: 7px; }
 #tray { flex: none; display: flex; align-items: center; gap: 4px; height: 23px; box-sizing: border-box; padding: 0 3px; margin: 0; font-size: 10px; white-space: nowrap; }
 .tray-button { min-width: 0; min-height: 0; padding: 0 3px; height: 18px; font-size: 10px; }
+#switch { display: flex; align-items: center; padding: 0 4px; }
+.k95-switch { position: fixed; z-index: 100000; min-width: 140px; max-width: 240px; }
+.k95-switch .window-body { margin: 2px; display: flex; flex-direction: column; gap: 2px; }
+.k95-switch-row { display: flex; align-items: center; gap: 4px; height: 20px; padding: 0 2px 0 5px; color: #fff; cursor: default; }
+.k95-switch-row:hover, .k95-switch-row:focus { outline: 1px dotted #fff; outline-offset: -2px; }
+.k95-switch-row .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.k95-switch-row .run { flex: none; width: 6px; height: 6px; background: #0f0; border: 1px solid #000; }
+.k95-switch-row .x { flex: none; min-width: 0; min-height: 0; width: 16px; height: 14px; padding: 0; font-size: 9px; font-weight: bold; }
+.k95-switch-none { padding: 2px 4px; color: grey; }
 .tray-button.flag { color: #a00; font-weight: bold; }
 
 /* Menus (Start, card context menu) */
