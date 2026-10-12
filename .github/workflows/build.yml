@@ -11,7 +11,6 @@ on:
         default: false
 
 env:
-  TAURI_CONFIG: ${{ inputs.release && '{"bundle":{"createUpdaterArtifacts":true}}' || '{}' }}
   TAURI_SIGNING_PRIVATE_KEY: ${{ inputs.release && secrets.TAURI_SIGNING_PRIVATE_KEY || '' }}
   TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ inputs.release && secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD || '' }}
 
@@ -33,7 +32,7 @@ jobs:
       - run: npm run build
       - run: npm test
       - run: npm run test:shell
-      - run: npm run installer
+      - run: npm run installer ${{ inputs.release && '-- --config shell/tauri.updater.json' || '' }}
       - shell: bash
         run: 7z l shell/target/release/bundle/nsis/*-setup.exe | grep -iE '(^| |\\|/)node\.exe$'
       - uses: actions/upload-artifact@v5
@@ -62,9 +61,9 @@ jobs:
       - run: npm run build
       - run: npm run test:shell
       - if: ${{ !cancelled() }}
-        run: npm run installer -- --target aarch64-apple-darwin --bundles app,dmg
+        run: npm run installer -- --target aarch64-apple-darwin --bundles app,dmg ${{ inputs.release && '--config shell/tauri.updater.json' || '' }}
       - if: ${{ !cancelled() }}
-        run: npm run installer -- --target x86_64-apple-darwin --bundles app,dmg
+        run: npm run installer -- --target x86_64-apple-darwin --bundles app,dmg ${{ inputs.release && '--config shell/tauri.updater.json' || '' }}
       - if: ${{ !cancelled() }}
         run: |
           for a in aarch64 x86_64; do

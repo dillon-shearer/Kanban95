@@ -129,7 +129,7 @@ A GitHub Release is cut only by pushing a tag `vX.Y.Z` (a prerelease such as `v0
 **Workflow.** `.github/workflows/release.yml` runs on tags matching `v*`:
 
 1. `version` fails with a clear error unless the tag is `v` + `package.json`'s version, before anything is built.
-2. `build` runs `build.yml`'s Windows and macOS jobs (tests included) with `release: true`, which sets `TAURI_CONFIG={"bundle":{"createUpdaterArtifacts":true}}` and the signing secrets for `tauri build`. Tauri then writes a `.sig` next to the NSIS setup.exe (the Windows update bundle is the setup.exe itself) and builds `Kanban95.app.tar.gz` plus `.sig` for each Mac target.
+2. `build` runs `build.yml`'s Windows and macOS jobs (tests included) with `release: true`, which adds `--config shell/tauri.updater.json` (`bundle.createUpdaterArtifacts: true`) to `npm run installer` and passes the signing secrets to it. The extra config must be a `--config` argument: the Tauri CLI does not read a `TAURI_CONFIG` environment variable for bundling. Tauri then writes a `.sig` next to the NSIS setup.exe (the Windows update bundle is the setup.exe itself) and builds `Kanban95.app.tar.gz` plus `.sig` for each Mac target.
 3. `release` downloads both artifacts, renames the Mac update bundles to carry version and arch, writes `latest.json`, and runs `gh release create` for the tag (`--prerelease` when the version has a `-`).
 
 The Release holds:
@@ -256,7 +256,7 @@ skills/           the Claude Code plugin `kanban95` (.claude-plugin/plugin.json 
 Kanban95.cmd      double-click launcher: finds Node 24, installs, builds, runs the shell on a repo
 Kanban95.vbs      runs Kanban95.cmd with no console window; a dialog shows its output if it fails
 Kanban95.command  macOS launcher: the same steps as Kanban95.cmd
-shell/            Cargo.toml, build.rs, tauri.conf.json, tauri.bundle.json (installer overlay), tauri.windows.conf.json and tauri.macos.conf.json (bundle targets), stage.mjs (stages the installed daemon and its Node sidecar), src/main.rs, icons/ (Packaging → Icons)
+shell/            Cargo.toml, build.rs, tauri.conf.json, tauri.bundle.json (installer overlay), tauri.updater.json (release builds: updater bundles), tauri.windows.conf.json and tauri.macos.conf.json (bundle targets), stage.mjs (stages the installed daemon and its Node sidecar), src/main.rs, icons/ (Packaging → Icons)
 docs/             this file, LEARNING.md (guided tour for newcomers), OPERATOR.md (driving the board), img/ (its screenshots), LIFECYCLE.md (state machine, merge queue, janitor), CLIS.md (how each CLI is launched), DATA.md (schema), AGENTS.md (what agents receive and how they behave), SECURITY.md (grants, audit, network), MCP.md (generated tool reference)
 <repo>/.kanban95/ board.db (gitignored), .gitignore, sessions/ (gitignored), attachments/ (gitignored), templates/*.md (committed, operator-editable) and templates/.shipped.json (the defaults' hashes, committed with them); created by the daemon on first start. config.json (optional, committed)
 ~/.kanban95/      brain.db (the global brain, shared by every board; written by brain_add and the Brain window)
