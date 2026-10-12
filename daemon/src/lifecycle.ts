@@ -660,23 +660,29 @@ export function operator(b: Board, mission: string): Session {
 
 // ---- the runner (docs/LIFECYCLE.md → The runner) ----
 
-/** `.kanban95/runner.json`, git-ignored: whether the runner is on, why it last stopped itself, how many tickets it keeps running. Absent means off. */
-export type Runner = { on: boolean; why?: string; concurrency?: number };
-const CONCURRENCY = 3;
+/** `.kanban95/runner.json`, git-ignored: whether the runner is on and why it last stopped itself. Absent means off. */
+export type Runner = { on: boolean; why?: string };
 const runnerFile = (b: Board) => join(b.repo, '.kanban95', 'runner.json');
 export function runner(b: Board): Runner {
   try {
-    return JSON.parse(readFileSync(runnerFile(b), 'utf8'));
+    const { on, why } = JSON.parse(readFileSync(runnerFile(b), 'utf8'));
+    return { on, ...(why && { why }) };
   } catch (e) {
     if ((e as NodeJS.ErrnoException).code === 'ENOENT') return { on: false };
     throw e;
   }
 }
-const limit = (b: Board) => runner(b).concurrency ?? CONCURRENCY;
+const limit = (b: Board) => {
+  try {
+    return readConfig('settings', b.repo).concurrency;
+  } catch {
+    return 3;
+  }
+};
 
-/** Turns the runner on (and launches at once) or off, keeping the concurrency unless given. Off lets running agents finish; nothing new starts. */
-export function setRunner(b: Board, on: boolean, why?: string, concurrency = runner(b).concurrency) {
-  writeFileSync(runnerFile(b), JSON.stringify({ on, ...(why && { why }), ...(concurrency && { concurrency }) }));
+/** Turns the runner on (and launches at once) or off. Off lets running agents finish; nothing new starts. */
+export function setRunner(b: Board, on: boolean, why?: string) {
+  writeFileSync(runnerFile(b), JSON.stringify({ on, ...(why && { why }) }));
   changed(null);
   if (on) tick(b);
 }
@@ -821,7 +827,7 @@ function restartWhenIdle(b: Board) {
 let ticking = false;
 
 /**
- * Runs after every apply and on daemon start: while the runner is on and fewer than `concurrency` (runner.json, default 3)
+ * Runs after every apply and on daemon start: while the runner is on and fewer than `concurrency` (settings.json, default 3)
  * tickets are running, launch the next candidate that shares no file with a running ticket, or the first candidate when all
  * do (the merge sync resolves it; waiting forever would be worse). Nothing running and nothing to launch: it turns itself off.
  * A ticket held on a running one is not "nothing": the runner waits for that merge. A board stale on daemon code launches no candidate.

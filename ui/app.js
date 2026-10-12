@@ -33,7 +33,7 @@ let runner = { on: false, concurrency: 3, running: [], left: 0, backlog: 0, wait
 let models = null; // models.json this board runs on (this repo's copy, else the global file), for the cards' default model and effort
 // Sounds stay off until /config/settings loads: listen() starts first, and a ding in that gap ignored the operator's choice.
 // `terminals` is absent until then too, so no session is opened or passed over before the operator's phases are known.
-const SETTINGS = { paths: {}, sounds: { merge: false, attention: false, done: false }, voice: { backend: 'local', mode: 'push' }, housekeeping: { auto: true, every: 10 }, idle_minutes: 20, zoom: 1, push_after_merge: true, sleepAfterMinutes: 30 };
+const SETTINGS = { paths: {}, sounds: { merge: false, attention: false, done: false }, voice: { backend: 'local', mode: 'push' }, housekeeping: { auto: true, every: 10 }, idle_minutes: 20, zoom: 1, push_after_merge: true, sleepAfterMinutes: 30, concurrency: 3 };
 let settings = { ...SETTINGS };
 let limits = null; // GET /api/limits: { rows, errors, fetched_at }, null until the first answer
 const views = new Map(); // open window id → redraw(ticketId | null)
@@ -1192,9 +1192,18 @@ function openSettings(tab) {
         const idle = h('input', { type: 'number', id: 'idle-minutes', min: 1, step: 1, value: s.idle_minutes });
         const hkAuto = h('input', { type: 'checkbox', id: 'hk-auto', checked: s.housekeeping.auto });
         const hkEvery = h('input', { type: 'number', id: 'hk-every', min: 1, step: 1, value: s.housekeeping.every });
+        const at = h('input', { type: 'number', id: 'concurrency', min: 1, max: 10, step: 1, value: s.concurrency });
+        const saveRunner = () => act(async () => {
+          Object.assign(s, await putSettings(scope, { concurrency: Number(at.value) }));
+          runner = await api('GET', '/runner');
+          drawBoard();
+        }, 'Saved.');
         return [
           h('fieldset', {}, h('legend', {}, 'Executables'), CLIS.map((c) => h('div', { class: 'field-row' }, h('label', { class: 'k95-label' }, c), paths[c])),
             h('button', { onclick: () => put({ paths: Object.fromEntries(CLIS.map((c) => [c, paths[c].value.trim()])) }, 'CLI paths saved.') }, 'Save')),
+          h('fieldset', {}, h('legend', {}, 'Runner'),
+            h('div', { class: 'field-row' }, h('label', { for: 'concurrency' }, 'Tickets running at once'), at),
+            h('button', { onclick: saveRunner }, 'Save')),
           h('fieldset', {}, h('legend', {}, 'Silent agents'),
             h('div', { class: 'field-row' }, h('label', { for: 'idle-minutes' }, 'Flag an agent whose transcript is quiet for (minutes)'), idle),
             h('p', {}, 'Keep it above the 10 min tool timeout, so a long test run is not flagged.'),
@@ -1204,11 +1213,6 @@ function openSettings(tab) {
             h('div', { class: 'field-row' }, h('label', { for: 'hk-every' }, 'Merged tickets between runs'), hkEvery),
             h('button', { onclick: () => put({ housekeeping: { auto: hkAuto.checked, every: Number(hkEvery.value) } }) }, 'Save'))];
       }, redraw);
-      const at = h('input', { type: 'number', id: 'concurrency', min: 1, max: 10, step: 1, value: runner.concurrency });
-      const saveRunner = () => act(async () => {
-        runner = await api('PUT', '/runner', { concurrency: Number(at.value) });
-        drawBoard();
-      }, 'Saved.');
       p.replaceChildren(
         ...await modelsPart,
         h('fieldset', {}, h('legend', {}, 'Trusted folders'),
@@ -1217,9 +1221,6 @@ function openSettings(tab) {
             : `Claude Code does not trust ${trust.key}; the board writes that entry before the next Claude launch.`),
           h('p', {}, 'Codex is told per launch that this repo is trusted; nothing is written to its config.'),
           h('button', { disabled: !trust.trusted, onclick: () => act(async () => { await api('DELETE', '/trust'); tb.show(); }, 'Claude trust entry cleared.') }, 'Clear Claude trust')),
-        h('fieldset', {}, h('legend', {}, 'Runner'),
-          h('div', { class: 'field-row' }, h('label', { for: 'concurrency' }, 'Tickets running at once (this project)'), at),
-          h('button', { onclick: saveRunner }, 'Save')),
         ...await settingsPart);
     } else if (tab === 'Prompts') {
       const [prefs, tpls] = await Promise.all([scoped('preferences', (value, scope, path) => {

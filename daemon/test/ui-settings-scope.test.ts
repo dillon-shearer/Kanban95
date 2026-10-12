@@ -40,7 +40,8 @@ describe('ui-settings-scope', { timeout: 60_000 }, () => {
     const global = readFileSync(globalFile('models.json'), 'utf8');
     await openSettings();
     await until(() => page.evaluate(`!!document.querySelector('#concurrency')`), 'the Agents tab');
-    expect(await page.evaluate(`document.querySelector('label[for=concurrency]').textContent`)).toBe('Tickets running at once (this project)');
+    expect(await page.evaluate(`document.querySelector('label[for=concurrency]').textContent`)).toBe('Tickets running at once');
+    expect(await page.evaluate(`document.querySelector('#concurrency').matches(':disabled')`)).toBe(false);
     expect(await bar('models')).toBe(null);
     expect(await page.evaluate(`document.querySelector('${W} .title-bar-text').textContent`)).toBe('Settings');
 
@@ -49,8 +50,8 @@ describe('ui-settings-scope', { timeout: 60_000 }, () => {
     expect(await greyed('models')).toBe(true);
     expect(await executeModel()).toBe('work');
     expect(await page.evaluate(`document.querySelector('${W} .k95-scope-bar[data-file=models] span').textContent`)).toBe('Uses the global settings');
-    expect(await page.evaluate(`document.querySelector('label[for=concurrency]').textContent`)).toBe('Tickets running at once (this project)');
-    expect(await page.evaluate(`document.querySelector('#concurrency').disabled`)).toBe(false);
+    expect(await page.evaluate(`document.querySelector('label[for=concurrency]').textContent`)).toBe('Tickets running at once');
+    expect(await page.evaluate(`document.querySelector('#concurrency').matches(':disabled')`)).toBe(true);
     await until(async () => (await page.evaluate<string>(`document.querySelector('${W} .title-bar-text').textContent`)) === `Settings: ${basename(repo)}`, 'the scoped title');
 
     await pressBar('models');

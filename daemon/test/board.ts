@@ -14,6 +14,7 @@ import { worktreePath } from '../src/git.ts';
 import { sessions } from '../src/launcher.ts';
 import { events } from '../src/lifecycle.ts';
 import { start } from '../src/server.ts';
+import { readConfig, writeConfig } from '../src/settings.ts';
 
 // Fake `claude` first on PATH: a scripted agent that talks to /mcp like the real CLI and stays up until the board ends it.
 // The brief's heading says which phase it is in; the model name says how it behaves (see `behave` below).
@@ -146,8 +147,10 @@ export const until = async (f: () => unknown, what: string, ms = 60_000) => {
   }
 };
 // Every backlog ticket at once, in one request (so none can finish before the last starts): the runner with room for all.
-export const launchTogether = (n: number) =>
-  fetch(`http://127.0.0.1:${srv.port}/api/runner`, { method: 'PUT', headers: { 'content-type': 'application/json', cookie: `k95=${srv.secret}` }, body: JSON.stringify({ on: true, concurrency: n }) });
+export const launchTogether = (n: number) => {
+  writeConfig('settings', { ...readConfig('settings', repo), concurrency: n }, repo);
+  return send('PUT')('/api/runner', { on: true });
+};
 export const mergeInProgress = (dir: string) => {
   try {
     execFileSync('git', ['rev-parse', '-q', '--verify', 'MERGE_HEAD'], { cwd: dir, stdio: 'ignore' });

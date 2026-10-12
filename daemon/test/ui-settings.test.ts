@@ -94,14 +94,15 @@ describe('ui-settings', { timeout: 60_000 }, () => {
       await page.evaluate(`document.querySelector('[data-icon="Settings"]').dispatchEvent(new MouseEvent('dblclick'))`);
       await page.evaluate(`[...document.querySelectorAll('[data-win="settings"] [role=tab] a')].find((t) => t.textContent === 'Agents').click()`);
       await until(() => page.evaluate(`!!document.querySelector('#concurrency')`), 'the Agents tab');
-      expect(await page.evaluate(`document.querySelector('label[for=concurrency]').textContent`)).toBe('Tickets running at once (this project)');
+      expect(await page.evaluate(`document.querySelector('label[for=concurrency]').textContent`)).toBe('Tickets running at once');
       await page.evaluate(`(() => { const f = document.querySelector('#concurrency'); f.value = '1'; f.closest('fieldset').querySelector('button').click(); })()`);
       await until(async () => (await runnerApi()).concurrency === 1, 'the saved concurrency');
       await runnerApi({ on: true });
       await until(async () => (await line()) === `Running: #${a} (1 of 1; 1 of 1 candidates left); #${b} waits: shares files with #${a}`, 'the limit and the deferral');
       expect(await page.evaluate('window.__noReload')).toBe(true);
     } finally {
-      await runnerApi({ on: false, concurrency: 3 });
+      await runnerApi({ on: false });
+      rmSync(join(process.env.USERPROFILE!, '.kanban95', 'settings.json'), { force: true });
       db.prepare("UPDATE tickets SET status = 'done', merged_at = 'x' WHERE id IN (?, ?)").run(a, b);
     }
   });
