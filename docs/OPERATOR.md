@@ -34,7 +34,7 @@ To start tickets yourself, select them and press **Launch**, runner on or off. A
 
 ![The board](img/board.png)
 
-Each card shows its id, title, model, effort and CLI (grey italic means "the phase default from Settings"), then its tags (light blue; set them in the ticket window's **Tags** field, comma or space separated, lowercase letters, digits and `-`), and badges for what needs attention: **running** (an agent is working on it), **needs human** (red), **retry n**, **merged**, **housekeeping** (a ticket the board filed to clean up).
+Each card shows its id, title, model, effort and CLI (grey italic means "the phase default from Settings"), then its tags (light blue; set them in the ticket window's **Tags** field, comma or space separated, lowercase letters, digits and `-`), and badges for what needs attention: the agent's phase and how long it has run, e.g. **execute 4m** or **test 1h12m** (an agent is working on it; updated every minute, so a long test run that shows a growing time is not stuck), **needs human** (red), **retry n**, **merged**, **housekeeping** (a ticket the board filed to clean up).
 
 ### 3. Watch, or don't
 
