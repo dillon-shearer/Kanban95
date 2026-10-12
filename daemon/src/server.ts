@@ -107,7 +107,7 @@ async function handle(board: Board, self: string, secret: string, req: IncomingM
   if (url.pathname === '/health') return send(res, 200, JSON.stringify({ ok: true }), 'application/json');
 
   if (url.pathname.startsWith('/voice-model/')) {
-    const file = voiceFile(url.pathname);
+    const file = await voiceFile(url.pathname);
     return file ? serveFile(req, res, file, 'application/octet-stream') : send(res, 404, 'not found');
   }
 
