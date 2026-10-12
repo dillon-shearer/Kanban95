@@ -96,28 +96,37 @@ export async function ensureModel() {
 /** A mic button. `onText` gets the words; the button shows idle, recording, transcribing or error. */
 export function micButton(onText) {
   let rec = null;
+  let stream = null;
+  let starting = false;
+  let gen = 0;
+  let watch = null;
   const b = h('button', { class: 'k95-mic', type: 'button', 'data-state': 'idle', title: 'Voice input', 'aria-label': 'Voice input' });
   const state = (s, title = 'Voice input') => { b.dataset.state = s; b.title = title; };
 
-  async function start() {
-    if (rec || b.dataset.state === 'transcribing') return;
-    if (!(await ensureModel())) return;
-    let stream;
-    try {
-      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    } catch (e) {
-      state('error', e.message);
-      await dialog('Microphone unavailable', h('div', {},
-        h('p', {}, e.name === 'NotAllowedError' ? 'Kanban95 is not allowed to use the microphone.' : `No microphone could be opened (${e.name}).`),
-        h('p', {}, 'Windows: open Privacy & security → Microphone in the Windows Settings app. Turn on "Microphone access" and "Let desktop apps access your microphone", then try again.'),
-        h('p', {}, 'Windows dictation (Win+H) also works in any field.')));
-      return;
+  const release = () => {
+    stream?.getTracks().forEach((t) => t.stop());
+    stream = null;
+    watch?.disconnect();
+    watch = null;
+  };
+  const drop = () => {
+    if (b.isConnected) return;
+    gen++;
+    if (rec) {
+      rec.onstop = null;
+      if (rec.state !== 'inactive') rec.stop();
+      rec = null;
+      state('idle');
     }
+    release();
+  };
+
+  function record() {
     const chunks = [];
-    rec = new MediaRecorder(stream);
-    rec.ondataavailable = (e) => chunks.push(e.data);
-    rec.onstop = async () => {
-      stream.getTracks().forEach((t) => t.stop());
+    const r = (rec = new MediaRecorder(stream));
+    r.ondataavailable = (e) => chunks.push(e.data);
+    r.onstop = async () => {
+      release();
       rec = null;
       state('transcribing', 'Transcribing…');
       try {
@@ -128,16 +137,52 @@ export function micButton(onText) {
         state('error', `Voice input failed: ${e.message}`);
       }
     };
-    rec.start();
+    r.start();
     state('recording', settings.mode === 'push' ? 'Recording… release to stop' : 'Recording… click to stop');
   }
-  const stop = () => rec?.state === 'recording' && rec.stop();
+
+  async function start() {
+    if (rec || starting || b.dataset.state === 'transcribing') return;
+    starting = true;
+    const my = ++gen;
+    watch ??= new MutationObserver(drop);
+    watch.observe(document, { childList: true, subtree: true });
+    try {
+      if (!(await ensureModel()) || my !== gen) return;
+      let s;
+      try {
+        s = await navigator.mediaDevices.getUserMedia({ audio: true });
+      } catch (e) {
+        if (!b.isConnected) return;
+        state('error', e.message);
+        await dialog('Microphone unavailable', h('div', {},
+          h('p', {}, e.name === 'NotAllowedError' ? 'Kanban95 is not allowed to use the microphone.' : `No microphone could be opened (${e.name}).`),
+          h('p', {}, 'Windows: open Privacy & security → Microphone in the Windows Settings app. Turn on "Microphone access" and "Let desktop apps access your microphone", then try again.'),
+          h('p', {}, 'Windows dictation (Win+H) also works in any field.')));
+        return;
+      }
+      if (my !== gen) {
+        s.getTracks().forEach((t) => t.stop());
+        return;
+      }
+      stream = s;
+      record();
+    } finally {
+      starting = false;
+      if (!rec) release();
+    }
+  }
+  const stop = () => {
+    gen++;
+    if (rec?.state === 'recording') rec.stop();
+  };
 
   b.addEventListener('mousedown', (e) => e.preventDefault()); // keep the caret in the field
   b.addEventListener('pointerdown', () => settings.mode === 'push' && start());
   b.addEventListener('pointerup', () => settings.mode === 'push' && stop());
   b.addEventListener('pointerleave', () => settings.mode === 'push' && stop());
-  b.addEventListener('click', () => settings.mode === 'toggle' && (rec ? stop() : start()));
+  b.addEventListener('pointercancel', () => settings.mode === 'push' && stop());
+  b.addEventListener('click', () => settings.mode === 'toggle' && (rec || starting ? stop() : start()));
   return b;
 }
 
