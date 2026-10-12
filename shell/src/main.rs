@@ -70,9 +70,9 @@ struct Started {
     lines: Lines,
 }
 
-/// Starts a daemon and reads the port from its first stdout line. Its stdin stays piped and open: the daemon exits on
-/// stdin EOF. The secret goes in the child's environment, never on its command line, which other processes can read.
-fn start(mut cmd: Command) -> Result<Started, String> {
+/// Spawns a daemon. Its stdin stays piped and open: the daemon exits on stdin EOF. The secret goes in the child's
+/// environment, never on its command line, which other processes can read.
+fn spawn(mut cmd: Command) -> Result<(Child, String, ChildStdout), String> {
     let secret = mint_secret();
     let mut child = cmd
         .env("KANBAN95_SECRET", &secret)
@@ -82,17 +82,41 @@ fn start(mut cmd: Command) -> Result<Started, String> {
         .stdout(Stdio::piped())
         .spawn()
         .map_err(|e| format!("Could not start Node.js: {e}.\n\nKanban95 needs Node 24 or newer: {NODE_DOWNLOAD}"))?;
+    let out = child.stdout.take().expect("daemon stdout");
+    Ok((child, secret, out))
+}
 
-    let mut lines = BufReader::new(child.stdout.take().expect("daemon stdout")).lines();
-    let first = lines.next().and_then(Result::ok).unwrap_or_default();
-    let Some(port) = first.strip_prefix("KANBAN95 port=").and_then(|p| p.trim().parse().ok()) else {
-        let _ = child.kill();
-        let _ = child.wait();
-        return Err(format!(
-            "The Kanban95 daemon did not start (it said {first:?}).\n\nRun `npm run build` and check the console for the daemon's error."
-        ));
+const HANDSHAKE_WAIT: Duration = Duration::from_secs(60);
+
+fn handshake(out: ChildStdout) -> Result<(u16, Lines), String> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut lines = BufReader::new(out).lines();
+        let first = lines.next().and_then(Result::ok).unwrap_or_default();
+        let _ = tx.send((first, lines));
+    });
+    let Ok((first, lines)) = rx.recv_timeout(HANDSHAKE_WAIT) else {
+        return Err(format!("The Kanban95 daemon did not say its port within {HANDSHAKE_WAIT:?}.\n\nCheck the console for the daemon's error."));
     };
-    Ok(Started { child, port, secret, lines })
+    match first.strip_prefix("KANBAN95 port=").and_then(|p| p.trim().parse().ok()) {
+        Some(port) => Ok((port, lines)),
+        None => Err(format!(
+            "The Kanban95 daemon did not start (it said {first:?}).\n\nRun `npm run build` and check the console for the daemon's error."
+        )),
+    }
+}
+
+/// Starts a daemon and waits for its handshake; a daemon that fails it is killed.
+fn start(cmd: Command) -> Result<Started, String> {
+    let (mut child, secret, out) = spawn(cmd)?;
+    match handshake(out) {
+        Ok((port, lines)) => Ok(Started { child, port, secret, lines }),
+        Err(e) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            Err(e)
+        }
+    }
 }
 
 /// The daemon's exit code for Start -> Restart board (daemon/src/api.ts): restart it, it did not crash.
@@ -149,6 +173,8 @@ struct Board {
     secret: String,
     place: Place,
     crashed: bool,
+    restarting: Option<u64>,
+    pending: Option<Child>,
 }
 
 #[derive(Default)]
@@ -158,6 +184,8 @@ struct Table {
     opening: BTreeSet<String>,
     closing: Vec<(Child, Instant)>,
     done: bool,
+    restarts: u64,
+    failed: bool,
 }
 
 /// The ports the navigation lock allows: every hosted daemon's. Kept apart from the table so the lock, which runs on
@@ -217,7 +245,64 @@ impl Host {
                 }
             }
         });
-        Board { child: s.child, port: s.port, secret: s.secret, place, crashed }
+        Board { child: s.child, port: s.port, secret: s.secret, place, crashed, restarting: None, pending: None }
+    }
+
+    fn restart(self: &Arc<Self>, repo: String, gen: u64) {
+        let (child, secret, out) = match spawn((self.launch)(&repo)) {
+            Ok(s) => s,
+            Err(e) => return self.restarted(&repo, gen, Err(e)),
+        };
+        let parked = {
+            let mut t = lock(&self.table);
+            match t.boards.get_mut(&repo).filter(|b| b.restarting == Some(gen)) {
+                Some(b) => {
+                    b.pending = Some(child);
+                    None
+                }
+                None => Some(child),
+            }
+        };
+        if let Some(mut child) = parked {
+            let _ = child.kill();
+            let _ = child.wait();
+            return;
+        }
+        let shake = handshake(out).map(|(port, lines)| (port, secret, lines));
+        self.restarted(&repo, gen, shake);
+    }
+
+    fn restarted(self: &Arc<Self>, repo: &str, gen: u64, shake: Result<(u16, String, Lines), String>) {
+        let mut fx = vec![];
+        let mut t = lock(&self.table);
+        let Some(old) = t.boards.get_mut(repo).filter(|b| b.restarting == Some(gen)) else {
+            return;
+        };
+        let child = old.pending.take();
+        match (shake, child) {
+            (Ok((port, secret, lines)), Some(child)) => {
+                let (place, crashed) = (old.place, old.crashed);
+                let b = self.board(Started { child, port, secret, lines }, place, crashed);
+                match place {
+                    Place::Own => fx.push(show(&label(repo), repo, &b)),
+                    Place::Docked if t.main == repo => fx.push(show(MAIN, repo, &b)),
+                    Place::Docked => {}
+                }
+                t.boards.insert(repo.into(), b);
+                self.sync(&t);
+            }
+            (shake, child) => {
+                if let Some(mut c) = child {
+                    let _ = c.kill();
+                    let _ = c.wait();
+                }
+                fx.push(Effect::Error(shake.err().unwrap_or_default()));
+                self.remove(&mut t, repo, &mut fx);
+                t.failed = true;
+            }
+        }
+        drop(t);
+        self.emit(fx);
     }
 
     fn first(self: &Arc<Self>, repo: &str, s: Started) {
@@ -325,6 +410,10 @@ impl Host {
         if let Some(mut b) = self.remove(t, repo, fx) {
             drop(b.child.stdin.take());
             t.closing.push((b.child, Instant::now() + STOP_WAIT));
+            if let Some(mut c) = b.pending {
+                let _ = c.kill();
+                t.closing.push((c, Instant::now()));
+            }
         }
     }
 
@@ -363,10 +452,15 @@ impl Host {
             }
             _ => false,
         });
-        let exited: Vec<_> = t.boards.iter_mut().filter_map(|(r, b)| Some((r.clone(), b.child.try_wait().ok()??))).collect();
+        let exited: Vec<_> = t
+            .boards
+            .iter_mut()
+            .filter(|(_, b)| b.restarting.is_none())
+            .filter_map(|(r, b)| Some((r.clone(), b.child.try_wait().ok()??)))
+            .collect();
         for (repo, status) in exited {
             let requested = status.code() == Some(RESTART_REQUESTED);
-            let (place, crashed) = (t.boards[&repo].place, t.boards[&repo].crashed);
+            let crashed = t.boards[&repo].crashed;
             if requested {
                 eprintln!("[shell] {repo}: daemon asked to be restarted");
             } else if crashed {
@@ -377,26 +471,19 @@ impl Host {
                 eprintln!("[shell] {repo}: daemon stopped ({status}); restarting it once");
             }
             // A secret dies with its daemon (docs/SECURITY.md), so the new one gets its own.
-            match self.start(&repo) {
-                Ok(s) => {
-                    let b = self.board(s, place, crashed || !requested);
-                    match place {
-                        Place::Own => fx.push(show(&label(&repo), &repo, &b)),
-                        Place::Docked if t.main == repo => fx.push(show(MAIN, &repo, &b)),
-                        Place::Docked => {}
-                    }
-                    t.boards.insert(repo, b);
-                }
-                Err(e) => {
-                    fx.push(Effect::Error(e));
-                    self.remove(&mut t, &repo, &mut fx);
-                }
-            }
+            t.restarts += 1;
+            let gen = t.restarts;
+            let b = t.boards.get_mut(&repo).expect("hosted");
+            b.crashed = crashed || !requested;
+            b.restarting = Some(gen);
+            let host = self.clone();
+            std::thread::spawn(move || host.restart(repo, gen));
         }
         self.sync(&t);
+        let failed = std::mem::take(&mut t.failed);
         if t.boards.is_empty() && t.opening.is_empty() && t.closing.is_empty() {
             t.done = true;
-            let failed = fx.iter().any(|f| matches!(f, Effect::Error(_)));
+            let failed = failed || fx.iter().any(|f| matches!(f, Effect::Error(_)));
             fx.push(Effect::Exit(if failed { 1 } else { 0 }));
         }
         let done = t.done;
@@ -409,7 +496,7 @@ impl Host {
     fn shutdown(&self) {
         let mut t = lock(&self.table);
         t.done = true;
-        let mut children: Vec<Child> = std::mem::take(&mut t.boards).into_values().map(|b| b.child).collect();
+        let mut children: Vec<Child> = std::mem::take(&mut t.boards).into_values().flat_map(|b| [Some(b.child), b.pending]).flatten().collect();
         children.extend(std::mem::take(&mut t.closing).into_iter().map(|(c, _)| c));
         for c in &mut children {
             let _ = c.kill();
@@ -879,6 +966,59 @@ mod tests {
         assert!(!host.tick());
         host.command(Verb::Open, "k95-c");
         assert!(lock(&host.table).opening.is_empty(), "nothing starts once the shell is exiting");
+    }
+
+    fn stalled(host: &Host, repo: &str) -> Option<u32> {
+        lock(&host.table).boards.get(repo)?.pending.as_ref().map(Child::id)
+    }
+
+    #[test]
+    fn a_restart_that_never_handshakes_blocks_no_other_board_and_closing_it_cancels_it() {
+        let (host, seen) = host(|repo, n| match (repo, n) {
+            ("k95-a", _) => up(41001, ""),
+            (_, 1) => "echo KANBAN95 port=41002&exit 75".into(),
+            _ => "findstr x".into(),
+        });
+        host.first("k95-a", host.start("k95-a").unwrap());
+        host.command(Verb::Open, "k95-b");
+        until("the stalled restart", || {
+            host.tick();
+            stalled(&host, "k95-b").is_some()
+        });
+        let p = stalled(&host, "k95-b").unwrap();
+        let began = Instant::now();
+        assert!(host.tick());
+        host.command(Verb::Switch, "k95-a");
+        assert_eq!(shown(&seen).last(), Some(&(MAIN.into(), 41001)));
+        host.command(Verb::Close, "k95-b");
+        assert!(began.elapsed() < Duration::from_secs(2), "nothing waited on the stalled handshake");
+        assert_eq!(hosted(&host), [("k95-a".into(), Place::Docked)]);
+        until("the stalled child to be killed", || {
+            host.tick();
+            !alive(p)
+        });
+        for _ in 0..5 {
+            assert!(host.tick());
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        assert_eq!(hosted(&host), [("k95-a".into(), Place::Docked)], "the closed board stays closed");
+        host.shutdown();
+    }
+
+    #[test]
+    fn shutdown_kills_a_restart_still_waiting_for_its_handshake() {
+        let (host, _) = host(|_, n| if n == 1 { "echo KANBAN95 port=41001&exit 3".into() } else { "findstr x".into() });
+        host.first("k95-a", host.start("k95-a").unwrap());
+        until("the stalled restart", || {
+            host.tick();
+            stalled(&host, "k95-a").is_some()
+        });
+        let p = stalled(&host, "k95-a").unwrap();
+        let began = Instant::now();
+        host.shutdown();
+        assert!(began.elapsed() < Duration::from_secs(5));
+        assert!(!alive(p));
+        assert!(!host.tick());
     }
 
     #[test]
