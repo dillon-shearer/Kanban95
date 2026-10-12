@@ -13,6 +13,10 @@ export const SWEEP_MS = 24 * 60 * 60 * 1000;
 type Board = { db: DatabaseSync; repo: string };
 const log = (db: DatabaseSync, ticket: number | null, tool: string, args: unknown, outcome: 'ok' | 'error' = 'ok') =>
   audit(db, { grant_id: null, ticket_id: ticket, tool, args, outcome });
+const landed = (db: DatabaseSync, id: number) => {
+  const t = db.prepare('SELECT status, merged_at FROM tickets WHERE id = ?').get(id) as { status: string; merged_at: string | null } | undefined;
+  return t?.status === 'done' ? t.merged_at : null;
+};
 const message = (e: unknown) => ((e as { stderr?: string }).stderr || (e as Error).message).trim();
 // A directory something still holds open (a running exe, an editor, OneDrive) is left for the next sweep, never fatal.
 // Links inside are unlinked first, so the delete never reaches through a junction into the main checkout.
@@ -29,11 +33,14 @@ const remove = (repo: string, path: string): string | undefined => {
  * After a ticket's branch has landed: its worktree (forced, the committed work is on the base now; what is left is build
  * output and test leftovers) and its branch. Windows keeps a directory locked for a moment after the agent that sat in it
  * exits, longer on a loaded machine (over 2 s seen in a full test run beside other agents), so the removal is retried for about
- * ten seconds before it is given up and audited as an error.
+ * ten seconds before it is given up and audited as an error. Every try first checks the ticket is still done with the same
+ * merged_at, so a rejection during the retries keeps the new cycle's worktree.
  */
 export async function cleanTicket(b: Board, id: number): Promise<void> {
   const path = worktreePath(b.repo, id);
+  const cycle = landed(b.db, id);
   for (let attempt = 1; ; attempt++) {
+    if (!cycle || landed(b.db, id) !== cycle) return log(b.db, id, 'janitor.worktree', { path, skipped: 'reopened' });
     try {
       const { branchDeleted } = removeWorktree(b.repo, id, true);
       log(b.db, id, 'janitor.worktree', { path, branchDeleted });
@@ -46,8 +53,8 @@ export async function cleanTicket(b: Board, id: number): Promise<void> {
 }
 
 /**
- * On daemon start and once a day. Orphans only: a worktree whose ticket is gone or merged, a session dir or grant with no live
- * session, an unfinished run with no live session. A worktree of an unmerged ticket is never touched: it may hold the only copy of work.
+ * On daemon start and once a day. Orphans only: a worktree whose ticket is gone or done and merged, a session dir or grant with no live
+ * session, an unfinished run with no live session. A worktree of an unmerged or reopened ticket is never touched: it may hold the only copy of work.
  */
 export function sweep(b: Board): Promise<void> {
   const { db, repo } = b;
@@ -66,9 +73,9 @@ export function sweep(b: Board): Promise<void> {
     for (const name of readdirSync(root)) {
       const id = Number(/^t-(\d+)$/.exec(name)?.[1]);
       if (!id || live.some((s) => s.ticketId === id)) continue;
-      const t = db.prepare('SELECT merged_at FROM tickets WHERE id = ?').get(id) as { merged_at: string | null } | undefined;
-      // An unmerged ticket's worktree in the old layout stays too; its next launch moves it to the new root (createWorktree).
-      if (t && t.merged_at === null) continue;
+      const t = db.prepare('SELECT 1 FROM tickets WHERE id = ?').get(id);
+      // An unmerged or reopened ticket's worktree in the old layout stays too; its next launch moves it to the new root (createWorktree).
+      if (t && landed(db, id) === null) continue;
       const ticket = t ? id : null;
       const path = join(root, name);
       try {
