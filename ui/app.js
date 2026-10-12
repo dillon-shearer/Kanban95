@@ -60,6 +60,7 @@ async function refreshShared() {
   [sessions, inbox, runner] = await Promise.all([api('GET', '/sessions'), api('GET', '/inbox'), api('GET', '/runner')]);
   openNewTerminals();
   taskbar();
+  tickRunBadges();
 }
 const redraw = (ticket) => views.forEach((f) => f(ticket));
 
@@ -117,6 +118,25 @@ let say = (msg) => console.log(msg); // the Board's status bar while it is open
 const defaults = (t) => models?.[t.cli ?? models.cli]?.execute ?? {};
 const badge = (text, cls = '') => h('span', { class: `badge ${cls}` }, text);
 const live = (ticketId) => sessions.filter((s) => s.ticket_id === ticketId);
+const elapsed = (iso) => {
+  const m = Math.max(0, Math.floor((Date.now() - Date.parse(iso)) / 60_000));
+  return m < 60 ? `${m}m` : `${Math.floor(m / 60)}h${m % 60}m`;
+};
+const runText = (s) => `${s.phase} ${elapsed(s.started_at)}`;
+let runClock = null;
+function tickRunBadges() {
+  const any = sessions.some((s) => s.ticket_id !== null);
+  if (any && !runClock) runClock = setInterval(() => {
+    for (const b of document.querySelectorAll('.card .badge.run')) {
+      const s = live(Number(b.closest('.card').dataset.id))[0];
+      if (s) b.textContent = runText(s);
+    }
+  }, 60_000);
+  if (!any && runClock) {
+    clearInterval(runClock);
+    runClock = null;
+  }
+}
 
 function card(t) {
   const d = defaults(t);
@@ -137,7 +157,7 @@ function card(t) {
     badge(t.cli ?? models?.cli ?? 'cli?', t.cli ? '' : 'default'),
     ...(t.tags ? t.tags.split(' ').map((g) => badge(g, 'tag')) : []),
     t.template === 'housekeeping' && badge('housekeeping'),
-    live(t.id).length > 0 && badge('running', 'run'),
+    live(t.id).length > 0 && badge(runText(live(t.id)[0]), 'run'),
     t.flags.needs_human && badge('needs human', 'flag'),
     t.flags.blocked_on_deps && badge(`waits on #${t.depends_on.join(', #')}`, 'hold'),
     t.retry > 0 && badge(`retry ${t.retry}`),

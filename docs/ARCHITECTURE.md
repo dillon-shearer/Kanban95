@@ -136,7 +136,7 @@ Every `/api/*` request needs the `k95` cookie holding the shell secret, or gets 
 | POST | `/api/brain` | add a note: `title`, `body` (at most 1500 characters), optional `tags` |
 | PATCH | `/api/brain/<id>` | edit a note in place: any of `title`, `body`, `tags`; 404 for an unknown id |
 | DELETE | `/api/brain/<id>` | delete a note; 404 for an unknown id |
-| GET | `/api/sessions` | live agent sessions: `id` (the `/pty/<id>` key), `ticket_id`, `run_id`, `grant_id`, `role`, `phase`, `model` |
+| GET | `/api/sessions` | live agent sessions: `id` (the `/pty/<id>` key), `ticket_id`, `run_id`, `grant_id`, `role`, `phase`, `model`, `started_at` (ISO time of spawn; a card's run badge shows the phase and the time since) |
 | DELETE | `/api/sessions/:id` | the operator's X on a terminal: ends the session (`runs.outcome` = `closed`, grant revoked, pty killed); a ticket session also flags its ticket (`exit` with an operator note). 404 when not live. Audited as `sessions.end` |
 | POST | `/api/brainstorm` | starts a brainstorm session (planner, repo root); optional `{ mission }`, the operator's draft, goes into its brief as `{{mission}}`; returns it in the `/api/sessions` shape |
 | POST | `/api/operator` | `{ mission }` (non-empty): starts an operator terminal (operator grant, repo root, the mission in its brief); returns it in the `/api/sessions` shape |
