@@ -4,6 +4,7 @@ import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { createReadStream, rmSync } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import { extname, resolve, sep } from 'node:path';
+import { pipeline } from 'node:stream';
 import type { DatabaseSync } from 'node:sqlite';
 import { WebSocketServer } from 'ws';
 import { handleApi } from './api.js';
@@ -129,7 +130,7 @@ async function serveFile(req: IncomingMessage, res: ServerResponse, file: string
   if (!info?.isFile()) return send(res, 404, 'not found');
   res.writeHead(200, { 'Content-Type': type, 'Content-Length': info.size });
   if (req.method === 'HEAD') return res.end();
-  createReadStream(file).pipe(res);
+  pipeline(createReadStream(file), res, () => {});
 }
 
 type Launch = Parameters<typeof launch>[1];
