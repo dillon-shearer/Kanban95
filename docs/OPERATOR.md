@@ -58,7 +58,7 @@ When the board restarts, every agent it was running is killed. Tickets that were
 
 ![Inbox](img/inbox.png)
 
-For anything else, open the ticket (double-click the card): the Notes tab has the failure notes, Runs has each run's exact prompt and terminal output, Diff shows what the worktree changed. Text you type in the Ticket tab stays while you look at other tabs and when the ticket changes underneath; it is only kept once you press **Save**. Closing a ticket window (Esc, X, or the ticket being deleted) with unsaved edits asks "Discard changes?": **Cancel** keeps the window and your text, **Discard** closes it. A New ticket window asks the same.
+For anything else, open the ticket (double-click the card): the Notes tab has the failure notes (it opens at the latest note), Runs has each run's exact prompt and terminal output, Diff shows what the worktree changed. Text you type in the Ticket tab stays while you look at other tabs and when the ticket changes underneath; it is only kept once you press **Save**. Closing a ticket window (Esc, X, or the ticket being deleted) with unsaved edits asks "Discard changes?": **Cancel** keeps the window and your text, **Discard** closes it. A New ticket window asks the same.
 
 ![Ticket window, Runs tab](img/ticket-runs.png)
 
@@ -147,6 +147,7 @@ Drag a card to any column to put it there by hand (docs/LIFECYCLE.md → Moves b
 | Ctrl+1 to Ctrl+9 | switch to the 1st to 9th hosted board |
 | Ctrl+L | Run / Stop the runner |
 | Ctrl+R | Restart the agent of the focused ticket window (after a confirm) |
+| Enter, Space, arrows | on a focused card (Tab to it): Enter opens the ticket, Space selects or deselects it (Shift+Space selects the range), Up/Down move to the card above or below, Left/Right to the next open column |
 | Ctrl+A | select every card the filter shows in an open column (on the Board, outside a text field) |
 | Ctrl+F | focus the Board's Filter box (Esc in the box clears it) |
 | Ctrl+N | New brainstorm |

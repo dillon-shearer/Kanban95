@@ -169,6 +169,7 @@ function card(t) {
     class: `card${selection.has(t.id) ? ' selected' : ''}${t.flags.needs_human ? ' alert' : ''}`, 'data-id': t.id, tabindex: 0,
     onclick: (e) => pick(t, e),
     ondblclick: () => openTicket(t.id),
+    onkeydown: (e) => cardKey(t, e),
     oncontextmenu: (e) => {
       e.preventDefault();
       if (!selection.has(t.id)) pick(t, {});
@@ -189,6 +190,29 @@ function card(t) {
     t.merged_at && badge('merged')));
   dragCard(el, t);
   return el;
+}
+
+function cardKey(t, e) {
+  if (e.ctrlKey || e.altKey || e.metaKey) return;
+  if (e.key === 'Enter') return openTicket(t.id);
+  if (e.key === ' ') {
+    e.preventDefault();
+    return pick(t, { ctrlKey: !e.shiftKey, shiftKey: e.shiftKey });
+  }
+  const step = { ArrowUp: [0, -1], ArrowDown: [0, 1], ArrowLeft: [-1, 0], ArrowRight: [1, 0] }[e.key];
+  if (!step) return;
+  e.preventDefault();
+  const cols = e.currentTarget.closest('.k95-columns');
+  const at = (s, id) => cols.querySelector(`.col[data-status="${s}"] .card[data-id="${id}"]`);
+  const ids = order.get(t.status) ?? [];
+  const i = ids.indexOf(t.id);
+  if (step[1]) return at(t.status, ids[i + step[1]])?.focus();
+  for (let c = COLUMNS.findIndex(([s]) => s === t.status) + step[0]; c >= 0 && c < COLUMNS.length; c += step[0]) {
+    const s = COLUMNS[c][0];
+    const next = order.get(s) ?? [];
+    if (collapsed.has(s) || !next.length) continue;
+    return at(s, next[Math.min(i, next.length - 1)])?.focus();
+  }
 }
 
 /** Pointer drag: a ghost follows the pointer; on release over a column the move is checked, otherwise the card stays. */
@@ -632,16 +656,18 @@ function openTicket(id) {
       const notes = await api('GET', `/tickets/${id}/notes`);
       keepScroll(p, () => p.replaceChildren(notes.length ? h('ol', { class: 'k95-notes' }, notes.map((n) => h('li', { class: `note ${n.kind}` },
         h('div', { class: 'note-head' }, `${fmt(n.created_at)} · ${n.role} · ${n.kind}`), h('pre', {}, n.body)))) : h('p', {}, 'No notes yet.')));
+      if (first) p.scrollTop = p.scrollHeight;
     } else if (tab === 'Runs') {
       const runs = await api('GET', `/tickets/${id}/runs`);
       const view = h('pre', { class: 'k95-pre' }, 'Select a run to see the exact prompt it was given.');
+      const load = async (r, field) => { view.textContent = (await api('GET', `/tickets/${id}/runs/${r.id}`))[field]; };
       keepScroll(p, () => p.replaceChildren(table(['Run', 'Phase', 'CLI', 'Model', 'Effort', 'Started', 'Ended', 'Outcome', ''], runs.map((r) => {
         const s = sessions.find((x) => x.run_id === r.id);
-        return h('tr', { onclick: () => { view.textContent = r.prompt_rendered; } },
+        return h('tr', { onclick: () => load(r, 'prompt_rendered') },
           h('td', {}, r.id), h('td', {}, r.phase), h('td', {}, r.cli), h('td', {}, r.model), h('td', {}, r.effort),
           h('td', {}, fmt(r.started_at)), h('td', {}, fmt(r.ended_at)), h('td', {}, r.outcome ?? (s ? 'running' : '')),
           h('td', {}, s ? h('button', { onclick: () => openTerminal(s) }, 'Terminal')
-            : r.scrollback ? h('button', { onclick: (e) => { e.stopPropagation(); view.textContent = r.scrollback; } }, 'Output') : ''));
+            : r.has_scrollback ? h('button', { onclick: (e) => { e.stopPropagation(); load(r, 'scrollback'); } }, 'Output') : ''));
       })), view));
     } else if (tab === 'Diff') {
       const { diff } = await api('GET', `/tickets/${id}/diff`);
@@ -834,7 +860,7 @@ function openTerminal(s, auto = false) {
     // ends a run with closes it: after conflict and restart a new run is already open, and a stale "ended" window in front of
     // it reads as a stuck ticket. `moved` closes it also when the operator opened it: they said Stop in the Move dialog.
     setTimeout(async () => {
-      const run = (await api('GET', `/tickets/${s.ticket_id}/runs`).catch(() => [])).find((r) => r.id === s.run_id);
+      const run = await api('GET', `/tickets/${s.ticket_id}/runs/${s.run_id}`).catch(() => null);
       if (run?.outcome === 'moved' || (auto && ['submit', 'pass', 'fail', 'conflict', 'restart'].includes(run?.outcome))) setTimeout(w.close, 1500);
     }, 500);
   };
