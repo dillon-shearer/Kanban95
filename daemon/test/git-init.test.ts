@@ -140,6 +140,50 @@ describe('git init', { timeout: 60_000 }, () => {
     expect(files()).not.toContain('secret.txt');
   });
 
+  it('env files stay out of the first commit and on disk; templates go in', async () => {
+    for (const f of ['.env', '.env.local', 'src/.env.production', '.ENV.Test', '.env.example', 'a.txt']) {
+      mkdirSync(join(dir, f, '..'), { recursive: true });
+      writeFileSync(join(dir, f), 'SYNTHETIC=1\n');
+    }
+    await restart();
+    expect(commits()).toBe(1);
+    expect(files()).toEqual(expect.arrayContaining(['.env.example', 'a.txt']));
+    expect(files().filter((f) => /(^|\/)\.env/i.test(f))).toEqual(['.env.example']);
+    expect(git('status', '--porcelain')).toBe('');
+    expect(existsSync(join(dir, 'src', '.env.production'))).toBe(true);
+  });
+
+  it('an existing .gitignore that does not cover env files still keeps them out', async () => {
+    git('init', '-q');
+    writeFileSync(join(dir, '.gitignore'), '!.env\n');
+    writeFileSync(join(dir, '.env'), 'SYNTHETIC=1\n');
+    writeFileSync(join(dir, '.env.staging'), 'SYNTHETIC=1\n');
+    writeFileSync(join(dir, 'a.txt'), 'a\n');
+    await restart();
+    expect(commits()).toBe(1);
+    expect(files()).toContain('a.txt');
+    expect(files().filter((f) => f.startsWith('.env'))).toEqual([]);
+    expect(readFileSync(join(dir, '.gitignore'), 'utf8')).toBe('!.env\n');
+  });
+
+  it('an env file already staged in a repo with no commit stops the first commit and says how to fix it', async () => {
+    git('init', '-q');
+    writeFileSync(join(dir, '.env'), 'SYNTHETIC=1\n');
+    writeFileSync(join(dir, 'a.txt'), 'a\n');
+    git('add', '.env', 'a.txt');
+    await restart();
+    expect(() => git('rev-parse', '--verify', 'HEAD')).toThrow();
+    const { gitError } = await (await request('GET', '/api/runner')).json();
+    expect(gitError).toMatch(/staged env file kept out of the first commit \(\.env\); unstage with git rm --cached -- "\.env"/);
+    expect(files().sort()).toEqual(['.env', 'a.txt']);
+
+    git('rm', '-q', '--cached', '--', '.env');
+    await restart();
+    expect(commits()).toBe(1);
+    expect(files()).not.toContain('.env');
+    expect(files()).toContain('a.txt');
+  });
+
   it('a repo with commits is left as it is', async () => {
     git('init', '-q');
     writeFileSync(join(dir, 'a.txt'), 'a\n');
