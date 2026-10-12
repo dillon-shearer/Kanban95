@@ -37,15 +37,24 @@ export function worktreesRoot(repo: string): string {
 export const worktreePath = (repo: string, ticketId: number) => join(worktreesRoot(repo), `t-${ticketId}`);
 export const branchName = (ticketId: number) => `ticket/${ticketId}`;
 
-/** A plain folder's first `.gitignore`: the usual build output and the board's own state. */
-const FIRST_GITIGNORE = ['node_modules/', 'dist/', 'build/', ...INNER_GITIGNORE.split('\n').filter(Boolean).map((l) => `.kanban95/${l}`)].join('\n') + '\n';
+const SAFE_ENV = ['.env.example', '.env.sample', '.env.template'];
+/** A plain folder's first `.gitignore`: the usual build output, env files and the board's own state. */
+const FIRST_GITIGNORE = ['node_modules/', 'dist/', 'build/', '.env', '.env.*', ...SAFE_ENV.map((f) => `!${f}`), ...INNER_GITIGNORE.split('\n').filter(Boolean).map((l) => `.kanban95/${l}`)].join('\n') + '\n';
 export const FIRST_COMMIT = 'Start the Kanban95 board';
+
+/** A path named `.env` or `.env.<anything>`, in any folder, except the usual templates: never in the first commit. Judged by name only. */
+export const isSecretPath = (p: string) => {
+  const name = p.split('/').pop()!.toLowerCase();
+  return (name === '.env' || name.startsWith('.env.')) && !SAFE_ENV.includes(name);
+};
 
 /**
  * On daemon start: makes a plain folder a local repo the board can run on. No `.git`: `git init`. No commit yet: a
  * `.gitignore` unless there is one, then everything is added and committed once as FIRST_COMMIT by the operator's own git
- * identity (`user.useConfigOnly`: git never makes one up from the host name). A repo with commits is left alone. Steps are
- * logged to stderr (stdout's first line is the handshake). Throws a message for the operator: git missing, or no identity.
+ * identity (`user.useConfigOnly`: git never makes one up from the host name). Env files (isSecretPath) are kept out of it
+ * even when no `.gitignore` covers them; one the operator staged before the board ran stops it instead. A repo with commits
+ * is left alone. Steps are logged to stderr (stdout's first line is the handshake). Throws a message for the operator: git
+ * missing, no identity, or a staged env file.
  */
 export function initRepo(repo: string): void {
   try {
@@ -61,7 +70,18 @@ export function initRepo(repo: string): void {
       writeFileSync(join(repo, '.gitignore'), FIRST_GITIGNORE);
       console.error('[git] wrote .gitignore');
     }
+    const index = () => git(repo, 'ls-files', '-z').split('\0').filter(Boolean);
+    const staged = index().filter(isSecretPath);
+    if (staged.length) {
+      throw new Error(`staged env file kept out of the first commit (${staged.join(', ')}); `
+        + `unstage with git rm --cached -- ${staged.map((p) => `"${p}"`).join(' ')}, or make the first commit yourself`);
+    }
     git(repo, 'add', '-A');
+    const secrets = index().filter(isSecretPath);
+    if (secrets.length) {
+      git(repo, 'rm', '-q', '--cached', '--', ...secrets);
+      console.error(`[git] left out of the first commit: ${secrets.join(', ')}`);
+    }
     git(repo, '-c', 'user.useConfigOnly=true', 'commit', '-q', '--allow-empty', '-m', FIRST_COMMIT);
     console.error(`[git] committed the folder as "${FIRST_COMMIT}"`);
   } catch (e) {
