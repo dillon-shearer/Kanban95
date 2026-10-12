@@ -5,7 +5,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync
 import { basename, dirname, join, resolve } from 'node:path';
 import { boardHome, normal, readProjects, same } from './settings.js';
 
-export interface Entry { pid: number; repo: string; port: number; started: string; shell: number | null; agents: number; attention: number }
+interface Entry { pid: number; repo: string; port: number; started: string; shell: number | null; agents: number; attention: number }
 
 const runningDir = () => join(boardHome(), 'running');
 export const entryPath = (pid: number) => join(runningDir(), `${pid}.json`);

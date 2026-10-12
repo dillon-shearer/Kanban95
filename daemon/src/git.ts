@@ -43,7 +43,7 @@ const FIRST_GITIGNORE = ['node_modules/', 'dist/', 'build/', '.env', '.env.*', .
 export const FIRST_COMMIT = 'Start the Kanban95 board';
 
 /** A path named `.env` or `.env.<anything>`, in any folder, except the usual templates: never in the first commit. Judged by name only. */
-export const isSecretPath = (p: string) => {
+const isSecretPath = (p: string) => {
   const name = p.split('/').pop()!.toLowerCase();
   return (name === '.env' || name.startsWith('.env.')) && !SAFE_ENV.includes(name);
 };
