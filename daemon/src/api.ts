@@ -128,10 +128,10 @@ function endSessions(db: DatabaseSync, id: number, outcome: string) {
 /** Deletes a ticket with its sessions and attachments. The UI's DELETE route and the delete_ticket tool both come here. */
 export function deleteTicket(board: Board, id: number) {
   const { db } = board;
-  // Its agents stop with it. The outcome makes their exit expected, so it flags nothing on a ticket that is gone.
-  endSessions(db, id, 'deleted');
   const r = db.prepare('DELETE FROM tickets WHERE id = ?').run(id);
   if (r.changes === 0) throw new HttpError(404, 'no such ticket');
+  // Its agents stop with it. The outcome makes their exit expected, so it flags nothing on a ticket that is gone.
+  endSessions(db, id, 'deleted');
   rmSync(attachmentDir(board.repo, id), { recursive: true, force: true });
 }
 
@@ -275,12 +275,12 @@ const routes: [method: string, path: RegExp, mutation: string | null, handler: (
     // body sets one. The UI closes the terminals of a ticket it sees in backlog.
     const was = readTicket(db, id);
     const moved = typeof body.status === 'string' && body.status !== was.status;
-    if (moved) endSessions(db, id, body.status === 'backlog' ? 'reset' : 'moved');
     transaction(db, () => {
       if (moved) db.prepare('UPDATE tickets SET needs_human = 0 WHERE id = ?').run(id);
       if (cols.length) db.prepare(`UPDATE tickets SET ${cols.map((c) => `${c} = ?`).join(', ')} WHERE id = ?`).run(...(vals as never[]), id);
       if (deps) setDeps(db, id, deps);
     });
+    if (moved) endSessions(db, id, body.status === 'backlog' ? 'reset' : 'moved');
     // Into Done unmerged: a branch goes to the merge queue, as a pass would; no branch means nothing to land, so it is closed.
     if (moved && body.status === 'done' && !was.merged_at) {
       if (hasBranch(board.repo, id)) apply(board, id, 'merge');
