@@ -26,7 +26,7 @@ export function register(repo: string, port: number, shell: number | null): () =
 export function countAgents(n: number): void {
   if (!own || own.agents === n) return;
   own.agents = n;
-  writeFileSync(entryPath(own.pid), JSON.stringify(own) + '\n');
+  try { writeFileSync(entryPath(own.pid), JSON.stringify(own) + '\n'); } catch {}
 }
 
 /** EPERM: the pid exists but belongs to someone else, so it is alive. */
