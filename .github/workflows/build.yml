@@ -24,6 +24,8 @@ jobs:
       - run: npm test
       - run: npm run test:shell
       - run: npm run installer
+      - shell: bash
+        run: 7z l shell/target/release/bundle/nsis/*-setup.exe | grep -iE '(^| |\\|/)node\.exe$'
       - uses: actions/upload-artifact@v5
         with:
           name: kanban95-windows
@@ -52,8 +54,14 @@ jobs:
       - if: ${{ !cancelled() }}
         run: npm run installer -- --target x86_64-apple-darwin --bundles app,dmg
       - if: ${{ !cancelled() }}
-        working-directory: shell/target/app
-        run: node -e "const p = require('node-pty').spawn('/bin/echo', ['pty ok'], {}); p.onData((d) => process.stdout.write(d)); p.onExit((e) => process.exit(e.exitCode))"
+        run: |
+          for a in aarch64 x86_64; do
+            n=shell/target/$a-apple-darwin/release/bundle/macos/Kanban95.app/Contents/MacOS/node
+            test -x "$n" && file "$n" | grep -q "$(echo $a | sed s/aarch64/arm64/)" || exit 1
+          done
+      - if: ${{ !cancelled() }}
+        working-directory: shell/target/aarch64-apple-darwin/release/bundle/macos/Kanban95.app/Contents/Resources/app
+        run: ../../MacOS/node -e "const p = require('node-pty').spawn('/bin/echo', ['pty ok'], {}); p.onData((d) => process.stdout.write(d)); p.onExit((e) => process.exit(e.exitCode))"
       - uses: actions/upload-artifact@v5
         if: always()
         with:

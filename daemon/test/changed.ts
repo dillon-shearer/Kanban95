@@ -24,6 +24,7 @@ export function mapped(paths: string[], testDir: string): string[] {
     // SQL is read from disk at start, so no test imports it.
     if (p.startsWith('daemon/migrations/global/')) out.add('brain-global.test.ts');
     else if (p.startsWith('daemon/migrations/')) out.add('db.test.ts');
+    if (p === 'shell/stage.mjs') out.add('stage-node.test.ts');
     if (DOC_TESTS[p]) out.add(DOC_TESTS[p]);
   }
   return [...out].filter((f) => tests.includes(f)).sort();
