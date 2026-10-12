@@ -194,3 +194,9 @@ fieldset { margin: 0; }
 .k95-panel .window-body > button, .k95-form button, fieldset > button { align-self: flex-start; }
 .k95-meter { width: 80px; height: 12px; padding: 2px; }
 .k95-limits { display: flex; flex-direction: column; gap: 6px; }
+
+/* First-run setup page (ui/setup.html) */
+.k95-setup { width: 460px; max-width: calc(100% - 16px); margin: 12vh auto 0; }
+.k95-setup .field-row-stacked { margin-bottom: 8px; }
+.k95-setup-error { color: #a00000; }
+.k95-setup-buttons { justify-content: flex-end; }

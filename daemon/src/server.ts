@@ -18,6 +18,7 @@ import { handleMcp } from './mcp.js';
 import { startMemoryLog } from './memlog.js';
 import { idle } from './merge.js';
 import { addProject, readConfig } from './settings.js';
+import { firstProject, handleSetup } from './setup.js';
 import { initTemplates } from './templates.js';
 import { voiceFile } from './voice.js';
 
@@ -82,7 +83,7 @@ const matches = (given: string | null | undefined, secret: string) => given != n
 const authed = (req: IncomingMessage, secret: string) =>
   [...(req.headers.cookie ?? '').matchAll(/(?:^|;\s*)k95(?:-\d+)?=([^;]*)/g)].some((m) => matches(m[1], secret));
 
-async function handle(board: Board, self: string, secret: string, req: IncomingMessage, res: ServerResponse) {
+async function handle(board: Board | null, self: string, secret: string, req: IncomingMessage, res: ServerResponse, done?: (repo: string) => void) {
   // The shell loads the UI from this origin, so the CSP must come from here:
   // Tauri only injects its configured CSP into pages it serves itself.
   // 'wasm-unsafe-eval' lets the local speech model's WebAssembly compile (no JS eval). Inline styles are for xterm.js, which
@@ -100,9 +101,10 @@ async function handle(board: Board, self: string, secret: string, req: IncomingM
     return res.end();
   }
   if (url.pathname.startsWith('/api/')) {
-    return authed(req, secret) ? handleApi(board, req, res, url) : send(res, 401, 'unauthorized');
+    if (!authed(req, secret)) return send(res, 401, 'unauthorized');
+    return board ? handleApi(board, req, res, url) : handleSetup(req, res, url, done!);
   }
-  if (url.pathname === '/mcp') return handleMcp(board, req, res);
+  if (url.pathname === '/mcp') return board ? handleMcp(board, req, res) : send(res, 404, 'not found');
   if (req.method !== 'GET' && req.method !== 'HEAD') return send(res, 405, 'method not allowed');
   if (url.pathname === '/health') return send(res, 200, JSON.stringify({ ok: true }), 'application/json');
 
@@ -117,6 +119,7 @@ async function handle(board: Board, self: string, secret: string, req: IncomingM
   } catch {
     return send(res, 400, 'bad request');
   }
+  if (!board && pathname === '/') pathname = '/setup.html';
   if (pathname.endsWith('/')) pathname += 'index.html';
   const file = resolve(UI_DIR, '.' + pathname);
   if (!file.startsWith(UI_DIR + sep)) return send(res, 403, 'forbidden');
@@ -297,6 +300,32 @@ export function start(config: Config = {}): Promise<{
   });
 }
 
+export function startSetup(config: Config & { done: (repo: string) => void }): Promise<{ port: number; secret: string; close: () => Promise<void> }> {
+  const { host, port } = validateConfig(config);
+  const secret = config.secret ?? randomBytes(32).toString('hex');
+  let self = '';
+  const server = createServer((req, res) => {
+    handle(null, self, secret, req, res, config.done).catch(() => send(res, 500, 'internal error'));
+  });
+  return new Promise((ok, fail) => {
+    server.once('error', fail);
+    server.listen(port, host, () => {
+      const addr = server.address();
+      if (!addr || typeof addr === 'string') return fail(new Error('no address'));
+      self = `${LOOPBACK}:${addr.port}`;
+      ok({
+        port: addr.port,
+        secret,
+        close: () => {
+          const closed = new Promise<void>((r) => server.close(() => r()));
+          server.closeAllConnections();
+          return closed;
+        },
+      });
+    });
+  });
+}
+
 if (import.meta.main) {
   // From the shell's environment, never argv (another process can read a command line). Dropped from ours at once so
   // nothing we spawn (git, hooks, agent CLIs) inherits it.
@@ -310,25 +339,27 @@ if (import.meta.main) {
     console.error('KANBAN95_SECRET is missing or shorter than 32 characters: start the board through the shell (Kanban95.cmd)');
     process.exit(1);
   }
-  const { port, board, close } = await start({
-    secret,
-    port: process.env.KANBAN95_PORT ? Number(process.env.KANBAN95_PORT) : 0,
-    repo: process.argv[2],
-    shellId,
-    shell,
-  });
+  const repo = process.argv[2] ?? firstProject();
+  const wanted = process.env.KANBAN95_PORT ? Number(process.env.KANBAN95_PORT) : 0;
+  const started = repo ? await start({ secret, port: wanted, repo, shellId, shell }) : await startSetup({ secret, port: wanted, done: () => process.exit(75) });
+  const { port } = started;
   console.log(`KANBAN95 port=${port}`);
-  // Restart board (POST /api/restart): the same shutdown as close(), so killed agents stay unflagged and recover() resumes
-  // them, then exit 75, which the shell takes as "start me again" (docs/ARCHITECTURE.md -> Restart board).
-  board.shutdown = (code) => {
-    if (board.closing) return;
-    // ponytail: a session whose pty never exits would hold close() forever; 15 s cap, a per-step timeout if that bites.
-    setTimeout(() => process.exit(code), 15_000).unref();
-    close().finally(() => process.exit(code));
-  };
-  // The parent (Tauri shell) holds our stdin. When it dies the pipe closes and we leave with it, agents' process trees first:
-  // on Windows the shell's job object would end them too, on macOS nothing would.
-  process.stdin.on('end', () => board.shutdown!(0));
-  process.on('exit', () => rmSync(entryPath(process.pid), { force: true })); // the running entry, also without close()
+  if (repo) {
+    const { board, close } = started as Awaited<ReturnType<typeof start>>;
+    // Restart board (POST /api/restart): the same shutdown as close(), so killed agents stay unflagged and recover() resumes
+    // them, then exit 75, which the shell takes as "start me again" (docs/ARCHITECTURE.md -> Restart board).
+    board.shutdown = (code) => {
+      if (board.closing) return;
+      // ponytail: a session whose pty never exits would hold close() forever; 15 s cap, a per-step timeout if that bites.
+      setTimeout(() => process.exit(code), 15_000).unref();
+      close().finally(() => process.exit(code));
+    };
+    // The parent (Tauri shell) holds our stdin. When it dies the pipe closes and we leave with it, agents' process trees first:
+    // on Windows the shell's job object would end them too, on macOS nothing would.
+    process.stdin.on('end', () => board.shutdown!(0));
+    process.on('exit', () => rmSync(entryPath(process.pid), { force: true })); // the running entry, also without close()
+  } else {
+    process.stdin.on('end', () => process.exit(0));
+  }
   process.stdin.resume();
 }
