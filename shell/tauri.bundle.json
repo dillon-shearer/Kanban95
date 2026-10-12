@@ -1,8 +1,6 @@
 {
   "bundle": {
     "active": true,
-    "targets": ["nsis"],
-    "resources": { "target/app/": "app/" },
-    "windows": { "nsis": { "installMode": "currentUser" } }
+    "resources": { "target/app/": "app/" }
   }
 }

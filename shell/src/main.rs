@@ -36,11 +36,56 @@ fn mint_secret() -> String {
     b.iter().map(|x| format!("{x:02x}")).collect()
 }
 
-/// The daemon the installer staged next to this exe (`app/`, shell/stage.mjs), else the repo's build (dev).
+/// The daemon the installer staged (`app/`, shell/stage.mjs): next to this exe on Windows, in the bundle's
+/// `Contents/Resources` on macOS (the exe is in `Contents/MacOS`). Else the repo's build (dev).
 fn daemon_script() -> std::path::PathBuf {
-    let installed = std::env::current_exe().ok().and_then(|e| Some(e.parent()?.join("app/daemon/dist/server.js")));
-    installed.filter(|p| p.is_file()).unwrap_or_else(|| concat!(env!("CARGO_MANIFEST_DIR"), "/../daemon/dist/server.js").into())
+    let dir = std::env::current_exe().ok().and_then(|e| Some(e.parent()?.to_path_buf()));
+    let installed = dir.into_iter().flat_map(|d| [d.join("app"), d.join("../Resources/app")]).map(|a| a.join("daemon/dist/server.js")).find(|p| p.is_file());
+    installed.unwrap_or_else(|| concat!(env!("CARGO_MANIFEST_DIR"), "/../daemon/dist/server.js").into())
 }
+
+#[cfg(any(target_os = "macos", test))]
+fn merge_path(current: &str, login: &str) -> String {
+    let mut parts: Vec<&str> = current.split(':').filter(|p| !p.is_empty()).collect();
+    for p in login.split(':') {
+        if !p.is_empty() && !parts.contains(&p) {
+            parts.push(p);
+        }
+    }
+    parts.join(":")
+}
+
+#[cfg(target_os = "macos")]
+fn add_login_path() {
+    use std::io::Read;
+    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
+    let Ok(mut child) = Command::new(shell)
+        .args(["-ilc", r#"printf '\n%s' "$PATH""#])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+    else {
+        return;
+    };
+    let end = Instant::now() + Duration::from_secs(5);
+    while let Ok(None) = child.try_wait() {
+        if Instant::now() > end {
+            eprintln!("[shell] the login shell did not print its PATH within 5 s; keeping the PATH this app got");
+            let _ = child.kill();
+            let _ = child.wait();
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let mut out = String::new();
+    if child.stdout.take().is_some_and(|mut o| o.read_to_string(&mut out).is_ok()) {
+        let login = out.lines().last().unwrap_or_default();
+        std::env::set_var("PATH", merge_path(&std::env::var("PATH").unwrap_or_default(), login));
+    }
+}
+#[cfg(not(target_os = "macos"))]
+fn add_login_path() {}
 
 /// `node daemon/dist/server.js <repo>`; no repo (`""`): the daemon picks the first project, or serves first-run setup.
 fn node(repo: &str) -> Command {
@@ -720,6 +765,7 @@ fn node_dialog(text: &str) {
 
 fn main() {
     kill_children_with_us();
+    add_login_path();
     if let Err(e) = check_node() {
         node_dialog(&e);
         std::process::exit(1);
@@ -776,11 +822,47 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(windows)]
     use std::os::windows::process::CommandExt;
     use tauri::test::{get_ipc_response, mock_builder, INVOKE_KEY};
     use tauri::webview::InvokeRequest;
 
-    /// A host whose daemons are `cmd` stand-ins: `script(repo, n)` is the n-th start's command line for that repo.
+    #[cfg(windows)]
+    fn stand_in(line: String) -> Command {
+        let mut c = Command::new("cmd");
+        c.raw_arg(format!("/d /c {line}"));
+        c
+    }
+    #[cfg(windows)]
+    const THEN: &str = "&";
+    #[cfg(windows)]
+    const WAIT: &str = "findstr x";
+    #[cfg(windows)]
+    fn save_shell_id(file: &str) -> String {
+        format!(">\"{file}\" echo %KANBAN95_SHELL_ID%{THEN}")
+    }
+
+    #[cfg(not(windows))]
+    fn stand_in(line: String) -> Command {
+        let mut c = Command::new("sh");
+        c.args(["-c", &line]);
+        c
+    }
+    #[cfg(not(windows))]
+    const THEN: &str = ";";
+    #[cfg(not(windows))]
+    const WAIT: &str = "exec cat";
+    #[cfg(not(windows))]
+    fn save_shell_id(file: &str) -> String {
+        format!("echo \"$KANBAN95_SHELL_ID\" >\"{file}\"{THEN}")
+    }
+
+    fn exits(port: u16, code: i32) -> String {
+        format!("echo KANBAN95 port={port}{THEN}exit {code}")
+    }
+
+    /// A host whose daemons are `cmd` (Windows) or `sh` stand-ins: `script(repo, n)` is the n-th start's command line for
+    /// that repo.
     fn host(script: impl Fn(&str, usize) -> String + Send + Sync + 'static) -> (Arc<Host>, Arc<Mutex<Vec<Effect>>>) {
         let starts = Mutex::new(BTreeMap::<String, usize>::new());
         let host = Host::new(move |repo| {
@@ -790,9 +872,7 @@ mod tests {
                 *n += 1;
                 *n
             };
-            let mut c = Command::new("cmd");
-            c.raw_arg(format!("/d /c {}", script(repo, n)));
-            c
+            stand_in(script(repo, n))
         });
         let seen = Arc::new(Mutex::new(vec![]));
         let rec = seen.clone();
@@ -802,7 +882,7 @@ mod tests {
 
     /// Prints the port line and `then` lines, then waits for stdin EOF.
     fn up(port: u16, then: &str) -> String {
-        format!("echo KANBAN95 port={port}&{then}findstr x")
+        format!("echo KANBAN95 port={port}{THEN}{then}{WAIT}")
     }
 
     fn until(what: &str, mut ok: impl FnMut() -> bool) {
@@ -827,9 +907,14 @@ mod tests {
         lock(&host.table).boards[repo].child.id()
     }
 
+    #[cfg(windows)]
     fn alive(pid: u32) -> bool {
         let out = Command::new("tasklist").args(["/FI", &format!("PID eq {pid}"), "/NH"]).output().unwrap();
         String::from_utf8_lossy(&out.stdout).contains(&format!(" {pid} "))
+    }
+    #[cfg(not(windows))]
+    fn alive(pid: u32) -> bool {
+        Command::new("kill").args(["-0", &pid.to_string()]).stderr(Stdio::null()).status().unwrap().success()
     }
 
     fn hosted(host: &Host) -> Vec<(String, Place)> {
@@ -853,8 +938,8 @@ mod tests {
         let id_file = std::env::temp_dir().join(format!("k95-shell-id-{}", std::process::id()));
         let file = id_file.display().to_string();
         let (host, seen) = host(move |repo, _| match repo {
-            "k95-a" => up(41001, "echo KANBAN95 open=k95-b&echo KANBAN95 open=k95-b&"),
-            _ => format!(">\"{file}\" echo %KANBAN95_SHELL_ID%&{}", up(41002, "")),
+            "k95-a" => up(41001, &format!("echo KANBAN95 open=k95-b{THEN}echo KANBAN95 open=k95-b{THEN}")),
+            _ => format!("{}{}", save_shell_id(&file), up(41002, "")),
         });
         host.first("k95-a", host.start("k95-a").unwrap());
         until("the second board", || shown(&seen).contains(&(MAIN.into(), 41002)));
@@ -924,9 +1009,9 @@ mod tests {
     fn each_daemon_is_restarted_on_75_and_once_on_a_crash() {
         let (host, seen) = host(|repo, n| match (repo, n) {
             ("k95-a", _) => up(41001, ""),
-            (_, 1) => "echo KANBAN95 port=41002&exit 75".into(),
-            (_, 2) => "echo KANBAN95 port=41003&exit 3".into(),
-            (_, 3) => "echo KANBAN95 port=41004&exit 3".into(),
+            (_, 1) => exits(41002, 75),
+            (_, 2) => exits(41003, 3),
+            (_, 3) => exits(41004, 3),
             _ => panic!("restarted after the second crash"),
         });
         host.first("k95-a", host.start("k95-a").unwrap());
@@ -950,7 +1035,7 @@ mod tests {
 
     #[test]
     fn a_failed_restart_of_the_last_board_is_reported_and_exits() {
-        let (host, seen) = host(|_, n| if n == 1 { "echo KANBAN95 port=41001&exit 3".into() } else { "echo nope".into() });
+        let (host, seen) = host(|_, n| if n == 1 { exits(41001, 3) } else { "echo nope".into() });
         host.first("k95-a", host.start("k95-a").unwrap());
         until("the shell to finish", || !host.tick());
         let fx = lock(&seen);
@@ -981,8 +1066,8 @@ mod tests {
     fn a_restart_that_never_handshakes_blocks_no_other_board_and_closing_it_cancels_it() {
         let (host, seen) = host(|repo, n| match (repo, n) {
             ("k95-a", _) => up(41001, ""),
-            (_, 1) => "echo KANBAN95 port=41002&exit 75".into(),
-            _ => "findstr x".into(),
+            (_, 1) => exits(41002, 75),
+            _ => WAIT.into(),
         });
         host.first("k95-a", host.start("k95-a").unwrap());
         host.command(Verb::Open, "k95-b");
@@ -1012,7 +1097,7 @@ mod tests {
 
     #[test]
     fn shutdown_kills_a_restart_still_waiting_for_its_handshake() {
-        let (host, _) = host(|_, n| if n == 1 { "echo KANBAN95 port=41001&exit 3".into() } else { "findstr x".into() });
+        let (host, _) = host(|_, n| if n == 1 { exits(41001, 3) } else { WAIT.into() });
         host.first("k95-a", host.start("k95-a").unwrap());
         until("the stalled restart", || {
             host.tick();
@@ -1024,6 +1109,13 @@ mod tests {
         assert!(began.elapsed() < Duration::from_secs(5));
         assert!(!alive(p));
         assert!(!host.tick());
+    }
+
+    #[test]
+    fn a_login_path_is_added_after_the_path_the_app_got() {
+        assert_eq!(merge_path("/fnm/node24/bin:/usr/bin:/bin", "/opt/homebrew/bin:/usr/bin:/usr/local/bin"), "/fnm/node24/bin:/usr/bin:/bin:/opt/homebrew/bin:/usr/local/bin");
+        assert_eq!(merge_path("/usr/bin:/bin", ""), "/usr/bin:/bin");
+        assert_eq!(merge_path("", "/opt/homebrew/bin::/usr/bin"), "/opt/homebrew/bin:/usr/bin");
     }
 
     #[test]
@@ -1081,7 +1173,7 @@ mod tests {
     /// The UI calls no Tauri command, so none may answer it: core plugin commands and unknown names alike.
     #[test]
     fn webview_cannot_call_any_tauri_command() {
-        let app = mock_builder().build(tauri::generate_context!()).unwrap();
+        let app = mock_builder().build(tauri::generate_context!(test = true)).unwrap();
         let origin: tauri::Url = "http://127.0.0.1:41234/".parse().unwrap();
         let w = window(&app, MAIN, origin.clone(), "Kanban95".into(), Arc::new(Mutex::new(vec![41234]))).unwrap();
         for cmd in [

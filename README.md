@@ -54,7 +54,15 @@ On macOS, double-click `Kanban95.command` in Finder (a Terminal window opens and
 
 `npm run installer` (from a source checkout, Rust required) builds a per-user NSIS installer at `shell/target/release/bundle/nsis/Kanban95_<version>_x64-setup.exe`. It needs no admin prompt and installs a Start menu entry; the installed app needs only Node 24+ on PATH and the WebView2 runtime, and shows a download dialog when Node is missing. `Kanban95.exe` opens the board on the folder passed as its argument, else on its working directory. Details: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) → Packaging.
 
-To get a build without building it yourself: open the repo on GitHub → Actions → the `build` workflow, pick a green run on `main` (or your branch), and download the `kanban95-windows` artifact (the NSIS setup.exe) or `kanban95-macos` (the `.app` and `.dmg` for Apple silicon and Intel, when that job produced them). GitHub serves artifacts as a zip and keeps them 90 days.
+On macOS, `npm run installer` builds `Kanban95.app` and a `.dmg` instead. To install on a Mac:
+
+1. Download the `.dmg` for your Mac: `aarch64` for Apple silicon (M1 and later), `x64` for Intel. Apple menu → About This Mac says which chip you have.
+2. Open the `.dmg` and drag Kanban95 to Applications.
+3. The app is not signed, so the first time, right-click (or Control-click) Kanban95 in Applications and choose **Open**, then **Open** again in the warning. After that it opens normally. On recent macOS versions, if there is no Open button, go to System Settings → Privacy & Security and press **Open Anyway** next to the Kanban95 message.
+
+The installed app needs Node 24+ (from nodejs.org, Homebrew or fnm; it reads your login shell's PATH, so a Node your Terminal finds is found). It opens the first project in your list, or first-run setup on a new Mac.
+
+To get a build without building it yourself: open the repo on GitHub → Actions → the `build` workflow, pick a green run on `main` (or your branch), and download the `kanban95-windows` artifact (the NSIS setup.exe) or `kanban95-macos` (the `.app` and `.dmg` for Apple silicon and Intel). GitHub serves artifacts as a zip and keeps them 90 days. On a Mac use the `.dmg` from that zip: the zip does not keep the `.app`'s file permissions, so the bare `.app` will not start.
 
 ## Developing Kanban95
 

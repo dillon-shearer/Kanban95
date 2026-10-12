@@ -1,7 +1,7 @@
 // Stages what the installer ships next to the shell exe: the built daemon, its runtime dependencies (locked versions,
 // no dev dependencies), the UI and the default templates, in the same layout as the repo so the daemon's relative
 // paths (../../ui, ../migrations) still hold. `npm run installer` runs this after `npm run build`.
-import { cpSync, rmSync } from 'node:fs';
+import { chmodSync, cpSync, existsSync, readdirSync, rmSync } from 'node:fs';
 import { execSync } from 'node:child_process';
 import { resolve } from 'node:path';
 
@@ -15,3 +15,10 @@ for (const p of ['package.json', 'package-lock.json', '.npmrc', 'ui', 'templates
 execSync('npm ci --omit=dev --ignore-scripts --no-audit --no-fund', { cwd: app, stdio: 'inherit' });
 // The workspace link points back at daemon/: a junction the bundler would follow in a loop, and nothing imports it.
 rmSync(resolve(app, 'node_modules/@kanban95'), { recursive: true, force: true });
+if (process.platform !== 'win32') {
+  const prebuilds = resolve(app, 'node_modules/node-pty/prebuilds');
+  for (const dir of readdirSync(prebuilds)) {
+    const helper = resolve(prebuilds, dir, 'spawn-helper');
+    if (existsSync(helper)) chmodSync(helper, 0o755);
+  }
+}
