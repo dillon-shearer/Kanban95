@@ -1,0 +1,64 @@
+name: release
+
+on:
+  push:
+    tags: ['v*']
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+    steps:
+      - uses: actions/checkout@v5
+      - id: check
+        run: |
+          v=$(node -p "require('./package.json').version")
+          if [ "$GITHUB_REF_NAME" != "v$v" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match package.json version $v. Tag the commit as v$v, or set package.json to ${GITHUB_REF_NAME#v} and tag again."
+            exit 1
+          fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: version
+    uses: ./.github/workflows/build.yml
+    with:
+      release: true
+    secrets: inherit
+
+  release:
+    needs: [version, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      V: ${{ needs.version.outputs.version }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/download-artifact@v5
+        with:
+          path: artifacts
+      - run: |
+          mkdir out
+          cp "artifacts/kanban95-windows/Kanban95_${V}_x64-setup.exe" "artifacts/kanban95-windows/Kanban95_${V}_x64-setup.exe.sig" out/
+          for t in aarch64:aarch64 x86_64:x64; do
+            b="artifacts/kanban95-macos/${t%%:*}-apple-darwin/release/bundle"
+            a=${t##*:}
+            cp "$b/dmg/Kanban95_${V}_$a.dmg" out/
+            cp "$b/macos/Kanban95.app.tar.gz" "out/Kanban95_${V}_$a.app.tar.gz"
+            cp "$b/macos/Kanban95.app.tar.gz.sig" "out/Kanban95_${V}_$a.app.tar.gz.sig"
+          done
+          base="https://github.com/$GITHUB_REPOSITORY/releases/download/$GITHUB_REF_NAME"
+          entry() { jq -n --arg url "$base/$1" --rawfile sig "out/$1.sig" '{signature: ($sig | rtrimstr("\n")), url: $url}'; }
+          jq -n --arg version "$V" --arg pub_date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --argjson win "$(entry "Kanban95_${V}_x64-setup.exe")" \
+            --argjson arm "$(entry "Kanban95_${V}_aarch64.app.tar.gz")" \
+            --argjson x64 "$(entry "Kanban95_${V}_x64.app.tar.gz")" \
+            '{version: $version, notes: "", pub_date: $pub_date, platforms: {"windows-x86_64": $win, "darwin-aarch64": $arm, "darwin-x86_64": $x64}}' > out/latest.json
+          cat out/latest.json
+          ls -l out
+      - run: |
+          pre=
+          case "$V" in *-*) pre=--prerelease ;; esac
+          gh release create "$GITHUB_REF_NAME" out/* --repo "$GITHUB_REPOSITORY" --verify-tag --title "Kanban95 $V" --generate-notes $pre

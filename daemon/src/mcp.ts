@@ -1,5 +1,7 @@
 // Agent-facing MCP at /mcp. A bearer grant picks the role; TOOLS below is both the enforcement table and the source of docs/MCP.md.
+import { readFileSync } from 'node:fs';
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import { resolve } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
@@ -27,6 +29,7 @@ const WORKER_FIELDS = ['body', 'criteria'] as const;
 /** What a worker may edit on a follow-up its own grant created, while it is in Backlog. */
 const FOLLOWUP_FIELDS = ['title', 'body', 'criteria', 'tags', 'depends_on'] as const;
 const BRAIN_SEARCH_MAX = 50;
+const VERSION: string = JSON.parse(readFileSync(resolve(import.meta.dirname, '../../package.json'), 'utf8')).version;
 /** An id is per brain file, so a row is `scope` + `id`. */
 const scope = z.enum(SCOPES).default('project')
   .describe('project (default): this repo\x27s brain, facts about this codebase. global: the brain every board shares, facts that hold in any repo (a tool, the OS, a CLI).');
@@ -442,7 +445,7 @@ export async function handleMcp(board: Board, req: IncomingMessage, res: ServerR
     return;
   }
   // ponytail: one stateless McpServer per request, closing over the grant. Sessions (GET streams, server pushes) when a tool needs them.
-  const server = new McpServer({ name: 'kanban95', version: '0.0.0' });
+  const server = new McpServer({ name: 'kanban95', version: VERSION });
   registerTools(server, board, grant);
   const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true, maxRequestBodySize: 1 << 20 });
   res.on('close', () => { void transport.close(); void server.close(); });

@@ -50,9 +50,11 @@ On macOS, double-click `Kanban95.command` in Finder (a Terminal window opens and
 | [docs/DATA.md](docs/DATA.md) | the per-repo SQLite schema, migrations, and every file the board writes |
 | [CLAUDE.md](CLAUDE.md) | conventions for agents working on this repo |
 
-## Install without Rust
+## Install
 
-`npm run installer` (from a source checkout, Rust required) builds a per-user NSIS installer at `shell/target/release/bundle/nsis/Kanban95_<version>_x64-setup.exe`. It needs no admin prompt and installs a Start menu entry; the installed app carries its own Node and needs only the WebView2 runtime. Building it downloads the official Node 24 binary from nodejs.org and checks its SHA-256. `Kanban95.exe` opens the board on the folder passed as its argument, else on its working directory. Details: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) → Packaging.
+Download the installer from the [latest Release](https://github.com/dillon-shearer/Kanban95/releases/latest): `Kanban95_<version>_x64-setup.exe` for Windows, or for a Mac `Kanban95_<version>_aarch64.dmg` (Apple silicon) or `Kanban95_<version>_x64.dmg` (Intel). Each Release is built from a version tag (`vX.Y.Z`); [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) → Packaging → Releases covers tagging, versioning and update signing. The Mac steps below apply to a downloaded `.dmg` too.
+
+To build the installer yourself, `npm run installer` (from a source checkout, Rust required) builds a per-user NSIS installer at `shell/target/release/bundle/nsis/Kanban95_<version>_x64-setup.exe`. It needs no admin prompt and installs a Start menu entry; the installed app carries its own Node and needs only the WebView2 runtime. Building it downloads the official Node 24 binary from nodejs.org and checks its SHA-256. `Kanban95.exe` opens the board on the folder passed as its argument, else on its working directory. Details: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) → Packaging.
 
 On macOS, `npm run installer` builds `Kanban95.app` and a `.dmg` instead. To install on a Mac:
 
