@@ -252,7 +252,7 @@ Any failure after the run row is written revokes the grant and removes the sessi
 
 ### Terminal websocket
 
-`/pty/<key>` (the run id, or minus the grant id for a brainstorm or operator terminal) with a websocket upgrade, same-origin only. The server first sends the scrollback so far, then every pty output chunk as a text frame, and closes when the pty exits. The client sends JSON: `{"data": "..."}` is written to the pty as typed input, `{"resize": [cols, rows]}` resizes it (1 to 999 each). Anything else is ignored. Several clients may watch one run.
+`/pty/<key>` (the run id, or minus the grant id for a brainstorm or operator terminal) with a websocket upgrade, same-origin only. The server first sends the scrollback so far, then every pty output chunk as a text frame, and closes when the pty exits. The client sends JSON: `{"data": "..."}` is written to the pty as typed input, `{"resize": [cols, rows]}` resizes it (1 to 999 each). Anything else is ignored. A frame over 64 KiB, or any other protocol error, closes only that connection; the UI sends a long paste as several `data` frames of at most 8192 characters each. Several clients may watch one run.
 
 ## Events
 

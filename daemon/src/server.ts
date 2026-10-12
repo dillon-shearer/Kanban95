@@ -213,6 +213,7 @@ export function start(config: Config = {}): Promise<{
         events.on('event', forward).on('change', forward);
         watchers++;
         doze();
+        ws.on('error', () => ws.terminate());
         ws.on('close', () => {
           events.off('event', forward).off('change', forward);
           watchers--;
@@ -225,6 +226,7 @@ export function start(config: Config = {}): Promise<{
       ws.send(s.scrollback());
       const out = s.pty.onData((d) => ws.send(d));
       const exit = s.pty.onExit(() => ws.close());
+      ws.on('error', () => ws.terminate());
       ws.on('message', (m) => {
         try {
           const msg = JSON.parse(String(m));
