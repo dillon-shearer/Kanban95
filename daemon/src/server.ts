@@ -7,7 +7,7 @@ import { extname, resolve, sep } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { WebSocketServer } from 'ws';
 import { handleApi } from './api.js';
-import { countAgents, entryPath, register } from './boards.js';
+import { countAgents, entryPath, register, tellShell } from './boards.js';
 import { openDb, openGlobalBrain } from './db.js';
 import { git, initRepo } from './git.js';
 import { sweep, SWEEP_MS } from './janitor.js';
@@ -16,7 +16,7 @@ import { countUnpushed, events, recover, tick, watchSilence, type Board } from '
 import { handleMcp } from './mcp.js';
 import { startMemoryLog } from './memlog.js';
 import { idle } from './merge.js';
-import { addProject } from './settings.js';
+import { addProject, readConfig } from './settings.js';
 import { initTemplates } from './templates.js';
 import { voiceFile } from './voice.js';
 
@@ -48,6 +48,7 @@ export interface Config {
   /** Shell-to-daemon secret required on /api, /events and /pty (docs/SECURITY.md). Random when not given. */
   secret?: string;
   shellId?: number | null;
+  shell?: boolean;
 }
 
 /** Rejects any bind address other than loopback. The daemon is never reachable off-host. */
@@ -159,7 +160,7 @@ export function start(config: Config = {}): Promise<{
     console.error(`projects.json not updated: ${(e as Error).message}`); // stderr: stdout's first line is the handshake
   }
   let self = '';
-  const board: Board = { db, brain, repo, port: 0, shellId: config.shellId ?? null };
+  const board: Board = { db, brain, repo, port: 0, shellId: config.shellId ?? null, shell: config.shell };
   try {
     initRepo(repo); // a plain folder becomes a local repo with one commit (docs/ARCHITECTURE.md → Daemon lifetime)
   } catch (e) {
@@ -179,6 +180,23 @@ export function start(config: Config = {}): Promise<{
   // /events: board events for the UI, one JSON text frame each: `{"sound": "ding" | "chord" | "done", "ticket": n}`, or
   // `{"ticket": n | null}` when that ticket (or, for null, the set of live sessions) changed. Nothing comes in.
   const wss = new WebSocketServer({ noServer: true, maxPayload: 1 << 16 });
+  let watchers = 0;
+  let nap: NodeJS.Timeout | undefined;
+  const doze = () => {
+    if (sessions.size || watchers) {
+      clearTimeout(nap);
+      nap = undefined;
+      return;
+    }
+    if (nap || !config.shell || board.closing) return;
+    let minutes: number;
+    try {
+      minutes = readConfig('settings', repo).sleepAfterMinutes;
+    } catch {
+      return;
+    }
+    if (minutes > 0) nap = setTimeout(() => { if (!sessions.size && !watchers && !board.closing) tellShell('close', repo); }, minutes * 60_000).unref();
+  };
   server.on('upgrade', (req, socket, head) => {
     const s = sessions.get(Number(/^\/pty\/(-?\d+)$/.exec(req.url ?? '')?.[1]));
     if (!req.headers.origin || !sameOrigin(req, self) || !(s || req.url === '/events')) {
@@ -193,7 +211,13 @@ export function start(config: Config = {}): Promise<{
       wss.handleUpgrade(req, socket, head, (ws) => {
         const forward = (e: unknown) => ws.send(JSON.stringify(e));
         events.on('event', forward).on('change', forward);
-        ws.on('close', () => events.off('event', forward).off('change', forward));
+        watchers++;
+        doze();
+        ws.on('close', () => {
+          events.off('event', forward).off('change', forward);
+          watchers--;
+          doze();
+        });
       });
       return;
     }
@@ -226,8 +250,12 @@ export function start(config: Config = {}): Promise<{
       self = `${LOOPBACK}:${addr.port}`;
       board.port = addr.port;
       const unregister = register(repo, addr.port, board.shellId ?? null); // Start → Projects on the other boards sees this one running
-      const count = () => countAgents(sessions.size);
+      const count = () => {
+        countAgents(sessions.size);
+        doze();
+      };
       events.on('change', count);
+      doze();
       // Janitor and recovery on start, the janitor again once a day (docs/LIFECYCLE.md).
       sweep(board).catch(() => {});
       void countUnpushed(board); // the status bar's "N commits not pushed"
@@ -246,6 +274,7 @@ export function start(config: Config = {}): Promise<{
           board.closing = true; // nothing new is spawned from here on
           clearInterval(daily);
           unwatch();
+          clearTimeout(nap);
           await killAll(); // run rows and exit flags are written before the db closes
           await idle(); // and every queued merge has finished
           stopMemoryLog();
@@ -283,9 +312,9 @@ if (import.meta.main) {
     port: process.env.KANBAN95_PORT ? Number(process.env.KANBAN95_PORT) : 0,
     repo: process.argv[2],
     shellId,
+    shell,
   });
   console.log(`KANBAN95 port=${port}`);
-  board.shell = shell;
   // Restart board (POST /api/restart): the same shutdown as close(), so killed agents stay unflagged and recover() resumes
   // them, then exit 75, which the shell takes as "start me again" (docs/ARCHITECTURE.md -> Restart board).
   board.shutdown = (code) => {

@@ -33,7 +33,7 @@ let runner = { on: false, concurrency: 3, running: [], left: 0, backlog: 0, wait
 let models = null; // models.json this board runs on (this repo's copy, else the global file), for the cards' default model and effort
 // Sounds stay off until /config/settings loads: listen() starts first, and a ding in that gap ignored the operator's choice.
 // `terminals` is absent until then too, so no session is opened or passed over before the operator's phases are known.
-const SETTINGS = { paths: {}, sounds: { merge: false, attention: false, done: false }, voice: { backend: 'local', mode: 'push' }, housekeeping: { auto: true, every: 10 }, idle_minutes: 20, zoom: 1, push_after_merge: true };
+const SETTINGS = { paths: {}, sounds: { merge: false, attention: false, done: false }, voice: { backend: 'local', mode: 'push' }, housekeeping: { auto: true, every: 10 }, idle_minutes: 20, zoom: 1, push_after_merge: true, sleepAfterMinutes: 30 };
 let settings = { ...SETTINGS };
 let limits = null; // GET /api/limits: { rows, errors, fetched_at }, null until the first answer
 const views = new Map(); // open window id → redraw(ticketId | null)
@@ -1235,6 +1235,7 @@ function openSettings(tab) {
         const live = () => scope === (settingsOwn ? 'project' : 'global');
         const zoom = h('select', { id: 'zoom', onchange: (e) => { const f = Number(e.target.value); if (live()) { s.zoom = f; zoomTo(f); } else put({ zoom: f }); } },
           ZOOMS.map((f) => h('option', { value: f, selected: f === s.zoom }, `${Math.round(f * 100)}%`)));
+        const sleep = h('input', { type: 'number', id: 'sleep-after', min: 0, step: 1, value: s.sleepAfterMinutes });
         const mode = (m, label) => h('div', { class: 'field-row' }, h('input', { type: 'radio', id: `mode-${m}`, name: 'mode', checked: s.voice.mode === m,
           onchange: () => put({ voice: { ...s.voice, mode: m } }, 'Voice mode saved.') }), h('label', { for: `mode-${m}` }, label));
         return [
@@ -1256,6 +1257,9 @@ function openSettings(tab) {
           h('fieldset', {}, h('legend', {}, 'Git'),
             h('div', { class: 'field-row' }, h('input', { type: 'checkbox', id: 'push-after-merge', checked: s.push_after_merge,
               onchange: (e) => put({ push_after_merge: e.target.checked }) }), h('label', { for: 'push-after-merge' }, 'Push the base branch to its upstream after each merge'))),
+          h('fieldset', {}, h('legend', {}, 'Sleep'),
+            h('div', { class: 'field-row' }, h('label', { for: 'sleep-after' }, 'Stop a board with no agents and no window after (minutes, 0 never)'), sleep),
+            h('button', { onclick: () => put({ sleepAfterMinutes: Number(sleep.value) }) }, 'Save')),
           h('fieldset', {}, h('legend', {}, 'Voice'),
             mode('push', 'Mic button: push to talk (hold the button)'), mode('toggle', 'Mic button: toggle (click to start, click to stop)'))];
       }, redraw)]);
