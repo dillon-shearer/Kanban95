@@ -8,7 +8,7 @@ use std::io::{BufRead, BufReader};
 use std::process::{Child, ChildStdout, Command, Stdio};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant};
-use tauri::webview::{PermissionKind, PermissionResponse};
+use tauri::webview::{NewWindowResponse, PermissionKind, PermissionResponse};
 use tauri::{AppHandle, Manager, RunEvent, Runtime, Url, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent};
 use tauri_plugin_updater::{Update, Updater, UpdaterExt};
 
@@ -791,6 +791,25 @@ fn on_daemon(to: &Url, ports: &[u16]) -> bool {
     to.scheme() == "http" && to.host_str() == Some("127.0.0.1") && to.port().is_some_and(|p| ports.contains(&p))
 }
 
+fn external(to: &Url) -> bool {
+    to.scheme() == "https" && to.host_str().is_some()
+}
+
+#[cfg(windows)]
+fn open_external(to: &Url) {
+    use windows_sys::Win32::UI::Shell::ShellExecuteW;
+    use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+    let wide = |s: &str| s.encode_utf16().chain([0]).collect::<Vec<u16>>();
+    unsafe { ShellExecuteW(std::ptr::null_mut(), wide("open").as_ptr(), wide(to.as_str()).as_ptr(), std::ptr::null(), std::ptr::null(), SW_SHOWNORMAL) };
+}
+#[cfg(not(windows))]
+fn open_external(to: &Url) {
+    let opener = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
+    if let Err(e) = Command::new(opener).arg(to.as_str()).spawn() {
+        eprintln!("[shell] could not open {to}: {e}");
+    }
+}
+
 /// "<repo folder> — Kanban95", as the UI titles itself, so the taskbar tells boards apart before the page loads.
 /// Tauri 2 does not copy `document.title` to the window.
 fn title(repo: Option<String>) -> String {
@@ -829,9 +848,15 @@ fn window<R: Runtime, M: Manager<R>>(app: &M, label: &str, url: Url, title: Stri
         .title(title)
         .data_directory(data)
         .inner_size(1280.0, 720.0)
-        // Any top-level navigation off a hosted daemon's origin is cancelled. New windows are already refused by wry
-        // when no handler is set, and the CSP keeps frames and fetches on the origin.
+        // Any top-level navigation off a hosted daemon's origin is cancelled, and the CSP keeps frames and fetches on
+        // the origin. No new window opens: an https one goes to the system browser, anything else is dropped.
         .on_navigation(move |to| on_daemon(to, &lock(&ports)))
+        .on_new_window(|to, _| {
+            if external(&to) {
+                open_external(&to);
+            }
+            NewWindowResponse::Deny
+        })
         // Navigation is pinned to the daemons' origins, so every request here comes from one. Answering in code
         // means no prompt, though the random port gives a new origin each start. Everything but the mic is denied.
         .on_permission_request(|_, kind| match kind {
@@ -1506,6 +1531,14 @@ mod tests {
         assert!(!at("http://127.0.0.1:41235/", &[41234]) && !at("http://localhost:41234/", &[41234]) && !at("https://127.0.0.1:41234/", &[41234]));
         assert!(at("http://127.0.0.1:41235/?k95=y", &[41234, 41235]) && at("http://127.0.0.1:41234/", &[41234, 41235]));
         assert!(!at("http://127.0.0.1/", &[80]) && !at("http://127.0.0.1:41234/", &[]));
+    }
+
+    #[test]
+    fn only_https_new_windows_go_to_the_system_browser() {
+        let ext = |u: &str| external(&u.parse().unwrap());
+        assert!(ext("https://github.com/dillon-shearer/Kanban95/actions"));
+        assert!(!ext("http://example.com/") && !ext("http://127.0.0.1:41234/") && !ext("file:///C:/Windows/notepad.exe"));
+        assert!(!ext("javascript:alert(1)") && !ext("ms-settings:") && !ext("data:text/html,x"));
     }
 
     #[test]
