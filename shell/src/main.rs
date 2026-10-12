@@ -522,22 +522,53 @@ fn window<R: Runtime, M: Manager<R>>(app: &M, label: &str, url: Url, title: Stri
 /// ContainsFullScreenElementChanged unhandled. Following it takes the whole monitor, over the Windows taskbar.
 #[cfg(windows)]
 fn follow_page_fullscreen<R: Runtime>(w: &WebviewWindow<R>) {
-    use webview2_com::ContainsFullScreenElementChangedEventHandler;
+    use std::{cell::Cell, rc::Rc};
+    use webview2_com::{
+        CallDevToolsProtocolMethodCompletedHandler, ContainsFullScreenElementChangedEventHandler,
+        NavigationCompletedEventHandler, NavigationStartingEventHandler,
+    };
+    use windows_core::w;
     let win = w.clone();
     let _ = w.with_webview(move |wv| {
         // SAFETY: COM calls on the live controller, on the main thread where with_webview runs this.
         unsafe {
             let Ok(core) = wv.controller().CoreWebView2() else { return };
+            let navigating = Rc::new(Cell::new(false));
+            let (starting, changed) = (navigating.clone(), navigating.clone());
+            let full_win = win.clone();
             let handler = ContainsFullScreenElementChangedEventHandler::create(Box::new(move |core, _| {
                 let mut full = windows_core::BOOL::default();
                 if let Some(core) = core {
                     core.ContainsFullScreenElement(&mut full)?;
                 }
-                let _ = win.set_fullscreen(full.as_bool());
+                if full.as_bool() || !changed.get() {
+                    let _ = full_win.set_fullscreen(full.as_bool());
+                }
                 Ok(())
             }));
             let mut token = 0;
             let _ = core.add_ContainsFullScreenElementChanged(&handler, &mut token);
+            let handler = NavigationStartingEventHandler::create(Box::new(move |_, _| {
+                starting.set(true);
+                Ok(())
+            }));
+            let _ = core.add_NavigationStarting(&handler, &mut token);
+            let handler = NavigationCompletedEventHandler::create(Box::new(move |core, _| {
+                navigating.set(false);
+                let Some(core) = core else { return Ok(()) };
+                let mut full = windows_core::BOOL::default();
+                core.ContainsFullScreenElement(&mut full)?;
+                if !full.as_bool() && win.is_fullscreen().unwrap_or(false) {
+                    let done = CallDevToolsProtocolMethodCompletedHandler::create(Box::new(|_, _| Ok(())));
+                    core.CallDevToolsProtocolMethod(
+                        w!("Runtime.evaluate"),
+                        w!(r#"{"expression":"document.documentElement.requestFullscreen()","userGesture":true}"#),
+                        &done,
+                    )?;
+                }
+                Ok(())
+            }));
+            let _ = core.add_NavigationCompleted(&handler, &mut token);
         }
     });
 }
