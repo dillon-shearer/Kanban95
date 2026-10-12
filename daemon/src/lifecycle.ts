@@ -2,7 +2,7 @@
 // picks a row or refuses, apply() writes the row and runs its effects. Nothing else changes a ticket's status or flags.
 import { exec } from 'node:child_process';
 import { EventEmitter } from 'node:events';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { freemem, totalmem } from 'node:os';
 import { join, resolve } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
@@ -173,6 +173,7 @@ export interface Board {
   lowMemory?: { free: number; floor: number };
   /** The 30 s timer that ticks again during a memory hold. */
   memoryWait?: NodeJS.Timeout;
+  files?: Map<number, { key: string; files: string[] }>;
 }
 
 /**
@@ -238,6 +239,7 @@ export function apply(b: Board, id: number, event: Event, x: { note?: Note; answ
     return Number(r.lastInsertRowid);
   });
 
+  if (event === 'merged') b.files?.clear();
   // Resume, and Launch on a running ticket whose agent is gone (as recover does after a restart), continue the killed
   // conversation when they can; every other spawn (a retry, a Restart) starts a fresh one.
   const resume = (event === 'resume' || event === 'launch') && t.status !== 'backlog';
@@ -718,6 +720,10 @@ export function candidates(b: Board): number[] {
  */
 function files(b: Board, id: number): string[] {
   const t = b.db.prepare('SELECT body, criteria FROM tickets WHERE id = ?').get(id) as { body: string; criteria: string };
+  const head = branchHead(b.repo, id);
+  const key = head === undefined ? undefined : JSON.stringify([head, t.body, t.criteria]);
+  const hit = b.files?.get(id);
+  if (key !== undefined && hit?.key === key) return hit.files;
   const named = `${t.body}\n${t.criteria}`.match(/[\w./-]+\.\w+/g) ?? [];
   let diff: string[] = [];
   try {
@@ -725,7 +731,23 @@ function files(b: Board, id: number): string[] {
   } catch { /* no branch yet */ }
   const inRepo = (f: string) => !f.split('/').includes('..') && existsSync(join(b.repo, f));
   const all = [...named.map((f) => f.replace(/^\.\//, '')).filter(inRepo), ...diff];
-  return [...new Set(all.filter((f) => f && !f.startsWith('docs/') && !f.endsWith('.md')))];
+  const out = [...new Set(all.filter((f) => f && !f.startsWith('docs/') && !f.endsWith('.md')))];
+  if (key !== undefined) (b.files ??= new Map()).set(id, { key, files: out });
+  return out;
+}
+
+function branchHead(repo: string, id: number): string | null | undefined {
+  const dir = join(repo, '.git');
+  if (!statSync(dir, { throwIfNoEntry: false })?.isDirectory() || existsSync(join(dir, 'reftable'))) return undefined;
+  const ref = `refs/heads/${branchName(id)}`;
+  try {
+    return readFileSync(join(dir, ref), 'utf8').trim();
+  } catch {}
+  try {
+    return readFileSync(join(dir, 'packed-refs'), 'utf8').split(/\r?\n/).find((l) => l.endsWith(` ${ref}`))?.split(' ')[0] ?? null;
+  } catch {
+    return null;
+  }
 }
 
 /** Each candidate that shares a file with a running ticket, mapped to the first running ticket it shares one with. */
