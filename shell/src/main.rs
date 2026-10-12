@@ -42,11 +42,14 @@ fn daemon_script() -> std::path::PathBuf {
     installed.filter(|p| p.is_file()).unwrap_or_else(|| concat!(env!("CARGO_MANIFEST_DIR"), "/../daemon/dist/server.js").into())
 }
 
-/// `node daemon/dist/server.js <repo>`.
+/// `node daemon/dist/server.js <repo>`; no repo (`""`): the daemon picks the first project, or serves first-run setup.
 fn node(repo: &str) -> Command {
     // ponytail: runs `node` from PATH; shipping Node itself is open (docs/ARCHITECTURE.md -> Packaging).
     let mut cmd = Command::new("node");
-    cmd.arg(daemon_script()).arg(repo);
+    cmd.arg(daemon_script());
+    if !repo.is_empty() {
+        cmd.arg(repo);
+    }
     cmd
 }
 
@@ -721,8 +724,10 @@ fn main() {
         node_dialog(&e);
         std::process::exit(1);
     }
-    // The shell's first argument, if any, is the repo of its first board; else the cwd, as for the daemon.
-    let repo = key(&std::env::args().nth(1).unwrap_or_else(|| ".".into()));
+    // The shell's first argument, if any, is the repo of its first board. Without one (Start menu, Dock) the daemon decides,
+    // and the board is keyed "" (docs/ARCHITECTURE.md -> Startup without an argument).
+    // ponytail: a board keyed "" that another board then opens by path gets a second daemon; re-keying on the handshake would fix it.
+    let repo = std::env::args().nth(1).map(|a| key(&a)).unwrap_or_default();
     let host = Host::new(node);
     let first = match host.start(&repo) {
         Ok(started) => started,
