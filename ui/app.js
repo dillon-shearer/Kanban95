@@ -37,6 +37,7 @@ const SETTINGS = { paths: {}, sounds: { merge: false, attention: false, done: fa
 let settings = { ...SETTINGS };
 let limits = null; // GET /api/limits: { rows, errors, fetched_at }, null until the first answer
 const views = new Map(); // open window id → redraw(Set of changed ticket ids | undefined)
+const forms = new Map();
 
 async function refreshTicket(id) {
   try {
@@ -51,7 +52,7 @@ async function refreshTicket(id) {
     if (e.status !== 404) throw e;
     tickets.delete(id); // deleted: it leaves the board, and its windows close (its agents were stopped by the delete)
     selection.delete(id);
-    close(`ticket-${id}`);
+    closeTicket(`ticket-${id}`);
     for (const [wid, term] of terms) if (term.s.ticket_id === id) close(wid);
   }
 }
@@ -583,11 +584,17 @@ function keepScroll(p, rebuild) {
   if (sp) sp.scrollTop = inner;
 }
 
+async function closeTicket(wid) {
+  if (forms.get(wid)?.changed() && (await dialog('Discard changes?', 'This ticket has unsaved changes.', ['Discard', 'Cancel'])) !== 'Discard') return;
+  close(wid);
+}
+
 function openTicket(id) {
   const wid = `ticket-${id ?? 'new'}`;
-  const w = open(wid, { title: id ? `Ticket #${id}` : 'New ticket', w: 680, h: 480, icon: 'ticket', onClose: () => views.delete(wid) });
+  const w = open(wid, { title: id ? `Ticket #${id}` : 'New ticket', w: 680, h: 480, icon: 'ticket', onX: () => closeTicket(wid),
+    onClose: () => { views.delete(wid); forms.delete(wid); } });
   if (id === null) {
-    if (!w.body.firstChild) w.body.append(ticketForm(w, null));
+    if (!w.body.firstChild) w.body.append(forms.set(wid, ticketForm(w, null)).get(wid));
     return;
   }
   if (w.body.firstChild) return;
@@ -596,9 +603,9 @@ function openTicket(id) {
     if (!t) return p.replaceChildren(h('p', {}, 'This ticket was deleted.'));
     w.title(`Ticket #${id} — ${t.title}`);
     if (tab === 'Ticket') {
-      // The form is built when the tab is shown, so an event never overwrites what the operator is typing.
-      if (first) p.replaceChildren(ticketForm(w, t), h('fieldset', { class: 'k95-attachments' }));
-      else p.querySelector('.k95-facts')?.replaceWith(facts(t));
+      if (!forms.has(wid)) forms.set(wid, ticketForm(w, t));
+      if (first) p.replaceChildren(forms.get(wid), h('fieldset', { class: 'k95-attachments' }));
+      p.querySelector('.k95-facts')?.replaceWith(facts(t));
       const list = await attachmentList(id);
       p.querySelector('.k95-attachments')?.replaceWith(list);
     } else if (tab === 'Notes') {
@@ -681,11 +688,15 @@ function ticketForm(w, t) {
   const criteria = h('textarea', { rows: 5 }, t?.criteria ?? '');
   const tags = h('input', { type: 'text', 'data-mic': 'off', value: t?.tags.split(' ').join(', ') ?? '', placeholder: 'e.g. ui, daemon' });
   const deps = h('input', { type: 'text', 'data-mic': 'off', value: t?.depends_on.join(', ') ?? '', placeholder: 'e.g. 3, 4' });
+  const snap = () => JSON.stringify([title, body, criteria, tags, deps].map((x) => x.value));
+  let saved = snap();
   const save = async () => {
     const fields = { title: title.value, body: body.value, criteria: criteria.value, tags: tags.value, depends_on: deps.value.split(/[\s,]+/).filter(Boolean).map(Number) };
     try {
       if (t) {
+        const now = snap();
         await api('PATCH', `/tickets/${t.id}`, fields);
+        saved = now;
         say(`#${t.id} saved.`);
       } else {
         const n = await api('POST', '/tickets', fields);
@@ -697,7 +708,7 @@ function ticketForm(w, t) {
       dialog('Not saved', e.message);
     }
   };
-  return h('div', { class: 'k95-form' }, t ? facts(t) : h('p', { class: 'k95-facts' }, 'A new ticket starts in Backlog.'),
+  const form = h('div', { class: 'k95-form' }, t ? facts(t) : h('p', { class: 'k95-facts' }, 'A new ticket starts in Backlog.'),
     h('div', { class: 'field-row-stacked' }, h('label', {}, 'Title'), title),
     h('div', { class: 'field-row-stacked' }, h('label', {}, 'Body'), body),
     h('div', { class: 'field-row-stacked' }, h('label', {}, 'Acceptance criteria, one per line'), criteria),
@@ -707,6 +718,8 @@ function ticketForm(w, t) {
       t && h('button', { disabled: t.status !== 'backlog', onclick: () => launch([t]) }, 'Launch'),
       t && h('button', { onclick: () => restart(t.id) }, 'Restart'),
       t?.status === 'done' && h('button', { onclick: () => reject(t.id) }, 'Reject')));
+  form.changed = () => snap() !== saved;
+  return form;
 }
 
 // ---- terminals ----
@@ -1535,7 +1548,7 @@ addEventListener('keydown', (e) => {
     const m = document.querySelector('.k95-menu');
     if (m) return m.remove();
     const w = focused();
-    if (w) close(w.el.dataset.win);
+    if (w) forms.has(w.el.dataset.win) ? closeTicket(w.el.dataset.win) : close(w.el.dataset.win);
   } else if (plainCtrl && e.key.toLowerCase() === 'l') {
     e.preventDefault();
     toggleRunner();
