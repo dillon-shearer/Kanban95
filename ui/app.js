@@ -632,16 +632,18 @@ function openTicket(id) {
       const notes = await api('GET', `/tickets/${id}/notes`);
       keepScroll(p, () => p.replaceChildren(notes.length ? h('ol', { class: 'k95-notes' }, notes.map((n) => h('li', { class: `note ${n.kind}` },
         h('div', { class: 'note-head' }, `${fmt(n.created_at)} · ${n.role} · ${n.kind}`), h('pre', {}, n.body)))) : h('p', {}, 'No notes yet.')));
+      if (first) p.scrollTop = p.scrollHeight;
     } else if (tab === 'Runs') {
       const runs = await api('GET', `/tickets/${id}/runs`);
       const view = h('pre', { class: 'k95-pre' }, 'Select a run to see the exact prompt it was given.');
+      const load = async (r, field) => { view.textContent = (await api('GET', `/tickets/${id}/runs/${r.id}`))[field]; };
       keepScroll(p, () => p.replaceChildren(table(['Run', 'Phase', 'CLI', 'Model', 'Effort', 'Started', 'Ended', 'Outcome', ''], runs.map((r) => {
         const s = sessions.find((x) => x.run_id === r.id);
-        return h('tr', { onclick: () => { view.textContent = r.prompt_rendered; } },
+        return h('tr', { onclick: () => load(r, 'prompt_rendered') },
           h('td', {}, r.id), h('td', {}, r.phase), h('td', {}, r.cli), h('td', {}, r.model), h('td', {}, r.effort),
           h('td', {}, fmt(r.started_at)), h('td', {}, fmt(r.ended_at)), h('td', {}, r.outcome ?? (s ? 'running' : '')),
           h('td', {}, s ? h('button', { onclick: () => openTerminal(s) }, 'Terminal')
-            : r.scrollback ? h('button', { onclick: (e) => { e.stopPropagation(); view.textContent = r.scrollback; } }, 'Output') : ''));
+            : r.has_scrollback ? h('button', { onclick: (e) => { e.stopPropagation(); load(r, 'scrollback'); } }, 'Output') : ''));
       })), view));
     } else if (tab === 'Diff') {
       const { diff } = await api('GET', `/tickets/${id}/diff`);
@@ -834,7 +836,7 @@ function openTerminal(s, auto = false) {
     // ends a run with closes it: after conflict and restart a new run is already open, and a stale "ended" window in front of
     // it reads as a stuck ticket. `moved` closes it also when the operator opened it: they said Stop in the Move dialog.
     setTimeout(async () => {
-      const run = (await api('GET', `/tickets/${s.ticket_id}/runs`).catch(() => [])).find((r) => r.id === s.run_id);
+      const run = await api('GET', `/tickets/${s.ticket_id}/runs/${s.run_id}`).catch(() => null);
       if (run?.outcome === 'moved' || (auto && ['submit', 'pass', 'fail', 'conflict', 'restart'].includes(run?.outcome))) setTimeout(w.close, 1500);
     }, 500);
   };

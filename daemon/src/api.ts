@@ -292,9 +292,21 @@ const routes: [method: string, path: RegExp, mutation: string | null, handler: (
     deleteTicket(board, Number(params[0]));
     return { status: 204 };
   }],
-  ['GET', /^\/api\/tickets\/(\d+)\/(notes|runs|audit)$/, null, ({ db, params }) => {
+  ['GET', /^\/api\/tickets\/(\d+)\/(notes|audit)$/, null, ({ db, params }) => {
     readTicket(db, Number(params[0]));
     return { status: 200, body: db.prepare(`SELECT * FROM ${params[1]} WHERE ticket_id = ? ORDER BY id`).all(Number(params[0])) };
+  }],
+  ['GET', /^\/api\/tickets\/(\d+)\/runs$/, null, ({ db, params }) => {
+    readTicket(db, Number(params[0]));
+    const rows = db.prepare(`SELECT id, ticket_id, phase, cli, model, effort, started_at, ended_at, outcome, session_id,
+      scrollback IS NOT NULL AS has_scrollback FROM runs WHERE ticket_id = ? ORDER BY id`).all(Number(params[0])) as { has_scrollback: number }[];
+    return { status: 200, body: rows.map((r) => ({ ...r, has_scrollback: !!r.has_scrollback })) };
+  }],
+  ['GET', /^\/api\/tickets\/(\d+)\/runs\/(\d+)$/, null, ({ db, params }) => {
+    readTicket(db, Number(params[0]));
+    const run = db.prepare('SELECT * FROM runs WHERE id = ? AND ticket_id = ?').get(Number(params[1]), Number(params[0]));
+    if (!run) throw new HttpError(404, 'no such run on this ticket');
+    return { status: 200, body: run };
   }],
   // Attachments. The upload is the file's raw bytes with its name in `?name=`; the audit row names the file as stored.
   ['GET', UPLOAD, null, ({ board, params }) => {

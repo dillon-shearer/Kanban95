@@ -122,7 +122,9 @@ Every `/api/*` request needs the `k95` cookie holding the shell secret, or gets 
 |---|---|---|
 | GET, POST | `/api/tickets` | list / create. Body fields: `title` (required), `body`, `criteria`, `status`, `cli`, `model`, `effort`, `retry`, `needs_human`, `blocked_on_deps`, `depends_on: number[]` |
 | GET, PATCH, DELETE | `/api/tickets/:id` | same fields on PATCH; `null` clears `cli`/`model`/`effort`; a PATCH that moves the ticket to `backlog` first ends its live sessions (`runs.outcome` = `reset`, grants revoked, ptys killed); DELETE ends them too and also removes `.kanban95/attachments/<id>/` |
-| GET | `/api/tickets/:id/notes` `/runs` `/audit` | rows for that ticket, oldest first |
+| GET | `/api/tickets/:id/notes` `/audit` | rows for that ticket, oldest first |
+| GET | `/api/tickets/:id/runs` | that ticket's runs, oldest first, without `prompt_rendered` and `scrollback`; `has_scrollback` (boolean) says whether output was kept |
+| GET | `/api/tickets/:id/runs/:run` | one full run row, `prompt_rendered` and `scrollback` included, for Ticket → Runs and a terminal's end; 404 when the run is not on that ticket |
 | GET, POST | `/api/tickets/:id/attachments` | list `[{name, path, size}]` (`path` absolute) / upload: the raw file bytes as the body, its name in `?name=`. The name is cleaned to a safe basename (anything outside letters, digits and ` ._()+-` becomes `_`); one with `/`, `\` or `..` is refused `400`, a body over 10 MB `413`. A clash is stored as `<stem>-1<ext>`, never overwritten. `201` with the stored entry |
 | GET, DELETE | `/api/tickets/:id/attachments/:name` | serve / remove one. PNG, JPEG, GIF, WebP and BMP are served inline with their image type; anything else as an `application/octet-stream` download, so an uploaded page never runs on the board's origin |
 | GET | `/api/brain?q=&limit=` | FTS5 ranked search (title and tags weigh more than body), limit at most 100; no `q` lists newest. Each row carries `ticket_status`, its source ticket's status (null when none or deleted) |
