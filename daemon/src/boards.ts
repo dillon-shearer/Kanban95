@@ -5,18 +5,28 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync
 import { basename, dirname, join, resolve } from 'node:path';
 import { boardHome, normal, readProjects, same } from './settings.js';
 
-export interface Entry { pid: number; repo: string; port: number; started: string; shell: number | null }
+export interface Entry { pid: number; repo: string; port: number; started: string; shell: number | null; agents: number }
 
 const runningDir = () => join(boardHome(), 'running');
 export const entryPath = (pid: number) => join(runningDir(), `${pid}.json`);
+let own: Entry | null = null;
 
 /** On daemon start, once it has its port. Returns the removal, which close() calls. */
 export function register(repo: string, port: number, shell: number | null): () => void {
   const file = entryPath(process.pid);
   mkdirSync(runningDir(), { recursive: true });
-  const entry: Entry = { pid: process.pid, repo: normal(repo), port, started: new Date().toISOString(), shell };
-  writeFileSync(file, JSON.stringify(entry) + '\n');
-  return () => rmSync(file, { force: true });
+  own = { pid: process.pid, repo: normal(repo), port, started: new Date().toISOString(), shell, agents: 0 };
+  writeFileSync(file, JSON.stringify(own) + '\n');
+  return () => {
+    own = null;
+    rmSync(file, { force: true });
+  };
+}
+
+export function countAgents(n: number): void {
+  if (!own || own.agents === n) return;
+  own.agents = n;
+  writeFileSync(entryPath(own.pid), JSON.stringify(own) + '\n');
 }
 
 /** EPERM: the pid exists but belongs to someone else, so it is alive. */
@@ -63,6 +73,14 @@ export function running(): Entry[] {
 export function runningMap(): Record<string, boolean> {
   const live = running();
   return Object.fromEntries(readProjects().map((p) => [p.path, live.some((e) => same(e.repo, p.path))]));
+}
+
+export function agentsMap(): Record<string, number> {
+  const live = running();
+  return Object.fromEntries(readProjects().flatMap((p) => {
+    const on = live.filter((e) => same(e.repo, p.path));
+    return on.length ? [[p.path, on.reduce((n, e) => n + (Number.isInteger(e.agents) ? e.agents : 0), 0)]] : [];
+  }));
 }
 
 export function hostedMap(shell: number | null | undefined): Record<string, boolean> {
