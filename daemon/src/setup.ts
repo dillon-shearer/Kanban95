@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { statSync } from 'node:fs';
 import { isAbsolute } from 'node:path';
+import { finishPick, readPick, startPick } from './pick.js';
 import { requirements } from './requirements.js';
 import { addProject, BadConfig, boardHome, gone, missingHome, normal, readProjects, setBoardHome } from './settings.js';
 
@@ -30,6 +31,11 @@ function json(res: ServerResponse, status: number, body: unknown) {
   res.end(text);
 }
 
+function answer(res: ServerResponse, r: { status: number; body?: unknown }) {
+  if (r.body === undefined) res.writeHead(r.status).end();
+  else json(res, r.status, r.body);
+}
+
 async function body(req: IncomingMessage): Promise<Record<string, unknown>> {
   let raw = '';
   for await (const c of req) {
@@ -43,8 +49,20 @@ async function body(req: IncomingMessage): Promise<Record<string, unknown>> {
   throw new BadConfig('body is not a JSON object');
 }
 
-export async function handleSetup(req: IncomingMessage, res: ServerResponse, url: URL, done: (repo?: string) => void) {
+export async function handleSetup(req: IncomingMessage, res: ServerResponse, url: URL, setup: { done: (repo?: string) => void; shell?: boolean }) {
+  const { done } = setup;
   if (url.pathname === '/api/requirements' && req.method === 'GET') return json(res, 200, await requirements());
+  const token = /^\/api\/pick\/([0-9a-f]{32})$/.exec(url.pathname)?.[1];
+  if (url.pathname === '/api/pick' || token) {
+    if (token && req.method === 'GET') return answer(res, readPick(token));
+    if (req.method !== 'POST') return json(res, 405, { error: 'method not allowed' });
+    try {
+      const b = await body(req);
+      return answer(res, token ? finishPick(token, req.headers.origin, b) : startPick(setup.shell === true, '', b.kind));
+    } catch (e) {
+      return json(res, 400, { error: (e as Error).message });
+    }
+  }
   if (url.pathname === '/api/setup/retry') {
     if (req.method !== 'POST') return json(res, 405, { error: 'method not allowed' });
     const lost = missingHome();

@@ -188,6 +188,7 @@ enum Verb {
     Check,
     CheckNow,
     Update,
+    Pick,
 }
 
 fn parse(line: &str) -> Option<(Verb, &str)> {
@@ -202,9 +203,21 @@ fn parse(line: &str) -> Option<(Verb, &str)> {
         "check" => Verb::Check,
         "checknow" => Verb::CheckNow,
         "update" => Verb::Update,
+        "pick" => Verb::Pick,
         _ => return None,
     };
     (!path.is_empty()).then_some((verb, path))
+}
+
+fn pick_args(rest: &str) -> Option<(bool, &str)> {
+    let mut words = rest.rsplitn(3, ' ');
+    let (token, kind, _path) = (words.next()?, words.next()?, words.next()?);
+    let folder = match kind {
+        "folder" => true,
+        "file" => false,
+        _ => return None,
+    };
+    (!token.is_empty() && token.len() <= 64 && token.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))).then_some((folder, token))
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -225,6 +238,7 @@ enum Effect {
     Check { to: Daemon, manual: bool },
     Install(Daemon),
     Tell(Daemon, String),
+    Pick { to: Daemon, window: String, folder: bool, token: String },
 }
 
 #[derive(Debug, PartialEq, Clone, Copy)]
@@ -314,6 +328,10 @@ impl Host {
                 match parse(&line) {
                     Some((Verb::Check, _)) => host.updates(Verb::Check, &me, std::mem::take(&mut fresh)),
                     Some((verb @ (Verb::CheckNow | Verb::Update), _)) => host.updates(verb, &me, false),
+                    Some((Verb::Pick, rest)) => match pick_args(rest) {
+                        Some((folder, token)) => host.pick(&me, folder, token),
+                        None => eprintln!("[shell] ignored a pick line without a kind and token"),
+                    },
                     Some((verb, path)) => host.command(verb, path),
                     None => {}
                 }
@@ -464,6 +482,20 @@ impl Host {
             }
         };
         self.emit(fx.into_iter().collect());
+    }
+
+    fn pick(&self, to: &Daemon, folder: bool, token: &str) {
+        let window = {
+            let t = lock(&self.table);
+            if t.done {
+                return;
+            }
+            match t.boards.iter().find(|(_, b)| b.port == to.port) {
+                Some((repo, b)) if b.place == Place::Own => label(repo),
+                _ => MAIN.into(),
+            }
+        };
+        self.emit(vec![Effect::Pick { to: to.clone(), window, folder, token: token.into() }]);
     }
 
     fn open(self: &Arc<Self>, repo: String) {
@@ -718,22 +750,55 @@ fn outcome(found: &Result<Option<String>, String>, current: &str, manual: bool) 
     }
 }
 
-fn tell(to: &Daemon, body: &str) {
+fn post(to: &Daemon, path: &str, body: &str, what: &str) {
     use std::io::{Read, Write};
     let sent = std::net::TcpStream::connect(("127.0.0.1", to.port)).and_then(|mut s| {
         s.set_read_timeout(Some(Duration::from_secs(10)))?;
         let port = to.port;
         let secret = &to.secret;
         let len = body.len();
-        write!(s, "POST /api/update/shell HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nCookie: k95={secret}\r\nContent-Type: application/json\r\nContent-Length: {len}\r\nConnection: close\r\n\r\n{body}")?;
+        write!(s, "POST {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nCookie: k95={secret}\r\nContent-Type: application/json\r\nContent-Length: {len}\r\nConnection: close\r\n\r\n{body}")?;
         let mut status = [0u8; 12];
         s.read_exact(&mut status)?;
         Ok(status)
     });
     match sent {
         Ok(status) if status.starts_with(b"HTTP/1.1 2") => {}
-        Ok(status) => eprintln!("[shell] the daemon on port {} refused an update report: {}", to.port, String::from_utf8_lossy(&status)),
-        Err(e) => eprintln!("[shell] could not tell the daemon on port {} about the update: {e}", to.port),
+        Ok(status) => eprintln!("[shell] the daemon on port {} refused {what}: {}", to.port, String::from_utf8_lossy(&status)),
+        Err(e) => eprintln!("[shell] could not send {what} to the daemon on port {}: {e}", to.port),
+    }
+}
+
+fn tell(to: &Daemon, body: &str) {
+    post(to, "/api/update/shell", body, "an update report");
+}
+
+fn answer_pick(to: &Daemon, token: &str, picked: Option<std::path::PathBuf>) {
+    let body = match picked {
+        Some(p) => serde_json::json!({ "path": p.to_string_lossy() }),
+        None => serde_json::json!({ "cancelled": true }),
+    };
+    post(to, &format!("/api/pick/{token}"), &body.to_string(), "a dialog result");
+}
+
+fn pick<R: Runtime>(app: &AppHandle<R>, to: Daemon, window: String, folder: bool, token: String) {
+    let handle = app.clone();
+    let (back, again) = (to.clone(), token.clone());
+    let opened = app.run_on_main_thread(move || {
+        let mut dialog = rfd::AsyncFileDialog::new();
+        if let Some(w) = handle.get_webview_window(&window) {
+            dialog = dialog.set_parent(&w);
+        }
+        let chosen: std::pin::Pin<Box<dyn std::future::Future<Output = Option<rfd::FileHandle>> + Send>> =
+            if folder { Box::pin(dialog.pick_folder()) } else { Box::pin(dialog.pick_file()) };
+        std::thread::spawn(move || {
+            let picked = tauri::async_runtime::block_on(chosen).map(|f| f.path().to_path_buf());
+            answer_pick(&to, &token, picked);
+        });
+    });
+    if let Err(e) = opened {
+        eprintln!("[shell] could not open a file or folder dialog: {e}");
+        std::thread::spawn(move || answer_pick(&back, &again, None));
     }
 }
 
@@ -978,6 +1043,7 @@ fn apply<R: Runtime>(app: &AppHandle<R>, ports: &Ports, fx: Effect) {
         Effect::Tell(to, body) => {
             std::thread::spawn(move || tell(&to, &body));
         }
+        Effect::Pick { to, window, folder, token } => pick(app, to, window, folder, token),
     }
 }
 
@@ -1159,9 +1225,70 @@ mod tests {
         assert_eq!(parse("KANBAN95 check=x"), Some((Verb::Check, "x")));
         assert_eq!(parse("KANBAN95 checknow=x"), Some((Verb::CheckNow, "x")));
         assert_eq!(parse("KANBAN95 update=x"), Some((Verb::Update, "x")));
+        assert_eq!(parse("KANBAN95 pick=C:\\a b folder 0a1b"), Some((Verb::Pick, "C:\\a b folder 0a1b")));
         for bad in ["KANBAN95 open=", "KANBAN95 port=41234", "KANBAN95 fly=x", "KANBAN95 open", "kanban95 open=x", " KANBAN95 open=x", "listening"] {
             assert_eq!(parse(bad), None, "{bad}");
         }
+    }
+
+    #[test]
+    fn a_pick_line_takes_its_kind_and_token_from_the_end_and_refuses_anything_else() {
+        assert_eq!(pick_args("C:\\a b folder 0a1b"), Some((true, "0a1b")));
+        assert_eq!(pick_args("/x/y file ff"), Some((false, "ff")));
+        assert_eq!(pick_args(" folder 0a1b"), Some((true, "0a1b")));
+        let long = "a".repeat(65);
+        for bad in ["folder 0a1b", "x disk 0a1b", "x folder ", "x folder 0A1B", "x folder 0a1b\r\nHost: evil", "x file a/b", &format!("x file {long}")] {
+            assert_eq!(pick_args(bad), None, "{bad}");
+        }
+    }
+
+    #[test]
+    fn a_pick_line_asks_for_a_dialog_and_its_answer_is_posted_to_the_daemon_that_printed_it() {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (host, seen) = host(move |_, _| up(port, &format!("echo KANBAN95 pick=k95-a disk 0a1b{THEN}echo KANBAN95 pick=k95-a folder 0a1b{THEN}")));
+        host.first("k95-a", host.start("k95-a").unwrap());
+        let picks = || {
+            lock(&seen)
+                .iter()
+                .filter_map(|f| match f {
+                    Effect::Pick { to, window, folder, token } => Some((to.clone(), window.clone(), *folder, token.clone())),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        until("the dialog request", || !picks().is_empty());
+        let secret = lock(&host.table).boards["k95-a"].secret.clone();
+        let (to, window, folder, token) = picks().remove(0);
+        assert_eq!(picks().len(), 1);
+        assert_eq!((&to, window.as_str(), folder, token.as_str()), (&Daemon { port, secret: secret.clone() }, MAIN, true, "0a1b"));
+
+        let server = std::thread::spawn(move || {
+            let mut reqs = vec![];
+            for _ in 0..2 {
+                let (mut s, _) = listener.accept().unwrap();
+                let mut req = String::new();
+                let mut buf = [0u8; 1024];
+                while !req.ends_with('}') {
+                    let n = s.read(&mut buf).unwrap();
+                    req.push_str(&String::from_utf8_lossy(&buf[..n]));
+                }
+                s.write_all(b"HTTP/1.1 204 No Content\r\n\r\n").unwrap();
+                reqs.push(req);
+            }
+            reqs
+        });
+        answer_pick(&to, &token, Some("C:\\a b\\c".into()));
+        answer_pick(&to, &token, None);
+        let reqs = server.join().unwrap();
+        for req in &reqs {
+            assert!(req.starts_with("POST /api/pick/0a1b HTTP/1.1\r\n"), "{req}");
+            assert!(req.contains(&format!("Cookie: k95={secret}\r\n")) && !req.to_lowercase().contains("origin:"), "{req}");
+        }
+        assert!(reqs[0].ends_with(r#"{"path":"C:\\a b\\c"}"#), "{}", reqs[0]);
+        assert!(reqs[1].ends_with(r#"{"cancelled":true}"#), "{}", reqs[1]);
+        host.shutdown();
     }
 
     #[test]
