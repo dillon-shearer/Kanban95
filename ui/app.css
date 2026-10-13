@@ -199,6 +199,7 @@ fieldset { margin: 0; }
 /* First-run setup page (ui/setup.html) */
 .k95-setup { width: 460px; max-width: calc(100% - 16px); margin: 12vh auto 0; }
 .k95-setup .field-row-stacked { margin-bottom: 8px; }
+.k95-setup-note { margin: 0; }
 .k95-setup-error { color: #a00000; }
 .k95-setup-buttons { justify-content: flex-end; }
 .k95-setup-requirements { margin-bottom: 8px; }
