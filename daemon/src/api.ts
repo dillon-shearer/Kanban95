@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync 
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { dirname, extname, isAbsolute, join, resolve } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
-import { agentsMap, askShell, attentionMap, focusProject, hostedMap, missingMap, NotListed, openProject, runningMap } from './boards.js';
+import { agentsMap, askShell, attentionMap, focusProject, hostedMap, missingMap, NotListed, openProject, othersHosted, runningMap, tellShell } from './boards.js';
 import { attachmentDir, attachments, MAX_ATTACHMENT, safeName, saveAttachment } from './attachments.js';
 import { BRAIN_BODY_MAX, BRAIN_RANK, isConstraintError, SCOPES, type Brains, type Scope } from './db.js';
 import { hasBranch, ticketDiff } from './git.js';
@@ -477,7 +477,9 @@ const routes: [method: string, path: RegExp, mutation: string | null, handler: (
     const refused = busy(board, 'Data folder not changed', 'Change it');
     if (refused) throw new HttpError(409, refused);
     if (board.closing || !board.shutdown) throw new HttpError(409, board.closing ? 'the board is already shutting down' : 'changing the data folder needs the daemon running as its own process');
+    const others = board.shell ? othersHosted(board.shellId) : [];
     setBoardHome(path);
+    others.forEach((repo) => tellShell('restart', repo));
     relaunch(board);
     return { status: 202, body: { path: boardHome(), shell: board.shell === true } };
   }],

@@ -95,7 +95,7 @@ export function hostedMap(shell: number | null | undefined): Record<string, bool
   return Object.fromEntries(readProjects().map((p) => [p.path, shell != null && live.some((e) => same(e.repo, p.path) && e.shell === shell)]));
 }
 
-type Verb = 'open' | 'switch' | 'popout' | 'dock' | 'close' | 'check' | 'checknow' | 'update';
+type Verb = 'open' | 'switch' | 'popout' | 'dock' | 'close' | 'restart' | 'check' | 'checknow' | 'update';
 
 export function tellShell(verb: Verb, path: string): void {
   process.stdout.write(`KANBAN95 ${verb}=${normal(path)}\n`);
@@ -114,6 +114,10 @@ export function askShell(board: { shell?: boolean; shellId?: number | null }, ve
   } else if (!hosted) throw new Error(`${name} is not hosted by this shell`);
   tellShell(verb, repo);
   return { name };
+}
+
+export function othersHosted(shell: number | null | undefined): string[] {
+  return shell == null ? [] : running().filter((e) => e.shell === shell && e.pid !== process.pid).map((e) => e.repo);
 }
 
 export class NotListed extends Error {}
