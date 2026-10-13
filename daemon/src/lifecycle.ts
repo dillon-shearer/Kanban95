@@ -3,7 +3,7 @@
 import { exec } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
-import { freemem, totalmem } from 'node:os';
+import { totalmem } from 'node:os';
 import { join, resolve } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { readTicket, transaction, type Ticket } from './api.js';
@@ -11,7 +11,7 @@ import { branchName, git, gitNotRun, isAncestor, notStarted, syncWorktree, workt
 import { revoke, type Role } from './grants.js';
 import { cleanTicket } from './janitor.js';
 import { cancelSetup, killSession, launch, launchRoot, prepareWorktree, SetupCancelled, sessions, sessionsOf, settingUp, transcriptSize, type Session } from './launcher.js';
-import { mark } from './memlog.js';
+import { freeMemory, mark } from './memlog.js';
 import { ahead, enqueue, merge, push, pushRelease, upstream } from './merge.js';
 import { lastLines } from './pty.js';
 import { BadConfig, EFFORT, readConfig, runSettings, type Effort } from './settings.js';
@@ -781,12 +781,8 @@ export function runnerState(b: Board) {
     ...(b.release && { release: { pending: true, ...b.release } }), ...(b.stale === 'daemon' && { hold: { finish: toFinish(b), terminals: terminals(), restart } }), ...(b.gitError && { gitError: b.gitError }), ...(r.on && b.lowMemory && { lowMemory: b.lowMemory }) };
 }
 
-/**
- * Free physical memory in bytes. On Windows libuv reads GlobalMemoryStatusEx's ullAvailPhys: available memory (free plus standby
- * cache the system hands back on demand), not only the zeroed free list, so it is the figure Task Manager shows as Available.
- * Tests swap it for a stub.
- */
-export const memory = { free: freemem };
+/** Free physical memory in bytes (freeMemory in memlog.ts, per platform). Tests swap it for a stub. */
+export const memory = { free: freeMemory };
 /** ponytail: hardcoded at the larger of 2 GiB and 10% of RAM; upgrade to a Settings → Board field when an operator needs another value. */
 const memoryFloor = () => Math.max(2 * 1024 ** 3, totalmem() / 10);
 const MEMORY_RECHECK = 30_000;
