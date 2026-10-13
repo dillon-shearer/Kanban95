@@ -24,6 +24,10 @@ To change the data folder later, use **Settings → Board → Data folder** (Set
 
 ![Settings, the Models group of the Agents tab](img/settings-models.png)
 
+### When the app will not start
+
+The error box ends with "Details:" and the path of the shell log: `%LOCALAPPDATA%\Kanban95\shell.log` on Windows, `~/Library/Logs/Kanban95/shell.log` on macOS. It holds one timestamped line per failure that stopped a board or an update (Node.js missing, a daemon that did not start or kept stopping, a window that would not open, a failed update) and nothing else. Read the last lines, or send them along with a bug report; they hold no keys or secrets.
+
 ## A full cycle
 
 ### 1. Brainstorm
