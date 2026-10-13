@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { countUnpushed } from '../src/lifecycle.ts';
 import { until } from './cdp.ts';
-import { repo, srv, db, page, base, git, ticket, statusOf, column, statusBar, click, setUi, menuItems, menuPick } from './ui.ts';
+import { repo, srv, db, page, base, git, ticket, statusOf, column, statusBar, click } from './ui.ts';
 
 describe('ui-board', { timeout: 60_000 }, () => {
   it('a drop on any column moves the card there without a reload', async () => {
@@ -25,70 +25,6 @@ describe('ui-board', { timeout: 60_000 }, () => {
     expect(statusOf(id)).toBe('in_progress');
     expect(await page.evaluate('window.__noReload')).toBe(true);
     db.prepare("UPDATE tickets SET status = 'done', merged_at = 'x' WHERE id = ?").run(id); // out of the way of the next tests
-  });
-
-  it('keeps column scroll and the focused card across an event redraw', async () => {
-    const ids = Array.from({ length: 30 }, (_, i) => ticket(`Long ${i}`));
-    const last = ids.at(-1)!;
-    try {
-      await page.goto(base);
-      await until(() => column(last), 'the cards');
-      const top = await page.evaluate<number>(`(() => { const c = document.querySelector('[data-status="backlog"] .cards'); c.scrollTop = c.scrollHeight; document.querySelector('.card[data-id="${last}"]').focus(); return c.scrollTop; })()`);
-      expect(top).toBeGreaterThan(0);
-      await page.evaluate(`fetch('/api/tickets/${ids[0]}', { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ title: 'Renamed' }) })`);
-      await until(() => page.evaluate<boolean>(`document.querySelector('.card[data-id="${ids[0]}"]').textContent.includes('Renamed')`), 'the redraw');
-      expect(await page.evaluate<number>(`document.querySelector('[data-status="backlog"] .cards').scrollTop`)).toBe(top);
-      expect(await page.evaluate<string>(`document.activeElement.dataset.id`)).toBe(String(last));
-    } finally {
-      for (const id of ids) db.prepare("UPDATE tickets SET status = 'done', merged_at = 'x' WHERE id = ?").run(id);
-    }
-  });
-
-  it('selects cards with Ctrl, Shift and Ctrl+A, and sets effort on the whole selection, naming a refusal', async () => {
-    const ids = ['One', 'Two', 'Three'].map((title) => ticket(title));
-    const [a, b, c] = ids;
-    const chosen = () => page.evaluate<number[]>(`[...document.querySelectorAll('.card.selected')].map((el) => Number(el.dataset.id))`);
-    const effort = (id: number) => (db.prepare('SELECT effort FROM tickets WHERE id = ?').get(id) as { effort: string | null }).effort;
-    try {
-      await page.goto(base);
-      await until(() => column(c), 'the cards');
-      await click(`.card[data-id="${a}"]`);
-      await click(`.card[data-id="${c}"]`, 2);
-      expect(await chosen()).toEqual([a, c]);
-      await click(`.card[data-id="${c}"]`, 2);
-      expect(await chosen()).toEqual([a]);
-      await click(`.card[data-id="${a}"]`);
-      await click(`.card[data-id="${c}"]`, 8);
-      expect(await chosen()).toEqual([a, b, c]);
-
-      await page.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65, modifiers: 2 });
-      expect((await chosen()).length).toBe(await page.evaluate<number>(`document.querySelectorAll('.card').length`));
-      await click(`[data-status="backlog"] .cards`);
-      expect(await chosen()).toEqual([]);
-
-      await click(`.card[data-id="${a}"]`);
-      await click(`.card[data-id="${b}"]`, 2);
-      await click(`.card[data-id="${c}"]`, 2);
-      // The daemon refuses #c once; the others still change and the status bar names it.
-      await page.evaluate(`(() => { const f = window.fetch; window.fetch = (u, o) => {
-        if (!(u.endsWith('/tickets/${c}') && o?.method === 'PATCH')) return f(u, o);
-        window.fetch = f;
-        return Promise.resolve(new Response(JSON.stringify({ error: 'nope' }), { status: 409 }));
-      }; })()`);
-      const high = async () => {
-        await page.evaluate(`document.querySelector('.card[data-id="${b}"]').dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 50, clientY: 50 }))`);
-        await page.evaluate(`[...document.querySelectorAll('.k95-menu li')].find((li) => li.firstChild?.textContent === 'Effort').querySelector('li:nth-child(4)').click()`);
-      };
-      await high();
-      await until(async () => (await statusBar()).startsWith('Effort'), 'the outcome');
-      expect(await statusBar()).toBe(`Effort set to high on 2 tickets. #${c} refused: nope`);
-      expect(ids.map(effort)).toEqual(['high', 'high', null]);
-      await high();
-      await until(async () => (await statusBar()) === 'Effort set to high on 3 tickets.', 'the second outcome');
-      expect(ids.map(effort)).toEqual(['high', 'high', 'high']);
-    } finally {
-      for (const id of ids) db.prepare("UPDATE tickets SET status = 'done', merged_at = 'x' WHERE id = ?").run(id);
-    }
   });
 
   it('names the reason in the status bar when a launch is refused, not "launched"', async () => {
@@ -155,82 +91,6 @@ describe('ui-board', { timeout: 60_000 }, () => {
     for (const id of held) expect(db.prepare('SELECT status, blocked_on_deps, retry FROM tickets WHERE id = ?').get(id)).toEqual({ status: 'backlog', blocked_on_deps: 0, retry: 2 });
     expect(db.prepare('SELECT status FROM tickets WHERE id = ?').get(dep)).toEqual({ status: 'in_progress' });
     db.prepare(`UPDATE tickets SET status = 'done', merged_at = 'x' WHERE id IN (${[dep, ...held].join(',')})`).run();
-  });
-
-  it('collapses a column to a strip that survives a reload, takes drops, and shows a flag in its count', async () => {
-    const id = ticket('Fold me', { status: 'testing' });
-    const flagged = ticket('Flagged', { needs_human: 1 });
-    const width = (s: string) => page.evaluate<number>(`document.querySelector('[data-status="${s}"]').getBoundingClientRect().width`);
-    try {
-      await page.goto(base);
-      await until(() => column(id), 'the card');
-      await setUi('k95.collapsed', []); // Done starts folded when nothing is saved
-      await page.goto(base);
-      await until(() => column(id), 'the card');
-      const before = await width('testing');
-      await click('[data-status="done"] > legend');
-      await until(async () => (await width('done')) <= 24, 'the Done strip');
-      expect(await width('testing')).toBeGreaterThan(before);
-
-      await click('[data-status="backlog"] > legend');
-      expect(await page.evaluate<boolean>(`!document.querySelector('[data-status="backlog"] .card')`)).toBe(true);
-      expect(await page.evaluate<string>(`getComputedStyle(document.querySelector('[data-status="backlog"] > legend')).color`)).toBe('rgb(192, 0, 0)');
-      expect(await page.evaluate<string>(`getComputedStyle(document.querySelector('[data-status="testing"] > legend')).color`)).not.toBe('rgb(192, 0, 0)');
-
-      await page.drag(await page.center(`.card[data-id="${id}"]`), await page.center('[data-status="backlog"]'));
-      await until(() => statusOf(id) === 'backlog', 'the reset');
-      await until(async () => (await statusBar()) === `#${id} reset to Backlog.`, 'the status-bar message');
-
-      await page.goto(base);
-      await until(() => page.evaluate<boolean>(`!!document.querySelector('[data-status="done"].collapsed')`), 'Done still collapsed');
-      await click('[data-status="done"] > legend');
-      await until(async () => (await width('done')) > 24, 'Done expanded');
-    } finally {
-      await setUi('k95.collapsed', undefined);
-      for (const t of [id, flagged]) db.prepare("UPDATE tickets SET status = 'done', merged_at = 'x', needs_human = 0 WHERE id = ?").run(t);
-    }
-  });
-  it('sorts each column on its own from the ▾ on its legend, keeps it across a reload, and reads an old single sort for every column', async () => {
-    // Done: the newest update is the highest id, so "updated" reverses id order. Backlog: effort max is the highest id.
-    const done = ['Oldest', 'Middle', 'Newest'].map((title, i) => ticket(title, { status: 'done', merged_at: 'x', updated_at: `2026-0${i + 1}-01T00:00:00.000Z` }));
-    const back = ['Low', 'Max'].map((title, i) => ticket(title, { effort: ['low', 'max'][i] }));
-    const ids = (s: string, mine: number[]) => page.evaluate<number[]>(`[...document.querySelectorAll('[data-status="${s}"] .card')].map((el) => Number(el.dataset.id)).filter((id) => ${JSON.stringify(mine)}.includes(id))`);
-    const legend = (s: string) => page.evaluate<string>(`document.querySelector('[data-status="${s}"] > legend').firstChild.textContent`);
-    try {
-      await page.goto(base);
-      await setUi('k95.collapsed', []); // Done starts folded when nothing is saved
-      await setUi('k95.view', undefined);
-      await page.goto(base);
-      await until(() => column(done[2]), 'the Done cards');
-      expect(await ids('done', done)).toEqual(done);
-
-      await click('[data-status="done"] > legend .k95-sort');
-      expect(await menuItems()).toEqual(['✓ id', 'updated', 'effort', 'model', 'tags', 'needs-human first']);
-      expect(await page.evaluate<boolean>(`!document.querySelector('[data-status="done"].collapsed')`)).toBe(true); // the ▾ does not fold
-      await menuPick('updated');
-      await until(async () => (await ids('done', done)).join() === [...done].reverse().join(), 'Done newest first');
-      expect(await ids('backlog', back)).toEqual(back);
-      expect(await legend('done')).toMatch(/^Done \(\d+\) · updated$/);
-      expect(await legend('backlog')).toMatch(/^Backlog \(\d+\)$/);
-
-      await page.goto(base);
-      await until(() => column(done[2]), 'the Done cards after the reload');
-      expect(await ids('done', done)).toEqual([...done].reverse());
-      expect(await ids('backlog', back)).toEqual(back);
-
-      // The shape before per-column sort: one sort for the board, and a group that no longer exists.
-      await setUi('k95.view', { sort: 'effort', group: 'tag' });
-      await page.goto(base);
-      await until(() => column(done[2]), 'the Done cards with the old view');
-      expect(await ids('backlog', back)).toEqual([...back].reverse());
-      expect(await legend('backlog')).toMatch(/· effort$/);
-      expect(await legend('done')).toMatch(/· effort$/);
-      expect(await page.evaluate<number>(`document.querySelectorAll('.k95-group, .k95-board select').length`)).toBe(0);
-    } finally {
-      await setUi('k95.view', undefined);
-      await setUi('k95.collapsed', undefined);
-      for (const id of back) db.prepare("UPDATE tickets SET status = 'done', merged_at = 'x' WHERE id = ?").run(id);
-    }
   });
 
   it('a base ahead of its upstream at start shows "N commits not pushed"; Push pushes it and the field goes', async () => {

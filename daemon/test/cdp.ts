@@ -36,6 +36,7 @@ export async function launch() {
   const argv = ['--headless=new', '--remote-debugging-port=0', `--user-data-dir=${profile}`, '--no-first-run',
     // Muted: a headless browser still plays sound, so every test merge and question rang the board's chimes on the operator's speakers.
     '--no-default-browser-check', '--window-size=1280,720', '--mute-audio',
+    '--disable-background-timer-throttling', '--disable-backgrounding-occluded-windows', '--disable-renderer-backgrounding',
     '--use-mock-keychain', '--password-store=basic', 'about:blank'];
   // A headed browser opens a window on the operator's desktop while they work; never allow one.
   if (!argv.some((a) => a.startsWith('--headless'))) throw new Error('cdp.ts must start the browser with --headless');

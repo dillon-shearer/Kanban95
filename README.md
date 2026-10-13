@@ -98,7 +98,7 @@ Other commands:
 
 ```
 npm run build        # compiles daemon/ to daemon/dist
-npm test             # tsc, then every daemon and UI test: the tester's one full run per ticket; the UI tests drive headless Edge or Chrome (or KANBAN95_BROWSER) and download the 80 MB speech model once into daemon/test/.cache/
+npm test             # tsc, then every daemon and UI test: the tester's one full run per ticket; a small set of UI tests drives headless Edge or Chrome (or KANBAN95_BROWSER); at most 5 minutes
 npm run test:changed -- main   # only the tests the changes against main (committed or not) can affect, no tsc: what the worker runs
 npm run test:shell   # the Tauri shell's tests (cargo test)
 npm run docs:mcp     # regenerate docs/MCP.md from the MCP tool table; a test fails if it drifts

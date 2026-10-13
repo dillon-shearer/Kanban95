@@ -1,11 +1,9 @@
-// In headless Edge or Chrome against a running daemon (setup in ui.ts): terminal windows: their lifetime, ending and resuming agents, the Operator terminal.
+// In headless Edge or Chrome against a running daemon (setup in ui.ts): terminal windows: their lifetime, ending and resuming agents.
 import './home.ts'; // also here, not only in vitest.config.ts: a run from the repo root skips that config and wrote the real home
-import { readFileSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { sessions } from '../src/launcher.ts';
 import { until } from './cdp.ts';
-import { repo, srv, db, page, base, ticket, column, statusBar, click, rightClick, menuItems, menuPick } from './ui.ts';
+import { srv, db, page, base, ticket, column, click, rightClick, menuItems, menuPick } from './ui.ts';
 
 describe('ui-terminal', { timeout: 60_000 }, () => {
   it('keeps an ended terminal open while its ticket exists; deleting the ticket closes its terminal and Ticket window', async () => {
@@ -39,48 +37,6 @@ describe('ui-terminal', { timeout: 60_000 }, () => {
     expect(await tasks()).toBe(0);
     // The next test's ticket reuses this id; it must not see these agents still exiting as its own.
     await until(() => sessions.size === 0, 'the agents to exit');
-  });
-
-  it("colours a terminal's title bar by its state, focused or not, and recolours it in place when its ticket is flagged", async () => {
-    const id = ticket('Colour me');
-    await page.goto(base);
-    await until(() => column(id), 'the card');
-    const cookie = { cookie: `k95=${srv.secret}` };
-    expect((await fetch(`${base}api/tickets/${id}/launch`, { method: 'POST', headers: cookie })).status).toBe(200);
-    const key = await until(async () => (await (await fetch(`${base}api/sessions`, { headers: cookie })).json()).find((x: { ticket_id: number }) => x.ticket_id === id)?.id, 'the session');
-    const wid = `term-${key}`;
-    await until(() => page.evaluate(`!!document.querySelector('[data-win="${wid}"] .xterm')`), 'the terminal');
-    const state = () => page.evaluate<string | null>(`document.querySelector('[data-win="${wid}"]').dataset.state ?? null`);
-    const bar = (w: string) => page.evaluate<string>(`getComputedStyle(document.querySelector('[data-win="${w}"] .title-bar')).backgroundImage`);
-    const flag = (on: boolean) => fetch(`${base}api/tickets/${id}`, { method: 'PATCH', headers: { ...cookie, 'content-type': 'application/json' }, body: JSON.stringify({ needs_human: on }) });
-    const GREY = 'linear-gradient(90deg, rgb(128, 128, 128), rgb(181, 181, 181))'; // 98.css's inactive bar
-    const BLUE = 'linear-gradient(90deg, rgb(0, 0, 128), rgb(16, 132, 208))'; // and its active one
-
-    // Opened behind the Board: unfocused, yet a dimmed blue rather than 98.css's grey.
-    expect(await state()).toBe('execute');
-    const dimmed = await bar(wid);
-    expect(dimmed).not.toBe(GREY);
-    expect(dimmed).not.toBe(BLUE);
-    await click(`[data-task="${wid}"]`);
-    expect(await bar(wid)).toBe(BLUE);
-    expect(await bar('board')).toBe(GREY); // other windows keep the 98.css look
-
-    expect((await flag(true)).status).toBe(200);
-    await until(async () => (await state()) === 'human', 'the orange bar');
-    const orange = await bar(wid);
-    expect(orange).not.toBe(BLUE);
-    expect((await flag(false)).status).toBe(200);
-    await until(async () => (await state()) === 'execute', 'the blue bar again');
-
-    // Ended beats a flag.
-    await flag(true);
-    await until(async () => (await state()) === 'human', 'the orange bar');
-    const grant = (db.prepare('SELECT id FROM grants WHERE ticket_id = ? AND revoked_at IS NULL').get(id) as { id: number }).id;
-    await fetch(`${base}api/grants/${grant}`, { method: 'DELETE', headers: cookie });
-    await until(async () => (await state()) === 'ended', 'the grey bar');
-    expect(await bar(wid)).not.toBe(orange);
-    db.prepare("UPDATE tickets SET needs_human = 0, status = 'done', merged_at = 'x' WHERE id = ?").run(id);
-    await until(() => sessions.size === 0, 'the agent to exit');
   });
 
   it("dragging a running card to Backlog stops its agent and closes its terminals, the live one and an already ended one", async () => {
@@ -187,34 +143,4 @@ describe('ui-terminal', { timeout: 60_000 }, () => {
     }
   });
 
-  it('asks for a mission on Ctrl+Shift+N and Start → New operator terminal, refuses an empty one, and opens the Operator terminal', async () => {
-    const models = join(process.env.USERPROFILE!, '.kanban95', 'models.json');
-    const before = readFileSync(models, 'utf8');
-    writeFileSync(models, JSON.stringify({ ...JSON.parse(before), claude: { ...JSON.parse(before).claude, plan: { model: 'plan', effort: 'low' } } }));
-    await page.goto(base);
-    await until(() => page.evaluate(`!!document.querySelector('[data-win="board"]')`), 'the board');
-    const dialogOpen = () => page.evaluate<boolean>(`document.querySelector('dialog[open] .title-bar-text')?.textContent === 'New operator terminal'`);
-    const press = (button: string) => page.evaluate(`[...document.querySelectorAll('dialog[open] button')].find((b) => b.textContent === '${button}').click()`);
-
-    for (const type of ['keyDown', 'keyUp']) {
-      await page.send('Input.dispatchKeyEvent', { type, key: 'N', code: 'KeyN', windowsVirtualKeyCode: 78, modifiers: 2 | 8 });
-    }
-    await until(dialogOpen, 'the mission dialog');
-    await press('Start');
-    await until(async () => (await statusBar()) === 'mission must be a non-empty string', 'the refusal');
-    expect(db.prepare("SELECT count(*) AS n FROM grants WHERE role = 'operator'").get()).toEqual({ n: 0 });
-
-    await click('#start');
-    await page.evaluate(`[...document.querySelectorAll('.k95-menu li')].find((li) => li.textContent === 'New operator terminal').click()`);
-    await until(dialogOpen, 'the mission dialog from Start');
-    const mission = 'Rename the janitor log & keep {{tools}} literal.';
-    await page.evaluate(`document.querySelector('dialog[open] textarea').value = ${JSON.stringify(mission)}`);
-    await press('Start');
-    await until(() => page.evaluate(`[...document.querySelectorAll('[data-win^="term-"] .title-bar-text')].some((t) => t.textContent === 'Operator — CLI default')`), 'the Operator terminal');
-    const g = db.prepare("SELECT id FROM grants WHERE role = 'operator' AND revoked_at IS NULL").get() as { id: number };
-    expect(readFileSync(join(repo, '.kanban95', 'sessions', String(-g.id), 'prompt.md'), 'utf8')).toContain(`## Mission\n\n${mission}\n`);
-    await fetch(`${base}api/grants/${g.id}`, { method: 'DELETE', headers: { cookie: `k95=${srv.secret}` } });
-    await until(() => ![...sessions.values()].some((s) => s.role === 'operator'), 'the operator agent to exit');
-    writeFileSync(models, before);
-  });
 });

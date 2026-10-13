@@ -4,9 +4,9 @@
 // the rest of the UI is checked by the dogfood cycle, not by DOM tests.
 import { removeTemp } from './home.ts'; // also here, not only in vitest.config.ts: a run from the repo root skips that config and wrote the real home
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { delimiter, join, resolve } from 'node:path';
+import { delimiter, join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { afterAll, beforeAll } from 'vitest';
 import { sources } from '../src/limits.ts';
@@ -43,10 +43,6 @@ if (brief.startsWith('# Test')) {
 }
 process.stdin.resume();
 `;
-// The speech model is 77 MB: downloaded through the daemon once, then kept here (gitignored) for later runs.
-export const CACHE = resolve(import.meta.dirname, '.cache', 'voice-model');
-export const WAV = resolve(import.meta.dirname, 'fixtures', 'merge-queue.wav');
-
 export let repo: string;
 let bin: string;
 export let srv: Awaited<ReturnType<typeof start>>;
@@ -54,7 +50,6 @@ export let db: DatabaseSync;
 export let page: Page;
 export let base: string;
 const PATH0 = process.env.PATH;
-export let limitCalls = 0;
 export const git = (...a: string[]) => execFileSync('git', a, { cwd: repo, encoding: 'utf8' }).trim();
 export const ticket = (title: string, cols: Record<string, unknown> = {}) => {
   const keys = ['title', ...Object.keys(cols)];
@@ -73,20 +68,6 @@ export const rightClick = async (selector: string) => {
   const { x, y } = await page.center(selector);
   await page.send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'right', buttons: 2, clickCount: 1 });
   await page.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'right', buttons: 0, clickCount: 1 });
-};
-/** Waits until ui.json holds the open page's value of `key`. The page writes 500 ms after a change, or on pagehide with a
- *  keepalive PUT that the next page's GET /api/ui can beat under load: a test that reloads to see saved UI state waits for this. */
-export const uiSaved = (key: string) => until(async () => {
-  let file: Record<string, unknown> = {};
-  try { file = JSON.parse(readFileSync(join(repo, '.kanban95', 'ui.json'), 'utf8')); } catch { /* not written yet */ }
-  const live = await page.evaluate<unknown>(`import('/state.js').then((s) => s.get(${JSON.stringify(key)}))`);
-  return JSON.stringify(file[key] ?? null) === JSON.stringify(live);
-}, `${key} in ui.json`);
-/** Sets one key of the open page's UI state (ui/state.js, so the page sees it at once; undefined removes it) and waits until
- *  it is in ui.json, so a reload right after keeps it. */
-export const setUi = async (key: string, value: unknown) => {
-  await page.evaluate(`import('/state.js').then((s) => s.set(${JSON.stringify(key)}, ${value === undefined ? 'undefined' : JSON.stringify(value)}))`);
-  await uiSaved(key);
 };
 export const menuItems = () => page.evaluate<string[]>(`[...document.querySelectorAll('.k95-menu > li[role="menuitem"]')].map((li) => li.textContent)`);
 export const menuPick = (label: string) => page.evaluate(`[...document.querySelectorAll('.k95-menu > li')].find((li) => li.textContent === ${JSON.stringify(label)}).click()`);
@@ -107,8 +88,8 @@ beforeAll(async () => {
   writeFileSync(join(process.env.USERPROFILE!, '.kanban95', 'models.json'), JSON.stringify({
     cli: 'claude', claude: { plan: { model: 'plan', effort: 'low' }, execute: { model: 'work', effort: 'low' }, test: { model: 'pass', effort: 'low' } },
   }));
-  // The tray asks for limits on load: canned answers, never the real CLIs. Claude's count says how often it was asked.
-  sources.claude = async () => `Current session: ${62 + limitCalls++}% used · resets Oct 8, 7:59pm (America/New_York)`;
+  // The tray asks for limits on load: canned answers, never the real CLIs.
+  sources.claude = async () => `Current session: 62% used · resets Oct 8, 7:59pm (America/New_York)`;
   sources.codex = async () => { throw new Error('codex app-server could not start: ENOENT'); };
   srv = await start({ repo });
   db = srv.db;

@@ -17,7 +17,7 @@ describe('processes Windows failed to start', { timeout: 60_000 }, () => {
   beforeAll(() => Object.assign(START_RETRY, { every: 100 }));
   afterAll(() => Object.assign(START_RETRY, retry0));
 
-  it('an agent whose CLI never started is started again, unflagged, and its ticket lands', async () => {
+  it.skipIf(process.platform !== 'win32')('an agent whose CLI never started is started again, unflagged, and its ticket lands', async () => {
     const id = ticket('Write it', { model: 'unstarted-once' });
     await post(`/api/tickets/${id}/launch`);
     await landed(id);
@@ -26,7 +26,7 @@ describe('processes Windows failed to start', { timeout: 60_000 }, () => {
     expect(t(id).flags.needs_human).toBe(false);
   });
 
-  it('an agent that never starts is flagged after START_RETRY.max more tries, saying why', async () => {
+  it.skipIf(process.platform !== 'win32')('an agent that never starts is flagged after START_RETRY.max more tries, saying why', async () => {
     const id = ticket('Write it', { model: 'unstarted' });
     await post(`/api/tickets/${id}/launch`);
     await until(() => t(id).flags.needs_human, 'the flag');

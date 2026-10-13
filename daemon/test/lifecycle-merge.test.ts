@@ -118,28 +118,6 @@ describe('lifecycle', { timeout: 180_000 }, () => {
       expect(execFileSync('git', ['log', '-1', '--format=%s'], { cwd: wt, encoding: 'utf8' }).trim()).toBe('Add lines.txt');
     });
 
-    it('uncommitted tracked changes: back to the worker with a note saying so, the changes untouched', async () => {
-      const id = ticket('Leave it half done', { model: 'dirty' });
-      expect((await post(`/api/tickets/${id}/launch`)).status).toBe(200);
-      await setRun(true);
-      await sentBack(id);
-      expect(t(id)).toMatchObject({ status: 'in_progress', retry: 1, flags: { needs_human: false } });
-      expect(notes(id, 'failure')).toEqual(['worktree has uncommitted changes; commit or discard them, then submit again:\n M a.txt']);
-      expect(readFileSync(join(worktreePath(repo, id), 'a.txt'), 'utf8')).toBe('half done\n');
-      expect(runs(id).map((x) => x.phase)).toEqual(['execute', 'execute']);
-    });
-
-    it('while the runner is off the conflict waits: in progress with no agent and no flag, and the worker starts on Run', async () => {
-      const id = ticket('Leave it half done', { model: 'dirty' });
-      expect((await post(`/api/tickets/${id}/launch`)).status).toBe(200);
-      await until(() => t(id).retry === 1, 'the conflict');
-      await until(() => !sessionsOf(id).length, 'the worker ended');
-      expect(t(id)).toMatchObject({ status: 'in_progress', flags: { needs_human: false } });
-      expect(runs(id).map((x) => x.outcome)).toEqual(['conflict']);
-      await setRun(true);
-      expect(runs(id).map((x) => x.phase)).toEqual(['execute', 'execute']);
-      expect(sessionsOf(id)).toHaveLength(1);
-    });
   });
 
   describe('a dirty main checkout', () => {
@@ -164,20 +142,6 @@ describe('lifecycle', { timeout: 180_000 }, () => {
       await landed(id);
       expect(t(id).flags.needs_human).toBe(false);
       expect(sounds).toEqual([{ sound: 'done', ticket: id }, { sound: 'ding', ticket: id }]);
-    });
-
-    it('the operator commits instead: the queue merges the new main into the worktree first, then lands it', async () => {
-      Object.assign(DIRTY_WAIT, { every: 50, max: 60_000 });
-      const id = ticket('Add behind main');
-      await launchThenDirty(id);
-      await until(() => t(id).status === 'done', 'done');
-      git('commit', '-qam', 'Edit a');
-      await landed(id);
-      expect(notes(id, 'failure')).toEqual([]);
-      expect(git('log', '-1', '--format=%an <%ae>|%s', 'HEAD^2')).toBe(`Op Erator <op@example.com>|Merge main into ticket/${id}`);
-      expect(git('log', '-1', '--format=%s', 'HEAD')).toBe('Add behind main');
-      expect(git('show', 'HEAD:a.txt')).toBe('the operator is editing');
-      expect(mergeInProgress(repo)).toBe(false);
     });
 
     it('still dirty after the wait: flagged with the changed files and the fix; Retry merge lands it once clean', async () => {

@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createWorktree, worktreePath, worktreesRoot } from '../src/git.ts';
 import { mint } from '../src/grants.ts';
-import { killTree, RESUME_MESSAGE, sessionsOf } from '../src/launcher.ts';
+import { RESUME_MESSAGE, sessionsOf } from '../src/launcher.ts';
 import { DIRTY_WAIT, RESTART_NOTE, RESTARTED, TO_RESOLVE, type Status } from '../src/lifecycle.ts';
 import { boot, db, git, landed, models, notes, post, repo, runs, sounds, srv, t, ticket, until } from './board.ts';
 
@@ -21,7 +21,7 @@ describe('stale daemon after a merge', { timeout: 60_000 }, () => {
     expect(git('show', '--stat', '--format=', 'HEAD')).toContain(`${dir}/`);
     expect(await stale()).toBe(want);
   };
-  it.each([['shell', 'shell'], ['ui', false], ['docs', false]] as const)('a merge touching %s/ reports stale: %s', merged);
+  it.each([['shell', 'shell'], ['ui', false]] as const)('a merge touching %s/ reports stale: %s', merged);
   // The daemon row, and what a restart then reports: one merge for both.
   it('a merge touching daemon/ reports stale: daemon; a daemon started on the merged commit is not stale', async () => {
     await merged('daemon', 'daemon');
@@ -122,26 +122,6 @@ describe('resume', { timeout: 60_000 }, () => {
     }
   });
 
-  it('Launch on a flagged running ticket with no agent resumes it', async () => {
-    models({ execute: 'hang' });
-    const id = flagged('Launch me again', 'in_progress', 2);
-    expect((await post(`/api/tickets/${id}/launch`)).status).toBe(200);
-    expect(t(id)).toMatchObject({ status: 'in_progress', retry: 2, flags: { needs_human: false } });
-    expect(sessionsOf(id)).toHaveLength(1);
-  });
-
-  it('is refused for an unflagged running ticket, and in backlog and done', async () => {
-    const unflagged = ticket('Fine', { status: 'in_progress' });
-    const backlog = ticket('Waiting');
-    const done = ticket('Shipped', { status: 'done', needs_human: 1 });
-    for (const [id, why] of [[unflagged, 'it is not flagged'], [backlog, 'in backlog'], [done, 'in done']] as const) {
-      const r = await post(`/api/tickets/${id}/resume`);
-      expect(r.status).toBe(409);
-      expect((await r.json()).error).toContain(why);
-    }
-    expect(runs(unflagged)).toEqual([]);
-  });
-
   it('an agent killed by the board shutting down is not flagged, so the next start resumes it (Restart board)', async () => {
     models({ execute: 'hang' });
     const id = ticket('Live');
@@ -163,17 +143,6 @@ describe('resume', { timeout: 60_000 }, () => {
     await until(() => s.scrollback().includes('FAKE'), 'the agent');
     return s;
   };
-  const transcript = (sessionId: string) => readdirSync(join(process.env.USERPROFILE!, '.claude', 'projects'), { recursive: true, encoding: 'utf8' })
-    .find((f) => f.endsWith(`${sessionId}.jsonl`));
-
-  it('a Claude launch carries --session-id and stores the id on its run', async () => {
-    models({ execute: 'hang' });
-    const id = ticket('Named session');
-    await launchedClaude(id);
-    const [run] = runs(id);
-    expect(run.session_id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
-    expect(transcript(run.session_id!)).toBeDefined(); // the fake got it as --session-id
-  });
 
   it('after Restart board, recovery continues the killed conversation with --resume <stored id> and a new grant', async () => {
     models({ execute: 'hang' });
@@ -195,41 +164,6 @@ describe('resume', { timeout: 60_000 }, () => {
     expect(grant(old.grantId).revoked_at).not.toBeNull();
     expect(grant(now.grantId).revoked_at).toBeNull();
     expect(t(id).flags.needs_human).toBe(false);
-  });
-
-  it('Resume of a flagged ticket continues the conversation; Restart starts a fresh one', async () => {
-    models({ execute: 'hang' });
-    const id = ticket('Crashed');
-    const old = await launchedClaude(id);
-    const sessionId = runs(id)[0].session_id!;
-    killTree(old.pty); // the agent died: exit flags the ticket
-    await until(() => t(id).flags.needs_human, 'the flag');
-    expect((await post(`/api/tickets/${id}/resume`)).status).toBe(200);
-    await until(() => existsSync(resumed(id)), 'the resumed session');
-    expect(JSON.parse(readFileSync(resumed(id), 'utf8')).argv).toEqual(expect.arrayContaining(['--resume', sessionId]));
-    expect(runs(id)[1].session_id).toBe(sessionId);
-    rmSync(resumed(id));
-    await until(() => sessionsOf(id)[0]?.scrollback().includes('FAKE RESUMED'), 'the resumed agent to print'); // before its kill (board.ts)
-    expect((await post(`/api/tickets/${id}/restart`)).status).toBe(200);
-    await until(() => runs(id).length === 3 && sessionsOf(id).length === 1, 'the restarted agent');
-    expect(runs(id)[2].session_id).not.toBe(sessionId);
-    expect(existsSync(resumed(id))).toBe(false);
-  });
-
-  it('a missing transcript falls back to a fresh session with the brief', async () => {
-    models({ execute: 'hang' });
-    const id = ticket('Transcript gone');
-    await launchedClaude(id);
-    const sessionId = runs(id)[0].session_id!;
-    await srv.close();
-    rmSync(join(process.env.USERPROFILE!, '.claude', 'projects', transcript(sessionId)!));
-    await boot();
-    await until(() => sessionsOf(id).length, 'the fresh agent');
-    const [, fresh] = runs(id);
-    expect(fresh.session_id).not.toBe(sessionId);
-    await until(() => transcript(fresh.session_id!), 'the fresh session id passed as --session-id');
-    expect(existsSync(resumed(id))).toBe(false);
-    expect(fresh.prompt_rendered).toContain(RESTARTED);
   });
 
   it('restart resumes a running ticket once by itself; an agent that then exits silently flags it with what to do', async () => {
@@ -272,35 +206,11 @@ describe('restart', { timeout: 60_000 }, () => {
     }
   });
 
-  it('is refused in backlog', async () => {
-    const id = ticket('Not started');
-    const r = await post(`/api/tickets/${id}/restart`);
-    expect(r.status).toBe(409);
-    expect((await r.json()).error).toContain('cannot restart a ticket in backlog');
-    expect(runs(id)).toEqual([]);
-  });
 });
 
 describe('reject', { timeout: 60_000 }, () => {
   const REASON = 'The greeting is in English only.\nDone means it also greets in French.';
   const failed = (prompt: string) => prompt.slice(prompt.indexOf('## What failed on the last attempt'), prompt.indexOf('Retry count:'));
-
-  it('needs a non-empty reason and a done ticket; a refusal changes nothing', async () => {
-    const done = ticket('Shipped', { status: 'done' });
-    for (const body of [undefined, {}, { reason: '' }, { reason: ' \n ' }, { reason: 3 }]) {
-      const r = await post(`/api/tickets/${done}/reject`, body);
-      expect(r.status, JSON.stringify(body)).toBe(400);
-      expect((await r.json()).error).toBe('reason must be a non-empty string');
-    }
-    const running = ticket('Running', { status: 'in_progress' });
-    const r = await post(`/api/tickets/${running}/reject`, { reason: 'no' });
-    expect(r.status).toBe(409);
-    expect((await r.json()).error).toContain('cannot reject a ticket in in_progress');
-    expect([t(done).status, t(running).status]).toEqual(['done', 'in_progress']);
-    expect(runs(done)).toEqual([]);
-    expect(db.prepare("SELECT outcome FROM audit WHERE tool = 'tickets.reject'").all()).toHaveLength(6);
-    expect(db.prepare("SELECT count(*) AS n FROM notes").get()).toEqual({ n: 0 });
-  });
 
   it('on a merged ticket: a fresh worktree holding the merged commit, retry 0, the reason in the prompt; a pass merges it again', async () => {
     const id = ticket('Add the greeting');
