@@ -3,8 +3,7 @@ import { availableParallelism, totalmem } from 'node:os';
 import { join } from 'node:path';
 
 export function workers(cpus = availableParallelism(), gb = totalmem() / 2 ** 30) {
-  const unit = Math.max(1, Math.min(cpus - 1, Math.floor(gb / 4)));
-  return { unit, heavy: Math.min(4, unit) };
+  return Math.max(1, Math.min(6, cpus - 1, Math.floor(gb / 2)));
 }
 
 // restart.test.ts runs alone, last: next to the ConPTY tests in other workers it once crashed one of them with

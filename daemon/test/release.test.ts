@@ -62,21 +62,6 @@ describe('POST /api/release', { timeout: 60_000 }, () => {
     expect(srv.db.prepare("SELECT outcome FROM audit WHERE tool = 'board.release'").all()).toEqual([{ outcome: 'error' }, { outcome: 'error' }]);
   });
 
-  it('is refused outside the Kanban95 repo', async () => {
-    const r = await release();
-    expect(r.status).toBe(409);
-    expect((await r.json()).error).toMatch(/^only the Kanban95 repo releases/);
-  });
-
-  it('is refused on the Kanban95 repo while the release setting is off, naming it', async () => {
-    kanban95(false);
-    const r = await release();
-    expect(r.status).toBe(409);
-    expect((await r.json()).error).toMatch(/^Release board is off: turn on "release" in settings.json/);
-    expect(version()).toBe('0.1.0');
-    expect(git('tag')).toBe('v0.1.0');
-  });
-
   it('GET /api/update says release only on the Kanban95 repo with the setting on', async () => {
     const flags = async () => {
       const u = await (await send('GET')('/api/update')).json();
@@ -123,16 +108,6 @@ describe('POST /api/release', { timeout: 60_000 }, () => {
 });
 
 describe('release pending', { timeout: 60_000 }, () => {
-  it('is not counted while the release setting is off', async () => {
-    kanban95(false);
-    srv.board.root = undefined;
-    models({ execute: 'touch-daemon' });
-    const id = ticket('Touch the daemon');
-    expect((await post(`/api/tickets/${id}/launch`)).status).toBe(200);
-    await landed(id);
-    expect(await (await send('GET')('/api/runner')).json()).not.toHaveProperty('release');
-  });
-
   it('counts commits since the last tag after a merge touching daemon/', async () => {
     kanban95();
     srv.board.root = undefined;

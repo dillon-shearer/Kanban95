@@ -1,4 +1,4 @@
-// In headless Edge or Chrome against a running daemon (setup in ui.ts): the release-pending text and Start -> Release board.
+// In headless Edge or Chrome against a running daemon (setup in ui.ts): the release-pending text, Start -> Release board and the stale-daemon restart badge.
 import './home.ts';
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -6,7 +6,7 @@ import { afterAll, describe, expect, it } from 'vitest';
 import { changed } from '../src/lifecycle.ts';
 import { globalPath } from '../src/settings.ts';
 import { until } from './cdp.ts';
-import { srv, page, base, click, menuPick, repo } from './ui.ts';
+import { srv, db, page, base, click, menuPick, repo, ticket } from './ui.ts';
 
 const settings = () => globalPath('settings');
 const setRelease = (on: boolean) => writeFileSync(settings(), JSON.stringify({ release: on }));
@@ -111,5 +111,37 @@ describe('ui-release', { timeout: 60_000 }, () => {
     });
     await page.evaluate(`[...document.querySelectorAll('dialog[open] .k95-buttons button')].find((b) => b.textContent === 'Cancel').click()`);
     await until(() => page.evaluate(`!document.querySelector('dialog[open]')`), 'the dialog closed');
+  });
+
+  it('a stale daemon: the status bar says restart, the tray shows a Restart badge that opens the Restart board confirm', async () => {
+    await page.goto(base);
+    await until(() => page.evaluate(`!!document.querySelector('[data-win="board"]')`), 'the board');
+    const badge = () => page.evaluate<boolean>(`!document.getElementById('restart-badge').hidden`);
+    const bar = () => page.evaluate<string>(`document.querySelector('.k95-board .status-bar').textContent`);
+    const dialog = () => page.evaluate<string | null>(`[...document.querySelectorAll('dialog[open]')].find((d) => d.querySelector('.title-bar-text').textContent === 'Restart board')?.querySelector('.window-body').textContent ?? null`);
+    expect(await badge()).toBe(false);
+    expect(await bar()).not.toContain('restart pending');
+    const running = ticket('Still running', { status: 'in_progress' }); // one ticket left to finish
+    try {
+      for (const stale of ['daemon', 'shell'] as const) {
+        srv.board.stale = stale;
+        changed(null);
+        await until(badge, 'the Restart badge');
+        // No shell runs this daemon, so the operator restarts it. A shell-only change holds nothing.
+        if (stale === 'daemon') expect(await bar()).toContain('restart pending, 1 ticket to finish; then Start → Restart board');
+        else expect(await bar()).not.toContain('restart pending');
+        await click('#restart-badge');
+        await until(dialog, 'the confirm');
+        expect((await dialog())!.includes('A merge changed the shell itself')).toBe(stale === 'shell');
+        await page.evaluate(`[...document.querySelectorAll('dialog[open] button')].find((b) => b.textContent === 'Cancel').click()`);
+        srv.board.stale = false; // a restart clears it; the next round then waits on a fresh refetch
+        changed(null);
+        await until(async () => !(await badge()), 'the badge to go');
+      }
+    } finally {
+      srv.board.stale = false;
+      db.prepare('DELETE FROM tickets WHERE id = ?').run(running);
+      changed(null);
+    }
   });
 });

@@ -210,7 +210,7 @@ describe('launch', () => {
   });
 
   // node-pty's own Windows kill did process.kill(shell pid) 5 s after the shell had exited, ending whatever had reused the pid.
-  it('a tree kill kills no pid after the pty has exited', async () => {
+  it.skipIf(process.platform !== 'win32')('a tree kill kills no pid after the pty has exited', async () => {
     const s = launch('claude');
     await waitFor(() => s.scrollback().includes('FAKE UP'));
     const kill = vi.spyOn(process, 'kill');

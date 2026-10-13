@@ -140,8 +140,8 @@ export const send = (method: string) => (path: string, body?: unknown) =>
 export const post = send('POST');
 export const patch = send('PATCH');
 export const setRun = (on: boolean) => send('PUT')('/api/runner', { on });
-// 60 s: lifecycle-merge.test.ts's merges took twice as long while the board ran other agents (55 s alone, up to 118 s).
-export const until = async (f: () => unknown, what: string, ms = 60_000) => {
+// 30 s: a merge in lifecycle-merge.test.ts measured 12 s alone on macOS; a wait past that is a failure, not load.
+export const until = async (f: () => unknown, what: string, ms = 30_000) => {
   const end = Date.now() + ms;
   while (!f()) {
     if (Date.now() > end) throw new Error(`timed out waiting for ${what}`);

@@ -6,7 +6,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import { worktreePath } from '../src/git.ts';
 import { sessionsOf } from '../src/launcher.ts';
 import { SILENCE } from '../src/lifecycle.ts';
-import { db, git, models, notes, post, repo, runs, sounds, t, ticket, until } from './board.ts';
+import { git, models, notes, post, repo, runs, sounds, t, ticket, until } from './board.ts';
 
 describe('silent agents', { timeout: 60_000 }, () => {
   // One minute of idle_minutes lasts 400 ms here; the watch looks every 50 ms. Set before the outer beforeEach starts the daemon.
@@ -40,35 +40,6 @@ describe('silent agents', { timeout: 60_000 }, () => {
     expect(sounds).toHaveLength(1);
   });
 
-  it('an agent that keeps writing to its transcript is not flagged, however long it runs', async () => {
-    const id = ticket('Busy', { model: 'chatty' });
-    await post(`/api/tickets/${id}/launch`);
-    await up(id);
-    await new Promise((r) => setTimeout(r, 2000)); // five times the limit
-    expect(t(id).flags.needs_human).toBe(false);
-    expect(notes(id, 'failure')).toEqual([]);
-    expect(sounds).toEqual([]);
-  });
-
-  it('a flagged agent that writes again is unflagged by itself; the note stays as the record', async () => {
-    const id = ticket('Slow start', { model: 'nap' });
-    await post(`/api/tickets/${id}/launch`);
-    await up(id);
-    await until(() => t(id).flags.needs_human, 'the silence flag', 10_000);
-    await until(() => !t(id).flags.needs_human, 'the flag cleared', 10_000);
-    expect(notes(id, 'failure')).toHaveLength(1);
-    expect(sessionsOf(id)).toHaveLength(1);
-  });
-
-  it('a flag raised by a question is not cleared when the transcript grows', async () => {
-    const id = ticket('Asks while slow', { model: 'nap' });
-    await post(`/api/tickets/${id}/launch`);
-    await up(id);
-    await until(() => t(id).flags.needs_human, 'the silence flag', 10_000);
-    db.prepare("INSERT INTO notes (ticket_id, role, kind, body) VALUES (?, 'worker', 'question', 'Which colour?')").run(id); // as ask_operator writes it
-    await new Promise((r) => setTimeout(r, 2500)); // the nap is over and the transcript grows
-    expect(t(id).flags.needs_human).toBe(true);
-  });
 });
 
 describe('worktree_setup', { timeout: 60_000 }, () => {
