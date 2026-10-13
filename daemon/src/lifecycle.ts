@@ -838,6 +838,10 @@ export async function restartBoard(b: Board): Promise<string | null> {
     });
     if (failed !== null) return failed;
   }
+  return relaunch(b);
+}
+
+export function relaunch(b: Board): string | null {
   if (b.closing || !b.shutdown) return 'the board is already shutting down';
   const shutdown = b.shutdown;
   setTimeout(() => shutdown(75), 50); // after a reply is on its way

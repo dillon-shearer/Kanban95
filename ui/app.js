@@ -1350,6 +1350,32 @@ async function scoped(name, draw, redraw) {
       } }, 'Use the global settings again'));
   return [bar, body];
 }
+async function dataFolderPart() {
+  if (settingsScope !== 'global') return [];
+  const { path } = await api('GET', '/data-folder');
+  const next = h('input', { type: 'text', id: 'data-folder', 'data-mic': 'off', size: 40 });
+  const use = async () => {
+    const dir = next.value.trim();
+    if (!dir) return say('Type the folder to use.');
+    if ((await dialog('Data folder', `Point Kanban95 at ${dir}? Every board in this window closes and starts again from that folder. Nothing is copied.`, ['OK', 'Cancel'])) !== 'OK') return;
+    try {
+      restarting = true;
+      const r = await api('PUT', '/data-folder', { path: dir });
+      if (!r.shell) {
+        restarting = false;
+        say('The daemon stopped. No shell is running it: start it again by hand.');
+      } else say('Restarting...');
+    } catch (e) {
+      restarting = false;
+      say(`Data folder not changed: ${e.message}`);
+      await dialog('Data folder not changed', e.message);
+    }
+  };
+  return [h('fieldset', { id: 'data-folder-group' }, h('legend', {}, 'Data folder'),
+    h('div', { class: 'field-row' }, h('label', { for: 'data-folder-current' }, 'Current'), h('input', { type: 'text', id: 'data-folder-current', readonly: true, size: 40, value: path })),
+    h('div', { class: 'field-row' }, h('label', { for: 'data-folder' }, 'New'), next, h('button', { id: 'data-folder-use', onclick: use }, 'Use this folder')),
+    h('p', {}, 'The folder must already exist. Nothing is moved or copied: copy the files by hand first if you want them there.'))];
+}
 /** `tab`: the tab to show, also when the window is already open. */
 function openSettings(tab) {
   const w = open('settings', { title: 'Settings', w: 640, h: 440, persist: true, icon: 'settings', onClose: () => views.delete('settings') });
@@ -1476,7 +1502,7 @@ function openSettings(tab) {
           h('button', { onclick: () => act(async () => show(await api('POST', `/templates/${pick.value}/reset`)), `${pick.value}.md reset to default.`) }, 'Reset to default'),
           ' ', stale));
     } else if (tab === 'Board') {
-      const [v, part] = await Promise.all([api('GET', '/voice'), scoped('settings', (value, scope) => {
+      const [v, folder, part] = await Promise.all([api('GET', '/voice'), dataFolderPart(), scoped('settings', (value, scope) => {
         const s = settingsFrom(value);
         const put = (patch, ok = 'Saved.', then) => act(async () => { Object.assign(s, await putSettings(scope, patch)); then?.(); }, ok);
         const live = () => scope === (settingsOwn ? 'project' : 'global');
@@ -1518,7 +1544,7 @@ function openSettings(tab) {
             h('div', { class: 'field-row' }, h('button', { id: 'update-now', onclick: checkForUpdates }, 'Check for updates'),
               h('span', { id: 'update-status' }, appVersion ? `This is Kanban95 v${appVersion}.` : '')))];
       }, redraw)]);
-      p.replaceChildren(...part,
+      p.replaceChildren(...part, ...folder,
         h('fieldset', {}, h('legend', {}, 'Speech model'),
           h('p', {}, `Speech model ${v.id}, ${(v.size / 1e6).toFixed(1)} MB: ${v.downloaded ? 'downloaded and verified' : 'not downloaded'}. It runs inside this window; audio is never sent anywhere.`),
           !v.downloaded && h('button', { onclick: async () => { if (await ensureModel()) tb.show(); } }, 'Download…')));

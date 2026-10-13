@@ -37,10 +37,15 @@ export function agentsRunning(board: Board): number {
   return holding(board) + others.reduce((n, e) => n + (Number.isInteger(e.agents) ? e.agents : 0), 0);
 }
 
+export function busy(board: Board, done: string, again: string): string | null {
+  const n = agentsRunning(board);
+  return n ? `${done}: ${n} agent${n === 1 ? ' is' : 's are'} running. ${again} when ${n === 1 ? 'it finishes' : 'they finish'}.` : null;
+}
+
 export function installNow(board: Board): string | null {
   if (!board.update) return 'No update is waiting. Check for updates first.';
-  const n = agentsRunning(board);
-  if (n) return `Not updated: ${n} agent${n === 1 ? ' is' : 's are'} running. Update when ${n === 1 ? 'it finishes' : 'they finish'}.`;
+  const refused = busy(board, 'Not updated', 'Update');
+  if (refused) return refused;
   tellShell('update', board.repo);
   return null;
 }

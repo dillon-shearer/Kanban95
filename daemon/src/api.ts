@@ -1,22 +1,22 @@
 // UI-facing REST under /api. Operator-only (no grant); every mutation writes an audit row.
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { dirname, extname, join, resolve } from 'node:path';
+import { dirname, extname, isAbsolute, join, resolve } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
-import { agentsMap, askShell, attentionMap, focusProject, hostedMap, missingMap, NotListed, openProject, runningMap } from './boards.js';
+import { agentsMap, askShell, attentionMap, focusProject, hostedMap, missingMap, NotListed, openProject, othersHosted, runningMap, tellShell } from './boards.js';
 import { attachmentDir, attachments, MAX_ATTACHMENT, safeName, saveAttachment } from './attachments.js';
 import { BRAIN_BODY_MAX, BRAIN_RANK, isConstraintError, SCOPES, type Brains, type Scope } from './db.js';
 import { hasBranch, ticketDiff } from './git.js';
 import { audit, revoke } from './grants.js';
 import { cancelSetup, killGrantSession, killSession, sessions, sessionsOf, type Session } from './launcher.js';
-import { apply, brainstorm, BUMPS, changed, housekeeping, isKanban95, operator, pushBase, Refused, release, releaseInfo, releaseOn, releasePending, restartBoard, runnerState, setRunner, tick, type Board, type Bump } from './lifecycle.js';
-import { addOverride, BadConfig, dropOverride, globalPath, isOverridable, knownModels, project, projectPath, projectsPath, readProjects, uncatalogued, writeConfig, writePreferences, writeProjects, type OverridableName } from './settings.js';
+import { apply, brainstorm, BUMPS, changed, housekeeping, isKanban95, operator, pushBase, Refused, release, releaseInfo, releaseOn, releasePending, relaunch, restartBoard, runnerState, setRunner, tick, type Board, type Bump } from './lifecycle.js';
+import { addOverride, BadConfig, boardHome, dropOverride, gone, globalPath, isOverridable, knownModels, project, projectPath, projectsPath, readProjects, setBoardHome, uncatalogued, writeConfig, writePreferences, writeProjects, type OverridableName } from './settings.js';
 import { isStale, resetTemplate, templatePath, TEMPLATES, unknownVar, VARS, writeTemplate, type TemplateName } from './templates.js';
 import { trustStatus, untrustClaude } from './trust.js';
 import { download, status as voiceStatus } from './voice.js';
 import { limits } from './limits.js';
 import { requirements } from './requirements.js';
-import { checkNow, installNow, relay, REPORT, VERSION } from './update.js';
+import { busy, checkNow, installNow, relay, REPORT, VERSION } from './update.js';
 
 type Json = Record<string, unknown>;
 type Reply = { status: number; body?: unknown; headers?: Record<string, string> };
@@ -468,6 +468,20 @@ const routes: [method: string, path: RegExp, mutation: string | null, handler: (
     const failed = await restartBoard(board);
     if (failed !== null) throw new HttpError(409, failed);
     return { status: 202, body: { restarting: true, shell: board.shell === true } };
+  }],
+  ['GET', /^\/api\/data-folder$/, null, () => ({ status: 200, body: { path: boardHome() } })],
+  ['PUT', /^\/api\/data-folder$/, 'config.write', ({ board, body }) => {
+    const path = typeof body.path === 'string' ? body.path.trim() : '';
+    if (!isAbsolute(path)) throw new HttpError(400, `Data folder ${path} is not an absolute path`);
+    if (gone(path)) throw new HttpError(400, `Data folder ${path} was not found or is not a folder`);
+    const refused = busy(board, 'Data folder not changed', 'Change it');
+    if (refused) throw new HttpError(409, refused);
+    if (board.closing || !board.shutdown) throw new HttpError(409, board.closing ? 'the board is already shutting down' : 'changing the data folder needs the daemon running as its own process');
+    const others = board.shell ? othersHosted(board.shellId) : [];
+    setBoardHome(path);
+    others.forEach((repo) => tellShell('restart', repo));
+    relaunch(board);
+    return { status: 202, body: { path: boardHome(), shell: board.shell === true } };
   }],
   ['GET', /^\/api\/update$/, null, ({ board }) => ({ status: 200, body: { version: VERSION, offer: board.update ?? null, release: releaseOn(board.repo), kanban95: isKanban95(board.repo) } })],
   ['POST', /^\/api\/update$/, 'update.answer', ({ board, body }) => {

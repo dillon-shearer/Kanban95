@@ -16,7 +16,7 @@ Under the two folders, **Requirements** lists git, Claude Code and Codex, each "
 
 If the data folder named in `~/.kanban95/home` is not there when a board starts (an SSD left in another machine, say), no board starts and nothing is created in its place. The window shows the same page with "Data folder <path> was not found. Connect it or choose another folder.", the path in **Data folder** and no project box. **Retry** checks again and, if the folder is back, starts the board (the project you opened, or the first in its list). **Next** with another full path points the board at that folder instead and starts on the first project listed there; a folder with no project listed gets the first-run page.
 
-Changing the data folder after first run is not supported: the page never comes back once a project is listed. To move it by hand, close every board, move the folder's contents and edit the one line in `~/.kanban95/home`.
+To change the data folder later, use **Settings → Board → Data folder** (Settings below). It only repoints the board: to take your settings and projects along, copy the folder's contents to the new folder by hand first.
 
 1. Log in to Claude Code and/or Codex CLI with their own commands. The board never asks for a key.
 2. For Claude Code, accept its one-time `--dangerously-skip-permissions` warning by hand once (`docs/CLIS.md`).
@@ -192,6 +192,8 @@ The top of the Settings window has a switch with two positions, **All projects**
 - **All projects** edits the global files in `~/.kanban95/`, as before.
 - **This project** with no copy yet shows the global values greyed, the line "Uses the global settings" and a **Customize for this project** button. The button starts this project's copy of that one file and shows it for editing. Each file has its own button, so a project can have its own models and keep the global sounds.
 - **This project** with a copy edits the copy; **Save** writes it. **Use the global settings again** asks first, then deletes the copy and goes back to the greyed view.
+
+**Settings → Board → Data folder** shows only on All projects, since it is this machine's pointer, not a project setting. It shows the current data folder and a box for a new full path (type it; the window cannot open a folder picker). **Use this folder** asks "Point Kanban95 at <path>? Every board in this window closes and starts again from that folder. Nothing is copied." On OK the board writes the path to `~/.kanban95/home` (or removes that file when the path is `~/.kanban95` itself) and restarts the way Restart board does, without a build. The folder must already exist: a typo is refused with a message naming the path, and nothing is created. It is refused, naming the count, while an agent, brainstorm or operator terminal runs on any board in this window. Nothing is moved, copied or merged. Every board hosted in this window restarts on the new folder: the one you pressed it on as Restart board does, the others as if closed and opened again, each staying where it was shown.
 
 While This project is on, the window title reads "Settings: <folder name>". The runner count on the Agents tab, "Tickets running at once (this project)", shows in both positions: it is always this repo's. The board runs on what resolves for this project: on load the page reads this project's copy when there is one, else the global file, for sounds, zoom, which terminals open and tile, and voice.
 

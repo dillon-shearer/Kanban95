@@ -182,6 +182,7 @@ enum Verb {
     Popout,
     Dock,
     Close,
+    Restart,
     Check,
     CheckNow,
     Update,
@@ -195,6 +196,7 @@ fn parse(line: &str) -> Option<(Verb, &str)> {
         "popout" => Verb::Popout,
         "dock" => Verb::Dock,
         "close" => Verb::Close,
+        "restart" => Verb::Restart,
         "check" => Verb::Check,
         "checknow" => Verb::CheckNow,
         "update" => Verb::Update,
@@ -237,6 +239,7 @@ struct Board {
     crashed: bool,
     restarting: Option<u64>,
     pending: Option<Child>,
+    stopping: Option<Instant>,
 }
 
 #[derive(Default)]
@@ -314,7 +317,7 @@ impl Host {
                 }
             }
         });
-        Board { child: s.child, port: s.port, secret: s.secret, place, crashed, restarting: None, pending: None }
+        Board { child: s.child, port: s.port, secret: s.secret, place, crashed, restarting: None, pending: None, stopping: None }
     }
 
     fn restart(self: &Arc<Self>, repo: String, gen: u64, requested: bool) {
@@ -423,6 +426,13 @@ impl Host {
                 t.main = repo;
             }
             (Verb::Close, Some(_)) => self.close(&mut t, &repo, &mut fx),
+            (Verb::Restart, Some(_)) => {
+                let b = t.boards.get_mut(&repo).expect("hosted");
+                if b.restarting.is_none() && b.stopping.is_none() {
+                    drop(b.child.stdin.take());
+                    b.stopping = Some(Instant::now() + STOP_WAIT);
+                }
+            }
             (verb, _) => eprintln!("[shell] ignored {verb:?} for {repo}: not a board in that state"),
         }
         drop(t);
@@ -546,6 +556,10 @@ impl Host {
             }
             _ => false,
         });
+        for (repo, b) in t.boards.iter_mut().filter(|(_, b)| b.restarting.is_none() && b.stopping.is_some_and(|until| now >= until)) {
+            eprintln!("[shell] {repo}: daemon did not stop in {STOP_WAIT:?} for its restart; killing it");
+            let _ = b.child.kill();
+        }
         let exited: Vec<_> = t
             .boards
             .iter_mut()
@@ -553,7 +567,7 @@ impl Host {
             .filter_map(|(r, b)| Some((r.clone(), b.child.try_wait().ok()??)))
             .collect();
         for (repo, status) in exited {
-            let requested = status.code() == Some(RESTART_REQUESTED);
+            let requested = status.code() == Some(RESTART_REQUESTED) || t.boards[&repo].stopping.is_some();
             let crashed = t.boards[&repo].crashed;
             if requested {
                 eprintln!("[shell] {repo}: daemon asked to be restarted");
@@ -1139,6 +1153,7 @@ mod tests {
         assert_eq!(parse("KANBAN95 popout=x"), Some((Verb::Popout, "x")));
         assert_eq!(parse("KANBAN95 dock=x"), Some((Verb::Dock, "x")));
         assert_eq!(parse("KANBAN95 close=x=y"), Some((Verb::Close, "x=y")));
+        assert_eq!(parse("KANBAN95 restart=x"), Some((Verb::Restart, "x")));
         assert_eq!(parse("KANBAN95 check=x"), Some((Verb::Check, "x")));
         assert_eq!(parse("KANBAN95 checknow=x"), Some((Verb::CheckNow, "x")));
         assert_eq!(parse("KANBAN95 update=x"), Some((Verb::Update, "x")));
@@ -1244,6 +1259,40 @@ mod tests {
         assert_eq!(hosted(&host), [("k95-a".into(), Place::Docked)]);
         assert_eq!(pid(&host, "k95-a"), a);
         assert!(host.tick());
+        host.shutdown();
+    }
+
+    #[test]
+    fn restart_stops_a_hosted_daemon_through_stdin_eof_and_starts_it_again_without_spending_its_crash_restart() {
+        let (host, seen) = host(|repo, n| match (repo, n) {
+            ("k95-a", _) => up(41001, ""),
+            (_, 1) => up(41002, ""),
+            (_, 2) => up(41003, ""),
+            _ => panic!("started a third time"),
+        });
+        host.first("k95-a", host.start("k95-a").unwrap());
+        let a = pid(&host, "k95-a");
+        host.command(Verb::Open, "k95-b");
+        until("the second board", || hosted(&host).len() == 2);
+        host.command(Verb::Switch, "k95-a");
+        let b = pid(&host, "k95-b");
+        let began = Instant::now();
+        host.command(Verb::Restart, "k95-b");
+        host.command(Verb::Restart, "k95-b");
+        until("the restarted board", || {
+            host.tick();
+            lock(&host.table).boards.get("k95-b").is_some_and(|x| x.restarting.is_none() && x.child.id() != b)
+        });
+        assert!(began.elapsed() < Duration::from_secs(10), "stopped by EOF, not by the 15 s kill");
+        assert!(!alive(b));
+        assert_eq!(pid(&host, "k95-a"), a);
+        let t = lock(&host.table);
+        let nb = &t.boards["k95-b"];
+        assert!(!nb.crashed && nb.stopping.is_none() && nb.port == 41003);
+        assert_eq!(t.main, "k95-a");
+        drop(t);
+        assert_eq!(shown(&seen).last(), Some(&(MAIN.into(), 41001)), "a board off screen restarts off screen");
+        assert!(!lock(&seen).iter().any(|f| matches!(f, Effect::Error(_))));
         host.shutdown();
     }
 
