@@ -42,7 +42,7 @@ beforeAll(() => {
   git('config', 'user.email', 'op@example.com');
   mkdirSync(join(repo, 'daemon'));
   writeFileSync(join(repo, 'daemon', 'a.ts'), 'x');
-  writeFileSync(join(repo, '.gitignore'), 'node_modules/\n.kanban95/\n');
+  writeFileSync(join(repo, '.gitignore'), 'node_modules\n.kanban95/\n');
   git('add', '.');
   git('commit', '-qm', 'init');
   target = join(repo, 'node_modules');
