@@ -1,6 +1,9 @@
+import { requirementsList } from './requirements.js';
+
 const $ = (id) => document.getElementById(id);
 const form = $('setup');
 const error = $('error');
+$('requirements').append(...requirementsList());
 const missing = !$('retry').hidden;
 
 fetch('/api/setup').then((r) => r.json()).then(({ data }) => {

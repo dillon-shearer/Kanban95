@@ -15,6 +15,7 @@ import { isStale, resetTemplate, templatePath, TEMPLATES, unknownVar, VARS, writ
 import { trustStatus, untrustClaude } from './trust.js';
 import { download, status as voiceStatus } from './voice.js';
 import { limits } from './limits.js';
+import { requirements } from './requirements.js';
 import { checkNow, installNow, relay, REPORT, VERSION } from './update.js';
 
 type Json = Record<string, unknown>;
@@ -601,6 +602,7 @@ const routes: [method: string, path: RegExp, mutation: string | null, handler: (
   }],
   // The CLIs' account limits, cached 5 min; ?refresh=1 asks again (docs/OPERATOR.md → Limits). Per-CLI failures are in `errors`.
   ['GET', /^\/api\/limits$/, null, async ({ url }) => ({ status: 200, body: await limits(url.searchParams.has('refresh')) })],
+  ['GET', /^\/api\/requirements$/, null, async ({ board }) => ({ status: 200, body: await requirements(board.repo) })],
   ['GET', /^\/api\/voice$/, null, async () => ({ status: 200, body: await voiceStatus() })],
   // The board's only network call, started by the operator's OK in the download dialog (docs/SECURITY.md → Voice model).
   ['POST', /^\/api\/voice\/download$/, 'voice.download', async () => {

@@ -36,7 +36,7 @@ The app reads your login shell's PATH, so it finds the same agent CLIs your Term
 - [git](https://git-scm.com/downloads)
 - [Claude Code](https://docs.anthropic.com/en/docs/claude-code) and/or [Codex CLI](https://github.com/openai/codex), installed and logged in
 
-That is all. The board holds no API key; the agent CLIs log in themselves.
+That is all. The board holds no API key; the agent CLIs log in themselves. The app carries its own Node but installs none of these. The setup page and Start -> Settings -> Agents -> Requirements show which are found, with an install hint for each missing one.
 
 ## First run
 

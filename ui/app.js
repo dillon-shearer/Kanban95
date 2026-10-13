@@ -4,6 +4,7 @@
 import { FitAddon } from './vendor/xterm/addon-fit.mjs';
 import { Terminal } from './vendor/xterm/xterm.mjs';
 import { configure, ensureModel, micButton, micEverywhere } from './voice.js';
+import { requirementsList } from './requirements.js';
 import * as ui from './state.js';
 import { close, dialog, dismiss, focus, focused, forget, h, isOpen, menu, open, raise, scale, seed, setTiling, setZoom, snapshot } from './wm.js';
 
@@ -1438,7 +1439,8 @@ function openSettings(tab) {
             : `Claude Code does not trust ${trust.key}; the board writes that entry before the next Claude launch.`),
           h('p', {}, 'Codex is told per launch that this repo is trusted; nothing is written to its config.'),
           h('button', { disabled: !trust.trusted, onclick: () => act(async () => { await api('DELETE', '/trust'); tb.show(); }, 'Claude trust entry cleared.') }, 'Clear Claude trust')),
-        ...await settingsPart);
+        ...await settingsPart,
+        h('fieldset', { id: 'requirements' }, h('legend', {}, 'Requirements'), ...requirementsList()));
     } else if (tab === 'Prompts') {
       const [prefs, tpls] = await Promise.all([scoped('preferences', (value, scope, path) => {
         const text = h('textarea', { id: 'preferences', rows: 10, placeholder: 'e.g. No em dashes or non-ASCII characters in output.' });
