@@ -339,7 +339,7 @@ if (import.meta.main) {
   delete process.env.KANBAN95_SHELL;
   delete process.env.KANBAN95_SHELL_ID;
   if (!secret || secret.length < 32) {
-    console.error('KANBAN95_SECRET is missing or shorter than 32 characters: start the board through the shell (Kanban95.cmd)');
+    console.error('KANBAN95_SECRET is missing or shorter than 32 characters: start the board through the shell (npm run dev)');
     process.exit(1);
   }
   const repo = process.argv[2] ?? firstProject();

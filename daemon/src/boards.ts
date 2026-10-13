@@ -129,10 +129,9 @@ function listed(path: unknown): string {
 export const boards = { start: startDetached };
 
 /**
- * Not running: start a new board on it. From a repo checkout (the install root has daemon/src) on Windows, the shell this
- * board was built into, as it is: Kanban95.vbs would `cargo run`, which relinks that exe every time (tauri-build watches
- * the missing shell/capabilities, so its build script always reruns) and fails while this board holds it open. On macOS,
- * which can replace a running binary, through Kanban95.command. Installed, the shell exe next to `app/`.
+ * Not running: start a new board on it. From a repo checkout (the install root has daemon/src), the shell `npm run dev`
+ * built, as it is: `cargo run` relinks that binary every time (tauri-build watches the missing shell/capabilities, so its
+ * build script always reruns) and on Windows fails while this board holds it open. Installed, the shell exe next to `app/`.
  */
 export async function openProject(path: unknown, root: string): Promise<{ name: string }> {
   const repo = listed(path);
@@ -141,10 +140,9 @@ export async function openProject(path: unknown, root: string): Promise<{ name: 
   const win = process.platform === 'win32';
   if (existsSync(join(root, 'daemon', 'src'))) {
     // ponytail: the dev build `cargo run` makes; a board run from a release build in a checkout is not looked for.
-    const exe = join(root, 'shell', 'target', 'debug', 'kanban95-shell.exe');
-    if (win && !existsSync(exe)) throw new Error(`no shell build at ${exe}: start a board with Kanban95.cmd once`);
-    if (win) await boards.start(exe, [repo]);
-    else await boards.start('/bin/bash', [join(root, 'Kanban95.command'), repo]);
+    const exe = join(root, 'shell', 'target', 'debug', win ? 'kanban95-shell.exe' : 'kanban95-shell');
+    if (!existsSync(exe)) throw new Error(`no shell build at ${exe}: run npm run dev once`);
+    await boards.start(exe, [repo]);
   } else {
     // ponytail: the installed exe is found as the one .exe beside app/ other than the uninstaller; Windows only, as only
     // an NSIS installer is built. A macOS bundle would need `open -n -a <bundle> --args <path>`.

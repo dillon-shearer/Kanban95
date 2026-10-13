@@ -72,7 +72,7 @@ describe('ui-projects', { timeout: 60_000 }, () => {
     const idle = realpathSync.native(mkdtempSync(join(tmpdir(), 'k95-idle-')));
     execFileSync('git', ['init', '-q'], { cwd: idle });
     const root = mkdtempSync(join(tmpdir(), 'k95-root-')); // a checkout with a built shell; nothing is really started
-    for (const f of ['daemon/src/server.ts', 'shell/target/debug/kanban95-shell.exe', 'Kanban95.command']) {
+    for (const f of ['daemon/src/server.ts', 'shell/target/debug/kanban95-shell.exe', 'shell/target/debug/kanban95-shell']) {
       mkdirSync(dirname(join(root, f)), { recursive: true });
       writeFileSync(join(root, f), '');
     }
