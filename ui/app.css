@@ -120,6 +120,8 @@ body.k95-vector { --k95-font: Tahoma, sans-serif; }
 .status-bar { flex: none; }
 /* Equal shares, so a long runner line cannot squeeze the Board's last-action field to an ellipsis. */
 .k95-status, .k95-runner { flex: 1 1 0; min-width: 0; }
+.k95-status { min-width: 160px; }
+.k95-release-pending, .k95-unpushed, .k95-held { flex: 0 1 auto; min-width: 0; }
 .status-bar-field { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 
 /* Tabs, tables, text */
