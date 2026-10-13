@@ -6,7 +6,7 @@ import { createReadStream, createWriteStream, existsSync, mkdirSync, readdirSync
 import { once } from 'node:events';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { DatabaseSync } from 'node:sqlite';
-import { boardHome } from './settings.js';
+import { boardHome, dataHome } from './settings.js';
 import { dirname, join, resolve } from 'node:path';
 
 export interface Manifest {
@@ -62,6 +62,7 @@ export const status = async (m = MANIFEST) => ({
 
 async function locked(m: Manifest, fn: () => Promise<void>) {
   const dir = modelDir(m);
+  dataHome();
   mkdirSync(dirname(dir), { recursive: true });
   const db = new DatabaseSync(`${dir}.lock`);
   try {

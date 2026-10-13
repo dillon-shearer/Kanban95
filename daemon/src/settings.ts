@@ -78,6 +78,21 @@ export function boardHome(): string {
   return localHome();
 }
 
+/** The pointer's folder when the pointer names one that is not there (or not a folder). The daemon then serves the not-found page. */
+export function missingHome(): string | undefined {
+  const dir = boardHome();
+  return dir !== localHome() && gone(dir) ? dir : undefined;
+}
+
+/** The data folder for a write. Only the local home is created here; a missing pointer folder is created by setBoardHome alone. */
+export function dataHome(): string {
+  const lost = missingHome();
+  if (lost) throw new BadConfig(`Data folder ${lost} was not found`);
+  const dir = boardHome();
+  mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
 export function setBoardHome(dir: string) {
   if (!isAbsolute(dir)) throw new BadConfig(`data folder ${dir} is not an absolute path`);
   mkdirSync(dir, { recursive: true });
@@ -129,6 +144,7 @@ export function addOverride(name: OverridableName, repo: string): boolean {
   if (existsSync(own)) return false;
   const global = globalPath(name);
   if (!existsSync(global) && name === 'models') throw new BadConfig(`no model catalog at ${global} to copy`);
+  dataHome();
   mkdirSync(dirname(own), { recursive: true });
   if (existsSync(global)) copyFileSync(global, own);
   else writeFileSync(own, name === 'settings' ? '{}\n' : '');
@@ -147,9 +163,7 @@ export function dropOverride(name: OverridableName, repo: string): boolean {
 const LOCK_MS = 10_000;
 
 function locked<T>(fn: () => T): T {
-  const home = boardHome();
-  mkdirSync(home, { recursive: true });
-  const db = new DatabaseSync(join(home, 'settings.lock'));
+  const db = new DatabaseSync(join(dataHome(), 'settings.lock'));
   try {
     db.exec(`PRAGMA busy_timeout = ${LOCK_MS}`);
     db.exec('BEGIN IMMEDIATE');

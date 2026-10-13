@@ -14,6 +14,8 @@ Under the two folders, **Requirements** lists git, Claude Code and Codex, each "
 
 **Next** adds the project to the list and starts its board, whatever the list shows. A folder that does not exist is refused with a message on the page. Later starts without a project open the first project in the list (Settings → Projects); there is no setup again. Ticket worktrees stay on this machine in `~/.kanban95/worktrees/` wherever the data folder is.
 
+If the data folder named in `~/.kanban95/home` is not there when a board starts (an SSD left in another machine, say), no board starts and nothing is created in its place. The window shows the same page with "Data folder <path> was not found. Connect it or choose another folder.", the path in **Data folder** and no project box. **Retry** checks again and, if the folder is back, starts the board (the project you opened, or the first in its list). **Next** with another full path points the board at that folder instead and starts on the first project listed there; a folder with no project listed gets the first-run page.
+
 Changing the data folder after first run is not supported: the page never comes back once a project is listed. To move it by hand, close every board, move the folder's contents and edit the one line in `~/.kanban95/home`.
 
 1. Log in to Claude Code and/or Codex CLI with their own commands. The board never asks for a key.

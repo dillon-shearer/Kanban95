@@ -2,7 +2,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { createReadStream, rmSync } from 'node:fs';
-import { stat } from 'node:fs/promises';
+import { readFile, stat } from 'node:fs/promises';
 import { extname, resolve, sep } from 'node:path';
 import { pipeline } from 'node:stream';
 import type { DatabaseSync } from 'node:sqlite';
@@ -17,8 +17,8 @@ import { countUnpushed, events, recover, releasePending, tick, watchSilence, typ
 import { handleMcp } from './mcp.js';
 import { startMemoryLog } from './memlog.js';
 import { idle } from './merge.js';
-import { addProject, gone, readConfig } from './settings.js';
-import { firstProject, handleSetup } from './setup.js';
+import { addProject, dataHome, gone, missingHome, readConfig } from './settings.js';
+import { firstProject, handleSetup, setupPage } from './setup.js';
 import { initTemplates } from './templates.js';
 import { askForCheck } from './update.js';
 import { voiceFile } from './voice.js';
@@ -84,7 +84,7 @@ const matches = (given: string | null | undefined, secret: string) => given != n
 const authed = (req: IncomingMessage, secret: string) =>
   [...(req.headers.cookie ?? '').matchAll(/(?:^|;\s*)k95(?:-\d+)?=([^;]*)/g)].some((m) => matches(m[1], secret));
 
-async function handle(board: Board | null, self: string, secret: string, req: IncomingMessage, res: ServerResponse, done?: (repo: string) => void) {
+async function handle(board: Board | null, self: string, secret: string, req: IncomingMessage, res: ServerResponse, done?: (repo?: string) => void) {
   // The shell loads the UI from this origin, so the CSP must come from here:
   // Tauri only injects its configured CSP into pages it serves itself.
   // 'wasm-unsafe-eval' lets the local speech model's WebAssembly compile (no JS eval). Inline styles are for xterm.js, which
@@ -120,7 +120,7 @@ async function handle(board: Board | null, self: string, secret: string, req: In
   } catch {
     return send(res, 400, 'bad request');
   }
-  if (!board && pathname === '/') pathname = '/setup.html';
+  if (!board && (pathname === '/' || pathname === '/setup.html')) return send(res, 200, setupPage(await readFile(resolve(UI_DIR, 'setup.html'), 'utf8')), MIME['.html']);
   if (pathname.endsWith('/')) pathname += 'index.html';
   const file = resolve(UI_DIR, '.' + pathname);
   if (!file.startsWith(UI_DIR + sep)) return send(res, 403, 'forbidden');
@@ -150,6 +150,7 @@ export function start(config: Config = {}): Promise<{
   const { host, port } = validateConfig(config);
   const repo = config.repo ?? process.cwd();
   const secret = config.secret ?? randomBytes(32).toString('hex');
+  dataHome();
   if (gone(repo)) throw new Error(`project folder ${repo} does not exist: it was deleted or moved`);
   const db = openDb(repo);
   let brain: DatabaseSync;
@@ -303,7 +304,7 @@ export function start(config: Config = {}): Promise<{
   });
 }
 
-export function startSetup(config: Config & { done: (repo: string) => void }): Promise<{ port: number; secret: string; close: () => Promise<void> }> {
+export function startSetup(config: Config & { done: (repo?: string) => void }): Promise<{ port: number; secret: string; close: () => Promise<void> }> {
   const { host, port } = validateConfig(config);
   const secret = config.secret ?? randomBytes(32).toString('hex');
   let self = '';
@@ -342,7 +343,7 @@ if (import.meta.main) {
     console.error('KANBAN95_SECRET is missing or shorter than 32 characters: start the board through the shell (npm run dev)');
     process.exit(1);
   }
-  const repo = process.argv[2] ?? firstProject();
+  const repo = missingHome() ? undefined : process.argv[2] ?? firstProject();
   const wanted = process.env.KANBAN95_PORT ? Number(process.env.KANBAN95_PORT) : 0;
   const started = await Promise.resolve().then(() => (repo ? start({ secret, port: wanted, repo, shellId, shell }) : startSetup({ secret, port: wanted, done: () => process.exit(75) }))).catch((e) => {
     console.log((e as Error).message);
