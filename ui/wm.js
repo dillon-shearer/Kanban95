@@ -55,7 +55,7 @@ export function setTiling(on) {
   retile();
 }
 /** Packs the grid's members into slots 0..n-1 of the grid for n in the current region. */
-export function retile() {
+function retile() {
   clearTimeout(tiling);
   if (!tileOn) return;
   const W = desktop.clientWidth;
