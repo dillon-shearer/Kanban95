@@ -1,0 +1,54 @@
+// vitest globalSetup: runs in the main process, where the operator's real home is still in effect (test/home.ts redirects it
+// only inside test workers). Fails the run if any test left a trace there: a trust entry for one of this run's test repos,
+// a board backup of ~/.claude.json, or a ~/.kanban95 that did not exist before.
+// Every temp dir of this run lives under one fresh `k95-run-*` dir (TEMP/TMP point there before the workers start), so a
+// `k95-*` trust entry another worktree's run writes at the same time is not this run's and does not fail it.
+// The run dir is resolved to its long form, so an 8.3 short tmpdir() (CI's RUNNER~1) never reaches a test's paths.
+import { execFileSync } from 'node:child_process';
+import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
+
+const state = join(process.env.CLAUDE_CONFIG_DIR ?? homedir(), '.claude.json');
+const keys = () => {
+  try {
+    return Object.keys(JSON.parse(readFileSync(state, 'utf8')).projects ?? {});
+  } catch {
+    return []; // no file, or Claude mid-write: nothing to compare
+  }
+};
+const traces = () => ({ bak: existsSync(`${state}.kanban95.bak`), board: existsSync(join(homedir(), '.kanban95')) });
+
+export default function setup() {
+  const run = realpathSync.native(mkdtempSync(join(tmpdir(), 'k95-run-')));
+  process.env.TEMP = process.env.TMP = process.env.TMPDIR = run;
+  const mine = resolve(run).replaceAll('\\', '/') + '/'; // Claude Code's key form (trust.ts)
+  const before = traces();
+  return () => {
+    const after = traces();
+    const found = [
+      ...keys().filter((k) => k.startsWith(mine)).map((k) => `trust entry ${k} in ${state}`),
+      ...(after.bak && !before.bak ? [`${state}.kanban95.bak`] : []),
+      ...(after.board && !before.board ? [join(homedir(), '.kanban95')] : []),
+    ];
+    // A fake agent left running holds its worktree under a test home (test/home.ts leaves such a home here): end it, and say so.
+    const left = process.platform === 'win32' ? strays(run) : [];
+    for (const { pid } of left) try { execFileSync('taskkill', ['/T', '/F', '/PID', String(pid)], { stdio: 'ignore' }); } catch {}
+    if (left.length) console.warn(`killed processes this run left running:\n${left.map((p) => `- ${p.pid} ${p.cmd}`).join('\n')}`);
+    try {
+      rmSync(run, { recursive: true, force: true, maxRetries: 8, retryDelay: 400 });
+    } catch {} // ponytail: a file still held open stays in %TEMP%; the OS temp cleanup takes it
+    if (found.length) throw new Error(`tests wrote to the operator's real home; remove by hand:\n- ${found.join('\n- ')}`);
+  };
+}
+
+// Processes whose command line names the run dir: every fake CLI is started from a `k95-bin-*` dir under it.
+function strays(run: string): { pid: number; cmd: string }[] {
+  const ps = `Get-CimInstance Win32_Process | ? { $_.CommandLine -and $_.CommandLine.Contains($env:K95_RUN) } | % { "$($_.ProcessId) $($_.CommandLine)" }`;
+  try {
+    const out = execFileSync('powershell', ['-NoProfile', '-Command', ps], { encoding: 'utf8', env: { ...process.env, K95_RUN: run }, timeout: 30_000 });
+    return out.split(/\r?\n/).filter(Boolean).map((l) => ({ pid: Number(l.split(' ')[0]), cmd: l.slice(l.indexOf(' ') + 1) }));
+  } catch {
+    return [];
+  }
+}

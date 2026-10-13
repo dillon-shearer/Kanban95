@@ -1,0 +1,1037 @@
+// The ticket state machine, documented row by row in docs/LIFECYCLE.md. TABLE is every transition there is: transition()
+// picks a row or refuses, apply() writes the row and runs its effects. Nothing else changes a ticket's status or flags.
+import { exec } from 'node:child_process';
+import { EventEmitter } from 'node:events';
+import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { freemem, totalmem } from 'node:os';
+import { join, resolve } from 'node:path';
+import type { DatabaseSync } from 'node:sqlite';
+import { readTicket, transaction, type Ticket } from './api.js';
+import { branchName, git, gitNotRun, isAncestor, notStarted, syncWorktree, worktreePath } from './git.js';
+import { revoke, type Role } from './grants.js';
+import { cleanTicket } from './janitor.js';
+import { cancelSetup, killSession, launch, launchRoot, prepareWorktree, SetupCancelled, sessions, sessionsOf, settingUp, transcriptSize, type Session } from './launcher.js';
+import { mark } from './memlog.js';
+import { ahead, enqueue, merge, push, pushRelease, upstream } from './merge.js';
+import { lastLines } from './pty.js';
+import { BadConfig, EFFORT, readConfig, runSettings, type Effort } from './settings.js';
+import { TEMPLATES } from './templates.js';
+
+export const MAX_RETRY = 3;
+
+export type Status = 'backlog' | 'in_progress' | 'testing' | 'done';
+export type Event =
+  | 'launch' // operator Launch, the runner, or the last dependency landing
+  | 'submit' // worker move_ticket(testing)
+  | 'pass' // tester move_ticket(done), after report_test(passed: true)
+  | 'fail' // tester move_ticket(in_progress)
+  | 'ask' // ask_operator
+  | 'answer' // the operator answers over REST
+  | 'exit' // the agent's pty exited without a move_ticket, or its launch failed
+  | 'silent' // the agent's transcript gained no line for idle_minutes (the silence watch)
+  | 'woke' // a silent agent's transcript grew again
+  | 'merged' // the merge queue's verdict
+  | 'conflict' // the base would not merge into the worktree (on submit or in the merge queue), or the worktree was dirty
+  | 'dirty' // the merge queue gave up waiting for the main checkout to be clean (DIRTY_WAIT)
+  | 'unpushed' // the merge landed but git push of the base to its upstream failed
+  | 'unmerged' // the merge queue's git failed to run on every try (START_RETRY)
+  | 'merge' // the operator retries a merge that failed
+  | 'resume' // the operator restarts the agent of a flagged running ticket whose agent is gone
+  | 'restart' // the operator replaces a running ticket's agent, live or not, with a fresh one in the same phase
+  | 'reject'; // the operator sends a done ticket, merged or not, back to a worker with a reason
+type Effect =
+  | 'spawn_execute' | 'spawn_test' | 'end_session' | 'enqueue_merge' | 'note' | 'answer_pty'
+  | 'chord' | 'ding' | 'done' | 'remove_worktree' | 'release_dependents' | 'housekeeping';
+
+/** Everything a guard may look at. */
+export interface Facts {
+  status: Status;
+  needs_human: boolean;
+  retry: number;
+  merged: boolean;
+  depsMerged: boolean;
+  passReported: boolean;
+  live: boolean;
+}
+interface Row {
+  from: Status[];
+  event: Event;
+  when?: (f: Facts) => boolean;
+  /** Why a guarded row did not match, for the refusal. */
+  why?: string | ((f: Facts) => string);
+  /** Omitted: the status does not change. */
+  to?: Status;
+  set?: { needs_human?: 0 | 1; blocked_on_deps?: 0 | 1; retry?: '+1' | 0; merged?: boolean };
+  effects: Effect[];
+  /** The note this row writes when the event brings none of its own. */
+  says?: string;
+  /**
+   * Every row that raises needs_human writes one note: what happened, then `To resolve: <this>`, the operator's next step.
+   * A question has none: the Inbox's Answer box is its fix.
+   */
+  resolve?: (id: number, repo: string) => string;
+}
+
+const RUNNING: Status[] = ['in_progress', 'testing'];
+/** What fixes an agent that went away. */
+const RESUME = 'Resume (card menu or Inbox) starts the agent again in the same worktree; Reset to Backlog starts over.';
+export const TO_RESOLVE = `To resolve: ${RESUME}`;
+const busy = (f: Facts) => f.live ? 'it already has a running agent; open its terminal, or Reset to Backlog to stop it' : '';
+const resumable = (f: Facts) => f.needs_human && !f.live;
+const notResumable = (f: Facts) => busy(f) || 'it is not flagged; nothing failed, so there is nothing to resume';
+export const TABLE: Row[] = [
+  { from: ['backlog'], event: 'launch', when: (f) => f.depsMerged, to: 'in_progress', set: { blocked_on_deps: 0 }, effects: ['spawn_execute'] },
+  { from: ['backlog'], event: 'launch', when: (f) => !f.depsMerged, set: { blocked_on_deps: 1 }, effects: [] },
+  // Launch on a running ticket whose agent is gone (a crash, a failed launch, a restart) starts the agent for its phase again.
+  { from: ['in_progress'], event: 'launch', when: (f) => !f.live, why: busy, set: { needs_human: 0 }, effects: ['spawn_execute'] },
+  { from: ['testing'], event: 'launch', when: (f) => !f.live, why: busy, set: { needs_human: 0 }, effects: ['spawn_test'] },
+  { from: ['in_progress'], event: 'resume', when: resumable, why: notResumable, set: { needs_human: 0 }, effects: ['spawn_execute'] },
+  { from: ['testing'], event: 'resume', when: resumable, why: notResumable, set: { needs_human: 0 }, effects: ['spawn_test'] },
+  // end_session sets the outcome before the kill, so exited() does not flag the killed session.
+  { from: ['in_progress'], event: 'restart', set: { needs_human: 0 }, effects: ['end_session', 'note', 'spawn_execute'] },
+  { from: ['testing'], event: 'restart', set: { needs_human: 0 }, effects: ['end_session', 'note', 'spawn_test'] },
+  { from: ['in_progress'], event: 'submit', to: 'testing', effects: ['end_session', 'spawn_test'] },
+  // merged: false clears the merged_at an earlier cycle left (a rejected ticket), so the queue merges this pass again.
+  { from: ['testing'], event: 'pass', when: (f) => f.passReported, why: 'call report_test with passed: true first', to: 'done', set: { merged: false }, effects: ['end_session', 'done', 'enqueue_merge'] },
+  { from: ['testing'], event: 'fail', when: (f) => f.retry < MAX_RETRY, to: 'in_progress', set: { retry: '+1' }, effects: ['end_session', 'spawn_execute'] },
+  { from: ['testing'], event: 'fail', when: (f) => f.retry >= MAX_RETRY, to: 'in_progress', set: { retry: '+1', needs_human: 1 }, effects: ['end_session', 'note', 'chord'],
+    says: `stopped after ${MAX_RETRY + 1} failed tests`,
+    resolve: () => "read the tester's failure notes on the ticket. Fix its body or criteria if they ask for the wrong thing, then Reset to Backlog and Launch; the agent starts again in the same worktree." },
+  { from: RUNNING, event: 'ask', set: { needs_human: 1 }, effects: ['note', 'chord'] },
+  { from: RUNNING, event: 'answer', when: (f) => f.needs_human && f.live, why: 'no flagged question with a live agent session', set: { needs_human: 0 }, effects: ['note', 'answer_pty'] },
+  { from: RUNNING, event: 'exit', set: { needs_human: 1 }, effects: ['note', 'chord'],
+    resolve: () => RESUME },
+  // The agent is still running: it may be hung on an API call, or sitting at its prompt after an error it cannot get past.
+  { from: RUNNING, event: 'silent', when: (f) => f.live && !f.needs_human, why: 'it has no running agent, or it is flagged already', set: { needs_human: 1 }, effects: ['note', 'chord'],
+    resolve: () => 'open its terminal (card menu → Terminal). If it is waiting on something you can fix there (a model error, a prompt), fix it; if it is hung, Restart. The flag clears by itself if the agent writes again.' },
+  { from: RUNNING, event: 'woke', when: (f) => f.live && f.needs_human, why: 'it has no running agent, or it is not flagged', set: { needs_human: 0 }, effects: [] },
+  { from: ['done'], event: 'merged', set: { merged: true, needs_human: 0 }, effects: ['ding', 'remove_worktree', 'release_dependents', 'housekeeping'] },
+  // A submit whose base will not merge in (lifecycle submit) and a merge-queue conflict share the way back to the worker.
+  { from: ['in_progress', 'done'], event: 'conflict', when: (f) => f.retry < MAX_RETRY, to: 'in_progress', set: { retry: '+1' }, effects: ['end_session', 'note', 'spawn_execute'] },
+  { from: ['in_progress'], event: 'conflict', when: (f) => f.retry >= MAX_RETRY, set: { needs_human: 1 }, effects: ['end_session', 'note', 'chord'],
+    resolve: (id, repo) => `in ${worktreePath(repo, id)} commit or discard any uncommitted changes, run git merge with the base branch, fix the conflicting files keeping both sides' intent, run the tests, commit, then Resume; the worker submits again.` },
+  { from: ['done'], event: 'conflict', when: (f) => f.retry >= MAX_RETRY, set: { needs_human: 1 }, effects: ['note', 'chord'],
+    resolve: (id, repo) => `in ${worktreePath(repo, id)} run git merge with the base branch, fix the conflicting files keeping both sides' intent, run the tests, commit, then Retry merge.` },
+  { from: ['done'], event: 'dirty', set: { needs_human: 1 }, effects: ['note', 'chord'],
+    resolve: (_, repo) => `commit or stash those changes in the main checkout (${repo}), then Retry merge. While the board runs, work in a worktree, never in the main checkout.` },
+  { from: ['done'], event: 'unmerged', set: { needs_human: 1 }, effects: ['note', 'chord'],
+    resolve: (_, repo) => `check that git runs in the main checkout (${repo}), then Retry merge.` },
+  // The merge stays in the base; Retry merge finds the branch already in it and only pushes again.
+  { from: ['done'], event: 'unpushed', set: { needs_human: 1 }, effects: ['note', 'chord'],
+    resolve: (_, repo) => `fix what git says in the main checkout (${repo}): when the remote has commits the base lacks, pull them and merge; when offline or signed out, reconnect or sign in to the remote with git. Then Retry merge; it pushes again.` },
+  // A rejection is a new cycle, not a failed test. Unmerged, the queue drops it (status is no longer done); merged, its worktree
+  // is gone and the worker's launch forks a fresh one from the base, which holds the merged work. merged_at is kept until a pass.
+  { from: ['done'], event: 'reject', when: (f) => !f.live, why: busy, to: 'in_progress', set: { needs_human: 0, retry: 0 }, effects: ['note', 'spawn_execute'] },
+  { from: ['done'], event: 'merge', when: (f) => !f.merged, why: 'already merged', effects: ['enqueue_merge'] },
+];
+
+/** A transition the table does not have. Refused, never forced. */
+export class Refused extends Error {}
+
+function pick(f: Facts, event: Event): Row {
+  const rows = TABLE.filter((r) => r.event === event && r.from.includes(f.status));
+  const row = rows.find((r) => !r.when || r.when(f));
+  if (!row) {
+    const why = rows.find((r) => r.why)?.why;
+    throw new Refused(`cannot ${event} a ticket in ${f.status}${why ? `: ${typeof why === 'string' ? why : why(f)}` : ''}`);
+  }
+  return row;
+}
+
+/** The one row that applies, or a refusal naming why. */
+export function transition(f: Facts, event: Event): { to: Status; set: NonNullable<Row['set']>; effects: Effect[] } {
+  const row = pick(f, event);
+  return { to: row.to ?? f.status, set: row.set ?? {}, effects: row.effects };
+}
+
+export interface Board {
+  db: DatabaseSync;
+  /** The global brain, ~/.kanban95/brain.db, shared by every board (docs/DATA.md → The global brain). */
+  brain: DatabaseSync;
+  repo: string;
+  port: number;
+  /** Set by close(): nothing new is spawned, and agents killed by the shutdown are not flagged, so `recover` resumes them. */
+  closing?: boolean;
+  /** Kanban95's own install root (the repo checkout or the installer's `app/`). Defaults to the one this code runs from. */
+  root?: string;
+  /** Closes the board and exits the process with `code`. Set only when the daemon runs as its own process. */
+  shutdown?: (code: number) => void;
+  /** The Tauri shell started this daemon and restarts it on exit code 75. */
+  shell?: boolean;
+  shellId?: number | null;
+  /** Why the repo could not be made a git repo with a commit on start (git.ts `initRepo`); every ticket launch fails with it. */
+  gitError?: string;
+  /** `git rev-parse HEAD` in the repo when the daemon started; unset in a repo with no commits. */
+  startCommit?: string;
+  /** A merge since start changed what the running daemon was built from: 'shell' when shell/ changed too (docs/OPERATOR.md → Restart board). */
+  stale?: false | 'daemon' | 'shell';
+  /** The board's own restart after a merge (restartWhenIdle): under way, or its build failed and it waits for the operator or the next merge. */
+  restart?: 'running' | 'failed';
+  release?: { since: string; commits: number };
+  /** Commits on the base its upstream lacks, counted on start (push_after_merge on) and zeroed by a push; the status bar's Push button. */
+  unpushed?: number;
+  /** Set while tick() holds launches because free memory is under the floor (The runner → Memory hold); runnerState reports it. */
+  lowMemory?: { free: number; floor: number };
+  /** The 30 s timer that ticks again during a memory hold. */
+  memoryWait?: NodeJS.Timeout;
+  files?: Map<number, { key: string; files: string[] }>;
+  update?: { version: string; current: string };
+}
+
+/**
+ * Board events for the UI's /events websocket. `event`: a sound, `{ sound: 'ding' | 'chord' | 'done', ticket }`. `change`: something about
+ * a ticket (`ticket` = its id) or the set of live sessions (`ticket` = null) changed; the UI refetches just that.
+ */
+export const events = new EventEmitter().setMaxListeners(0);
+export const changed = (ticket: number | null) => events.emit('change', { ticket });
+
+function facts(b: Board, t: Ticket): Facts {
+  const merged = (id: number) => (b.db.prepare('SELECT merged_at FROM tickets WHERE id = ?').get(id) as { merged_at: string | null }).merged_at !== null;
+  // A pass counts only if reported during the latest test run, so a pass from an earlier cycle cannot finish a retry.
+  const pass = b.db.prepare(`
+    SELECT 1 FROM notes WHERE ticket_id = ? AND role = 'tester' AND kind = 'summary' AND body LIKE 'PASS:%'
+      AND created_at >= coalesce((SELECT max(started_at) FROM runs WHERE ticket_id = ? AND phase = 'test'), '')`).get(t.id, t.id);
+  return {
+    status: t.status as Status,
+    needs_human: t.flags.needs_human,
+    retry: t.retry,
+    merged: t.merged_at !== null,
+    depsMerged: t.depends_on.every(merged),
+    passReported: pass !== undefined,
+    live: sessionsOf(t.id).length > 0 || settingUp(t.id),
+  };
+}
+
+type Note = { role: Role | 'operator'; kind: 'question' | 'answer' | 'failure'; body: string };
+
+/**
+ * Applies `event` to the ticket: picks the row, writes status, flags and note in one transaction, then runs the effects.
+ * Throws Refused when the table has no row. `pending` holds the effects that finish later (worktree removal).
+ */
+export function apply(b: Board, id: number, event: Event, x: { note?: Note; answer?: string; auto?: boolean } = {}) {
+  const t = readTicket(b.db, id);
+  const row = pick(facts(b, t), event);
+  // The one gate on the board starting an agent by itself (`auto`: a released dependent, a conflict sent back): while the
+  // runner is off it starts nothing. A backlog launch is not applied at all, so the ticket stays held; any other row is
+  // written without its spawn and kept in `held`, and tick() starts that agent when Run is turned on. A board stale on
+  // daemon code starts no backlog ticket either (restartWhenIdle); a running ticket's conflict retry still goes ahead.
+  const spawns = x.auto === true && row.effects.includes('spawn_execute');
+  if (spawns && t.status === 'backlog' && (b.stale === 'daemon' || !runner(b).on)) return { ticket: t, noteId: undefined, pending: [] as Promise<void>[] };
+  const hold = spawns && !runner(b).on;
+  if (hold) held.add(id);
+  if (event === 'submit') {
+    // The tester tests the branch with the base merged in, so stale code never spends a tester round.
+    const s = syncWorktree(b.repo, id);
+    if (!s.ok) return apply(b, id, 'conflict', { note: { role: 'worker', kind: 'failure', body: s.reason }, auto: true });
+  }
+  const { to = t.status as Status, set = {}, effects } = row;
+  let note = x.note ?? (row.says ? ({ role: 'tester', kind: 'failure', body: row.says } as Note) : undefined);
+  if (event === 'restart') note = { role: 'operator', kind: 'failure', body: RESTART_NOTE };
+  if (note && row.resolve) note = { ...note, body: `${note.body}\nTo resolve: ${row.resolve(id, b.repo)}` };
+  if (effects.includes('note') !== (note !== undefined)) throw new Error(`${event} ${note ? 'takes no' : 'needs a'} note`);
+  const noteId = transaction(b.db, () => {
+    b.db.prepare(`
+      UPDATE tickets SET status = ?, needs_human = coalesce(?, needs_human), blocked_on_deps = coalesce(?, blocked_on_deps),
+        retry = CASE WHEN ? THEN 0 ELSE retry + ? END,
+        merged_at = CASE ? WHEN 1 THEN strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHEN 0 THEN NULL ELSE merged_at END
+      WHERE id = ?`).run(to, set.needs_human ?? null, set.blocked_on_deps ?? null, set.retry === 0 ? 1 : 0, set.retry === '+1' ? 1 : 0,
+      set.merged === undefined ? null : set.merged ? 1 : 0, id);
+    if (!note) return undefined;
+    const r = b.db.prepare('INSERT INTO notes (ticket_id, role, kind, body) VALUES (?, ?, ?, ?)').run(id, note.role, note.kind, note.body);
+    return Number(r.lastInsertRowid);
+  });
+
+  if (event === 'merged') b.files?.clear();
+  // Resume, and Launch on a running ticket whose agent is gone (as recover does after a restart), continue the killed
+  // conversation when they can; every other spawn (a retry, a Restart) starts a fresh one.
+  const resume = (event === 'resume' || event === 'launch') && t.status !== 'backlog';
+  const pending: Promise<void>[] = [];
+  for (const e of effects) {
+    switch (e) {
+      case 'spawn_execute': if (!hold) spawn(b, id, t.template as 'execute' | 'housekeeping', resume); break;
+      case 'spawn_test': spawn(b, id, 'test', resume); break;
+      case 'end_session':
+        // The agent reported; its session is over. The grant expires now, the pty is killed, its exit is expected.
+        // A session with an outcome is already dying (an earlier report); its outcome stays the one that ended it.
+        for (const s of sessionsOf(id)) {
+          if (s.outcome) continue;
+          s.outcome = event;
+          revoke(b.db, s.grantId);
+          killSession(s);
+        }
+        void cancelSetup(id);
+        break;
+      case 'enqueue_merge': queueMerge(b, id); break;
+      case 'note': break; // written above, in the transaction
+      case 'answer_pty':
+        // Text, then Enter as its own write: Claude Code reads one burst as a paste, where \r is a newline, not Enter.
+        // ponytail: fixed 300 ms gap, a very slow pty may still merge the two; upgrade is to wait for the echo before Enter.
+        for (const s of sessionsOf(id)) {
+          s.pty.write(menuChoice(b, id, oneLine(x.answer ?? '')));
+          setTimeout(() => s.pty.write('\r'), 300);
+        }
+        break;
+      case 'chord': case 'ding': case 'done': events.emit('event', { sound: e, ticket: id }); break;
+      case 'remove_worktree': pending.push(cleanTicket(b, id)); break;
+      case 'release_dependents': releaseDependents(b, id); break;
+      case 'housekeeping': maybeHousekeeping(b, t); break;
+    }
+  }
+  changed(id);
+  tick(b);
+  return { ticket: readTicket(b.db, id), noteId, pending };
+}
+
+/**
+ * Running tickets whose agent apply() held back while the runner was off.
+ * ponytail: in memory, so a restart forgets them and recover resumes them whatever the runner says; upgrade is a column.
+ */
+const held = new Set<number>();
+
+/** An answer is typed into a terminal: a newline would submit half of it, so it becomes one line. */
+const oneLine = (s: string) => s.replace(/\s*[\r\n]+\s*/g, ' ').trim();
+
+/** The latest spawn of each ticket. A setup that finishes after a newer spawn of its ticket starts nothing and flags nothing. */
+const spawns = new Map<number, number>();
+let spawnCount = 0;
+
+/**
+ * Launches the phase's agent, after the repo's `worktree_setup` when its worktree is new. A launch that fails is an agent that
+ * exited without reporting: the ticket is flagged. A ticket moved on while its setup ran (Reset, a shutdown) starts nothing.
+ */
+function spawn(b: Board, id: number, template: 'execute' | 'housekeeping' | 'test', resume = false) {
+  const status = template === 'test' ? 'testing' : 'in_progress';
+  const fail = (e: unknown) => apply(b, id, 'exit', { note: { role: TEMPLATES[template].role, kind: 'failure', body: `launch failed: ${(e as Error).message}` } });
+  try {
+    if (b.closing) throw new Error('the daemon is shutting down');
+    if (b.gitError) throw new Error(b.gitError);
+    const settings = runSettings(readTicket(b.db, id), template === 'test' ? 'test' : 'execute', b.repo);
+    const go = () => void launch({ ...b, onExit: (s) => exited(b, s) }, { ticketId: id, template, resume, ...settings });
+    const me = ++spawnCount;
+    spawns.set(id, me);
+    const setup = prepareWorktree(b.repo, id, worktreeSetup(b.repo));
+    if (!setup) return go();
+    const after = async () => {
+      await setup;
+      const t = readTicket(b.db, id);
+      if (spawns.get(id) === me && !b.closing && t.status === status && !t.flags.needs_human && !sessionsOf(id).length) go();
+    };
+    void after().catch((e) => {
+      try {
+        if (spawns.get(id) === me && !(e instanceof SetupCancelled) && !b.closing && readTicket(b.db, id).status === status) fail(e);
+      } catch (x) {
+        console.error('[lifecycle]', x); // deleted or moved on meanwhile: nothing to flag
+      }
+    }).finally(() => changed(id));
+  } catch (e) {
+    fail(e);
+  }
+}
+
+/** Agents that Windows failed to start, by ticket: how many times in a row (START_RETRY). */
+const unstarted = new Map<number, number>();
+
+function exited(b: Board, s: Session) {
+  const id = s.ticketId!;
+  // Its cmd.exe or CLI never ran (`notStarted`): nothing the agent did, so it is started again before anyone is asked.
+  const failedStart = !s.outcome && notStarted(s.exitCode);
+  b.db.prepare('UPDATE runs SET outcome = ? WHERE id = ?').run(s.outcome ?? (failedStart ? 'unstarted' : 'exit'), s.runId);
+  changed(id);
+  const tries = failedStart ? (unstarted.get(id) ?? 0) + 1 : 0;
+  if (tries) unstarted.set(id, tries);
+  else unstarted.delete(id);
+  restartWhenIdle(b); // a session's end can be the last thing a restart after a merge waits for
+  if (s.outcome || b.closing) return;
+  const flag = (body: string) => {
+    try {
+      apply(b, id, 'exit', { note: { role: s.role, kind: 'failure', body } });
+    } catch (e) {
+      if (!(e instanceof Refused)) throw e; // the ticket has moved on (operator edit); nothing to flag
+    }
+  };
+  if (!failedStart) return flag('agent exited without reporting');
+  if (tries > START_RETRY.max) return flag(`agent could not start: Windows failed to start its process ${tries} times (0xC0000142)`);
+  setTimeout(() => {
+    try {
+      const t = b.closing ? undefined : readTicket(b.db, id);
+      // Launch on a running ticket with no agent starts its phase again; a ticket moved, flagged or relaunched meanwhile is left be.
+      if (t?.status === (s.phase === 'test' ? 'testing' : 'in_progress') && !t.flags.needs_human && !sessionsOf(id).length) apply(b, id, 'launch');
+    } catch (e) {
+      if (!(e instanceof Refused)) console.error('[lifecycle]', e); // deleted meanwhile, say: nothing to start
+    }
+  }, START_RETRY.every).unref();
+}
+
+// ---- the silence watch (docs/LIFECYCLE.md → Silent agents) ----
+
+/** How often running agents' transcripts are looked at, and how long one of settings.json's idle_minutes is. Tests shorten both. */
+export const SILENCE = { every: 60_000, minute: 60_000 };
+/**
+ * Per session: the transcript size last seen, when the silence began, and the note that flagged it, if it did (`prompt`: a
+ * CLAUDE_PROMPT question). Keyed by the session, not its key: a key is a run id, which a second board in the same process (the
+ * tests) hands out again, and an entry left by the first would date the new session's silence from the old one's start.
+ */
+const heard = new WeakMap<Session, { size: number; at: number; note?: number; prompt?: boolean }>();
+
+/**
+ * Claude Code's own yes/no menu. A few of its safety checks still raise it under --dangerously-skip-permissions, and no
+ * permission rule turns them off ("Dangerous rm operation on possibly-empty variable path"); unattended, it denies by itself after
+ * two minutes. Taken from Claude Code 2.1.296 on 2026-10-09, as `lastLines` reads its terminal:
+ *
+ *   │ Dangerous rm operation on possibly-empty variable path: "$SHOTS"/* in `rm -f "$SHOTS"/*`
+ *   │ (rewrite it as "${SHOTS:?}"/* or use a literal path)
+ *   ⚠ Claude Code will automatically deny this request in 1:59, to avoid blocking progress on an
+ *   unattended session
+ *   Do you want to proceed?
+ *   ❯ 1. Yes
+ *   2. No
+ *   Esc to cancel · Tab to amend
+ *   8
+ *   ●
+ *
+ * Matched on the text only. The countdown redraws just its changed digits and a dot blinks, so the menu is still up while no line
+ * after "Esc to cancel" holds a letter. Group 1 is the menu, from "Do you want to proceed?" through "Esc to cancel".
+ */
+const CLAUDE_PROMPT = /(?:^|\n)(Do you want to proceed\?(?:(?!Do you want to proceed\?)[\s\S])*?Esc to cancel[^\n]*)(?:\n[^A-Za-z\n]*)*$/;
+/** Heads the Inbox question raised for a CLAUDE_PROMPT; `menuChoice` knows such a question by it. */
+export const PROMPT_ASK = "Claude Code is waiting on its own prompt in the agent's terminal and denies it by itself in about two minutes. Answer with the option's number or its label; it is chosen in the terminal.";
+
+/** The note that closes a PROMPT_ASK question nobody answered from the Inbox. */
+export const PROMPT_GONE = 'the prompt closed in the terminal (Claude Code denied it by itself, or it was answered there)';
+
+/** The CLAUDE_PROMPT block at the end of `raw`, with the lines above the menu that say what it asks, up to a rule line. */
+export function claudePrompt(raw: string): string | undefined {
+  const tail = lastLines(raw, 40);
+  const m = CLAUDE_PROMPT.exec(tail.join('\n'));
+  if (!m) return undefined;
+  const menu = m[1].split('\n');
+  const at = tail.lastIndexOf(menu[0]);
+  let from = at;
+  while (from > 0 && at - from < 8 && /[A-Za-z0-9]/.test(tail[from - 1])) from--;
+  return [...tail.slice(from, at), ...menu].join('\n');
+}
+
+/** An Inbox answer to a PROMPT_ASK question becomes the option's number ("Yes" → "1"), which Claude Code's menu takes; any other answer is left as typed. */
+function menuChoice(b: Board, id: number, answer: string) {
+  const q = b.db.prepare("SELECT body FROM notes WHERE ticket_id = ? AND kind = 'question' ORDER BY id DESC LIMIT 1").get(id) as { body: string } | undefined;
+  if (!q?.body.startsWith(PROMPT_ASK)) return answer;
+  const digit = /^(\d)\b/.exec(answer);
+  if (digit) return digit[1];
+  const a = answer.toLowerCase();
+  for (const [, n, label] of q.body.matchAll(/^\W*(\d)\. (.+)$/gm)) if (label.trim().toLowerCase().startsWith(a)) return n;
+  return answer;
+}
+
+/** Starts the watch; the returned function stops it. */
+export function watchSilence(b: Board): () => void {
+  let timer: NodeJS.Timeout;
+  const next = () => (timer = setTimeout(() => {
+    try {
+      listen(b);
+    } finally {
+      next();
+    }
+  }, SILENCE.every).unref());
+  next();
+  return () => clearTimeout(timer);
+}
+
+/**
+ * The pty is no signal (Claude Code's spinner animates while it waits on the API), so a ticket's agent is judged by its transcript
+ * (`transcriptSize`): no new line for idle_minutes while the ticket is unflagged applies `silent`. Time spent flagged (a question
+ * waiting on the operator) does not count. A transcript that grows again while the silence note is still the ticket's latest
+ * applies `woke`, so a long step that was healthy after all does not hold the card red. A Claude Code terminal ending in its own
+ * menu (CLAUDE_PROMPT) applies `ask` at once, and `woke` the same way once the menu is gone and the transcript grows.
+ */
+function listen(b: Board) {
+  if (b.closing) return;
+  let limit = 20;
+  try {
+    limit = readConfig('settings', b.repo).idle_minutes;
+  } catch { /* a broken settings.json: the default */ }
+  const now = Date.now();
+  for (const s of sessions.values()) {
+    if (s.ticketId === null || s.outcome) continue;
+    try {
+      const size = transcriptSize(s);
+      const h = heard.get(s) ?? { size, at: s.started };
+      heard.set(s, h);
+      const flagged = readTicket(b.db, s.ticketId).flags.needs_human;
+      const prompt = s.cli === 'claude' ? claudePrompt(s.scrollback()) : undefined;
+      if (prompt !== undefined) {
+        // Asked like ask_operator, so the Inbox answer reaches the menu; `woke` clears it once the menu is gone and the transcript grows.
+        Object.assign(h, { size, at: now });
+        if (!flagged) {
+          h.note = apply(b, s.ticketId, 'ask', { note: { role: s.role, kind: 'question', body: `${PROMPT_ASK}\n\`\`\`\n${prompt}\n\`\`\`` } }).noteId;
+          h.prompt = true;
+        }
+      } else if (size !== h.size) {
+        const latest = (b.db.prepare('SELECT max(id) AS id FROM notes WHERE ticket_id = ?').get(s.ticketId) as { id: number | null }).id;
+        if (h.note !== undefined && flagged && latest === h.note) {
+          apply(b, s.ticketId, 'woke');
+          // Closes the menu's question, which a later flag would otherwise bring back to the Inbox.
+          if (h.prompt) b.db.prepare("INSERT INTO notes (ticket_id, role, kind, body) VALUES (?, ?, 'answer', ?)").run(s.ticketId, s.role, PROMPT_GONE);
+        }
+        Object.assign(h, { size, at: now, note: undefined, prompt: false });
+      } else if (flagged) h.at = now;
+      else if (now - h.at >= limit * SILENCE.minute) {
+        const mins = Math.round((now - h.at) / SILENCE.minute);
+        const tail = lastLines(s.scrollback(), 10).join('\n') || '(nothing)';
+        const body = `agent silent for ${mins} min: its ${s.cli === 'codex' ? 'rollout' : 'transcript'} has had no new line since ${new Date(h.at).toISOString()}. ` +
+          `Last lines of its terminal:\n\`\`\`\n${tail}\n\`\`\``;
+        h.note = apply(b, s.ticketId, 'silent', { note: { role: s.role, kind: 'failure', body } }).noteId;
+      }
+    } catch (e) {
+      if (!(e instanceof Refused)) console.error('[silence]', e); // one session's trouble must not stop the watch for the rest
+    }
+  }
+}
+
+/** A merge refused for a dirty main checkout is tried again every `every` ms and flagged once it has waited `max`. Tests shorten it. */
+export const DIRTY_WAIT = { every: 30_000, max: 600_000 };
+/**
+ * A process Windows failed to start (`notStarted`, on a loaded machine): an agent whose pty never ran its CLI, or a merge job whose
+ * git did not run, is started again `every` ms later, up to `max` times, before the ticket is flagged. Tests shorten it.
+ */
+export const START_RETRY = { every: 2_000, max: 3 };
+const waiting = new Map<number, NodeJS.Timeout>();
+
+/**
+ * A conflict goes back to the worker (TABLE); it is met in the ticket's worktree, never in the main checkout. A dirty base is the
+ * operator's own edits in the main checkout, not the ticket's fault: the merge waits for them to be committed, and only a base
+ * still dirty after DIRTY_WAIT.max is flagged.
+ */
+function queueMerge(b: Board, id: number, since = Date.now(), tries = 0) {
+  clearTimeout(waiting.get(id)); // the operator's Retry merge restarts a wait
+  waiting.delete(id);
+  void enqueue(() => mergeJob(b, id, since).catch(async (e) => {
+    if (!gitNotRun(e) || b.closing) throw e; // the queue logs it
+    if (tries < START_RETRY.max) return void waiting.set(id, setTimeout(() => b.closing || queueMerge(b, id, since, tries + 1), START_RETRY.every).unref());
+    if (readTicket(b.db, id).status !== 'done') return; // moved on while it waited
+    const body = `merge did not run: git failed to run ${tries + 1} times: ${(e as Error).message.trim()}`;
+    await Promise.all(apply(b, id, 'unmerged', { note: { role: 'tester', kind: 'failure', body } }).pending);
+  }));
+}
+
+/** One try at landing a done ticket. Throws when a git it runs did not run at all (`gitNotRun`); queueMerge tries again. */
+async function mergeJob(b: Board, id: number, since: number) {
+  // A ticket rejected while it waited has a worker running now; waiting on that session would hold the whole queue.
+  if (readTicket(b.db, id).status !== 'done') return;
+  await Promise.all(sessionsOf(id).map((s) => s.done)); // the tester's pty is still closing
+  const t = readTicket(b.db, id);
+  if (t.status !== 'done' || t.merged_at) return; // reset, rejected or moved by hand while it waited
+  // Main is merged into the worktree first, so the merge into the main checkout is conflict-free by construction; merge.ts's
+  // abort stays as a safety net.
+  // ponytail: lands even when the sync brought in new commits (the worker merged and the tester tested at submit); upgrade is
+  // to send it back to testing when the sync touched files the ticket also touched.
+  // Retry merge after a failed push: the branch is already in the base, so only the push is left.
+  const inBase = isAncestor(b.repo, branchName(id), 'HEAD');
+  const s = inBase ? { ok: true as const } : syncWorktree(b.repo, id);
+  if (!s.ok) return void (await Promise.all(apply(b, id, 'conflict', { note: { role: 'tester', kind: 'failure', body: s.reason }, auto: true }).pending));
+  mark('merge-start', `t${id}`);
+  const r = inBase ? { ok: true as const } : await merge(b.repo, id, t.title, () => readTicket(b.db, id).status === 'done');
+  mark('merge-end', `t${id}`, !r ? 'skipped' : r.ok ? 'ok' : r.dirty ? 'dirty' : 'conflict');
+  if (!r) return;
+  // Rejected while git merge ran: the work landed, but the ticket is a worker's again and its next pass merges again.
+  if (r.ok && readTicket(b.db, id).status !== 'done') return;
+  let out;
+  if (r.ok) {
+    if (!inBase) {
+      markStale(b);
+      releasePending(b);
+    }
+    // Published before it counts as merged: a failed push flags the ticket and leaves the merge in the base.
+    const p = readConfig('settings', b.repo).push_after_merge ? await push(b.repo) : { ok: true as const, pushed: false };
+    if (!p.ok) {
+      const body = `merged into ${p.base}, but git push to ${p.remote} failed, so the ticket is not closed:
+${p.reason}`;
+      return void apply(b, id, 'unpushed', { note: { role: 'tester', kind: 'failure', body } });
+    }
+    if (p.pushed) b.unpushed = 0;
+    out = apply(b, id, 'merged');
+  }
+  else if (r.dirty && Date.now() - since < DIRTY_WAIT.max) {
+    waiting.set(id, setTimeout(() => b.closing || queueMerge(b, id, since), DIRTY_WAIT.every).unref());
+    return;
+  } else if (r.dirty) {
+    const body = `merge did not run: the main checkout (${r.base}) still has uncommitted changes after the wait:\n${r.reason}`;
+    out = apply(b, id, 'dirty', { note: { role: 'tester', kind: 'failure', body } });
+  } else out = apply(b, id, 'conflict', { note: { role: 'tester', kind: 'failure', body: `merge conflict with ${r.base}: ${r.reason}` }, auto: true });
+  await Promise.all(out.pending);
+}
+
+/** Daemon start, before recover(): with push_after_merge on, how far the base is ahead of its upstream (a crash, or a time the setting was off). */
+export function countUnpushed(b: Board) {
+  // In the queue, so a push recover() queued cannot finish between the count and its write.
+  return enqueue(async () => {
+    if (!readConfig('settings', b.repo).push_after_merge) return;
+    b.unpushed = await ahead(b.repo);
+    if (b.unpushed) changed(null);
+  });
+}
+
+/** The status bar's Push button: the merge queue's push, in the queue so it never runs beside a merge. Resolves to git's refusal or null. */
+export async function pushBase(b: Board): Promise<string | null> {
+  let failed: string | null = null;
+  await enqueue(async () => {
+    const p = await push(b.repo);
+    if (!p.ok) failed = `git push to ${p.remote} failed:
+${p.reason}`;
+    else b.unpushed = 0;
+  });
+  changed(null);
+  return failed;
+}
+
+/**
+ * After a merge: did it change what the running daemon was built or started from (templates/ is copied into the repo on
+ * start)? The UI reads `stale` from GET /api/runner. A new merge lets a restart whose build failed try again.
+ */
+function markStale(b: Board) {
+  if (b.restart === 'failed') b.restart = undefined;
+  if (!b.startCommit || installed(rootOf(b))) return;
+  let files: string[];
+  try {
+    files = git(b.repo, 'diff', '--name-only', b.startCommit, 'HEAD', '--', 'daemon/', 'templates/', 'shell/', 'package.json', 'package-lock.json').split('\n').filter(Boolean);
+  } catch {
+    return; // start commit gone (history rewritten): nothing to compare against
+  }
+  if (!files.length) return;
+  b.stale = files.every((f) => f.startsWith('shell/')) ? 'shell' : 'daemon';
+  changed(null);
+}
+
+function releaseDependents(b: Board, id: number) {
+  const rows = b.db.prepare(`
+    SELECT t.id FROM tickets t JOIN ticket_deps d ON d.ticket_id = t.id
+    WHERE d.depends_on_id = ? AND t.status = 'backlog' AND t.blocked_on_deps = 1 ORDER BY t.id`).all(id) as { id: number }[];
+  for (const r of rows) apply(b, r.id, 'launch', { auto: true }); // one still waiting on another dependency stays held
+}
+
+/** `<repo>/.kanban95/config.json`, the repo's own board settings (docs/DATA.md); `{}` when absent. The daemon never writes it. */
+const repoConfigPath = (repo: string) => join(repo, '.kanban95', 'config.json');
+const repoConfig = (repo: string) => (existsSync(repoConfigPath(repo)) ? JSON.parse(readFileSync(repoConfigPath(repo), 'utf8')) : {});
+
+/** config.json `worktree_setup`: a shell command run once in each new ticket worktree before its first agent (docs/LIFECYCLE.md). */
+function worktreeSetup(repo: string): string | undefined {
+  const c = repoConfig(repo).worktree_setup;
+  if (c !== undefined && (typeof c !== 'string' || !c.trim())) throw new BadConfig(`${repoConfigPath(repo)} worktree_setup must be a non-empty string`);
+  return c;
+}
+
+/** settings.json `housekeeping: { auto, every }` (on, 10). Merged execute tickets are counted; housekeeping ones are not. The ticket waits in Backlog for the runner. */
+function maybeHousekeeping(b: Board, t: Ticket) {
+  if (t.template !== 'execute') return;
+  const { auto, every } = readConfig('settings', b.repo).housekeeping;
+  if (!auto) return;
+  const { n } = b.db.prepare("SELECT count(*) AS n FROM tickets WHERE template = 'execute' AND merged_at IS NOT NULL").get() as { n: number };
+  if (n % every !== 0) return;
+  housekeeping(b, `Scheduled after ${n} tickets reached Done. Follow the housekeeping brief.`, false);
+}
+
+/** Creates a housekeeping ticket. The Housekeeping button launches it at once; the automatic trigger leaves it to the runner. */
+export function housekeeping(b: Board, body: string, launchNow = true): Ticket {
+  const r = b.db.prepare("INSERT INTO tickets (title, body, criteria, template) VALUES (?, ?, ?, 'housekeeping')").run(
+    'Clean up stale docs, unused modules and leftover artefacts',
+    body,
+    'The tests and the build pass exactly as before.\nNo living document is removed.\nEvery deleted or updated path is listed with report_cleanup and a reason.',
+  );
+  const id = Number(r.lastInsertRowid);
+  if (launchNow) return apply(b, id, 'launch').ticket;
+  changed(id);
+  return readTicket(b.db, id);
+}
+
+/** A session in the repo root without a ticket. It touches no ticket, so the lifecycle has no row for it. */
+function rootSession(b: Board, o: Parameters<typeof launchRoot>[1]): Session {
+  if (b.closing) throw new Error('the daemon is shutting down');
+  const s = launchRoot({ ...b, onExit: () => {
+    changed(null);
+    restartWhenIdle(b); // the last open brainstorm or operator terminal can be what a restart after a merge waits for
+  } }, o);
+  changed(null);
+  return s;
+}
+
+/** A brainstorm session: a planner with plan-phase settings, optionally seeded with the operator's text (Notepad). */
+export const brainstorm = (b: Board, mission?: string) => rootSession(b, { ...runSettings(null, 'plan', b.repo), template: 'brainstorm', mission });
+
+/** An operator terminal: the operator phase (Settings → Agents; the CLI's default model when unset) unless `.kanban95/config.json` has `operator: { model, effort }` (either or both). */
+export function operator(b: Board, mission: string): Session {
+  const o = repoConfig(b.repo).operator ?? {};
+  const where = `${repoConfigPath(b.repo)} operator`;
+  if (typeof o !== 'object' || Array.isArray(o)) throw new BadConfig(`${where} must be an object`);
+  if (o.model !== undefined && (typeof o.model !== 'string' || !o.model)) throw new BadConfig(`${where}.model must be a non-empty string`);
+  if (o.effort !== undefined && !EFFORT.includes(o.effort)) throw new BadConfig(`${where}.effort must be one of ${EFFORT.join(', ')}`);
+  const plan = runSettings(null, 'operator', b.repo);
+  return rootSession(b, { ...plan, model: o.model ?? plan.model, effort: (o.effort as Effort) ?? plan.effort, template: 'operator', mission });
+}
+
+// ---- the runner (docs/LIFECYCLE.md → The runner) ----
+
+/** `.kanban95/runner.json`, git-ignored: whether the runner is on and why it last stopped itself. Absent means off. */
+export type Runner = { on: boolean; why?: string };
+const runnerFile = (b: Board) => join(b.repo, '.kanban95', 'runner.json');
+export function runner(b: Board): Runner {
+  try {
+    const { on, why } = JSON.parse(readFileSync(runnerFile(b), 'utf8'));
+    return { on, ...(why && { why }) };
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return { on: false };
+    throw e;
+  }
+}
+const limit = (b: Board) => {
+  try {
+    return readConfig('settings', b.repo).concurrency;
+  } catch {
+    return 3;
+  }
+};
+
+/** Turns the runner on (and launches at once) or off. Off lets running agents finish; nothing new starts. */
+export function setRunner(b: Board, on: boolean, why?: string) {
+  writeFileSync(runnerFile(b), JSON.stringify({ on, ...(why && { why }) }));
+  changed(null);
+  if (on) tick(b);
+}
+
+/** Tickets the runner waits on: unflagged and running, or done and not merged yet. A flagged one waits for the operator instead. */
+const running = (b: Board) => (b.db.prepare(`
+  SELECT id FROM tickets WHERE needs_human = 0 AND (status IN ('in_progress', 'testing') OR (status = 'done' AND merged_at IS NULL))
+  ORDER BY id`).all() as { id: number }[]).map((r) => r.id);
+
+const EFFORT_RANK: Record<string, number> = { low: 0, medium: 1, high: 2, max: 3 };
+const lines = (s: string) => s.split(/\r?\n/).filter((l) => l.trim()).length;
+
+/**
+ * Backlog tickets the runner may launch, next first: unflagged, every dependency merged.
+ * ponytail: effort then criteria lines is a rough size; upgrade to a size estimate the planner writes on each ticket.
+ */
+export function candidates(b: Board): number[] {
+  const rows = b.db.prepare(`
+    SELECT id, effort, criteria FROM tickets t WHERE status = 'backlog' AND needs_human = 0 AND NOT EXISTS (
+      SELECT 1 FROM ticket_deps d JOIN tickets x ON x.id = d.depends_on_id WHERE d.ticket_id = t.id AND x.merged_at IS NULL)`).all() as
+    { id: number; effort: string | null; criteria: string }[];
+  const rank = (r: (typeof rows)[number]) => EFFORT_RANK[r.effort ?? 'medium'];
+  return rows.sort((x, y) => rank(x) - rank(y) || lines(x.criteria) - lines(y.criteria) || x.id - y.id).map((r) => r.id);
+}
+
+/**
+ * The repo files a ticket touches, docs and markdown left out (every ticket touches those; the merge sync handles them):
+ * paths its body or criteria names that exist in the repo, plus, once it has a branch, what that branch changed.
+ * ponytail: names in prose are a guess; upgrade to a files list the planner writes on each ticket.
+ */
+function files(b: Board, id: number): string[] {
+  const t = b.db.prepare('SELECT body, criteria FROM tickets WHERE id = ?').get(id) as { body: string; criteria: string };
+  const head = branchHead(b.repo, id);
+  const key = head === undefined ? undefined : JSON.stringify([head, t.body, t.criteria]);
+  const hit = b.files?.get(id);
+  if (key !== undefined && hit?.key === key) return hit.files;
+  const named = `${t.body}\n${t.criteria}`.match(/[\w./-]+\.\w+/g) ?? [];
+  let diff: string[] = [];
+  try {
+    diff = git(b.repo, 'diff', '--name-only', `${git(b.repo, 'rev-parse', '--abbrev-ref', 'HEAD')}...${branchName(id)}`).split('\n');
+  } catch { /* no branch yet */ }
+  const inRepo = (f: string) => !f.split('/').includes('..') && existsSync(join(b.repo, f));
+  const all = [...named.map((f) => f.replace(/^\.\//, '')).filter(inRepo), ...diff];
+  const out = [...new Set(all.filter((f) => f && !f.startsWith('docs/') && !f.endsWith('.md')))];
+  if (key !== undefined) (b.files ??= new Map()).set(id, { key, files: out });
+  return out;
+}
+
+function branchHead(repo: string, id: number): string | null | undefined {
+  const dir = join(repo, '.git');
+  if (!statSync(dir, { throwIfNoEntry: false })?.isDirectory() || existsSync(join(dir, 'reftable'))) return undefined;
+  const ref = `refs/heads/${branchName(id)}`;
+  try {
+    return readFileSync(join(dir, ref), 'utf8').trim();
+  } catch {}
+  try {
+    return readFileSync(join(dir, 'packed-refs'), 'utf8').split(/\r?\n/).find((l) => l.endsWith(` ${ref}`))?.split(' ')[0] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** Each candidate that shares a file with a running ticket, mapped to the first running ticket it shares one with. */
+function overlaps(b: Board, cs: number[]): Map<number, number> {
+  const owner = new Map<string, number>();
+  for (const id of running(b)) for (const f of files(b, id)) if (!owner.has(f)) owner.set(f, id);
+  const out = new Map<number, number>();
+  if (!owner.size) return out;
+  for (const c of cs) {
+    const f = files(b, c).find((x) => owner.has(x));
+    if (f) out.set(c, owner.get(f)!);
+  }
+  return out;
+}
+
+/**
+ * What the status bar shows: the flag, the limit, the tickets it waits on, candidates left of everything in Backlog, deferrals.
+ * While stale, `hold`: how many tickets the restart waits for, and who restarts (docs/LIFECYCLE.md → Restart after a merge).
+ */
+export function runnerState(b: Board) {
+  const { n } = b.db.prepare("SELECT count(*) AS n FROM tickets WHERE status = 'backlog'").get() as { n: number };
+  const cs = candidates(b);
+  const waits = [...overlaps(b, cs)].map(([id, on]) => ({ id, on }));
+  const restart = b.restart === 'failed' ? 'failed' : b.shell && b.shutdown ? 'self' : 'manual';
+  const r = runner(b);
+  return { ...r, concurrency: limit(b), running: running(b), left: cs.length, backlog: n, waits, stale: b.stale ?? false, unpushed: b.unpushed ?? 0,
+    ...(b.release && { release: { pending: true, ...b.release } }), ...(b.stale === 'daemon' && { hold: { finish: toFinish(b), terminals: terminals(), restart } }), ...(b.gitError && { gitError: b.gitError }), ...(r.on && b.lowMemory && { lowMemory: b.lowMemory }) };
+}
+
+/**
+ * Free physical memory in bytes. On Windows libuv reads GlobalMemoryStatusEx's ullAvailPhys: available memory (free plus standby
+ * cache the system hands back on demand), not only the zeroed free list, so it is the figure Task Manager shows as Available.
+ * Tests swap it for a stub.
+ */
+export const memory = { free: freemem };
+/** ponytail: hardcoded at the larger of 2 GiB and 10% of RAM; upgrade to a Settings → Board field when an operator needs another value. */
+const memoryFloor = () => Math.max(2 * 1024 ** 3, totalmem() / 10);
+const MEMORY_RECHECK = 30_000;
+
+/** Whether free memory allows the runner another launch; when not, records the hold and arms a timer that ticks again. */
+function roomFor(b: Board) {
+  const free = memory.free();
+  const floor = memoryFloor();
+  if (free >= floor) return true;
+  b.lowMemory = { free, floor };
+  b.memoryWait ??= setTimeout(() => {
+    b.memoryWait = undefined;
+    tick(b);
+  }, MEMORY_RECHECK).unref();
+  changed(null);
+  return false;
+}
+
+// ---- restart after a merge (docs/LIFECYCLE.md → Restart after a merge) ----
+
+/** Tickets a stale board finishes before it restarts: running ones (held retries aside: they wait for Run) and any with a live agent. */
+function toFinish(b: Board) {
+  const ids = new Set(running(b).filter((id) => !held.has(id)));
+  for (const s of sessions.values()) if (s.ticketId !== null) ids.add(s.ticketId);
+  return ids.size;
+}
+
+/** Open brainstorm and operator terminals: a restart after a merge waits for the operator to close them, since it would end them. */
+const terminals = () => [...sessions.values()].filter((s) => s.ticketId === null).length;
+
+export const holding = (b: Board) => toFinish(b) + terminals();
+
+const BUILD_TIMEOUT = 120_000;
+const rootOf = (b: Board) => b.root ?? resolve(import.meta.dirname, '../..');
+export const installed = (root: string) => !existsSync(join(root, 'daemon', 'src'));
+
+/**
+ * Start → Restart board, and the board's own restart after a merge: rebuild (from a repo checkout; an installed app/ has no
+ * daemon/src and nothing to build), then close and exit 75. The shell restarts the daemon on 75 and the window follows it to
+ * the new port (docs/ARCHITECTURE.md -> Restart board). Resolves to why it did not restart (the compiler output), or null.
+ */
+export async function restartBoard(b: Board): Promise<string | null> {
+  const root = rootOf(b);
+  if (!installed(root)) {
+    const failed = await new Promise<string | null>((ok) => {
+      // Through a shell, since npm is npm.cmd on Windows. The command is fixed; nothing from a request reaches it.
+      exec('npm run build', { cwd: root, timeout: BUILD_TIMEOUT, windowsHide: true }, (e, out, err) =>
+        ok(e ? `${out}${err}`.trim() || e.message : null));
+    });
+    if (failed !== null) return failed;
+  }
+  return relaunch(b);
+}
+
+export function relaunch(b: Board): string | null {
+  if (b.closing || !b.shutdown) return 'the board is already shutting down';
+  const shutdown = b.shutdown;
+  setTimeout(() => shutdown(75), 50); // after a reply is on its way
+  return null;
+}
+
+/**
+ * A stale board (b.stale 'daemon') under the shell restarts itself once no ticket is left to finish, the same way as Restart
+ * board; runner.json survives it, so the runner carries on as it was. Open brainstorm and operator terminals hold it too. A
+ * failed build keeps the hold and logs the compiler output; Restart board shows it to the operator.
+ */
+function restartWhenIdle(b: Board) {
+  if (b.stale !== 'daemon' || !b.shell || !b.shutdown || b.closing || b.restart || toFinish(b) || terminals()) return;
+  b.restart = 'running';
+  void restartBoard(b).then((failed) => {
+    if (failed === null) return;
+    b.restart = 'failed';
+    console.error(`[restart] the board did not restart itself after a merge: ${failed}`);
+    changed(null);
+  });
+}
+
+let ticking = false;
+
+/**
+ * Runs after every apply and on daemon start: while the runner is on and fewer than `concurrency` (settings.json, default 3)
+ * tickets are running, launch the next candidate that shares no file with a running ticket, or the first candidate when all
+ * do (the merge sync resolves it; waiting forever would be worse). Nothing running and nothing to launch: it turns itself off.
+ * A ticket held on a running one is not "nothing": the runner waits for that merge. A board stale on daemon code launches no candidate.
+ * Before each launch free memory is checked against a floor (roomFor): under it, nothing more starts this tick and a timer
+ * ticks again in 30 s.
+ */
+export function tick(b: Board) {
+  if (ticking || b.closing) return;
+  restartWhenIdle(b);
+  if (!runner(b).on) return;
+  ticking = true; // its own launches call apply, which calls tick
+  try {
+    const max = limit(b);
+    const wasLow = b.lowMemory;
+    b.lowMemory = undefined;
+    // A conflict sent back to its worker while the runner was off (apply's hold): that worker starts first, unless the
+    // operator has moved the ticket on since.
+    for (const id of held) {
+      const t = b.db.prepare('SELECT status, needs_human FROM tickets WHERE id = ?').get(id) as { status: string; needs_human: number } | undefined;
+      const go = t?.status === 'in_progress' && !t.needs_human && !sessionsOf(id).length;
+      if (go && !roomFor(b)) break; // kept in `held` for the next tick
+      held.delete(id);
+      if (go) apply(b, id, 'launch');
+    }
+    while (b.stale !== 'daemon' && !b.lowMemory && running(b).length < max) {
+      const cs = candidates(b);
+      if (!cs.length || !roomFor(b)) break;
+      const busy = overlaps(b, cs);
+      apply(b, cs.find((c) => !busy.has(c)) ?? cs[0], 'launch');
+    }
+    if (wasLow && !b.lowMemory) changed(null);
+    if (running(b).length === 0 && candidates(b).length === 0) {
+      setRunner(b, false, 'nothing left to launch');
+      events.emit('event', { sound: 'ding', ticket: null });
+    }
+  } finally {
+    ticking = false;
+  }
+}
+
+export const RESTART_NOTE = 'restarted by the operator; the previous session was ended without reporting. Continue from the state of this worktree: read `git status` and `git log` first';
+
+export const RESTARTED = 'agent exited without reporting (the daemon restarted)';
+
+/**
+ * Daemon start: no agent survives a restart. The agent did nothing wrong, so a running, unflagged ticket is resumed once: the
+ * agent for its phase starts again in the same worktree, continuing its Claude Code conversation (launcher `resumable`) or
+ * else fresh with the note in its prompt. If that agent then exits
+ * without reporting, the ordinary exit row flags it. A done ticket that never merged and is not flagged was cut off mid-queue:
+ * it is queued again.
+ */
+export function recover(b: Board) {
+  const running = b.db.prepare("SELECT id, status FROM tickets WHERE status IN ('in_progress', 'testing') AND needs_human = 0").all() as { id: number; status: string }[];
+  for (const { id, status } of running) {
+    if (sessionsOf(id).length > 0) continue;
+    const role = status === 'testing' ? 'tester' : 'worker';
+    // ponytail: no Pause yet; when it lands, a paused board flags here (apply 'exit' with RESTARTED) instead.
+    b.db.prepare("INSERT INTO notes (ticket_id, role, kind, body) VALUES (?, ?, 'failure', ?)").run(id, role, RESTARTED);
+    apply(b, id, 'launch');
+  }
+  for (const { id } of b.db.prepare("SELECT id FROM tickets WHERE status = 'done' AND merged_at IS NULL AND needs_human = 0").all() as { id: number }[]) {
+    queueMerge(b, id);
+  }
+}
+
+export const BUMPS = ['patch', 'minor', 'major'] as const;
+export type Bump = (typeof BUMPS)[number];
+const RELEASE_PATHS = ['daemon/', 'shell/', 'templates/'];
+
+export function isKanban95(repo: string) {
+  try {
+    return existsSync(join(repo, 'shell', 'tauri.conf.json')) && JSON.parse(readFileSync(join(repo, 'package.json'), 'utf8')).name === 'kanban95';
+  } catch {
+    return false;
+  }
+}
+
+const version = (repo: string) => String(JSON.parse(readFileSync(join(repo, 'package.json'), 'utf8')).version);
+
+export function bumped(v: string, bump: Bump) {
+  const m = /^(\d+)\.(\d+)\.(\d+)(-.+)?$/.exec(v);
+  const [x, y, z] = m ? [Number(m[1]), Number(m[2]), Number(m[3])] : [0, 0, 0];
+  const pre = m?.[4];
+  if (bump === 'major') return `${pre && !y && !z ? x : x + 1}.0.0`;
+  if (bump === 'minor') return `${x}.${pre && !z ? y : y + 1}.0`;
+  return `${x}.${y}.${pre ? z : z + 1}`;
+}
+
+export function releaseOn(repo: string) {
+  if (!isKanban95(repo)) return false;
+  try {
+    return readConfig('settings', repo).release;
+  } catch {
+    return false;
+  }
+}
+
+export function releaseInfo(b: Board) {
+  if (!isKanban95(b.repo)) throw new Refused(NOT_KANBAN95);
+  if (!releaseOn(b.repo)) throw new Refused(RELEASE_OFF);
+  const v = version(b.repo);
+  return { version: v, next: Object.fromEntries(BUMPS.map((k) => [k, bumped(v, k)])) };
+}
+
+export function releasePending(b: Board) {
+  b.release = undefined;
+  if (!releaseOn(b.repo)) return;
+  try {
+    const since = git(b.repo, 'describe', '--tags', '--abbrev=0', '--match', 'v*');
+    const commits = Number(git(b.repo, 'rev-list', '--count', `${since}..HEAD`, '--', ...RELEASE_PATHS));
+    if (commits) b.release = { since, commits };
+  } catch {
+    b.release = undefined;
+  }
+}
+
+const NOT_KANBAN95 = 'only the Kanban95 repo releases (it has shell/tauri.conf.json and a package.json named kanban95)';
+const RELEASE_OFF = 'Release board is off: turn on "release" in settings.json (Settings -> Board -> Show Release board)';
+const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? '' : 's'}`;
+
+async function releaseRefusal(b: Board): Promise<string | null> {
+  if (!isKanban95(b.repo)) return NOT_KANBAN95;
+  if (!releaseOn(b.repo)) return RELEASE_OFF;
+  const [n, m] = [toFinish(b), terminals()];
+  if (n || m) return `${plural(n, 'ticket')} running and ${plural(m, 'terminal')} open; release once nothing runs`;
+  const dirty = git(b.repo, 'status', '--porcelain', '--untracked-files=no');
+  if (dirty) return `the main working tree has uncommitted changes:
+${dirty}`;
+  if (!(await upstream(b.repo))) return 'the main branch tracks no remote branch, so there is nowhere to push the release';
+  const a = await ahead(b.repo);
+  if (a) return `main has ${plural(a, 'commit')} not pushed; push first`;
+  return null;
+}
+
+export async function release(b: Board, bump: Bump): Promise<{ tag: string } | { failed: string }> {
+  let out = { failed: 'the release did not run' } as { tag: string } | { failed: string } | { refused: string };
+  await enqueue(async () => {
+    const why = await releaseRefusal(b);
+    if (why) return void (out = { refused: why });
+    const head = git(b.repo, 'rev-parse', 'HEAD');
+    const files = ['package.json', 'package-lock.json'].filter((f) => existsSync(join(b.repo, f)));
+    let tag = '';
+    try {
+      await new Promise<void>((ok, fail) =>
+        exec(`npm version ${bump} --no-git-tag-version`, { cwd: b.repo, timeout: BUILD_TIMEOUT, windowsHide: true }, (e, o, err) =>
+          (e ? fail(new Error(`${o}${err}`.trim() || e.message)) : ok())));
+      tag = `v${version(b.repo)}`;
+      git(b.repo, 'add', '--', ...files);
+      git(b.repo, '-c', 'user.useConfigOnly=true', 'commit', '-q', '-m', `Release ${tag}`);
+      git(b.repo, 'tag', tag);
+      const p = await pushRelease(b.repo, tag);
+      if (!p.ok) throw new Error(`git push to ${p.remote} failed:
+${p.reason}`);
+      out = { tag };
+    } catch (e) {
+      if (tag) try { git(b.repo, 'tag', '-d', tag); } catch { /* not made */ }
+      git(b.repo, 'reset', '-q', '--soft', head);
+      git(b.repo, 'checkout', head, '--', ...files);
+      const x = e as { stderr?: string; message: string };
+      out = { failed: String(x.stderr ?? '').trim() || x.message };
+    }
+    releasePending(b);
+  });
+  changed(null);
+  if ('refused' in out) throw new Refused(out.refused);
+  return out;
+}

@@ -1,0 +1,325 @@
+# Ticket lifecycle
+
+Living document. How a ticket moves itself from Launch to merged, and what the board does at each step. The table below is `TABLE` in `daemon/src/lifecycle.ts`; change both together (`daemon/test/lifecycle.test.ts` has the same rows written out by hand and fails on a mismatch).
+
+## Columns and flags
+
+Status is one of **backlog → in_progress → testing → done**. Two flags sit beside it: `needs_human` (the operator is needed: a question, a silent exit, an agent silent for `idle_minutes`, the retry cap, a merge conflict (on submit or in the merge queue) at the retry cap, a main checkout still dirty after the merge queue's wait, a merge whose git never ran, a merge that landed but could not be pushed) and `blocked_on_deps` (launched, but waiting for a dependency to merge). A ticket also records `retry` (failed tests and merge conflicts so far) and `merged_at` (when its branch landed and, with `push_after_merge` on, was pushed).
+
+## Events
+
+| event | raised by |
+|---|---|
+| `launch` | the operator (Launch), the runner, or the board when the last dependency of a held ticket merges (runner on only, see Stop below) |
+| `submit` | the worker's `move_ticket(testing)` |
+| `pass` | the tester's `report_test(passed: true)` (an operator's `move_ticket(done)` after it) |
+| `fail` | the tester's `report_test(passed: false)`, or an operator's `move_ticket(in_progress)` on a ticket in testing |
+| `ask` | `ask_operator` from any agent, or the silence watch when a Claude Code agent sits on its own prompt (Claude Code prompts below) |
+| `answer` | the operator, `POST /api/tickets/:id/answer` |
+| `exit` | the agent's terminal closed without a `move_ticket` or `report_test`, or its launch failed, or Windows failed to start its CLI more than `START_RETRY.max` times in a row (Processes that never started below) |
+| `silent` | the silence watch, when a live agent's transcript has gained no line for `idle_minutes` (Silent agents below) |
+| `woke` | the silence watch, when a flagged silent agent's transcript grows again, or a Claude Code prompt it raised is gone and the transcript grows |
+| `merged` | the merge queue |
+| `conflict` | the board, when the base will not merge into the ticket's worktree (on submit or in the merge queue) or the worktree has uncommitted changes |
+| `dirty` | the merge queue, once the main checkout has had uncommitted changes for the whole wait (10 min) |
+| `unmerged` | the merge queue, when its git did not run on the first try nor on `START_RETRY.max` more (Processes that never started below) |
+| `unpushed` | the merge queue, when the branch landed in the base but `git push` of the base to its upstream failed |
+| `merge` | the operator retrying a failed merge, `POST /api/tickets/:id/merge` |
+| `resume` | the operator, Resume in the card menu or the Inbox, `POST /api/tickets/:id/resume` |
+| `restart` | the operator, Restart in the card menu, the ticket window (Ctrl+R) or the Inbox, `POST /api/tickets/:id/restart` |
+| `reject` | the operator, Reject on a Done card's menu or in its ticket window, `POST /api/tickets/:id/reject` |
+
+The tester's verdict is the move: `report_test` writes the PASS or FAIL note, then applies `pass` or `fail`, so a tester that stops after reporting cannot leave the ticket in Testing. It is refused, with no note written, on a ticket not in testing. A `move_ticket` to the column the ticket is already in returns the ticket unchanged and raises no event, so an agent following the old report-then-move script is not refused.
+
+## The table
+
+"Running" means status `in_progress` or `testing`. Anything not in this table is refused (`409` over REST, a `denied` tool error over MCP), and nothing changes.
+
+| from | event | guard | to | flags / counters | side effects |
+|---|---|---|---|---|---|
+| backlog | launch | every dependency merged | in_progress | `blocked_on_deps` off | worktree (and its setup, below), worker grant, execute agent |
+| backlog | launch | a dependency not merged | backlog | `blocked_on_deps` on | none; launched again when the dependency merges, if the runner is on |
+| in_progress | launch | no live agent session | in_progress | `needs_human` off | execute agent again in the same worktree, `retry` unchanged. Refused while an agent is live: "it already has a running agent; open its terminal, or Reset to Backlog to stop it" |
+| testing | launch | no live agent session | testing | `needs_human` off | test agent again in the same worktree, `retry` unchanged. Refused while an agent is live, as above |
+| in_progress | resume | `needs_human` on and no live agent session | in_progress | `needs_human` off | execute agent again, as for launch |
+| testing | resume | `needs_human` on and no live agent session | testing | `needs_human` off | test agent again, as for launch |
+| in_progress | restart | | in_progress | `needs_human` off | end every live session (outcome `restart`, grant revoked, pty killed), operator failure note, execute agent again |
+| testing | restart | | testing | `needs_human` off | as above, then test agent again (the diff is re-rendered from the worktree) |
+| in_progress | submit | | testing | | the base merged into the worktree first (see Sync below); clean or already up to date: worker session ended (grant revoked, pty killed), tester grant, test agent. Otherwise `conflict` instead |
+| testing | pass | the tester called `report_test(passed: true)` during this test run | done | `merged_at` cleared (set again when it lands; only a rejected ticket had one) | tester session ended, done sound, merge queued |
+| testing | fail | `retry` < 3 | in_progress | `retry` + 1 | tester session ended, execute agent again, with the failure notes and the ticket's (possibly escalated) model |
+| testing | fail | `retry` = 3 | in_progress | `retry` + 1, `needs_human` on | tester session ended, failure note "stopped after 4 failed tests", chord. Stops |
+| running | ask | | same | `needs_human` on | question note, chord. The agent's terminal stays open |
+| running | answer | `needs_human` on and an agent session is live | same | `needs_human` off | answer note; the answer typed into the agent's terminal as one line, then Enter as a separate keystroke 300 ms later (one burst would read as a paste, leaving the answer unsubmitted) |
+| running | exit | | same | `needs_human` on | failure note ("agent exited without reporting" or "launch failed: …", e.g. a model outside the CLI's `models` list (Run settings), then a "To resolve:" line naming Resume and Reset to Backlog), chord |
+| running | silent | an agent session is live and `needs_human` off | same | `needs_human` on | failure note ("agent silent for N min: …" with the last lines of its terminal, then a "To resolve:" line), chord. The agent keeps running |
+| running | woke | an agent session is live and `needs_human` on | same | `needs_human` off | none (the silence watch applies it only while its own note is the ticket's latest) |
+| done | merged | | done | `merged_at` set, `needs_human` off | ding, worktree and branch removed, held dependents launched, housekeeping check |
+| in_progress | conflict | `retry` < 3 | in_progress | `retry` + 1 | worker session ended, failure note ("merge conflict with <base>: <git output>" or "worktree has uncommitted changes; …"), execute agent again in the kept worktree. No tester round is spent on stale code |
+| in_progress | conflict | `retry` = 3 | in_progress | `needs_human` on | worker session ended, the same failure note, chord. Worktree kept |
+| done | conflict | `retry` < 3 | in_progress | `retry` + 1 | failure note as above, execute agent again in the kept worktree. It merges the base in, resolves, and submits; the tester runs and the merge is queued again |
+| done | conflict | `retry` = 3 | done | `needs_human` on | the same failure note, chord. Worktree kept |
+| done | dirty | | done | `needs_human` on | failure note naming the uncommitted files, chord |
+| done | unmerged | | done | `needs_human` on | failure note with the last git error, chord. Worktree kept, `merged_at` unset |
+| done | unpushed | | done | `needs_human` on | failure note with git's message, chord. The merge stays in the base; worktree kept, `merged_at` unset |
+| done | merge | not merged yet | done | | merge queued again |
+| done | reject | no live agent session | in_progress | `needs_human` off, `retry` 0, `merged_at` kept | the operator's reason as an `operator` failure note, execute agent (see Reject below) |
+
+Resume and launch on a running ticket are not in the original spec. Before them, the only way past a silent exit was Reset to Backlog and Launch, which threw away `retry` and the phase. The new prompt carries the exit's failure note like any retry (`attemptNotes` in `daemon/src/context.ts`: failure notes since the latest execute run). Resume is the strict form (only a flagged ticket); Launch on a running ticket also starts an unflagged one with no agent, such as one dragged by hand into a running column.
+
+Both continue the killed conversation when they can, instead of starting over. When the ticket's latest run was a Claude Code session in the same phase that ended without reporting (`runs.outcome` `exit`, `lost` or `closed`) and its transcript is still on disk, the new run launches `claude --resume <runs.session_id>` in the same worktree, with a fresh grant and `mcp.json`, and the one-line message "The board restarted this session after it ended without reporting. Your board tools work again under a new grant; carry on where you left off." in place of the brief; the agent keeps everything it had read and done. Otherwise (a Codex run, a missing transcript, a run that reported, a phase change) it is a fresh session with the brief and its failure notes, as before (`resumable` in `daemon/src/launcher.ts`, docs/CLIS.md → Resuming a killed session). Restart, a retry and Reject always start fresh: Restart is for an agent that is stuck, and the others bring news the old conversation lacks.
+
+### Resume, Restart and Reset
+
+| | When | Agent | Phase, worktree, `retry` |
+|---|---|---|---|
+| Resume | flagged running ticket, no live agent | starts one | kept |
+| Restart | any running ticket, live agent or not, flagged or not | ends the live one, starts a new one | kept |
+| Reset to Backlog | any ticket | the daemon ends every live one on the move (run outcome `reset`), starts none; the ticket's terminal windows close, live or already "(ended)" | back to Backlog, `retry` 0; the worktree is kept, so the next launch starts in it |
+| Reject | a done ticket, merged or not | starts a worker | back to In Progress, `retry` 0; the worktree is kept if it still exists, otherwise a fresh one from the base |
+
+Restart is for an agent that is live but stuck: idle, hung, or its CLI died without the pty closing. The old session's outcome is set to `restart` before the kill (as `end_session` does for a reported move), so its exit is expected and does not raise the `exit` row's flag. The operator note ("restarted by the operator; the previous session was ended without reporting. Continue from the state of this worktree: read `git status` and `git log` first") lands under "What failed on the last attempt" in the new prompt. Restart has no `done` row: a done ticket that did not merge has Retry merge (`merge`), and one the operator does not accept has Reject.
+
+Reset to Backlog is not a lifecycle event: it is `PATCH /api/tickets/:id` with `status: backlog`, from any UI path (drag, card menu, Ticket window, Inbox) or a REST client. When the ticket was not already in Backlog, the handler commits the update, then ends the ticket's live sessions the way a delete does (`endSessions` in `daemon/src/api.ts`: outcome `reset` first, then revoke the grant, then kill the pty), so the exit flags nothing. A refused update (a bad column, a missing or cyclic dependency) leaves the sessions running. The UI closes every terminal window of a ticket it refreshes in Backlog.
+
+### Moves by hand
+
+A drag into any other column is the same PATCH with that `status`, and is not a lifecycle event either: the operator overrides the table. A PATCH that changes the status ends the ticket's live sessions (outcome `moved`), clears `needs_human` unless the body sets it, and starts no agent. Into Done when the ticket has no `merged_at`: if its branch exists, the merge queue takes it as after a pass (the `merge` row); with no branch there is nothing to land, so `merged_at` is set and the ticket is closed. A ticket moved by hand into In Progress or Testing has no agent; Launch starts the one for that column.
+
+### Reject
+
+Reject is how the operator sends a Done ticket they do not accept back to a worker, with a reason, instead of Reset to Backlog, which loses both the reason and the work. The reason is required (the REST route refuses a missing or blank one with `400`, the dialog will not submit it) and is written as a `failure` note with role `operator`, so the worker sees it under "What failed on the last attempt" as `- [operator] …`. `retry` goes back to 0: a rejection starts a new cycle, it is not a failed test. No chord, nothing in the Inbox: the ticket is simply running again.
+
+- **Not merged yet** (waiting in the merge queue, or flagged `dirty` or `conflict`): the worktree is still there and the worker continues in it. The queued merge job checks the status before it waits on the tester's pty, after it, and once more with no await between that check and starting `git merge` (`merge`'s `wanted`, `daemon/src/merge.ts`), so a ticket no longer `done` is dropped and never lands. Only a reject that arrives while `git merge` itself is running is too late: that merge lands, the ticket stays with its worker (no `merged` row) and the next pass merges again.
+- **Merged**: its worktree and branch were removed on merge. The launch forks a fresh worktree from the current base, which holds the merged work, so the worker continues from what shipped. If the branch survived (removed by hand, or cleanup failed), `createWorktree` (`daemon/src/git.ts`) resets it to the base when the base already contains it, and reuses it when it holds work the base lacks. `merged_at` keeps the first merge's time until the next `pass` clears it; the next merge is a new merge commit of the same branch, titled with the ticket title as always. While `merged_at` is kept the ticket is not `done`, so the janitor treats its worktree as the new cycle's: the sweep leaves it, and a merge cleanup still retrying stops (audit `janitor.worktree` `skipped: reopened`) instead of removing the worktree the new worker sits in.
+
+The `merge` row is not in the original spec: it is how the operator finishes a flagged merge. They fix the branch in its worktree (merge the base into it and commit) or clean the main checkout, then retry the merge.
+
+### Needs human
+
+Every row that turns `needs_human` on writes exactly one note in the same transaction (`Row.says` when the event brings none). Except for a question, that note is what happened, then a last line starting `To resolve:` with the operator's concrete next step: the worktree path (`<board home>/worktrees/<repo key>/t-<id>`, written out in full) and the button (Retry merge, Resume, Reset to Backlog). A question needs no such line: the Inbox's Answer box is its fix. `GET /api/inbox` lists every unanswered question of a flagged ticket, and its newest `failure` when no newer question is open, with `kind` and `status`; the Inbox window shows it with the buttons the line names. `daemon/test/lifecycle.test.ts` checks every such row.
+
+| row | note | To resolve |
+|---|---|---|
+| fail at the cap | `stopped after 4 failed tests` | read the tester's notes, fix the ticket if it asks for the wrong thing, Reset to Backlog and Launch |
+| ask | the question | (the Answer box) |
+| exit | `agent exited without reporting` / `launch failed: …` / `ended by the operator from the terminal window` / `agent could not start: Windows failed to start its process N times (0xC0000142)` | Resume (the agent starts again in the same worktree), or Reset to Backlog to start over |
+| silent | `agent silent for N min: its transcript has had no new line since <time>. Last lines of its terminal:` and up to 10 lines | open its terminal; fix what it waits on there, or Restart if it is hung. The flag clears by itself if the agent writes again |
+| conflict at the cap, on submit | `merge conflict with <base>: …` / `worktree has uncommitted changes; …` | in the ticket's worktree (its full path) commit or discard, merge the base, fix, test, commit, Resume |
+| conflict at the cap, in the queue | `merge conflict with <base>: …` | in the ticket's worktree (its full path) merge the base, fix, test, commit, Retry merge |
+| dirty | the `git status` lines | commit or stash in the main checkout, Retry merge |
+| unmerged | `merge did not run: git failed to run N times:` and the error | check that git runs in the main checkout, then Retry merge |
+| unpushed | `merged into <base>, but git push to <remote> failed, so the ticket is not closed:` and git's message | in the main checkout pull and merge what the remote has, or reconnect or sign in to the remote, then Retry merge (it pushes again) |
+
+### Retries
+
+The first execute run is attempt 0. Each failed test adds one to `retry` and runs execute again, up to `retry` = 3: the first attempt plus exactly three retries. The fourth failed test stops the ticket with `needs_human`. A merge conflict counts against the same `retry`: below the cap it sends the ticket back to the worker, at the cap it flags it. Each retry's prompt carries the failure notes of the attempt before it (`docs/AGENTS.md`).
+
+### Work already on the base
+
+A ticket can be filed or launched after another ticket already landed its work (ticket #122: filed the same second the fix merged, then failed twice for "no change"). Nothing checks a new ticket against the base, so the worker does: it makes no change, proves each criterion against the code, posts a `decision` note naming the base commits and the evidence, and submits the empty branch with `move_ticket(testing)` as usual (`templates/execute.md`). The tester gets that note in `{{notes}}` and `(none)` as the diff; `templates/test.md` tells it to judge each criterion against the code on the base and pass when all hold. A pass takes the ordinary `pass` row: the merge queue finds nothing to merge, closes the ticket (`merged_at` set, worktree removed) and the base does not move. No operator action and no retry is spent (`daemon/test/lifecycle-done-on-main.test.ts`).
+
+### Escalation
+
+The ticket's `model` and `effort` override the execute phase only, so a retry runs with the same ones; test runs keep the phase default. Only the planner (`set_model`, `create_ticket`) and the operator (UI or the operator terminal) set them; a worker or tester that thinks the work needs a bigger model says so in its note.
+
+### Ending a session
+
+Both CLIs run interactive sessions that never exit by themselves. When an agent's `move_ticket` or the tester's `report_test` is accepted, the board revokes its grant and kills its terminal; that exit is expected (`runs.outcome` = the event: `submit`, `pass`, `fail`). The operator's X on a terminal (`DELETE /api/sessions/:id`) sets `runs.outcome` = `closed`, revokes the grant and kills the pty, then applies `exit` itself with the failure note "ended by the operator from the terminal window" (role `operator`), so the ticket is flagged with the usual "To resolve:" line and offers Resume; the exit handler sees `closed` and writes no second note. A brainstorm has no ticket, so ending one only stops it. A reset to Backlog ends the ticket's sessions with `runs.outcome` = `reset` and flags nothing (Resume, Restart and Reset). Any other exit, including the operator revoking a grant and the daemon shutting down, is the `exit` event (`runs.outcome` = `exit`), so a ticket can never sit in a running column with no agent and no flag. The one exception is an agent that never started (`runs.outcome` = `unstarted`, next section).
+
+### Processes that never started
+
+On a loaded Windows machine (hundreds of processes) Windows sometimes refuses to start a process: it exits at once with `0xC0000142` (STATUS_DLL_INIT_FAILED) before running a line of its own. The agent's terminal then shows nothing but ConPTY's opening escape codes, and a git the daemon runs exits with no output. Nothing is wrong with the ticket, so the board starts the same thing again (`START_RETRY` in `daemon/src/lifecycle.ts`: every 2 s, up to 3 more times) before anyone is asked:
+
+- **An agent** whose terminal exits with that code, before any `move_ticket` (`notStarted` in `daemon/src/git.ts`), gets `runs.outcome` = `unstarted` and no note. Two seconds later, if the ticket is still in its phase's column, unflagged and with no agent, the running-ticket `launch` row starts its phase again. A Claude Code launch that was resuming a killed conversation resumes it again: `unstarted` runs are skipped when looking for the conversation to resume. After the fourth failed start in a row the `exit` row flags it with "agent could not start: …".
+- **A merge job** whose git did not run (`gitNotRun`: that exit code, a spawn error, or a failure with no output at all, which git never gives for a verdict such as a conflict) is queued again rather than reported as a conflict. After four tries the `unmerged` row flags the ticket, its worktree kept, and Retry merge queues it again.
+
+### Silent agents
+
+An agent can stop without exiting: an API call that never returns, or a CLI sitting at its prompt after an error it cannot get past ("There's an issue with the selected model"). The pty is no signal, because Claude Code's spinner animates while it waits. The board watches the transcript instead (`watchSilence` in `daemon/src/lifecycle.ts`): every minute it looks at each live ticket session's transcript, Claude Code's `<config>/projects/<cwd>/<runs.session_id>.jsonl` or, for Codex, the newest `<CODEX_HOME>/sessions/YYYY/MM/DD/rollout-*.jsonl` written since the session started whose `session_meta` cwd is the worktree (`transcriptSize` in `daemon/src/launcher.ts`). A session whose transcript has not grown for `idle_minutes` (`~/.kanban95/settings.json`, Settings → Agents → Silent agents, default 20) gets the `silent` row: `needs_human`, a note naming the minutes and the last 10 lines of its terminal (escape codes stripped), and the chord. A session with no transcript yet counts from its start. Time the ticket spends flagged (a question waiting for the operator) does not count as silence.
+
+The default is above the 10 min tool timeout, so a long test run is not flagged. The agent is left running: the operator opens its terminal, fixes what it waits on there or presses Restart. If its transcript grows again while the silence note is still the ticket's latest note (no question since), the watch applies `woke` and the flag clears by itself, so a long step that was healthy after all does not hold the card red or keep the runner waiting.
+
+### Claude Code prompts
+
+A few of Claude Code's own safety checks ask "Do you want to proceed? 1. Yes 2. No" even under `--dangerously-skip-permissions`, and no permission rule turns them off (Claude Code 2.1.296: "Dangerous rm operation on possibly-empty variable path … cannot be auto-allowed by permission rules"). Unattended, Claude Code denies by itself after about two minutes, long before `idle_minutes`. So on every tick the silence watch also reads the end of each live Claude Code ticket session's terminal (`claudePrompt` in `daemon/src/lifecycle.ts`, pattern `CLAUDE_PROMPT`): a terminal ending in that menu, from "Do you want to proceed?" through "Esc to cancel" with only the countdown's digits after it, applies `ask` on an unflagged ticket. The question is `PROMPT_ASK` followed by the menu and the lines above it that say what it asks, so it shows in the Inbox with the chord like an `ask_operator` question. The operator's answer goes through the ordinary `answer` row, except that an answer to such a question is typed as the option's number: "1", "yes" or "Y" types `1` (the first option whose label starts with the answer), then Enter. When the menu goes away without an Inbox answer (Claude Code denied it, or the operator answered in the terminal) and the transcript grows again while that question is still the ticket's latest note, the watch applies `woke` and writes an `answer` note saying the prompt closed, so the question does not come back in the Inbox. Codex sessions are not read for it. The agent templates also tell agents not to write the `rm` that raises the commonest one.
+
+### Restart
+
+No agent survives a daemon restart, and an agent killed by one did nothing wrong. While the daemon shuts down (`close()`, as Start → Restart board does), an agent's exit writes its run row but does not apply the `exit` row, so the ticket stays unflagged. On start, every running ticket without a live session and without `needs_human` gets a failure note ("agent exited without reporting (the daemon restarted)") and the running-ticket `launch` row: the agent for its phase starts again in the same worktree, `retry` unchanged, no operator action. A Claude Code agent continues its killed conversation (`--resume`, see Resume above); otherwise the new session gets that note in its prompt. If that agent then exits without reporting, the ordinary `exit` row flags the ticket. A ticket already flagged before the restart stays flagged until the operator resumes it. Every done ticket that never merged and is not flagged is queued for merge again.
+
+There is no Pause yet; when it exists, a paused board flags these tickets (`exit`, with the "To resolve:" line) instead of resuming them.
+
+## The runner
+
+**Run** (Board toolbar, Start menu, Ctrl+L) lets the board work the backlog by itself, up to `concurrency` tickets start to finish (execute, test, merge) at a time. `tick` in `daemon/src/lifecycle.ts` runs after every `apply`, after a ticket is deleted, and once on daemon start, after `recover`. While the runner is on and fewer than `concurrency` tickets are running, it applies `launch` to the next candidate.
+
+- **Concurrency** is `concurrency` in `settings.json` (an integer 1 to 10, default **3**), so it follows the global file or the project's own copy like every other setting. Set it from Settings → Agents → Runner, under the All projects / This project switch. `runner.json` holds only the flag: `{"on", "why"?}`; a `concurrency` key left in an older one is ignored. `PUT /api/runner` refuses a body carrying `concurrency` with `400`. A save of settings.json, or a project copy started or removed, ticks at once: a raise launches straight away, a cut stops new launches until running drops below it; nothing running is stopped. Another board picks up a global change on its next tick.
+
+- **Running** means not flagged and in `in_progress` or `testing`, or in `done` and not merged yet: the next ticket starts only once the previous one has merged. A flagged ticket does not count; it waits for the operator in the Inbox while the runner goes on.
+- **A candidate** is a backlog ticket with `needs_human = 0` whose every dependency is merged. The runner never launches a flagged ticket or one whose dependency has not merged; it takes the next one instead.
+- **Order**: effort `low` < `medium` < `high` < `max` (unset counts as `medium`), then fewer non-blank acceptance-criteria lines, then lower id. It is a rough size; a size estimate from the planner would replace it.
+- **Shared files**: while tickets are running, a candidate that shares a file with one of them is deferred and the runner takes the next candidate that shares none. A ticket names a file when its body or criteria contains a path (`[w./-]+.w+`) that exists in the repo; a running ticket also touches what `git diff --name-only <base>...ticket/<id>` lists. `docs/**` and `*.md` never count: every ticket touches docs and the merge sync handles them. When every remaining candidate shares a file, the first launches anyway (the merge sync below resolves it; waiting forever would be worse). `GET /api/runner` lists the deferrals as `waits: [{id, on}]` and the status bar says "#id waits: shares files with #n". It is a heuristic; a files list the planner writes on each ticket would replace it.
+- **File cache**: `Board.files` holds each ticket's file list, keyed on its body, criteria and `ticket/<id>` head (read from `.git/refs` or `packed-refs`, no git spawned); a body or criteria edit or a new commit on the branch recomputes it, and every merge clears it.
+- **It stops itself** when nothing is running and no candidate is left: the flag goes off with `why: "nothing left to launch"`, a `ding` (`ticket: null`) plays and the status bar says "Runner stopped: nothing left to launch". A backlog ticket held only on a running ticket's merge is not "nothing left": the runner waits for that merge. Tickets that stay behind (flagged, or held on a flagged ticket) wait for the operator.
+- **Stop** turns the flag off. Running agents finish their current phase and their merges land, but nothing new starts, not even by the board's own triggers (Stop holds every automatic launch, below). `PUT /api/runner {"on": false}` also clears `blocked_on_deps` on every Backlog ticket (Cancel wait, below, for all of them), so nothing staged starts later by itself, and its reply adds `cleared`, the number of holds cleared; the status bar says "Runner stopped, n holds cleared." The runner turning itself off clears nothing. The operator's own Launch on a card works either way. A ticket that hits the retry cap and flags never stops the runner.
+- **A restart** keeps the flag (`<repo>/.kanban95/runner.json`, git-ignored); `recover` resumes the running tickets and the runner carries on from there.
+- **Housekeeping** tickets created after every `housekeeping.every` merges are candidates like any other and sort by their effort.
+- **A stale board** (a merge changed the daemon's own code) launches no candidate until it has restarted: Restart after a merge, below.
+- **Memory hold**: before each launch it makes (a candidate or a held conflict retry; workers and testers alike), `tick` compares free memory (`os.freemem()`, which on Windows is available physical memory, free plus standby, as Task Manager's Available) with a floor: the larger of 2 GiB and 10 percent of total RAM, hardcoded for now (a Settings → Board field would replace it). Under the floor nothing more starts this tick and a 30 s timer ticks again; `GET /api/runner` adds `lowMemory: {free, floor}` and the status bar says "waiting for memory (N GB free)". Running tickets are not touched and the runner stays on. The operator's own Launch is not held.
+
+Tickets held with `blocked_on_deps` by a manual Launch keep their own path: the board launches them when their last dependency merges, while the runner is on. Dependency cycles cannot exist: `create_ticket`, `update_ticket` and `PATCH /api/tickets/:id` refuse a dependency list that would make a ticket depend on itself through any chain.
+
+### Restart after a merge
+
+A merge that changes `daemon/`, `templates/`, `shell/`, `package.json` or `package-lock.json` is not live until the daemon restarts (`board.stale`, `docs/ARCHITECTURE.md` → Stale daemon). Agents launched before the restart would run on the old code and the old templates, so a stale board finishes what it has and then restarts itself (`restartWhenIdle` in `daemon/src/lifecycle.ts`). Agents never run on the shell, so a merge that changed only `shell/` holds nothing.
+
+- **Hold**: while `stale` is `daemon`, `tick` launches no candidate and `apply` holds a released dependent in Backlog (`blocked_on_deps` stays on). Tickets already running carry on to the end: worker, tester, conflict retries and the merge. The operator's own Launch is not held.
+- **To finish**: the running tickets (as the runner counts them, so a done ticket waiting to merge counts), except a conflict retry held while the runner is off, plus any ticket with a live agent (a flagged one asking a question, say). The restart also waits for every open brainstorm and operator terminal (`terminals`), since it would end them; the operator closes them when done.
+- **Self-restart** (`stale: 'daemon'`, the daemon run by the shell): once nothing is left to finish and no brainstorm or operator terminal is open, checked after every `apply` and every agent or terminal exit, the board restarts through `restartBoard`, the same path as Start → Restart board (build, then exit 75). It runs once; `recover` and `tick` on the next start carry on. `runner.json` is untouched, so a runner that was on launches the backlog again and one that was off stays off. A failed build keeps the hold, logs `[restart] ...` with the compiler output, and waits for the operator's Restart board (which shows the output) or the next merge, which tries again.
+- **`stale: 'shell'`** (every changed path is under `shell/`) holds nothing and never restarts by itself: the runner carries on, and the Restart badge stays up until the operator relaunches (close Kanban95 and start it again). A later merge that also touches `daemon/`, `templates/` or a package file turns it into `daemon`. A daemon started by hand, without the shell, does not restart itself either; the operator uses Restart board.
+- **`GET /api/runner`** adds `hold: {finish, terminals, restart}` while `stale` is `daemon`: `finish` is the count above, `terminals` the open brainstorm and operator terminals, `restart` is `self`, `manual` (no shell), or `failed` (the build failed). The Board status bar shows it in place of the runner line: "restart pending, N tickets to finish", then ", M terminals to close" when M is not 0, plus what the operator has to do when the board cannot restart by itself.
+- **Installed app**: a daemon run from an installed `app/` (its install root, the folder beside the exe, has no `daemon/src`; `installed()` in `daemon/src/lifecycle.ts`) runs the installer's code, not the repo's. A merge never makes it stale, so nothing is held and it never restarts by itself; in the Kanban95 repo the merge shows up as release pending instead (Release board, below). Restart board there skips `npm run build` and just restarts.
+
+### Release board
+
+Start → Release board (`POST /api/release {bump}`, `release` in `daemon/src/lifecycle.ts`) cuts a release of Kanban95 from its own repo. Nothing releases on a push to main; only this button, or a `vX.Y.Z` tag pushed by hand, starts the release workflow (`docs/ARCHITECTURE.md` → Releases). It runs in the merge queue, so no merge lands in between, and refuses with `409` and the reason unless:
+
+- the repo is the Kanban95 repo (it has `shell/tauri.conf.json` and a `package.json` named `kanban95`);
+- `release` is true in `settings.json` (`releaseOn`, default false; Settings → Board → Updates → Show Release board). `GET /api/update` sends the same answer as `release`, and the UI shows the Start entry only when it is true;
+- nothing runs: the same count the restart hold waits for (To finish, above), and no brainstorm or operator terminal is open;
+- the main working tree has no uncommitted changes to tracked files;
+- the branch has an upstream and no commit it lacks (as last fetched or pushed).
+
+Then it runs `npm version <bump> --no-git-tag-version` in the main checkout, commits `package.json` and `package-lock.json` as "Release vX.Y.Z" by the operator's git identity (`user.useConfigOnly`, no trailer), tags `vX.Y.Z`, and pushes the branch and the tag in one `git push --atomic`, so the remote gets both or neither. If any step fails, the tag is deleted, the branch goes back to the commit it was on and the two package files are restored; the reply is `502` with npm's or git's message.
+
+**Release pending.** In the Kanban95 repo with `release` on, at start, on each settings change and after each merge, the daemon counts the commits since the newest `v*` tag that touch `daemon/`, `shell/` or `templates/` (`releasePending`). When there are any, `GET /api/runner` adds `release: {pending: true, since, commits}` and the Board status bar shows "release pending (N commits since vA.B.C)" next to the runner or restart text. It never holds anything. With no `v*` tag yet, nothing is pending.
+
+### Stop holds every automatic launch
+
+The board starts an agent without an operator click in three places: a held dependent whose last dependency merged (`releaseDependents`), the scheduled housekeeping ticket, and a `conflict` below the retry cap sent back to the worker (on submit or in the merge queue). While the runner is off none of them starts an agent. The check is in one place, `apply` in `daemon/src/lifecycle.ts`: the board's own launches pass `auto`, and an `auto` event whose row would spawn an execute agent while the runner is off is held.
+
+- **A held dependent** is not applied at all: it stays in Backlog with `blocked_on_deps` on, and is a candidate the runner launches once **Run** is on.
+- **Housekeeping** is filed in Backlog and never launched by the trigger (runner on or off); the runner picks it up like any candidate.
+- **A conflict retry** writes its row (In Progress, `retry` + 1, the failure note, the worker session ended) without the spawn. The ticket sits In Progress, unflagged, with no agent, and counts as running. `tick` starts its worker first when **Run** is turned on. The set of held retries is in memory: a restart forgets it and `recover` resumes the ticket like any running one.
+
+Agents already running carry on, and the operator's own Launch, Resume, Restart and Reject never pass `auto`, so they work with the runner off.
+
+### Cancel wait
+
+`PATCH /api/tickets/:id {"blocked_on_deps": false}` clears a hold and nothing else: status, `retry` and notes stay, and a later merge of the dependency launches nothing; the ticket starts when the operator launches it or the runner picks it up as a candidate. The card menu's **Cancel wait** sends it for the selected held cards; **Stop** clears every held Backlog ticket at once (The runner, above). Reset to Backlog also clears the hold, but resets `retry` and `needs_human` too. No event is needed: no status changes and no effect runs. The Board's status bar shows "n waiting to launch by themselves" while any Backlog ticket has `blocked_on_deps` on.
+
+### Worktree setup
+
+A new worktree has no build dependencies. `.kanban95/config.json` `worktree_setup` (`docs/DATA.md`; `npm ci` for this repo) is a shell command the daemon runs in the worktree after creating it and before the first agent starts there (`prepareWorktree` in `daemon/src/launcher.ts`). It runs with the agent's pty environment (the allowlist, the daemon's Node first on `PATH`, `KANBAN95_AGENT`, no token) and asynchronously, so the daemon keeps serving meanwhile. While it runs the ticket counts as live (a second Launch is refused) but has no session or run yet. On success a marker in the worktree's git dir (`git rev-parse --git-path kanban95-setup-done`) records it, so a resumed, restarted or retried run in the same worktree does not run it again; the marker goes with the worktree, and a fresh worktree (a rejected merged ticket) runs it again.
+
+A non-zero exit, a command that will not start or one still running after 15 minutes is a launch failure: the `exit` row flags the ticket with `launch failed: worktree_setup "<command>" failed (<exit code>) in <worktree>; last output:` and the last 20 non-blank lines. No marker is written, so Resume runs it again.
+
+A setup is cancelled with its whole tree (`killTree`) when its ticket is restarted, reset, moved or deleted, and when the daemon closes; `close()` waits for its shell to end (`killAll`). A cancelled setup writes no marker and flags nothing. A new setup for the same ticket waits until the earlier one has ended, so two never run in one worktree. Each spawn takes a generation; a setup that ends after a newer spawn of its ticket starts nothing and flags nothing, so it cannot launch an old phase or the settings captured before a Restart. An absent key runs nothing; a key that is not a non-empty string is a launch failure naming it.
+
+### Sync: the base merged into the worktree
+
+A ticket's worktree forks from the base at launch and never pulls it back in by itself, so with several agents running the first branch to land makes the others stale. `syncWorktree` in `daemon/src/git.ts` runs `git merge --no-edit -m "Merge <base> into ticket/<id>" <base>` inside the ticket's worktree, where `<base>` is the branch the main checkout has. The commit lands on the ticket branch, authored by the repo's git identity (the operator). It runs twice:
+
+- **On submit**, before the tester is spawned, so the tester tests the combined code.
+- **In the merge queue**, just before the merge into the main checkout, so that merge is conflict-free by construction.
+
+Clean or already up to date: carry on. A conflict runs `git merge --abort` in the worktree (no merge is left in progress there) and raises `conflict`. A worktree with uncommitted changes to tracked files (an agent that died mid-edit) is not merged at all: the changes are left untouched and `conflict` is raised with the note "worktree has uncommitted changes; commit or discard them, then submit again" and the `git status` lines. Untracked files (build output, test leftovers) are ignored.
+
+When the queue's sync brings in new commits the ticket lands anyway, without another test run: the worker merged and the tester tested at submit, and the queue sync usually brings in nothing or a little. The upgrade path, marked `ponytail:` in `queueMerge`, is to send the ticket back to testing when the sync touched files the ticket also touched.
+
+## The merge queue
+
+`daemon/src/merge.ts`. One queue for the whole daemon; a merge starts only after the previous one, and its cleanup, has finished. Each job:
+
+1. waits until the ticket's tester terminal has fully closed;
+2. refuses if the main working tree has uncommitted changes to tracked files. That is not the ticket's fault, so nothing is flagged: the job is queued again every 30 s and raises `dirty` only if the tree is still dirty 10 min after the first try (`DIRTY_WAIT`). It never merges into a dirty tree and never runs `git merge --abort` over the operator's edits. A Retry merge restarts the wait; a ticket moved out of done or merged meanwhile is skipped;
+3. merges the base into the ticket's worktree (Sync, above). A conflict or uncommitted changes there raise `conflict` (back to the worker below the retry cap, flagged at it) and the main checkout is not touched;
+4. runs `git merge --no-ff --no-edit -m "<ticket title>" ticket/<id>` in the main working tree, into whatever branch it has checked out. The commit is authored by the repo's own git identity (the operator), with the title as its only line: no ticket id, no trailer. After the sync this cannot conflict; on any failure anyway it runs `git merge --abort` (a safety net), so the base is left exactly as it was, and raises `conflict`. A queue job never ends with the main checkout mid-merge;
+5. pushes the base to its upstream (Push, below). A failed push raises `unpushed` and the job ends there;
+6. on success raises `merged`, whose effects remove the worktree and branch before the next job starts.
+
+A git in any step that did not run at all (Processes that never started, above) is no conflict: the job is queued again 2 s later, and the ticket is flagged `unmerged` only after the fourth try.
+
+A job whose branch is already in the base (`git merge-base --is-ancestor ticket/<id> HEAD`) skips steps 3 and 4 and only pushes. That is Retry merge after a failed push, and also a daemon that stopped between the merge and the push: `recover` queues the unflagged, unmerged done ticket again and it is pushed then.
+
+### Push
+
+With `push_after_merge` on (`~/.kanban95/settings.json`, default on, Settings → Board → Git), the queue runs `git push <remote> <base>:<branch>` in the main checkout, where `<remote>` and `<branch>` are the base's upstream (`branch.<base>.remote` and `branch.<base>.merge`). Only then is the ticket `merged` (`merged_at`, cleanup). The push sends the whole base, so any earlier commits the upstream lacks go with it. It runs inside the queue job, so pushes never run beside a merge. `push` in `daemon/src/merge.ts`.
+
+- **No upstream**: nothing is run and the ticket closes, so a local-only repo works as before. A plain folder the board made a repo (`docs/ARCHITECTURE.md` → Daemon lifetime) has no remote, so it stays this way, its unpushed count 0 and the Push button hidden, until the operator adds a remote and sets the base's upstream (`git push -u <remote> <base>` once); from the next merge on, pushes run.
+- **Setting off**: nothing is pushed and tickets close as before.
+- **Failure** (rejected because the remote has commits the base lacks, a hook refused it, offline, signed out): the merge stays in the base and `unpushed` flags the ticket with git's stderr. Git runs with `GIT_TERMINAL_PROMPT=0`, so a missing credential fails at once instead of waiting on a prompt nobody sees, and a push that hangs is killed after 2 minutes (`ponytail:` in `push`: the queue is held that long).
+- **Credentials** are git's own (credential helper, SSH agent); the board never reads them (`SECURITY.md`).
+
+On daemon start, with the setting on, the board counts the commits on the base its upstream lacks (`git rev-list --count @{u}..HEAD`, against the remote-tracking ref as last fetched or pushed; `countUnpushed`). A non-zero count shows "N commits not pushed" in the Board's status bar with a **Push** button (`POST /api/push`, audited as `board.push`), which runs the same push in the queue and clears the count. A refused Push answers 502 with git's message and keeps the count. A successful push after a merge also clears it.
+
+## Run settings
+
+The board names no model. Each run's CLI, model and effort come from `~/.kanban95/models.json`, which the operator edits in **Settings → Agents → Models** (or by hand):
+
+```json
+{
+  "cli": "claude",
+  "claude": {
+    "models": ["<model id>", "..."],
+    "plan": { "model": "<model id>", "effort": "medium" },
+    "execute": { "model": "<model id>", "effort": "medium" },
+    "test": { "model": "<model id>", "effort": "medium" },
+    "operator": { "model": "<model id>", "effort": "medium" }
+  },
+  "codex": {
+    "execute": { "model": "<model id>", "effort": "medium" },
+    "test": { "model": "<model id>", "effort": "medium" }
+  }
+}
+```
+
+The ticket's `cli` overrides `cli`; its `model` and `effort` override the execute phase. `plan` is the brainstorm's phase; `operator` the operator terminal's, and the only one that may be absent (the CLI then runs its own default model). Effort defaults to `medium`. `models` is optional: when a CLI has one, a run's model (the ticket's or the phase default) must be in it. A missing file, CLI, model, a model outside that CLI's `models` list or a bad effort fails the launch at once ("launch failed: model <id> is not in the <cli> model list in <file>"), which flags the ticket with the reason and leaves no session running. The list is also checked when a model is set: `POST`/`PATCH /api/tickets` answer 400 and the MCP `create_ticket`/`set_model` refuse an id outside it, so a typo is never stored. No list, no check. Settings keeps the list on Save but does not edit it; add it by hand. Settings → Agents → Executables can name the executable per CLI (`~/.kanban95/settings.json` → `paths`); unset, the CLI is found on `PATH`.
+
+## Operator preferences
+
+Every template has a `## Operator preferences` section holding `{{preferences}}`: the contents of `~/.kanban95/preferences.md` (Settings → Prompts), read fresh at each render, `(none)` when the file is absent or empty. It is the operator's file, not the repo's, so it applies to every repo the board works on. Capped at 16 KB; a bigger save is refused.
+
+A repo's prompts come from its own `.kanban95/templates/`, copied from `templates/`. On daemon start an unedited copy is replaced by a changed default, so it gets the section by itself; a copy edited in Settings → Prompts is never overwritten and needs the section added by hand (or Reset). Add it only once the board has been restarted on a build that knows `{{preferences}}`, because an older daemon refuses any template naming an unknown variable and every launch would fail. How a copy counts as unedited: `docs/ARCHITECTURE.md` → Prompts.
+
+## Sounds
+
+`done.wav` when a tester's pass moves a ticket to Done, `ding.wav` when a ticket is merged, `chord.wav` whenever `needs_human` is raised by the table (question, silent exit, silent agent, retry cap, conflict at the cap, dirty base, merge git never ran, failed push). The daemon sends `{"sound": "done" | "ding" | "chord", "ticket": <id>}` on the `/events` websocket; the UI plays `ui/sounds/<sound>.wav` unless that sound is off in Settings → Board → Sounds, and says the reason in the status bar ("#<id> passed, in Done.", "#<id> merged.", or the needs-human reason). Every transition also sends `{"ticket": <id>}`, so the board redraws that card without a reload (`docs/ARCHITECTURE.md` → Events).
+
+## Janitor
+
+`daemon/src/janitor.ts`. Every deletion writes an audit row (`janitor.worktree`, `janitor.session`, `janitor.process`, `janitor.grant`, `janitor.run`, `janitor.scrollback`; no grant). A directory that cannot be deleted (Windows refuses while a process still holds a file or sits in it) is audited as `error` and left for the next sweep; it never stops the daemon.
+
+No removal deletes through a link. Before a worktree, a leftover directory among the worktrees or a session dir is deleted, every junction and symlink inside it is unlinked without being followed (`unlinkLinks` in `daemon/src/git.ts`): `git worktree remove --force` once followed a worktree's `node_modules` junction into the main checkout and emptied its `daemon/`. If a link that resolves into the main checkout cannot be unlinked, the removal is refused, nothing more is deleted, and the refusal is audited as `error`. A non-forced removal (a deleted ticket's worktree) checks with `git status` that the worktree is clean before it unlinks anything, so a dirty worktree is kept with every file, symlink and junction as it was. After the unlink the only change allowed is the deletion of the tracked symlinks just unlinked; git is then forced past those. Anything else puts the links back and refuses.
+
+- **After a merge**: the ticket's worktree is removed (forced: the committed work is on the base; what is left is build output and test leftovers) and its branch deleted. Windows holds a directory for a moment after the agent in it exits, seconds on a loaded machine, so removal is retried for about ten seconds. Before every try it checks the ticket is still `done` with the same `merged_at`; a rejection (or a later cycle landing) ends the cleanup without removing anything. Session dirs are already gone: each is removed when its terminal closes.
+- **When a ticket is deleted**: the row goes first (its runs, notes and grants cascade away with it), then each of its live sessions has its pty killed; the UI closes the ticket's window and its terminals, and the runner fills the slot a running ticket leaves. The worktree is left to the next sweep. A delete refused because another ticket depends on this one leaves its sessions running.
+- **On start and once a day**: worktrees under the repo's worktrees root (`<board home>/worktrees/<repo key>/`) whose ticket is gone or `done` and merged (a deleted ticket's worktree only if clean; a branch is deleted only if merged), session dirs and live grants with no live session, runs with no end and no live session (`outcome` = `lost`), and `runs.scrollback` of runs that ended more than 30 days ago (the row, its outcome and the ticket's notes stay). Then `VACUUM`. A worktree of an unmerged ticket, or of a merged ticket rejected back to a worker (`merged_at` kept, status not `done`), is never touched: it may hold the only copy of the work.
+- **Orphaned agent processes, on start and once a day**: one process listing (Windows `Get-CimInstance Win32_Process`, POSIX `ps`). A process whose command line names `<repo>/.kanban95/sessions/<key>/prompt.md` (the brief every CLI is launched with) for a key no live session holds is left over from a daemon crash, a hard reset or a kill that raced a starting process. Its whole tree is killed (`killTree`) and one `janitor.process` row (pid, key) written. The match is on this repo's session path, never a process name, so another board's agents and the operator's own CLI are left alone. A grandchild whose parent already died names no session dir and is not found.
+- **Once, the old layout**: an older board kept worktrees in `<repo>/.worktrees/`. The sweep handles each `t-<id>` there by the same rules, then removes the directory once it is empty. An unmerged ticket's worktree there stays until the ticket's next launch moves it to the worktrees root. A file OneDrive still holds leaves it for the next sweep.
+
+## Housekeeping
+
+Every time the number of merged tickets (housekeeping tickets not counted) reaches a multiple of `housekeeping.every`, the board creates a ticket that runs the `housekeeping.md` template and leaves it in Backlog, where the runner picks it up like any other (or the operator launches it): same worktree, test, retry and merge path. The **Housekeeping** button creates one and launches it at once. Settings → Agents → Housekeeping switches the automatic ticket off and sets the interval; both live in `~/.kanban95/settings.json` and default to on, every 10:
+
+```json
+{ "housekeeping": { "auto": true, "every": 10 } }
+```
+
+The count is derived from the database (`template = 'execute' AND merged_at IS NOT NULL`), not stored: a counter in the committed `config.json` would leave the base branch dirty after every merge, and a dirty base refuses launches and merges.
+
+## REST
+
+| method | path | event |
+|---|---|---|
+| POST | `/api/tickets/:id/launch` | `launch` |
+| POST | `/api/tickets/:id/answer` | `answer`; body `{ "answer": "..." }`, non-empty |
+| POST | `/api/tickets/:id/merge` | `merge` |
+| POST | `/api/tickets/:id/resume` | `resume` |
+| POST | `/api/tickets/:id/restart` | `restart` |
+| POST | `/api/tickets/:id/reject` | `reject`; body `{ "reason": "..." }`, non-empty (`400` otherwise) |
+
+Each returns the ticket (`200`), `409` with the refusal when the table has no row, and is audited like every REST mutation (`tickets.launch`, `tickets.answer`, `tickets.merge`, `tickets.resume`, `tickets.restart`, `tickets.reject`).
+
+`GET /api/runner` returns `{on, why?, running: [ids], left, backlog, lowMemory?}`: the flag, why it last stopped itself, the tickets it waits on, the candidates left, the number of backlog tickets and, during a memory hold, free memory and the floor in bytes. `PUT /api/runner` with `{"on": true | false}` turns it on (and launches at once) or off and returns the same, plus `cleared` (holds cleared) on off; audited as `runner.set`.

@@ -1,0 +1,205 @@
+/* Kanban95 desktop on top of 98.css. Compact; nothing here is decoration. */
+html, body { height: 100%; margin: 0; overflow: hidden; }
+/* Wallpaper: the project's colour (--k95-wall, set by app.js from /api/project; Win95 teal by default) under a faint blueprint grid that darkens toward the taskbar. Windows and cards are opaque. */
+body { background: linear-gradient(transparent 55%, rgb(0 0 0 / 0.22)),
+  repeating-linear-gradient(0deg, rgb(0 0 0 / 0.07) 0 1px, transparent 1px 16px),
+  repeating-linear-gradient(90deg, rgb(0 0 0 / 0.07) 0 1px, transparent 1px 16px), var(--k95-wall, #008080); font-family: var(--k95-font); font-size: 11px; }
+/* 98.css's pixel font is drawn for whole pixels: at a zoom that is not a whole number its strokes resample unevenly and show
+   stray lines, so setZoom (wm.js) sets .k95-vector and every control takes Tahoma. Same selectors as 98.css's font rule. */
+body { --k95-font: "Pixelated MS Sans Serif", Tahoma, sans-serif; }
+body.k95-vector { --k95-font: Tahoma, sans-serif; }
+.title-bar, .window, button, input, label, legend, li[role=tab], option, select, table, textarea, ul.tree-view { font-family: var(--k95-font); }
+[hidden] { display: none !important; }
+
+/* Desktop and windows */
+#desktop { position: fixed; inset: 0 0 28px 0; overflow: hidden; }
+.k95-win { position: absolute; box-sizing: border-box; display: flex; flex-direction: column; min-width: 220px; min-height: 120px; resize: both; overflow: hidden; }
+.k95-win.max { left: 0 !important; top: 0 !important; width: 100% !important; height: 100% !important; resize: none; }
+.k95-win > .window-body { flex: 1; min-height: 0; overflow: auto; margin: 4px; display: flex; flex-direction: column; gap: 4px; }
+.k95-win .title-bar { touch-action: none; user-select: none; flex: none; }
+/* Terminal title bars by agent state (termState in app.js sets data-state). Unfocused is the same colour mixed toward grey. */
+.k95-win[data-state="execute"] { --k95-from: navy; --k95-to: #1084d0; }
+.k95-win[data-state="test"] { --k95-from: #006400; --k95-to: #2ea043; }
+.k95-win[data-state="plan"] { --k95-from: #4b0082; --k95-to: #9b59d0; }
+.k95-win[data-state="human"] { --k95-from: #b34700; --k95-to: #ff9a2e; }
+.k95-win[data-state="ended"] { --k95-from: #808080; --k95-to: #b5b5b5; }
+.k95-win[data-state] .title-bar { background: linear-gradient(90deg, var(--k95-from), var(--k95-to)); }
+.k95-win[data-state] .title-bar.inactive { background: linear-gradient(90deg, color-mix(in srgb, var(--k95-from) 45%, #c0c0c0), color-mix(in srgb, var(--k95-to) 45%, #c0c0c0)); }
+
+/* Desktop icons: a column down the left edge, below every window (windows start at z-index 1) */
+#icons { position: absolute; z-index: 0; left: 4px; top: 4px; display: flex; flex-direction: column; gap: 6px; }
+.k95-icon { width: 72px; display: flex; flex-direction: column; align-items: center; gap: 3px; color: #fff; text-align: center;
+  cursor: default; user-select: none; outline: none; }
+.k95-icon img { pointer-events: none; }
+.k95-icon span { padding: 1px 2px; border: 1px dotted transparent; }
+.k95-icon:focus img { filter: brightness(0.55) sepia(1) hue-rotate(180deg) saturate(4); }
+.k95-icon:focus span { background: navy; border-color: #fff; }
+
+/* Taskbar */
+#taskbar { position: fixed; left: 0; right: 0; bottom: 0; height: 28px; display: flex; align-items: center; gap: 3px; padding: 0 2px;
+  background: silver; box-shadow: inset 0 1px #dfdfdf, inset 0 2px #fff; }
+#start { min-width: 54px; }
+/* Pinned launchers (Quick Launch), then one icon button per open window; past the bar's width #tasks scrolls (arrows, wheel),
+   its scrollbar hidden. A window's button is its icon and a short label, cut with an ellipsis; the full title is the tooltip. */
+#pinned { flex: none; display: flex; gap: 1px; padding: 0 4px 0 3px; border-left: 1px solid grey; box-shadow: inset 1px 0 #fff; }
+#pinned button { min-width: 0; width: 24px; height: 22px; padding: 0; box-shadow: none; background: none; }
+#pinned button:hover { box-shadow: inset -1px -1px #0a0a0a, inset 1px 1px #fff; }
+#pinned button:active { box-shadow: inset -1px -1px #fff, inset 1px 1px #0a0a0a; }
+#tasks { flex: 1; min-width: 0; display: flex; gap: 3px; overflow-x: auto; scrollbar-width: none; }
+#tasks .task { min-width: 0; width: 80px; height: 23px; flex: none; padding: 0 3px; display: flex; align-items: center; gap: 2px; font-size: 10px; }
+#tasks .task span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; pointer-events: none; }
+#pinned svg { display: block; margin: auto; }
+#pinned img { display: block; margin: auto; pointer-events: none; }
+#tasks .task img { flex: none; pointer-events: none; }
+#tasks .task.selected { outline: 1px dotted #000; outline-offset: -4px; background: #e8e8ff; }
+#tasks .task.active { box-shadow: inset -1px -1px #fff, inset 1px 1px #0a0a0a, inset -2px -2px #dfdfdf, inset 2px 2px grey; font-weight: bold; }
+.task-scroll { flex: none; min-width: 0; width: 16px; padding: 0; font-size: 7px; }
+#tray { flex: none; display: flex; align-items: center; gap: 4px; height: 23px; box-sizing: border-box; padding: 0 3px; margin: 0; font-size: 10px; white-space: nowrap; }
+.tray-button { min-width: 0; min-height: 0; padding: 0 3px; height: 18px; font-size: 10px; }
+.k95-switch { position: fixed; z-index: 100000; min-width: 140px; max-width: 240px; }
+.k95-switch .window-body { margin: 2px; display: flex; flex-direction: column; gap: 2px; }
+.k95-switch-row { display: flex; align-items: center; gap: 4px; height: 20px; padding: 0 2px 0 5px; color: #fff; cursor: default; }
+.k95-switch-row:hover, .k95-switch-row:focus { outline: 1px dotted #fff; outline-offset: -2px; }
+.k95-switch-row .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.k95-switch-row .gone { flex: none; padding: 0 2px; background: #c0c0c0; color: #000; font-size: 10px; line-height: 12px; }
+.k95-switch-row .run { flex: none; width: 6px; height: 6px; background: #0f0; border: 1px solid #000; }
+.k95-switch-row .attn { flex: none; padding: 0 2px; background: #fff; color: #c00000; font-size: 10px; font-weight: bold; line-height: 12px; }
+.k95-switch-row .x { flex: none; min-width: 0; min-height: 0; width: 16px; height: 14px; padding: 0; font-size: 9px; font-weight: bold; }
+.k95-switch-none { padding: 2px 4px; color: grey; }
+.tray-button.flag { color: #a00; font-weight: bold; }
+
+/* Menus (Start, card context menu) */
+.k95-menu { position: fixed; z-index: 100000; margin: 0; padding: 2px; list-style: none; background: silver; min-width: 150px;
+  box-shadow: inset -1px -1px #0a0a0a, inset 1px 1px #dfdfdf, inset -2px -2px grey, inset 2px 2px #fff; }
+.k95-menu li { position: relative; padding: 3px 20px 3px 18px; white-space: nowrap; cursor: default; }
+.k95-menu li:hover { background: navy; color: #fff; }
+.k95-menu li[aria-disabled] { color: grey; }
+.k95-menu li.sep { padding: 0; margin: 3px 1px; height: 0; border-top: 1px solid grey; border-bottom: 1px solid #fff; }
+.k95-menu li.sub::after { content: "▸"; position: absolute; right: 6px; }
+.k95-menu .k95-menu { display: none; position: absolute; left: 100%; top: -3px; color: #000; }
+.k95-menu li.sub:hover > .k95-menu { display: block; }
+
+/* Dialogs */
+.k95-dialog { padding: 0; border: 0; max-width: min(640px, 90vw); }
+.k95-dialog::backdrop { background: transparent; }
+.k95-dialog .k95-pre { max-height: 50vh; }
+.k95-buttons { justify-content: flex-end; margin-top: 10px; }
+.k95-download th { text-align: left; padding-right: 8px; }
+.k95-download td { word-break: break-all; }
+.k95-hashes { max-height: 120px; overflow: auto; font-family: Consolas, monospace; font-size: 10px; word-break: break-all; }
+
+/* Board */
+.k95-board { overflow: hidden !important; }
+.k95-toolbar { display: flex; gap: 4px; flex-wrap: wrap; flex: none; align-items: center; }
+.k95-filter-field { flex: none; padding: 0 2px; }
+.k95-filter { width: 220px; height: 16px; }
+.k95-columns { flex: 1; min-height: 0; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px; }
+.col { min-width: 0; min-height: 0; margin: 0; padding: 4px; display: flex; flex-direction: column; }
+.col > legend { cursor: pointer; }
+.col > legend.alert { color: #c00000; }
+.k95-sort { padding: 0 3px; }
+.k95-sort:hover { outline: 1px dotted currentColor; }
+.col.collapsed { padding: 4px 0; align-items: center; overflow: hidden; }
+.col.collapsed > legend { float: none; writing-mode: vertical-rl; white-space: nowrap; padding: 4px 0; margin: 0; }
+.col .cards { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; padding: 2px; }
+.card { background: #fff; padding: 3px 4px; cursor: default; user-select: none; touch-action: none;
+  box-shadow: inset -1px -1px #fff, inset 1px 1px grey, inset -2px -2px #dfdfdf, inset 2px 2px #0a0a0a; }
+.card.selected { outline: 1px dotted #000; outline-offset: -4px; background: #e8e8ff; }
+.card:focus { outline: 1px dotted #000; outline-offset: -2px; }
+.card.alert { background: #fff0f0; }
+.card.dragging { opacity: 0.4; }
+.card.ghost { position: fixed; z-index: 100001; pointer-events: none; opacity: 0.85; }
+.card-title { overflow-wrap: anywhere; }
+.badges { display: flex; flex-wrap: wrap; gap: 2px; margin-top: 2px; }
+.badge { border: 1px solid grey; padding: 0 3px; background: silver; font-size: 10px; white-space: nowrap; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+.badge.default { color: #555; font-style: italic; }
+.badge.flag { background: #a00; color: #fff; border-color: #600; }
+.badge.hold { background: #ffffc0; }
+.badge.run { background: navy; color: #fff; }
+.badge.tag { background: #c0e0ff; }
+.status-bar { flex: none; }
+/* Equal shares, so a long runner line cannot squeeze the Board's last-action field to an ellipsis. */
+.k95-status, .k95-runner { flex: 1 1 0; min-width: 0; }
+.status-bar-field { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+
+/* Tabs, tables, text */
+menu[role=tablist] { flex: none; margin-bottom: -2px !important; }
+/* 98.css's selected tab is faint: bold, 2px taller, and its silver box covers the panel's top border so it joins the panel. */
+menu[role=tablist] > li[aria-selected=true] { font-weight: bold; margin-top: -4px; margin-bottom: -4px; padding-bottom: 6px; background: silver; }
+menu[role=tablist] > li[aria-selected=true] > a { color: #000; }
+.k95-panel { flex: 1; min-height: 0; display: flex; }
+.k95-panel > .window-body { flex: 1; overflow: auto; margin: 6px; display: flex; flex-direction: column; gap: 6px; }
+.sunken-panel { flex: none; max-height: 220px; overflow: auto; }
+.sunken-panel table { width: 100%; }
+.k95-args { font-family: Consolas, monospace; word-break: break-all; }
+.k95-pre, .k95-notes pre, .k95-question pre, .k95-flag pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-family: Consolas, monospace; font-size: 11px; }
+.k95-pre { flex: 1; min-height: 80px; overflow: auto; background: #fff; padding: 4px;
+  box-shadow: inset -1px -1px #fff, inset 1px 1px grey, inset -2px -2px #dfdfdf, inset 2px 2px #0a0a0a; }
+.k95-notes { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 4px; }
+.note { background: #fff; padding: 3px 5px; border-left: 4px solid silver; }
+.note.failure { border-left-color: #a00; }
+.note.question { border-left-color: #c80; }
+.note.answer { border-left-color: navy; }
+.note.summary { border-left-color: green; }
+.note-head { color: #444; margin-bottom: 2px; }
+.note-meta { color: #666; display: flex; gap: 4px; align-items: center; }
+.note-meta button { min-width: 0; padding: 0 6px; margin-left: auto; }
+.note-meta button + button { margin-left: 0; }
+.k95-brain-edit { width: 460px; max-width: 80vw; }
+.k95-brain-edit textarea { width: 100%; box-sizing: border-box; }
+.k95-facts { margin: 0; font-weight: bold; }
+.k95-form { display: flex; flex-direction: column; gap: 6px; }
+.k95-form textarea, .k95-form input[type=text] { width: 100%; box-sizing: border-box; }
+.k95-attachment { display: flex; align-items: center; gap: 6px; }
+.k95-attachment img { width: 48px; height: 48px; object-fit: contain; background: #fff; }
+.k95-attachment span { flex: 1; overflow-wrap: anywhere; }
+.k95-image { align-self: flex-start; }
+.field-row-stacked { position: relative; }
+.k95-label { width: 50px; }
+.k95-models td, .k95-models th { padding: 1px 3px; text-align: left; }
+.k95-pick { min-width: 0; padding: 0 4px; margin-left: 2px; }
+.k95-brain .k95-notes { flex: 1; overflow: auto; min-height: 60px; }
+.k95-brain .note[data-scope=global] { border-left-color: navy; }
+.k95-brain input[type=search] { flex: 1; }
+.k95-brain textarea { flex: 1; }
+.k95-question textarea { flex: 1; }
+#preferences, #template-text { flex: 1; }
+.k95-notepad { flex: 1; min-height: 0; display: flex; gap: 4px; }
+.k95-notepad textarea { flex: 1; resize: none; font-family: Consolas, monospace; font-size: 12px; }
+fieldset { margin: 0; }
+.k95-scope { flex: none; margin: 2px 4px; }
+.k95-scoped { border: 0; border-image: none; padding: 0; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.k95-scoped:disabled { color: grey; }
+.k95-scope-bar { flex: none; }
+
+/* Terminal */
+.k95-term { padding: 0 !important; margin: 2px !important; background: #000; overflow: hidden !important; }
+.k95-term .xterm { height: 100%; padding: 2px; }
+
+/* Mic button: beside every text field, and in terminal title bars */
+.k95-mic { min-width: 22px !important; width: 22px; height: 21px; padding: 0 !important; flex: none; position: relative; align-self: flex-start; }
+.k95-mic::before { content: ""; position: absolute; left: 8px; top: 4px; width: 5px; height: 8px; border-radius: 3px; background: #000; }
+.k95-mic::after { content: ""; position: absolute; left: 6px; top: 10px; width: 7px; height: 4px; border: 1px solid #000; border-top: 0; border-radius: 0 0 5px 5px; }
+.k95-mic[data-state=recording]::before { background: #d00; }
+.k95-mic[data-state=recording] { box-shadow: inset -1px -1px #fff, inset 1px 1px #0a0a0a, inset -2px -2px #dfdfdf, inset 2px 2px grey; }
+.k95-mic[data-state=transcribing]::before { background: #00a; animation: k95-blink 0.6s steps(1) infinite; }
+.k95-mic[data-state=error]::before { background: #a00; }
+.k95-mic[data-state=error]::after { border-color: #a00; }
+@keyframes k95-blink { 50% { background: silver; } }
+.title-bar-controls .k95-mic { width: 16px; min-width: 16px !important; height: 14px; margin-right: 2px; }
+.title-bar-controls .k95-mic::before { left: 6px; top: 2px; width: 4px; height: 6px; }
+.title-bar-controls .k95-mic::after { left: 4px; top: 6px; width: 6px; height: 3px; }
+.field-row-stacked > .k95-mic { position: absolute; right: 0; top: -5px; height: 16px; }
+.field-row-stacked > .k95-mic::before { top: 2px; }
+.field-row-stacked > .k95-mic::after { top: 7px; }
+.k95-panel .window-body > button, .k95-form button, fieldset > button { align-self: flex-start; }
+.k95-meter { width: 80px; height: 12px; padding: 2px; }
+.k95-limits { display: flex; flex-direction: column; gap: 6px; }
+
+/* First-run setup page (ui/setup.html) */
+.k95-setup { width: 460px; max-width: calc(100% - 16px); margin: 12vh auto 0; }
+.k95-setup .field-row-stacked { margin-bottom: 8px; }
+.k95-setup-error { color: #a00000; }
+.k95-setup-buttons { justify-content: flex-end; }
+.k95-setup-requirements { margin-bottom: 8px; }
+.k95-requirement-hint { margin: 2px 0 6px 12px; }

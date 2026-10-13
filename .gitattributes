@@ -1,0 +1,6 @@
+* text=auto eol=lf
+*.ico binary
+*.woff2 binary
+*.cmd text eol=crlf
+*.vbs text eol=crlf
+*.command text eol=lf

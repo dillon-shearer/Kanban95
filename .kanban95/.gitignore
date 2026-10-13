@@ -1,0 +1,9 @@
+board.db
+board.db-*
+sessions/
+attachments/
+memory.log
+notepad.md
+runner.json
+ui.json
+templates/*.replaced.md

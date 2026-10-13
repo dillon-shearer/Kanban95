@@ -1,0 +1,114 @@
+// Agent terminals: a pseudo-terminal per run with a minimal environment and a capped scrollback.
+import { delimiter, dirname } from 'node:path';
+import { spawn, type IPty } from 'node-pty';
+
+const SCROLLBACK_LINES = 2000;
+const SCROLLBACK_BYTES = 2 * 1024 * 1024;
+
+/**
+ * The only daemon variables a CLI inherits: what Windows and a shell need to run, where the user's home and temp are
+ * (Claude Code and Codex keep their own auth under the home dir), and the CLIs' own config-dir overrides.
+ * Nothing else crosses, so a secret in the daemon's environment never reaches an agent.
+ */
+const ENV_ALLOW = [
+  'PATH', 'PATHEXT', 'SystemRoot', 'SystemDrive', 'windir', 'ComSpec',
+  'HOME', 'USERPROFILE', 'HOMEDRIVE', 'HOMEPATH', 'APPDATA', 'LOCALAPPDATA', 'USERNAME',
+  'TEMP', 'TMP', 'TMPDIR', 'LANG',
+  'CLAUDE_CONFIG_DIR', 'CODEX_HOME',
+];
+
+export function childEnv(extra: Record<string, string> = {}): Record<string, string> {
+  // NoDefaultCurrentDirectoryInExePath: cmd.exe would otherwise run a `claude.cmd` sitting in the worktree before the real one.
+  const env: Record<string, string> = { TERM: 'xterm-256color', NoDefaultCurrentDirectoryInExePath: '1' };
+  for (const k of ENV_ALLOW) if (process.env[k] !== undefined) env[k] = process.env[k]; // process.env is case-insensitive on Windows
+  // The daemon's own Node (24) first: the operator's PATH `node` may be older, and the tests need 24 (node:sqlite with fts5).
+  env.PATH = [dirname(process.execPath), env.PATH].filter(Boolean).join(delimiter);
+  return { ...env, ...extra };
+}
+
+/** Whether an argument can pass through cmd.exe unescaped: `"`, `%` and newlines cannot, and a trailing `\` would escape the closing quote. */
+export const cmdSafe = (a: string) => !/["%\r\n]/.test(a) && !a.endsWith('\\');
+
+/**
+ * Windows: cmd.exe resolves `claude` (.exe) and `codex` (an npm .cmd shim) through PATHEXT, which conpty alone does not.
+ * The command line is built here because node-pty's own quoting is MSVCRT-style, which cmd.exe does not read.
+ */
+function windowsCommandLine(cmd: string, args: string[]): string {
+  const quoted = [cmd, ...args].map((a) => {
+    if (!cmdSafe(a)) throw new Error(`argument not safe to pass through cmd.exe: ${a}`);
+    return /^[\w\-.:/=\\]+$/.test(a) ? a : `"${a}"`;
+  });
+  return `/d /s /c "${quoted.join(' ')}"`;
+}
+
+export function spawnPty(cmd: string, args: string[], o: { cwd: string; env: Record<string, string>; cols?: number; rows?: number }) {
+  const opts = { name: 'xterm-256color', cwd: o.cwd, env: o.env, cols: o.cols ?? 120, rows: o.rows ?? 30 };
+  const pty: IPty = process.platform === 'win32'
+    ? spawn(o.env.ComSpec ?? 'cmd.exe', windowsCommandLine(cmd, args), opts)
+    : spawn(cmd, args, opts);
+  // node-pty 1.1's Windows kill() closes the pseudoconsole, then forks a helper to list the processes on the shell's console and
+  // kills each; when the helper fails (always, once the console is closed: "AttachConsole failed") it kills the shell's pid 5 s
+  // later. By then (a bare kill, or killTree after a taskkill that timed out) Windows may have handed that pid to another
+  // process, which node-pty would end (under a full npm test, other tickets' agents and git mid-merge). killTree ends the tree
+  // itself, so the list is dropped.
+  // When the shell exits, node-pty drops its pseudoconsole handle without closing it, so its conhost.exe would live as long as
+  // the daemon. Closing our end of the console's input pipe makes conhost exit. node-pty reports the exit only after it has
+  // flushed the output, so nothing is lost.
+  // ponytail: reaches into node-pty internals; drop both once node-pty lists the processes before it closes the console and
+  // closes the pseudoconsole on exit.
+  type OnError = { on(e: 'error', f: () => void): void };
+  const agent = (pty as unknown as { _agent?: {
+    _getConsoleProcessList?: () => Promise<number[]>;
+    _inSocket?: OnError & { destroy(): void };
+    _conoutSocketWorker?: { _worker?: OnError };
+  } })._agent;
+  if (agent?._getConsoleProcessList) agent._getConsoleProcessList = () => Promise.resolve([]);
+  agent?._inSocket?.on('error', () => {});
+  agent?._conoutSocketWorker?._worker?.on('error', () => {});
+  if (agent?._inSocket) pty.onExit(() => agent._inSocket!.destroy());
+
+  // Raw terminal output, trimmed to the last SCROLLBACK_LINES lines and SCROLLBACK_BYTES characters whenever either grows to twice its cap.
+  let buf = '';
+  let lines = 0;
+  const trim = () => {
+    let parts = buf.split('\n').slice(-SCROLLBACK_LINES);
+    buf = parts.join('\n');
+    if (buf.length > SCROLLBACK_BYTES) {
+      const tail = buf.slice(-SCROLLBACK_BYTES);
+      const nl = tail.indexOf('\n');
+      buf = nl >= 0 ? tail.slice(nl + 1) : tail;
+      parts = buf.split('\n');
+    }
+    lines = parts.length - 1;
+  };
+  pty.onData((d) => {
+    buf += d;
+    for (const c of d) if (c === '\n') lines++;
+    if (lines >= 2 * SCROLLBACK_LINES || buf.length > 2 * SCROLLBACK_BYTES) trim();
+  });
+  return {
+    pty,
+    scrollback: () => {
+      trim();
+      return buf;
+    },
+  };
+}
+
+/**
+ * The last `n` lines of text in raw terminal output, for a note: escape sequences dropped, a cursor move taken as a line break
+ * (a TUI such as Claude Code's positions text rather than printing newlines) and a cursor-forward as a space (Claude Code draws
+ * the spaces between words that way), blank and repeated lines skipped, each cut at 200 characters.
+ */
+export function lastLines(raw: string, n: number): string[] {
+  const text = raw
+    .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '') // OSC (window title, hyperlinks)
+    .replace(/\x1b\[[0-?]*[ -/]*[HfABEFGd]/g, '\n') // CSI cursor moves
+    .replace(/\x1b\[\d*C/g, ' ') // CSI cursor forward
+    .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '') // every other CSI
+    .replace(/\x1b[@-_]/g, '')
+    .replace(/[\x00-\x08\x0b-\x1f\x7f]/g, (c) => (c === '\r' ? '\n' : ''));
+  const out: string[] = [];
+  for (const l of text.split('\n').map((x) => x.trim().slice(0, 200)).filter(Boolean)) if (out.at(-1) !== l) out.push(l);
+  return out.slice(-n);
+}

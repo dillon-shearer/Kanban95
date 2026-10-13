@@ -1,0 +1,7 @@
+{
+  "name": "kanban95",
+  "version": "0.1.0",
+  "description": "Skills for agents working a Kanban95 ticket: start, complete, and ask the operator.",
+  "author": { "name": "Dillon Shearer" },
+  "skills": "./"
+}
