@@ -1,7 +1,7 @@
 {
   "name": "kanban95",
   "private": true,
-  "version": "1.0.5",
+  "version": "1.0.6",
   "engines": {
     "node": ">=24"
   },
