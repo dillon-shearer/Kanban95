@@ -129,6 +129,15 @@ describe('git init', { timeout: 60_000 }, () => {
     expect(existsSync(join(dir, '.worktrees'))).toBe(false); // the old place, under the repo
   });
 
+  it('a copied repo with no .git is not inited and the runner state says to clone it', async () => {
+    mkdirSync(join(dir, '.github'));
+    writeFileSync(join(dir, 'a.txt'), 'a\n');
+    await restart();
+    expect(existsSync(join(dir, '.git'))).toBe(false);
+    const { gitError } = await (await request('GET', '/api/runner')).json();
+    expect(gitError).toMatch(/no git repo with a commit.*has \.github but no \.git.*git clone/);
+  });
+
   it('a repo with no commit gets the first commit and keeps its own .gitignore', async () => {
     git('init', '-q');
     writeFileSync(join(dir, '.gitignore'), 'secret.txt\n');

@@ -41,6 +41,7 @@ const SAFE_ENV = ['.env.example', '.env.sample', '.env.template'];
 /** A plain folder's first `.gitignore`: the usual build output, env files and the board's own state. */
 const FIRST_GITIGNORE = ['node_modules/', 'dist/', 'build/', '.env', '.env.*', ...SAFE_ENV.map((f) => `!${f}`), ...INNER_GITIGNORE.split('\n').filter(Boolean).map((l) => `.kanban95/${l}`)].join('\n') + '\n';
 export const FIRST_COMMIT = 'Start the Kanban95 board';
+const GIT_COPY_MARKS = ['.gitattributes', '.github'];
 
 /** A path named `.env` or `.env.<anything>`, in any folder, except the usual templates: never in the first commit. Judged by name only. */
 const isSecretPath = (p: string) => {
@@ -59,6 +60,11 @@ const isSecretPath = (p: string) => {
 export function initRepo(repo: string): void {
   try {
     if (!existsSync(join(repo, '.git'))) {
+      const marks = GIT_COPY_MARKS.filter((m) => existsSync(join(repo, m)));
+      if (marks.length) {
+        throw new Error(`the folder has ${marks.join(' and ')} but no .git, so it looks like a copy of a git repo; `
+          + 'clone the repo with git clone so the board keeps its history and remote, or run git init yourself if it is new');
+      }
       git(repo, 'init', '-q');
       console.error(`[git] ${repo} is not a git repo: ran git init`);
     }
