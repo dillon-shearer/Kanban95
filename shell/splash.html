@@ -1,0 +1,13 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Kanban95</title>
+<style>
+html, body { margin: 0; height: 100%; overflow: hidden; background: #c0c0c0; font: 12px Tahoma, "MS Sans Serif", sans-serif; cursor: default; user-select: none; }
+body { box-sizing: border-box; display: flex; flex-direction: column; justify-content: center; gap: 12px; padding: 0 16px; border: 2px solid; border-color: #fff #000 #000 #fff; box-shadow: inset -1px -1px #808080, inset 1px 1px #dfdfdf; }
+.row { display: flex; align-items: center; gap: 12px; }
+.bar { height: 18px; padding: 2px; box-sizing: border-box; overflow: hidden; background: #fff; border: 1px solid; border-color: #808080 #fff #fff #808080; }
+.blocks { width: 60%; height: 100%; background: repeating-linear-gradient(90deg, #000080 0 8px, transparent 8px 10px); animation: run 1.4s steps(14) infinite; }
+@keyframes run { from { transform: translateX(-100%); } to { transform: translateX(170%); } }
+</style>
+<div class="row"><img src="icon.png" width="32" height="32" alt=""><span>Starting Kanban95...</span></div>
+<div class="bar"><div class="blocks"></div></div>
