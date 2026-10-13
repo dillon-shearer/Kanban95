@@ -174,6 +174,10 @@ const STOP_WAIT: Duration = Duration::from_secs(15);
 
 const MAIN: &str = "main";
 
+const SPLASH: &str = "splash";
+
+const SPLASH_AFTER: Duration = Duration::from_millis(400);
+
 const CHECK_EVERY: Duration = Duration::from_secs(60 * 60);
 
 /// A command a daemon prints on stdout after its port line (docs/ARCHITECTURE.md -> Hosted boards).
@@ -233,6 +237,7 @@ enum Effect {
     Open { label: String, url: Url, title: String },
     Focus(String),
     Close(String),
+    Splash(bool),
     Error(String),
     Exit(i32),
     Check { to: Daemon, manual: bool },
@@ -403,6 +408,38 @@ impl Host {
         t.boards.insert(repo.into(), b);
         t.main = repo.into();
         self.sync(&t);
+    }
+
+    fn boot(self: &Arc<Self>, repo: String, (mut child, secret, out): (Child, String, ChildStdout), spawned: Instant) -> bool {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            if std::env::var_os("KANBAN95_SPLASH_TEST").is_some() {
+                std::thread::sleep(Duration::from_secs(3));
+            }
+            let _ = tx.send(handshake(out));
+        });
+        let (shake, splash) = match rx.recv_timeout(SPLASH_AFTER.saturating_sub(spawned.elapsed())) {
+            Ok(shake) => (shake, false),
+            Err(_) => {
+                self.emit(vec![Effect::Splash(true)]);
+                (rx.recv().unwrap_or_else(|_| Err("The Kanban95 daemon's handshake was lost.".into())), true)
+            }
+        };
+        let gone = splash.then_some(Effect::Splash(false));
+        match shake {
+            Ok((port, lines)) => {
+                let main = url(port, &secret, Place::Docked);
+                self.first(&repo, Started { child, port, secret, lines });
+                self.emit([Some(Effect::Open { label: MAIN.into(), url: main, title: title(Some(repo)) }), gone].into_iter().flatten().collect());
+                true
+            }
+            Err(e) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                self.emit(gone.into_iter().chain([Effect::Error(e), Effect::Exit(1)]).collect());
+                false
+            }
+        }
     }
 
     fn command(self: &Arc<Self>, verb: Verb, path: &str) {
@@ -916,18 +953,52 @@ fn profile(repo: Option<String>) -> String {
     fnv(&std::fs::canonicalize(&repo).map_or(repo, |d| d.to_string_lossy().into_owned()))
 }
 
+fn data_dir<R: Runtime, M: Manager<R>>(app: &M) -> tauri::Result<std::path::PathBuf> {
+    // WebView2 prefers `WEBVIEW2_USER_DATA_FOLDER` to the folder passed here; passing it too keeps Tauri from
+    // creating an unused profile folder.
+    Ok(match std::env::var_os("WEBVIEW2_USER_DATA_FOLDER") {
+        Some(dir) => dir.into(),
+        None => app.path().app_local_data_dir()?.join("boards").join(profile(std::env::args().nth(1))),
+    })
+}
+
+const SPLASH_SCHEME: &str = "k95splash";
+
+fn splash_page(path: &str) -> Option<(&'static str, &'static [u8])> {
+    match path {
+        "/" => Some(("text/html", include_bytes!("../splash.html"))),
+        "/icon.png" => Some(("image/png", include_bytes!("../icons/32x32.png"))),
+        _ => None,
+    }
+}
+
+fn splash_url() -> Url {
+    let url = if cfg!(windows) { format!("http://{SPLASH_SCHEME}.localhost/") } else { format!("{SPLASH_SCHEME}://localhost/") };
+    url.parse().expect("splash url")
+}
+
+fn splash<R: Runtime, M: Manager<R>>(app: &M) -> tauri::Result<WebviewWindow<R>> {
+    let home = splash_url();
+    WebviewWindowBuilder::new(app, SPLASH, WebviewUrl::CustomProtocol(home.clone()))
+        .title("Kanban95")
+        .data_directory(data_dir(app)?)
+        .inner_size(320.0, 120.0)
+        .center()
+        .decorations(false)
+        .resizable(false)
+        .always_on_top(true)
+        .on_navigation(move |to| to.origin() == home.origin())
+        .on_new_window(|_, _| NewWindowResponse::Deny)
+        .on_permission_request(|_, _| PermissionResponse::Deny)
+        .build()
+}
+
 /// A board window, locked to the hosted daemons' origins. It holds no Tauri capability (there is no `capabilities/`
 /// dir), so every IPC command is refused for it: the UI talks to the daemon over HTTP and never calls Tauri.
 fn window<R: Runtime, M: Manager<R>>(app: &M, label: &str, url: Url, title: String, ports: Ports) -> tauri::Result<WebviewWindow<R>> {
-    // WebView2 prefers `WEBVIEW2_USER_DATA_FOLDER` to the folder passed here; passing it too keeps Tauri from
-    // creating an unused profile folder.
-    let data = match std::env::var_os("WEBVIEW2_USER_DATA_FOLDER") {
-        Some(dir) => dir.into(),
-        None => app.path().app_local_data_dir()?.join("boards").join(profile(std::env::args().nth(1))),
-    };
     WebviewWindowBuilder::new(app, label, WebviewUrl::External(url))
         .title(title)
-        .data_directory(data)
+        .data_directory(data_dir(app)?)
         .inner_size(1280.0, 720.0)
         // Any top-level navigation off a hosted daemon's origin is cancelled, and the CSP keeps frames and fetches on
         // the origin. No new window opens: an https one goes to the system browser, anything else is dropped.
@@ -1017,8 +1088,25 @@ fn apply<R: Runtime>(app: &AppHandle<R>, ports: &Ports, fx: Effect) {
         }
         Effect::Open { label, url, title } => match window(app, &label, url, title, ports.clone()) {
             Ok(w) => follow_page_fullscreen(&w),
+            Err(e) if label == MAIN => {
+                error_dialog(&format!("Could not open the board window: {e}"));
+                app.exit(1);
+            }
             Err(e) => eprintln!("[shell] could not open a window: {e}"),
         },
+        Effect::Splash(true) => {
+            if let Err(e) = splash(app) {
+                eprintln!("[shell] could not open the splash: {e}");
+            }
+        }
+        Effect::Splash(false) => {
+            if let Some(w) = app.get_webview_window(SPLASH) {
+                let _ = w.hide();
+                if app.get_webview_window(MAIN).is_some() {
+                    let _ = w.destroy();
+                }
+            }
+        }
         Effect::Focus(label) => {
             if let Some(w) = app.get_webview_window(&label) {
                 let _ = w.unminimize();
@@ -1056,13 +1144,14 @@ fn main() {
     let repo = std::env::args().nth(1).map(|a| key(&a)).unwrap_or_default();
     let installed = staged(exe_dir().as_deref()).is_some();
     let host = Host::new(node, installed);
-    let first = match host.start(&repo) {
-        Ok(started) => started,
+    let first = match spawn((host.launch)(&repo)) {
+        Ok(spawned) => spawned,
         Err(e) => {
             error_dialog(&e);
             std::process::exit(1);
         }
     };
+    let spawned = Instant::now();
     let setup = host.clone();
 
     let mut builder = tauri::Builder::default();
@@ -1072,14 +1161,21 @@ fn main() {
     builder
         .manage(host)
         .manage(Pending::default())
+        .register_uri_scheme_protocol(SPLASH_SCHEME, |_, req| {
+            let (status, kind, body) = match splash_page(req.uri().path()) {
+                Some((kind, body)) => (200, kind, body),
+                None => (404, "text/plain", &b""[..]),
+            };
+            tauri::http::Response::builder().status(status).header("Content-Type", kind).body(body).expect("splash response")
+        })
         .setup(move |app| {
             let host = setup;
             let (handle, ports) = (app.handle().clone(), host.ports.clone());
             let _ = host.ui.set(Box::new(move |fx| apply(&handle, &ports, fx)));
-            let main = url(first.port, &first.secret, Place::Docked);
-            host.first(&repo, first);
-            follow_page_fullscreen(&window(app, MAIN, main, title(Some(repo)), host.ports.clone())?);
             std::thread::spawn(move || {
+                if !host.boot(repo, first, spawned) {
+                    return;
+                }
                 // ponytail: 250 ms poll so `Exit` can take every child without waiting on a blocked `wait()`.
                 while host.tick() {
                     std::thread::sleep(Duration::from_millis(250));
@@ -1087,14 +1183,11 @@ fn main() {
             });
             Ok(())
         })
-        .on_window_event(|w, event| {
-            if let WindowEvent::Destroyed = event {
-                if w.label() == MAIN {
-                    w.app_handle().exit(0);
-                } else {
-                    w.state::<Arc<Host>>().window_closed(w.label());
-                }
-            }
+        .on_window_event(|w, event| match event {
+            WindowEvent::CloseRequested { api, .. } if w.label() == SPLASH => api.prevent_close(),
+            WindowEvent::Destroyed if w.label() == MAIN => w.app_handle().exit(0),
+            WindowEvent::Destroyed => w.state::<Arc<Host>>().window_closed(w.label()),
+            _ => {}
         })
         .build(tauri::generate_context!())
         .expect("tauri build")
@@ -1701,6 +1794,44 @@ mod tests {
         std::fs::write(&bundled, "").unwrap();
         assert_eq!(node_exe(Some(&dir)), bundled);
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[cfg(windows)]
+    const PAUSE: &str = "ping -n 2 127.0.0.1 >nul&";
+    #[cfg(not(windows))]
+    const PAUSE: &str = "sleep 1;";
+
+    #[test]
+    fn the_splash_shows_only_after_400_ms_and_goes_before_the_board_or_the_error() {
+        let boot = |line: String| {
+            let (host, seen) = host(|_, _| unreachable!());
+            let ok = host.boot("k95-a".into(), spawn(stand_in(line)).unwrap(), Instant::now());
+            let fx: Vec<String> = std::mem::take(&mut *lock(&seen))
+                .into_iter()
+                .map(|f| match f {
+                    Effect::Open { label, .. } => format!("open {label}"),
+                    Effect::Splash(on) => format!("splash {on}"),
+                    Effect::Error(_) => "error".into(),
+                    Effect::Exit(code) => format!("exit {code}"),
+                    f => format!("{f:?}"),
+                })
+                .collect();
+            let hosted = hosted(&host).len();
+            host.shutdown();
+            (ok, hosted, fx)
+        };
+        let (ok, hosted, fx) = boot(up(41501, ""));
+        assert!(ok && hosted == 1);
+        assert_eq!(fx, ["open main"]);
+        let (ok, hosted, fx) = boot(format!("{PAUSE}{}", up(41502, "")));
+        assert!(ok && hosted == 1);
+        assert_eq!(fx, ["splash true", "open main", "splash false"]);
+        let (ok, hosted, fx) = boot("echo nope".into());
+        assert!(!ok && hosted == 0);
+        assert_eq!(fx, ["error", "exit 1"]);
+        let (ok, hosted, fx) = boot(format!("{PAUSE}echo nope"));
+        assert!(!ok && hosted == 0);
+        assert_eq!(fx, ["splash true", "splash false", "error", "exit 1"]);
     }
 
     #[test]
