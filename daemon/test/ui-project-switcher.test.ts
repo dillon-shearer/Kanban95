@@ -12,7 +12,7 @@ import { writeProjects } from '../src/settings.ts';
 import { until } from './cdp.ts';
 import { base, click, column, page, repo, srv, statusBar, ticket } from './ui.ts';
 
-const dir = (p: string) => realpathSync.native(mkdtempSync(join(tmpdir(), p)));
+const dir = (p: string) => mkdtempSync(join(tmpdir(), p));
 let own: string, other: string, third: string, idle: string;
 let ownEntry: { repo: string; port: number; shell: number | null };
 const sleepers: ChildProcess[] = [];

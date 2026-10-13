@@ -1,7 +1,7 @@
 // Start -> Projects on a macOS checkout starts the dev shell binary, as on Windows, not a launcher script.
 import './home.ts';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, expect, it } from 'vitest';
@@ -16,7 +16,7 @@ let repo: string;
 let root: string;
 beforeAll(() => {
   Object.defineProperty(process, 'platform', { value: 'darwin' });
-  repo = realpathSync.native(mkdtempSync(join(tmpdir(), 'k95-mac-')));
+  repo = mkdtempSync(join(tmpdir(), 'k95-mac-'));
   execFileSync('git', ['init', '-q'], { cwd: repo });
   writeProjects([{ path: repo, colour: 120 }], repo);
   root = mkdtempSync(join(tmpdir(), 'k95-root-'));

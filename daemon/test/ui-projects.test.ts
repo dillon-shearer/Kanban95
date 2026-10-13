@@ -10,7 +10,7 @@ import { boards, entryPath } from '../src/boards.ts';
 import { writeProjects } from '../src/settings.ts';
 import { page, base, repo, srv, statusBar } from './ui.ts';
 
-const other = realpathSync.native(mkdtempSync(join(tmpdir(), 'k95-other-'))); // a plain folder, no git
+const other = mkdtempSync(join(tmpdir(), 'k95-other-')); // a plain folder, no git
 afterAll(() => rmSync(other, { recursive: true, force: true, maxRetries: 5 }));
 
 const saved = () => JSON.parse(readFileSync(join(process.env.USERPROFILE!, '.kanban95', 'projects.json'), 'utf8'));
@@ -69,7 +69,7 @@ describe('ui-projects', { timeout: 60_000 }, () => {
 
   it('Start → Projects lists every project, marks the running one, and Open in new window opens or focuses it', async () => {
     const own = realpathSync.native(repo);
-    const idle = realpathSync.native(mkdtempSync(join(tmpdir(), 'k95-idle-')));
+    const idle = mkdtempSync(join(tmpdir(), 'k95-idle-'));
     execFileSync('git', ['init', '-q'], { cwd: idle });
     const root = mkdtempSync(join(tmpdir(), 'k95-root-')); // a checkout with a built shell; nothing is really started
     for (const f of ['daemon/src/server.ts', 'shell/target/debug/kanban95-shell.exe', 'shell/target/debug/kanban95-shell']) {

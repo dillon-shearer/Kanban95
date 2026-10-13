@@ -1,6 +1,6 @@
 import './home.ts';
 import { execFileSync } from 'node:child_process';
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, parse } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -27,7 +27,7 @@ describe.runIf(process.platform === 'win32')('projects.json on a carried drive',
   const point = (dir: string) => writeFileSync(pointerPath(), dir + '\n');
 
   beforeAll(() => {
-    base = realpathSync.native(mkdtempSync(join(tmpdir(), 'k95-carried-')));
+    base = mkdtempSync(join(tmpdir(), 'k95-carried-'));
     data = join(base, 'data');
     moved = join(base, 'moved');
     repo = join(base, 'repo');

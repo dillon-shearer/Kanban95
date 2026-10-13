@@ -1,7 +1,7 @@
 // Start → Projects: the running registry ~/.kanban95/running/<pid>.json, and /api/projects/open and /focus.
 import './home.ts';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterAll, beforeAll, expect, it } from 'vitest';
@@ -10,7 +10,7 @@ import { start } from '../src/server.ts';
 import { writeProjects } from '../src/settings.ts';
 
 const repo = () => {
-  const r = realpathSync.native(mkdtempSync(join(tmpdir(), 'k95-run-')));
+  const r = mkdtempSync(join(tmpdir(), 'k95-run-'));
   execFileSync('git', ['init', '-q'], { cwd: r });
   return r;
 };

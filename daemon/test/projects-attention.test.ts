@@ -1,6 +1,6 @@
 import './home.ts';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, expect, it } from 'vitest';
@@ -21,7 +21,7 @@ const entry = () => JSON.parse(readFileSync(entryPath(process.pid), 'utf8'));
 const attention = async () => (await (await api('GET', '/projects')).json()).attention;
 
 beforeAll(async () => {
-  repo = realpathSync.native(mkdtempSync(join(tmpdir(), 'k95-attn-')));
+  repo = mkdtempSync(join(tmpdir(), 'k95-attn-'));
   execFileSync('git', ['init', '-q'], { cwd: repo });
   srv = await start({ repo });
   writeProjects([{ path: repo, colour: '#008080' }], repo);

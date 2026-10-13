@@ -2,7 +2,7 @@
 // on a plain folder), and runs tickets there; with no git identity it still serves and says why nothing can launch.
 import './home.ts'; // also here, not only in vitest.config.ts: a run from the repo root skips that config and wrote the real home
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
@@ -82,7 +82,7 @@ const restart = async () => {
 
 beforeEach(() => {
   writeFileSync(gitconfig, IDENTITY);
-  dir = realpathSync.native(mkdtempSync(join(tmpdir(), 'k95-plain-')));
+  dir = mkdtempSync(join(tmpdir(), 'k95-plain-'));
 });
 afterEach(async () => {
   await srv?.close();
