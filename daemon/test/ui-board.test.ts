@@ -248,6 +248,7 @@ describe('ui-board', { timeout: 60_000 }, () => {
       }
       await countUnpushed(srv.board); // what daemon start runs
       await page.goto(base);
+      await until(() => page.evaluate(`!!document.querySelector('.k95-unpushed')`), 'the status bar');
       await until(async () => (await field()) === '2 commits not pushed', 'the unpushed field');
       await page.evaluate(`document.querySelector('.k95-unpushed button').click()`);
       await until(async () => (await field()) === null, 'the field gone');
