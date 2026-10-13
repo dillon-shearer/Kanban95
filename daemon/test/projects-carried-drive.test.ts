@@ -33,7 +33,7 @@ describe.runIf(process.platform === 'win32')('projects.json on a carried drive',
     repo = join(base, 'repo');
     for (const d of [data, moved, repo]) mkdirSync(d);
     execFileSync('git', ['init', '-q'], { cwd: repo });
-    rel = repo.slice(parse(repo).root.length);
+    rel = repo.slice(parse(repo).root.length).replaceAll('\\', '/');
     mkdirSync(process.env.KANBAN95_HOME!, { recursive: true });
   });
   afterAll(() => {
