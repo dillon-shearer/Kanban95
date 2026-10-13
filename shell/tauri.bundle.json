@@ -1,7 +1,7 @@
 {
   "bundle": {
     "active": true,
-    "resources": { "target/app/": "app/" },
+    "resources": { "target/app/": "app/", "target/npm/": "" },
     "externalBin": ["target/sidecar/node"]
   },
   "plugins": {

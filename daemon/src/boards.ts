@@ -95,10 +95,10 @@ export function hostedMap(shell: number | null | undefined): Record<string, bool
   return Object.fromEntries(readProjects().map((p) => [p.path, shell != null && live.some((e) => same(e.repo, p.path) && e.shell === shell)]));
 }
 
-type Verb = 'open' | 'switch' | 'popout' | 'dock' | 'close' | 'restart' | 'check' | 'checknow' | 'update';
+type Verb = 'open' | 'switch' | 'popout' | 'dock' | 'close' | 'restart' | 'check' | 'checknow' | 'update' | 'pick';
 
-export function tellShell(verb: Verb, path: string): void {
-  process.stdout.write(`KANBAN95 ${verb}=${normal(path)}\n`);
+export function tellShell(verb: Verb, path: string, rest = ''): void {
+  process.stdout.write(`KANBAN95 ${verb}=${path && normal(path)}${rest && ' ' + rest}\n`);
 }
 
 export function askShell(board: { shell?: boolean; shellId?: number | null }, verb: Verb, path: unknown): { name: string } {

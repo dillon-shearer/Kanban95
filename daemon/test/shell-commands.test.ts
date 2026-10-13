@@ -170,7 +170,7 @@ describe('stdout rule', () => {
       .filter(({ line }) => /process\.stdout\b|console\.(log|info|debug|dir|table|trace)\b/.test(line))
       .map(({ f, line }) => `${f}: ${line}`);
     expect(hits).toEqual([
-      'boards.ts: process.stdout.write(`KANBAN95 ${verb}=${normal(path)}\\n`);',
+      'boards.ts: process.stdout.write(`KANBAN95 ${verb}=${path && normal(path)}${rest && \' \' + rest}\\n`);',
       'server.ts: console.log((e as Error).message);',
       'server.ts: console.log(`KANBAN95 port=${port}`);',
     ]);
