@@ -10,7 +10,9 @@ The installed app started from the Start menu or the Dock has no project to open
 - **Data folder**: where the board keeps settings, `models.json`, preferences, `projects.json` and the global brain. Defaults to `~/.kanban95`; type another full path (an SSD you carry between machines, say). Any other folder is recorded in `~/.kanban95/home` before anything is written there.
 - **Project folder**: the folder the first board works on. It must exist; a plain folder becomes a git repo on first start.
 
-**Next** adds the project to the list and starts its board. A folder that does not exist is refused with a message on the page. Later starts without a project open the first project in the list (Settings → Projects); there is no setup again. Ticket worktrees stay on this machine in `~/.kanban95/worktrees/` wherever the data folder is.
+Under the two folders, **Requirements** lists git, Claude Code and Codex, each "found (version)" or "missing" with a one-line install hint and link (links open in the system browser). The board needs git and at least one of the two CLIs; it installs none of them, and logging in to each CLI stays your step. **Check again** asks once more after you install one. Each tool is asked for `--version` with a 4 s timeout: git on PATH, the CLIs from **Settings → Agents → Executables** when set, else PATH. A configured path that does not exist, or a tool that hangs, shows as missing. The same list sits at the bottom of **Settings → Agents**.
+
+**Next** adds the project to the list and starts its board, whatever the list shows. A folder that does not exist is refused with a message on the page. Later starts without a project open the first project in the list (Settings → Projects); there is no setup again. Ticket worktrees stay on this machine in `~/.kanban95/worktrees/` wherever the data folder is.
 
 Changing the data folder after first run is not supported: the page never comes back once a project is listed. To move it by hand, close every board, move the folder's contents and edit the one line in `~/.kanban95/home`.
 

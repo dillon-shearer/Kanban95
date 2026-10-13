@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { statSync } from 'node:fs';
 import { isAbsolute } from 'node:path';
+import { requirements } from './requirements.js';
 import { addProject, BadConfig, boardHome, gone, normal, readProjects, setBoardHome } from './settings.js';
 
 export function firstProject(): string | undefined {
@@ -27,6 +28,7 @@ async function body(req: IncomingMessage): Promise<Record<string, unknown>> {
 }
 
 export async function handleSetup(req: IncomingMessage, res: ServerResponse, url: URL, done: (repo: string) => void) {
+  if (url.pathname === '/api/requirements' && req.method === 'GET') return json(res, 200, await requirements());
   if (url.pathname !== '/api/setup') return json(res, 404, { error: 'not found' });
   if (req.method === 'GET') return json(res, 200, { data: boardHome() });
   if (req.method !== 'POST') return json(res, 405, { error: 'method not allowed' });
