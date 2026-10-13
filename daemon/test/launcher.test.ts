@@ -153,7 +153,7 @@ describe('launch', () => {
     // The daemon's own Node first: PATH's `node` may be older than 24.
     expect(env[Object.keys(env).find((k) => k.toUpperCase() === 'PATH')!].split(delimiter)[0]).toBe(dirname(process.execPath));
     expect(env.KANBAN95_TOKEN).toMatch(/^[\w-]{43}$/); // codex reads its bearer token from here
-    expect(env.KANBAN95_AGENT).toBe('1'); // makes npm run dev and Kanban95.cmd refuse to start
+    expect(env.KANBAN95_AGENT).toBe('1'); // makes npm run dev refuse to start
     expect(existsSync(join(s.dir, 'mcp.json'))).toBe(false); // codex gets its MCP server through -c, not a file
     expect(runRow(s.runId!).session_id).toBeNull();
   });

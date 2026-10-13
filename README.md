@@ -18,17 +18,18 @@ New to worktrees, MCP or agent tooling? Start with [docs/LEARNING.md](docs/LEARN
 
 ## Quickstart
 
-You need Windows 11, [Node 24+](https://nodejs.org/), [Rust](https://rustup.rs/) with the MSVC build tools (Visual Studio 2022 Build Tools, "Desktop development with C++"), and Claude Code and/or Codex CLI installed and logged in.
+To use Kanban95, download the installer from the [latest Release](https://github.com/dillon-shearer/Kanban95/releases/latest) (Install below). It carries its own Node. You need Claude Code and/or Codex CLI installed and logged in.
+
+To develop Kanban95, you need [Node 24+](https://nodejs.org/) on PATH, [Rust](https://rustup.rs/) (on Windows with the MSVC build tools: Visual Studio 2022 Build Tools, "Desktop development with C++"), and Claude Code and/or Codex CLI installed and logged in:
 
 ```
 git clone https://github.com/dillon-shearer/Kanban95.git
 cd Kanban95
-.\Kanban95.cmd C:\path\to\your\project
+npm install
+npm run dev -- <project>
 ```
 
-The project must be a git repository. `Kanban95.cmd` finds Node 24 (through fnm if an older Node is first on PATH), installs, builds and opens the board, keeping its console open for the session. To start without a console window, double-click `Kanban95.vbs` instead: it runs `Kanban95.cmd` hidden and shows a dialog with the end of its output (full log in `%TEMP%\kanban95-start-<random>.log`, kept only when the start fails) if Node 24 is missing or the install or build fails. Either one opens the board on Kanban95 itself when double-clicked, and on a project folder dropped onto it.
-
-On macOS, double-click `Kanban95.command` in Finder (a Terminal window opens and stays for the session) or run `./Kanban95.command /path/to/project`: the same Node 24 lookup through fnm, install, build and start. Then, once:
+`npm run dev` builds the daemon and runs the shell on `<project>`, a folder path; a plain folder is made a local git repo. Then, once:
 
 1. **Start → Settings → Agents**: pick a CLI, model and effort per phase and press **Save** (writes `~/.kanban95/models.json`; nothing launches without it).
 2. For Claude Code, accept its one-time `--dangerously-skip-permissions` warning by hand ([docs/CLIS.md](docs/CLIS.md) → First-run prompts).
