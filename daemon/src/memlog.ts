@@ -1,4 +1,4 @@
-import { execFile } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { freemem, totalmem } from 'node:os';
 import { join } from 'node:path';
@@ -37,7 +37,40 @@ function snapshot(): Promise<Snapshot> {
   }));
 }
 
-export const sources = { free: freemem, total: totalmem, rss: () => process.memoryUsage.rss(), snapshot };
+const VM_STAT_FIELDS = ['Pages free', 'Pages inactive', 'Pages purgeable', 'Pages speculative'];
+const FREE_CACHE = 5_000;
+
+export function parseVmStat(out: string) {
+  const page = /page size of (\d+) bytes/.exec(out);
+  if (!page) throw new Error('vm_stat: no page size');
+  let pages = 0;
+  for (const field of VM_STAT_FIELDS) {
+    const m = new RegExp(`^${field}:\\s+(\\d+)`, 'm').exec(out);
+    if (!m) throw new Error(`vm_stat: no ${field}`);
+    pages += Number(m[1]);
+  }
+  return pages * Number(page[1]);
+}
+
+let darwinCache: { at: number; bytes: number } | undefined;
+let darwinWarned = false;
+function darwinFree() {
+  const now = Date.now();
+  if (darwinCache && now - darwinCache.at < FREE_CACHE) return darwinCache.bytes;
+  try {
+    const bytes = parseVmStat(execFileSync('vm_stat', { encoding: 'utf8', timeout: 5_000 }));
+    darwinCache = { at: now, bytes };
+    return bytes;
+  } catch (e) {
+    if (!darwinWarned) console.error('[memory] vm_stat failed, using os.freemem():', (e as Error).message.split('\n')[0]);
+    darwinWarned = true;
+    return freemem();
+  }
+}
+
+export const freeMemory = () => (process.platform === 'darwin' ? darwinFree() : freemem());
+
+export const sources = { free: freeMemory, total: totalmem, rss: () => process.memoryUsage.rss(), snapshot };
 
 let file: string | undefined;
 let live: () => Iterable<Live> = () => [];
