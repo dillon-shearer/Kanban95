@@ -80,6 +80,13 @@ The full suite (`npm test`: `tsc`, then unit tests plus a small set of critical-
 
 The worker runs `test:changed` and the build while working and before `move_ticket(testing)`. The tester runs `test:changed` and the build once in its step 1, and `test:changed` again while iterating on tests it adds.
 
+### WebKit screenshots
+
+The Mac app renders the UI in WKWebView, so a WebKit-only bug (thin font, a misplaced menu) does not show in the headless Edge or Chrome of the UI tests. `npm run shot -- <out.png> [--zoom 100] [--open board|start|switch|taskmenu]` (`daemon/test/shot.ts`) builds the daemon, starts it on a scratch repo in a throwaway home with five seeded tickets across the columns, opens the board in headless WebKit at 1280x800, optionally opens the Start menu, the Switch board panel or the Board taskbar button's right-click menu, writes a full-page PNG and removes the scratch folder. It never opens a window. `--zoom` is the UI zoom in percent (80 to 200).
+
+- One-time per machine: `npx playwright install webkit` (about 300 MB unpacked into Playwright's user cache, shared by every worktree; `npm ci` does not download it, so `worktree_setup` needs no change). Install no other Playwright browser.
+- To attach a shot to a ticket: the operator (or anything holding the shell's cookie) sends the PNG as the raw body of `POST /api/tickets/:id/attachments?name=<file>.png`; an agent has no cookie, so it copies the PNG into `<board repo>/.kanban95/attachments/<id>/` (the folder that route writes, which `get_ticket` lists), or names the path in a note.
+
 ## Skills
 
 `skills/` in the Kanban95 repo is a Claude Code plugin named `kanban95` (manifest `skills/.claude-plugin/plugin.json`). Each skill is one page and names only tools from `docs/MCP.md`.
