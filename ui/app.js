@@ -1188,7 +1188,10 @@ async function projectsPanel(p) {
       return h('tr', { 'data-project': x.path }, h('td', {}, x.path.split(/[\\/]/).pop() + (self ? ' (this board)' : missing[x.path] ? ' (missing)' : '')), h('td', {}, x.path),
         h('td', {}, h('input', { type: 'color', value: hex(x.colour),
           onchange: (e) => save(list.map((y, j) => (j === i ? { ...y, colour: e.target.value } : y)), 'Colour saved.') })),
-        h('td', {}, h('button', { disabled: self, onclick: () => save(list.filter((_, j) => j !== i), 'Project removed.') }, 'Remove')));
+        h('td', {}, h('button', { disabled: self, onclick: async () => {
+          const data = x.path + (x.path.includes('\\') ? '\\' : '/') + '.kanban95';
+          if ((await dialog('Remove project', h('p', {}, `Removing only forgets this project. Its tickets, notes and brain stay in ${data} and are lost if that folder is deleted.`), ['Remove', 'Cancel'])) === 'Remove') save(list.filter((_, j) => j !== i), 'Project removed.');
+        } }, 'Remove')));
     })),
     h('div', { class: 'field-row' }, h('label', { for: 'project-add' }, 'Folder'), add,
       h('button', { onclick: () => save([...list, { path: add.value.trim(), colour: '#008080' }], 'Project added.') }, 'Add')));
