@@ -10,6 +10,7 @@ import { readTicket } from '../src/api.ts';
 import { FIRST_COMMIT, worktreePath, worktreesRoot } from '../src/git.ts';
 import { sessionsOf } from '../src/launcher.ts';
 import { start } from '../src/server.ts';
+import './memory.ts';
 
 // Commits a file holding its own working directory, then submits; a test run passes.
 const FAKE = `
