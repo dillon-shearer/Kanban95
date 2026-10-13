@@ -1,6 +1,6 @@
 ## Download
 
-Pick one file. You can ignore the rest; the app uses them to update itself.
+Pick one file.
 
 | Your computer | File |
 |---|---|

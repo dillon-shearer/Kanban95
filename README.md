@@ -12,7 +12,7 @@ Get the installer from the [latest Release](https://github.com/dillon-shearer/Ka
 - Mac with Apple silicon (M1 and later): `Kanban95-<version>-Mac-AppleSilicon.dmg`
 - Mac with Intel: `Kanban95-<version>-Mac-Intel.dmg`
 
-The `updater-` files and `latest.json` are for the app's own updates. "Source code" is not the app.
+"Source code" is not the app; GitHub adds it to every release.
 
 Not sure which Mac you have? Apple menu -> About This Mac shows the chip.
 

@@ -137,26 +137,29 @@ A GitHub Release is cut only by pushing a tag `vX.Y.Z` (a prerelease such as `v0
 
 1. `version` fails with a clear error unless the tag is `v` + `package.json`'s version, before anything is built.
 2. `build` runs `build.yml`'s Windows and macOS jobs (tests included) with `release: true`, which adds `--config shell/tauri.updater.json` (`bundle.createUpdaterArtifacts: true`) to `npm run installer` and passes the signing secrets to it. The extra config must be a `--config` argument: the Tauri CLI does not read a `TAURI_CONFIG` environment variable for bundling. Tauri then writes a `.sig` next to the NSIS setup.exe (the Windows update bundle is the setup.exe itself) and builds `Kanban95.app.tar.gz` plus `.sig` for each Mac target.
-3. `release` downloads both artifacts, renames every file to say version and platform in plain words (the bundler's names use target triples, and the Mac update bundle is just `Kanban95.app.tar.gz`), writes `latest.json` from the `.sig` files, fills `.github/release-notes.md` (`{{version}}`, `{{base}}` the Release download URL) and runs `gh release create` for the tag with those notes ahead of the generated ones (`--prerelease` when the version has a `-`). The notes open with a Download table and install steps, because a Release cannot group its assets into folders.
+3. `release` downloads both artifacts and renames every file to say version and platform in plain words (the bundler's names use target triples, and the Mac update bundle is just `Kanban95.app.tar.gz`). It fills `.github/release-notes.md` (`{{version}}`, `{{base}}` the Release download URL) and runs `gh release create` for the tag with those notes ahead of the generated ones (`--prerelease` when the version has a `-`). The notes open with a Download table and install steps.
+4. For a full release only, it writes `latest.json` from the `.sig` files and uploads it with the Mac update bundles to the `updater` release (tag `updater`, a prerelease, created on first use), then deletes that release's older assets.
 
-The Release holds:
+A version's Release holds only what a person downloads, plus the two Source code archives GitHub adds to every Release and that cannot be removed:
 - `Kanban95-<version>-Mac-AppleSilicon.dmg`
 - `Kanban95-<version>-Mac-Intel.dmg`
 - `Kanban95-<version>-Windows-setup.exe` (also the Windows update bundle)
+
+A Release cannot hide assets or group them in folders, so the files only the updater reads live on the separate `updater` release, which GitHub's `latest` skips because it is a prerelease:
+- `Kanban95-<version>-Mac-AppleSilicon.app.tar.gz`
+- `Kanban95-<version>-Mac-Intel.app.tar.gz`
 - `latest.json`
-- `updater-Kanban95-<version>-Mac-AppleSilicon.app.tar.gz`
-- `updater-Kanban95-<version>-Mac-Intel.app.tar.gz`
 
 The `.sig` files are not uploaded: the updater reads each signature from `latest.json` and never fetches a `.sig`.
 
-`latest.json` is the Tauri updater plugin's static manifest: `version`, `notes`, `pub_date` and `platforms` with one entry each for `windows-x86_64`, `darwin-aarch64` and `darwin-x86_64`, each a download `url` on this Release and the `signature` (the content of its `.sig`). `https://github.com/dillon-shearer/Kanban95/releases/latest/download/latest.json` always points at the newest full release; GitHub skips prereleases for `latest`.
+`latest.json` is the Tauri updater plugin's static manifest: `version`, `notes`, `pub_date` and `platforms` with one entry each for `windows-x86_64`, `darwin-aarch64` and `darwin-x86_64`, each a download `url` (the setup.exe on the version's Release, the Mac bundles on `updater`) and the `signature` (the content of its `.sig`). `https://github.com/dillon-shearer/Kanban95/releases/download/updater/latest.json` always holds the newest full release; a prerelease tag never touches it. v1.0.2 and older read `releases/latest/download/latest.json`, which no longer exists, so they never offer an update: reinstall them once by hand.
 
 **Signing.** Update bundles are signed with a minisign key pair made once with `npx tauri signer generate`. The public key is `plugins.updater.pubkey` in `shell/tauri.bundle.json`; the app checks every update against it. Any `plugins` entry makes `tauri::generate_context!` emit code that calls `serde_json`, so `shell/Cargo.toml` lists `serde_json` as a direct dependency; without it the installer build fails with `cannot find serde_json in the list of imported crates`. The private key and its password are the repository secrets `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`, and the operator keeps the key file offline. They never go in the repo, a ticket, the brain or `~/.kanban95`, and only a release build gets them (branch builds see empty values and make no update bundles). `tauri build` refuses to sign with a key that does not match the public key. Losing the private key means installed apps can never take another update; a new key pair needs a release signed with the old key that ships the new public key. This signature is only for the updater: the installers themselves are not code-signed (Windows SmartScreen and macOS Gatekeeper still warn).
 
 ### Updates
 
 The installed app updates itself from the GitHub Releases (Releases above) through `tauri-plugin-updater`, registered in the shell only when it is installed: `staged()` in `shell/src/main.rs` finds the staged daemon next to the exe, the same lookup that picks the daemon to run. `npm run dev` and `cargo run` never check. The plugin's config is in `shell/tauri.bundle.json`, so only installer builds carry it:
-- `endpoints`: `https://github.com/dillon-shearer/Kanban95/releases/latest/download/latest.json`
+- `endpoints`: `https://github.com/dillon-shearer/Kanban95/releases/download/updater/latest.json`
 - `pubkey`: the minisign public key (Releases → Signing)
 - `dangerousInsecureTransportProtocol: true`, so the override below can be plain http on loopback
 

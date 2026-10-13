@@ -43,7 +43,7 @@ jobs:
         with:
           path: artifacts
       - run: |
-          mkdir out sig
+          mkdir out upd sig
           w="artifacts/kanban95-windows/Kanban95_${V}_x64-setup.exe"
           cp "$w" "out/Kanban95-$V-Windows-setup.exe"
           cp "$w.sig" "sig/Kanban95-$V-Windows-setup.exe.sig"
@@ -51,20 +51,27 @@ jobs:
             IFS=: read -r triple a name <<< "$t"
             b="artifacts/kanban95-macos/$triple-apple-darwin/release/bundle"
             cp "$b/dmg/Kanban95_${V}_$a.dmg" "out/Kanban95-$V-Mac-$name.dmg"
-            cp "$b/macos/Kanban95.app.tar.gz" "out/updater-Kanban95-$V-Mac-$name.app.tar.gz"
-            cp "$b/macos/Kanban95.app.tar.gz.sig" "sig/updater-Kanban95-$V-Mac-$name.app.tar.gz.sig"
+            cp "$b/macos/Kanban95.app.tar.gz" "upd/Kanban95-$V-Mac-$name.app.tar.gz"
+            cp "$b/macos/Kanban95.app.tar.gz.sig" "sig/Kanban95-$V-Mac-$name.app.tar.gz.sig"
           done
-          base="https://github.com/$GITHUB_REPOSITORY/releases/download/$GITHUB_REF_NAME"
-          sed -e "s|{{version}}|$V|g" -e "s|{{base}}|$base|g" .github/release-notes.md > notes.md
-          entry() { jq -n --arg url "$base/$1" --rawfile sig "sig/$1.sig" '{signature: ($sig | rtrimstr("\n")), url: $url}'; }
+          base="https://github.com/$GITHUB_REPOSITORY/releases/download"
+          sed -e "s|{{version}}|$V|g" -e "s|{{base}}|$base/$GITHUB_REF_NAME|g" .github/release-notes.md > notes.md
+          entry() { jq -n --arg url "$base/$1" --rawfile sig "sig/${1#*/}.sig" '{signature: ($sig | rtrimstr("\n")), url: $url}'; }
           jq -n --arg version "$V" --arg pub_date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-            --argjson win "$(entry "Kanban95-$V-Windows-setup.exe")" \
-            --argjson arm "$(entry "updater-Kanban95-$V-Mac-AppleSilicon.app.tar.gz")" \
-            --argjson x64 "$(entry "updater-Kanban95-$V-Mac-Intel.app.tar.gz")" \
-            '{version: $version, notes: "", pub_date: $pub_date, platforms: {"windows-x86_64": $win, "darwin-aarch64": $arm, "darwin-x86_64": $x64}}' > out/latest.json
-          cat out/latest.json
-          ls -l out
+            --argjson win "$(entry "$GITHUB_REF_NAME/Kanban95-$V-Windows-setup.exe")" \
+            --argjson arm "$(entry "updater/Kanban95-$V-Mac-AppleSilicon.app.tar.gz")" \
+            --argjson x64 "$(entry "updater/Kanban95-$V-Mac-Intel.app.tar.gz")" \
+            '{version: $version, notes: "", pub_date: $pub_date, platforms: {"windows-x86_64": $win, "darwin-aarch64": $arm, "darwin-x86_64": $x64}}' > upd/latest.json
+          cat upd/latest.json
+          ls -l out upd
       - run: |
           pre=
           case "$V" in *-*) pre=--prerelease ;; esac
           gh release create "$GITHUB_REF_NAME" out/* --repo "$GITHUB_REPOSITORY" --verify-tag --title "Kanban95 $V" --notes-file notes.md --generate-notes $pre
+      - if: ${{ !contains(needs.version.outputs.version, '-') }}
+        run: |
+          r=(updater --repo "$GITHUB_REPOSITORY")
+          gh release view "${r[@]}" > /dev/null 2>&1 || gh release create "${r[@]}" --target "$GITHUB_SHA" --prerelease --title "Updater files" --notes "Files the installed app reads to update itself. Nothing to download here: get Kanban95 from the latest release."
+          gh release upload "${r[@]}" --clobber upd/*.tar.gz
+          gh release upload "${r[@]}" --clobber upd/latest.json
+          gh release view "${r[@]}" --json assets --jq '.assets[].name' | grep -vxF -f <(ls upd) | while read -r old; do gh release delete-asset "${r[@]}" "$old" -y; done
