@@ -14,6 +14,7 @@ import { worktreePath } from '../src/git.ts';
 import { sessions } from '../src/launcher.ts';
 import { events } from '../src/lifecycle.ts';
 import { start } from '../src/server.ts';
+import './memory.ts';
 import { readConfig, writeConfig } from '../src/settings.ts';
 
 // Fake `claude` first on PATH: a scripted agent that talks to /mcp like the real CLI and stays up until the board ends it.

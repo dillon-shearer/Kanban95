@@ -5,6 +5,7 @@ import { delimiter, join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { runner } from '../src/lifecycle.ts';
 import { start } from '../src/server.ts';
+import './memory.ts';
 import { readConfig, writeConfig } from '../src/settings.ts';
 import { removeTemp } from './home.ts';
 

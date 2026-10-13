@@ -11,6 +11,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import { afterAll, beforeAll } from 'vitest';
 import { sources } from '../src/limits.ts';
 import { start } from '../src/server.ts';
+import './memory.ts';
 import { browser, until, type Page } from './cdp.ts';
 
 // Fake `claude`: asks the operator a question when its model is `ask`, commits the answer and submits; `submit` commits and
