@@ -36,29 +36,48 @@ jobs:
       V: ${{ needs.version.outputs.version }}
       GH_TOKEN: ${{ github.token }}
     steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
       - uses: actions/download-artifact@v5
         with:
           path: artifacts
       - run: |
-          mkdir out
-          cp "artifacts/kanban95-windows/Kanban95_${V}_x64-setup.exe" "artifacts/kanban95-windows/Kanban95_${V}_x64-setup.exe.sig" out/
-          for t in aarch64:aarch64 x86_64:x64; do
-            b="artifacts/kanban95-macos/${t%%:*}-apple-darwin/release/bundle"
-            a=${t##*:}
-            cp "$b/dmg/Kanban95_${V}_$a.dmg" out/
-            cp "$b/macos/Kanban95.app.tar.gz" "out/Kanban95_${V}_$a.app.tar.gz"
-            cp "$b/macos/Kanban95.app.tar.gz.sig" "out/Kanban95_${V}_$a.app.tar.gz.sig"
+          mkdir out upd
+          win="artifacts/kanban95-windows/Kanban95_${V}_x64-setup.exe"
+          cp "$win" "out/Kanban95-${V}-Windows-setup.exe"
+          cp "$win" "$win.sig" upd/
+          for t in aarch64:aarch64:AppleSilicon x86_64:x64:Intel; do
+            IFS=: read -r d a n <<< "$t"
+            b="artifacts/kanban95-macos/$d-apple-darwin/release/bundle"
+            cp "$b/dmg/Kanban95_${V}_$a.dmg" "out/Kanban95-${V}-Mac-$n.dmg"
+            cp "$b/macos/Kanban95.app.tar.gz" "upd/Kanban95_${V}_$a.app.tar.gz"
+            cp "$b/macos/Kanban95.app.tar.gz.sig" "upd/Kanban95_${V}_$a.app.tar.gz.sig"
           done
-          base="https://github.com/$GITHUB_REPOSITORY/releases/download/$GITHUB_REF_NAME"
-          entry() { jq -n --arg url "$base/$1" --rawfile sig "out/$1.sig" '{signature: ($sig | rtrimstr("\n")), url: $url}'; }
+          base="https://github.com/$GITHUB_REPOSITORY/releases/download/updater"
+          entry() { jq -n --arg url "$base/$1" --rawfile sig "upd/$1.sig" '{signature: ($sig | rtrimstr("\n")), url: $url}'; }
           jq -n --arg version "$V" --arg pub_date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             --argjson win "$(entry "Kanban95_${V}_x64-setup.exe")" \
             --argjson arm "$(entry "Kanban95_${V}_aarch64.app.tar.gz")" \
             --argjson x64 "$(entry "Kanban95_${V}_x64.app.tar.gz")" \
-            '{version: $version, notes: "", pub_date: $pub_date, platforms: {"windows-x86_64": $win, "darwin-aarch64": $arm, "darwin-x86_64": $x64}}' > out/latest.json
-          cat out/latest.json
-          ls -l out
+            '{version: $version, notes: "", pub_date: $pub_date, platforms: {"windows-x86_64": $win, "darwin-aarch64": $arm, "darwin-x86_64": $x64}}' > upd/latest.json
+          PREV=$(git describe --tags --abbrev=0 --match 'v*' "$GITHUB_REF_NAME^" 2>/dev/null || git rev-list --max-parents=0 HEAD | tail -n 1)
+          VERSION=$V WIN="Kanban95-${V}-Windows-setup.exe" MAC_ARM="Kanban95-${V}-Mac-AppleSilicon.dmg" MAC_INTEL="Kanban95-${V}-Mac-Intel.dmg" PREV=$PREV \
+            envsubst '${VERSION} ${PREV} ${WIN} ${MAC_ARM} ${MAC_INTEL}' < .github/release-notes.md > notes.md
+          cat notes.md upd/latest.json
+          ls -l out upd
       - run: |
           pre=
           case "$V" in *-*) pre=--prerelease ;; esac
-          gh release create "$GITHUB_REF_NAME" out/* --repo "$GITHUB_REPOSITORY" --verify-tag --title "Kanban95 $V" --generate-notes $pre
+          gh release create "$GITHUB_REF_NAME" out/* --repo "$GITHUB_REPOSITORY" --verify-tag --title "Kanban95 $V" --notes-file notes.md $pre
+      - if: ${{ !contains(needs.version.outputs.version, '-') }}
+        run: |
+          if gh release view updater --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            gh api -X PATCH "repos/$GITHUB_REPOSITORY/git/refs/tags/updater" -f sha="$GITHUB_SHA" -F force=true
+            gh release upload updater upd/* --repo "$GITHUB_REPOSITORY" --clobber
+            gh release view updater --repo "$GITHUB_REPOSITORY" --json assets -q '.assets[].name' | while read -r f; do
+              [ -e "upd/$f" ] || gh release delete-asset updater "$f" --repo "$GITHUB_REPOSITORY" --yes
+            done
+          else
+            gh release create updater upd/* --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --prerelease --title "Updater" --notes "Files the installed app uses to update itself. Download Kanban95 from the latest release instead."
+          fi
