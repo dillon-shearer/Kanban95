@@ -6,7 +6,7 @@
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { copyFileSync, createReadStream, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, rmdirSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { homedir, userInfo } from 'node:os';
 import { basename, delimiter, dirname, isAbsolute, join, parse, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import * as z from 'zod';
@@ -55,13 +55,22 @@ type Config<N extends ConfigName> = z.output<(typeof FILES)[N]>;
 const CONFIGS = Object.keys(FILES) as ConfigName[];
 
 /**
- * This machine's own board directory: $KANBAN95_HOME, else ~/.kanban95. It holds the data folder pointer and the worktrees,
+ * This machine's own board directory: $KANBAN95_HOME, else .kanban95 in the home folder: os.homedir(), or the OS
+ * account's (getpwuid on POSIX) when HOME is unset, empty or not absolute. It holds the data folder pointer and the worktrees,
  * and is the data folder when there is no pointer. Under vitest the real one is refused, so no test can overwrite it.
  */
 export function localHome(): string {
   if (process.env.KANBAN95_HOME) return process.env.KANBAN95_HOME;
   if (process.env.VITEST) throw new Error('refusing the real ~/.kanban95 under vitest: set KANBAN95_HOME (test/home.ts does)');
-  return join(homedir(), '.kanban95');
+  return join(accountHome(), '.kanban95');
+}
+
+function accountHome(): string {
+  try {
+    const home = homedir();
+    if (isAbsolute(home)) return home;
+  } catch {}
+  return userInfo().homedir;
 }
 
 export const pointerPath = () => join(localHome(), 'home');
