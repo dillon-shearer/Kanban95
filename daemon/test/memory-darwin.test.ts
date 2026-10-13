@@ -6,7 +6,6 @@ vi.mock('node:os', async (orig) => ({ ...(await orig<typeof import('node:os')>()
 vi.mock('node:child_process', async (orig) => ({ ...(await orig<typeof import('node:child_process')>()), execFileSync: cp.execFileSync }));
 
 const { freeMemory, parseVmStat } = await import('../src/memlog.ts');
-const { memory } = await import('../src/lifecycle.ts');
 
 const VM_STAT = `Mach Virtual Memory Statistics: (page size of 16384 bytes)
 Pages free:                                5093.
@@ -43,21 +42,21 @@ describe('free memory on macOS', () => {
     expect(() => parseVmStat(VM_STAT.replace(/Pages purgeable.*\n/, ''))).toThrow(/purgeable/);
   });
 
-  it('the runner reads vm_stat on darwin and never os.freemem, and caches it for a few seconds', () => {
+  it('reads vm_stat on darwin and never os.freemem, and caches it for a few seconds', () => {
     setPlatform('darwin');
     cp.execFileSync.mockReturnValue(VM_STAT);
-    expect(memory.free()).toBe(BYTES);
-    expect(memory.free()).toBe(BYTES);
+    expect(freeMemory()).toBe(BYTES);
+    expect(freeMemory()).toBe(BYTES);
     expect(cp.execFileSync).toHaveBeenCalledTimes(1);
     vi.advanceTimersByTime(10_000);
-    memory.free();
+    freeMemory();
     expect(cp.execFileSync).toHaveBeenCalledTimes(2);
     expect(os.freemem).not.toHaveBeenCalled();
   });
 
-  it('the runner reads os.freemem on win32 and never runs vm_stat', () => {
+  it('reads os.freemem on win32 and never runs vm_stat', () => {
     setPlatform('win32');
-    expect(memory.free()).toBe(42);
+    expect(freeMemory()).toBe(42);
     expect(os.freemem).toHaveBeenCalledTimes(1);
     expect(cp.execFileSync).not.toHaveBeenCalled();
   });

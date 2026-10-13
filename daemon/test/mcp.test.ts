@@ -10,6 +10,7 @@ import { MCP_DOC, renderMcpDoc } from '../src/mcp-doc.ts';
 import { TOOLS } from '../src/mcp.ts';
 import { configPath, writeConfig } from '../src/settings.ts';
 import { start } from '../src/server.ts';
+import './memory.ts';
 
 let repo: string;
 let srv: Awaited<ReturnType<typeof start>>;
