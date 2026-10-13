@@ -71,8 +71,11 @@ describe('ui-release', { timeout: 60_000 }, () => {
     expect(await page.evaluate(`document.querySelector('label[for="release-board"]').textContent`)).toBe('Show Release board');
     await page.evaluate(`document.querySelector('#release-board').click()`);
     await until(() => { try { return JSON.parse(readFileSync(settings(), 'utf8')).release === true; } catch { return false; } }, 'settings.json');
-    await click('#start');
-    await until(() => page.evaluate(`[...document.querySelectorAll('.k95-menu > li')].some((li) => li.textContent === 'Release board…')`), 'the Release board entry');
+    await until(async () => {
+      await page.evaluate(`document.querySelector('.k95-menu')?.remove()`);
+      await click('#start');
+      return page.evaluate(`[...document.querySelectorAll('.k95-menu > li')].some((li) => li.textContent === 'Release board…')`);
+    }, 'the Release board entry');
     await page.evaluate(`document.querySelector('.k95-menu').remove()`);
   });
 
