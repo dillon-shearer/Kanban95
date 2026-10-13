@@ -287,6 +287,7 @@ struct Host {
     launch: Box<dyn Fn(&str) -> Command + Send + Sync>,
     ui: OnceLock<Box<dyn Fn(Effect) + Send + Sync>>,
     installed: bool,
+    log: Option<std::path::PathBuf>,
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -303,8 +304,14 @@ fn show(label: &str, repo: &str, b: &Board) -> Effect {
 }
 
 impl Host {
-    fn new(launch: impl Fn(&str) -> Command + Send + Sync + 'static, installed: bool) -> Arc<Self> {
-        Arc::new(Host { table: Mutex::default(), ports: Ports::default(), launch: Box::new(launch), ui: OnceLock::new(), installed })
+    fn new(launch: impl Fn(&str) -> Command + Send + Sync + 'static, installed: bool, log: Option<std::path::PathBuf>) -> Arc<Self> {
+        Arc::new(Host { table: Mutex::default(), ports: Ports::default(), launch: Box::new(launch), ui: OnceLock::new(), installed, log })
+    }
+
+    fn log(&self, line: &str) {
+        if let Some(to) = &self.log {
+            log(to, line);
+        }
     }
 
     fn start(&self, repo: &str) -> Result<Started, String> {
@@ -312,6 +319,11 @@ impl Host {
     }
 
     fn emit(&self, fx: Vec<Effect>) {
+        for f in &fx {
+            if let Effect::Error(e) = f {
+                self.log(e);
+            }
+        }
         if let Some(ui) = self.ui.get() {
             fx.into_iter().for_each(ui);
         }
@@ -620,7 +632,9 @@ impl Host {
         t.closing.retain_mut(|(child, until)| match child.try_wait() {
             Ok(None) if now < *until => true,
             Ok(None) => {
-                eprintln!("[shell] a closed daemon did not stop in {STOP_WAIT:?}; killing it");
+                let line = format!("[shell] a closed daemon did not stop in {STOP_WAIT:?}; killing it");
+                eprintln!("{line}");
+                self.log(&line);
                 let _ = child.kill();
                 let _ = child.wait();
                 false
@@ -687,9 +701,61 @@ impl Host {
     }
 }
 
+fn log_path() -> std::path::PathBuf {
+    if let Some(p) = std::env::var_os("KANBAN95_SHELL_LOG") {
+        return p.into();
+    }
+    let base = if cfg!(target_os = "macos") {
+        std::env::var_os("HOME").map(|h| std::path::Path::new(&h).join("Library/Logs"))
+    } else {
+        std::env::var_os("LOCALAPPDATA").map(Into::into)
+    };
+    base.unwrap_or_else(std::env::temp_dir).join("Kanban95").join("shell.log")
+}
+
+fn iso(secs: u64) -> String {
+    let (days, rem) = ((secs / 86_400) as i64, secs % 86_400);
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = yoe + era * 400 + i64::from(m <= 2);
+    format!("{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}Z", rem / 3_600, rem / 60 % 60, rem % 60)
+}
+
+fn log(to: &std::path::Path, text: &str) {
+    use std::io::Write;
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+    let text = text.lines().map(str::trim).filter(|l| !l.is_empty()).collect::<Vec<_>>().join(" ");
+    if let Some(dir) = to.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let _ = std::fs::OpenOptions::new().create(true).append(true).open(to).and_then(|mut f| writeln!(f, "{} {text}", iso(now)));
+}
+
+// ponytail: the log is emptied at startup once past 1 MB; rotate instead if operators need older lines.
+const LOG_CAP: u64 = 1 << 20;
+
+fn trim_log(to: &std::path::Path) {
+    if std::fs::metadata(to).is_ok_and(|m| m.len() > LOG_CAP) {
+        let _ = std::fs::File::create(to);
+    }
+}
+
 fn error_dialog(text: &str) {
+    log(&log_path(), text);
+    show_error(text);
+}
+
+fn show_error(text: &str) {
     eprintln!("Kanban95: {text}");
-    native_error(text);
+    native_error(&format!("{text}
+
+Details: {}", log_path().display()));
 }
 
 /// Native Windows error box: works before any window exists and while the webview is dead.
@@ -866,6 +932,9 @@ fn check<R: Runtime>(app: AppHandle<R>, to: Daemon, manual: bool) {
     let current = app.package_info().version.to_string();
     let (line, report) = outcome(&found.as_ref().map(|u| u.as_ref().map(|u| u.version.clone())).map_err(Clone::clone), &current, manual);
     eprintln!("{line}");
+    if found.is_err() {
+        log(&log_path(), &line);
+    }
     if let Ok(Some(update)) = found {
         *lock(&app.state::<Pending>().0) = Some(update);
     }
@@ -881,7 +950,7 @@ fn install<R: Runtime>(app: AppHandle<R>, to: Daemon) {
         None => match tauri::async_runtime::block_on(find(&app)) {
             Ok(Some(u)) => u,
             Ok(None) => return tell(&to, &failed("No newer release is available now.")),
-            Err(e) => return tell(&to, &failed(&format!("Could not check for updates: {e}"))),
+            Err(e) => return install_failed(&to, &format!("Could not check for updates: {e}")),
         },
     };
     let (mut done, mut shown) = (0u64, 0u64);
@@ -898,7 +967,7 @@ fn install<R: Runtime>(app: AppHandle<R>, to: Daemon) {
     ));
     let bytes = match bytes {
         Ok(b) => b,
-        Err(e) => return tell(&to, &failed(&format!("The download failed: {e}"))),
+        Err(e) => return install_failed(&to, &format!("The download failed: {e}")),
     };
     tell(&to, &serde_json::json!({ "state": "installing" }).to_string());
     match update.install(bytes) {
@@ -909,8 +978,13 @@ fn install<R: Runtime>(app: AppHandle<R>, to: Daemon) {
 Start Kanban95 again."));
             app.exit(1);
         }
-        Err(e) => tell(&to, &failed(&format!("The install failed: {e}"))),
+        Err(e) => install_failed(&to, &format!("The install failed: {e}")),
     }
+}
+
+fn install_failed(to: &Daemon, why: &str) {
+    log(&log_path(), &format!("[shell] update install failed: {why}"));
+    tell(to, &failed(why));
 }
 
 /// The daemon swaps `?k95=` for an HttpOnly cookie and redirects to `/`, so the page never holds the secret.
@@ -1107,11 +1181,17 @@ fn apply<R: Runtime>(app: &AppHandle<R>, ports: &Ports, fx: Effect) {
                 error_dialog(&format!("Could not open the board window: {e}"));
                 app.exit(1);
             }
-            Err(e) => eprintln!("[shell] could not open a window: {e}"),
+            Err(e) => {
+                let line = format!("[shell] could not open a window: {e}");
+                eprintln!("{line}");
+                log(&log_path(), &line);
+            }
         },
         Effect::Splash(true) => {
             if let Err(e) = splash(app) {
-                eprintln!("[shell] could not open the splash: {e}");
+                let line = format!("[shell] could not open the splash: {e}");
+                eprintln!("{line}");
+                log(&log_path(), &line);
             }
         }
         Effect::Splash(false) => {
@@ -1133,7 +1213,7 @@ fn apply<R: Runtime>(app: &AppHandle<R>, ports: &Ports, fx: Effect) {
                 let _ = w.close();
             }
         }
-        Effect::Error(e) => error_dialog(&e),
+        Effect::Error(e) => show_error(&e),
         Effect::Exit(code) => app.exit(code),
         Effect::Check { to, manual } => {
             let app = app.clone();
@@ -1158,7 +1238,8 @@ fn main() {
     // ponytail: a board keyed "" that another board then opens by path gets a second daemon; re-keying on the handshake would fix it.
     let repo = std::env::args().nth(1).map(|a| key(&a)).unwrap_or_default();
     let installed = staged(exe_dir().as_deref()).is_some();
-    let host = Host::new(node, installed);
+    trim_log(&log_path());
+    let host = Host::new(node, installed, Some(log_path()));
     let first = match spawn((host.launch)(&repo)) {
         Ok(spawned) => spawned,
         Err(e) => {
@@ -1274,6 +1355,7 @@ mod tests {
                 stand_in(script(repo, n))
             },
             installed,
+            None,
         );
         let seen = Arc::new(Mutex::new(vec![]));
         let rec = seen.clone();
@@ -1847,6 +1929,33 @@ mod tests {
         let (ok, hosted, fx) = boot(format!("{PAUSE}echo nope"));
         assert!(!ok && hosted == 0);
         assert_eq!(fx, ["splash true", "splash false", "error", "exit 1"]);
+    }
+
+    #[test]
+    fn a_failed_handshake_logs_one_line_with_its_error_and_a_good_start_logs_nothing() {
+        let file = std::env::temp_dir().join(format!("kanban95-shell-log-test-{}.log", std::process::id()));
+        let _ = std::fs::remove_file(&file);
+        let boot = |line: String| {
+            let host = Host::new(|_| unreachable!(), false, Some(file.clone()));
+            let ok = host.boot("k95-a".into(), spawn(stand_in(line)).unwrap(), Instant::now());
+            host.shutdown();
+            ok
+        };
+        assert!(boot(up(41511, "")));
+        assert!(!file.exists());
+        assert!(!boot("echo nope".into()));
+        let logged = std::fs::read_to_string(&file).unwrap();
+        let _ = std::fs::remove_file(&file);
+        let lines: Vec<_> = logged.lines().collect();
+        assert!(matches!(&lines[..], [l] if l.contains("The Kanban95 daemon did not start (it said \"nope\").") && l.contains("npm run build")), "{logged:?}");
+        assert!(lines[0].as_bytes()[10] == b'T' && lines[0][21..].starts_with("The Kanban95"), "{logged:?}");
+    }
+
+    #[test]
+    fn log_times_are_utc_iso_dates() {
+        assert_eq!(iso(0), "1970-01-01T00:00:00Z");
+        assert_eq!(iso(951_782_400 + 86_399), "2000-02-29T23:59:59Z");
+        assert_eq!(iso(1_791_849_600), "2026-10-13T00:00:00Z");
     }
 
     #[test]

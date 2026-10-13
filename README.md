@@ -23,6 +23,8 @@ Node comes inside the app. Nothing else is downloaded.
 
 The app needs the WebView2 runtime, which Windows 10 and 11 already have.
 
+If the app will not start, the reason is in `%LOCALAPPDATA%\Kanban95\shell.log`.
+
 ### Mac
 
 1. Open the `.dmg` and drag Kanban95 to Applications.
@@ -30,6 +32,8 @@ The app needs the WebView2 runtime, which Windows 10 and 11 already have.
 3. On recent macOS versions there may be no Open button. Then go to System Settings -> Privacy & Security and press **Open Anyway** next to the Kanban95 message.
 
 The app reads your login shell's PATH, so it finds the same agent CLIs your Terminal finds.
+
+If the app will not start, the reason is in `~/Library/Logs/Kanban95/shell.log`.
 
 ## What you need
 
