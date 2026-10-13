@@ -171,7 +171,7 @@ The threat model as of the end of the hardening phase. The attacker is a worker 
 | Read files outside `ui/` or the voice manifest through the daemon | Static serving and `/voice-model/` answer only allowlisted paths | `daemon/src/server.ts`, `daemon/src/voice.ts` | `server.test.ts` "serves the UI but nothing above it"; `voice.test.ts` "serves only paths the manifest lists" |
 | Leave a daemon or webview behind it can attach to after the board closes | The shell's kill-on-close job takes the whole tree down on every exit path; the daemon exits on stdin EOF | `shell/src/main.rs` `kill_children_with_us`, `Host::shutdown`, `daemon/src/server.ts` | `server.test.ts` "… exits when stdin closes"; `cargo test` in `shell/`: `shutdown_kills_every_daemon_and_stops_the_supervisor`, `close_ends_the_last_daemon_through_stdin_eof_and_exits`; job object checked live (`docs/ARCHITECTURE.md` → Daemon lifetime) |
 
-One guard here is against accidents, not attacks: `KANBAN95_AGENT=1` in every agent's environment (`daemon/src/launcher.ts`) makes `npm run dev` and `Kanban95.cmd` refuse to start, and `daemon/test/cdp.ts` refuses a headed browser, so a well-meaning agent does not open windows on the operator's desktop (`launcher.test.ts` asserts the variable). A hostile agent can unset it.
+One guard here is against accidents, not attacks: `KANBAN95_AGENT=1` in every agent's environment (`daemon/src/launcher.ts`) makes `npm run dev` refuse to start, and `daemon/test/cdp.ts` refuses a headed browser, so a well-meaning agent does not open windows on the operator's desktop (`launcher.test.ts` asserts the variable). A hostile agent can unset it.
 
 ### What it can reach
 
@@ -184,7 +184,7 @@ Permissions are off and the agent is the operator's user, so the worktree is whe
 - **Use the network** with no egress filter: exfiltrate what it reads, push with the operator's git credentials.
 - **Change git directly**: commit to the base branch in the main checkout or rewrite other branches; the merge queue only orders the board's own merges.
 - **As a tester, pass bad work**: the board trusts the tester's verdict.
-- **Plant code the board runs**: what it writes into the main checkout (`daemon/`, `package.json` scripts) runs at the next Start → Restart board (`npm run build`, then the rebuilt daemon), as it would at the next `Kanban95.cmd`.
+- **Plant code the board runs**: what it writes into the main checkout (`daemon/`, `package.json` scripts) runs at the next Start → Restart board (`npm run build`, then the rebuilt daemon), as it would at the next `npm run dev`.
 
 Ceiling and upgrade path: run worker and tester CLIs as a separate low-privilege Windows account (or an AppContainer) with only its worktree ACL'd to it, and an egress allowlist for the provider's API. Then owner-only session dirs, `board.db` and the WebView2 profile become real boundaries and the rows above are the whole reach.
 

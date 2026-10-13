@@ -16,7 +16,7 @@ Changing the data folder after first run is not supported: the page never comes 
 
 1. Log in to Claude Code and/or Codex CLI with their own commands. The board never asks for a key.
 2. For Claude Code, accept its one-time `--dangerously-skip-permissions` warning by hand once (`docs/CLIS.md`).
-3. Start the board: on Windows double-click `Kanban95.vbs` (no console window; a dialog says why if it cannot start) or `Kanban95.cmd` (keeps a console), on macOS `Kanban95.command`; drop the project folder you want it to work on onto it, or pass it as the argument (`README.md` → Quickstart). Open **Start → Settings → Agents**, pick the default CLI and a model and effort for each phase (type a model id, or press ▾ beside the box for every model that CLI knows) (plan is the brainstorm, execute does the work, test checks it), and press **Save**. That writes `~/.kanban95/models.json`; until it exists nothing can launch, and the Board's status bar says so.
+3. Start the board: open the installed Kanban95, or from a source checkout run `npm run dev -- <project>` with the project folder you want it to work on (Node 24 on PATH and Rust; `README.md` → Quickstart). Open **Start → Settings → Agents**, pick the default CLI and a model and effort for each phase (type a model id, or press ▾ beside the box for every model that CLI knows) (plan is the brainstorm, execute does the work, test checks it), and press **Save**. That writes `~/.kanban95/models.json`; until it exists nothing can launch, and the Board's status bar says so.
 
 ![Settings, the Models group of the Agents tab](img/settings-models.png)
 
@@ -206,7 +206,7 @@ Each board works on one repo, so with several boards open they are told apart by
 - **Dock**: only on this board's own project, when the board is popped out into its own window; that window closes and the board goes back into the main Kanban95 window ("Docking <name>…").
 - **Close board**: only on a project hosted in this window; closes its board after a confirm.
 
-If something cannot be done, the status bar says why. Below the projects, after a separator, **Add project board…** opens Settings on the Projects tab (switching to it if Settings is already open on another tab) with **Folder** focused: type the path and press **Add**. From a repo checkout the new board runs the shell as last built (Kanban95.cmd builds it); on macOS a running board is not brought forward, switch to it from the Dock.
+If something cannot be done, the status bar says why. Below the projects, after a separator, **Add project board…** opens Settings on the Projects tab (switching to it if Settings is already open on another tab) with **Folder** focused: type the path and press **Add**. From a repo checkout the new board runs the shell as last built (`npm run dev` builds it); on macOS a running board is not brought forward, switch to it from the Dock.
 
 **Sleep.** A board hosted in this window that is not on screen and runs no agent, brainstorm or operator terminal stops its daemon after 30 minutes, so several boards in one window do not slow the machine. It loses its running mark in the Switch board popup and Start → Projects no longer marks it "(running)"; **Open here** starts it again in a few seconds. Set the minutes in **Settings → Board → Sleep** (`sleepAfterMinutes` in `settings.json`, per project or for all projects like the other Board settings; 0 never). A board started by hand, outside the shell, never sleeps.
 

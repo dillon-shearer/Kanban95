@@ -84,23 +84,24 @@ const fakeRoot = (files: string[]) => {
 
 it('open starts the board on a listed project that is not running, from a checkout or an install, and refuses one that is', async () => {
   const win = process.platform === 'win32';
-  const checkout = fakeRoot(['daemon/src/server.ts', 'shell/target/debug/kanban95-shell.exe', 'Kanban95.command']);
+  const shell = join('shell', 'target', 'debug', win ? 'kanban95-shell.exe' : 'kanban95-shell');
+  const checkout = fakeRoot(['daemon/src/server.ts', shell]);
   const install = fakeRoot(['Kanban95.exe', 'uninstall.exe', 'app/daemon/dist/server.js']);
   try {
     srv.board.root = checkout;
     const r = await call('POST', '/projects/open', { path: `${other}/` }); // spelled differently, still the listed project
     expect(r.status).toBe(202);
-    expect(started.pop()).toEqual(win ? [join(checkout, 'shell', 'target', 'debug', 'kanban95-shell.exe'), [other]] : ['/bin/bash', [join(checkout, 'Kanban95.command'), other]]);
+    expect(started.pop()).toEqual([join(checkout, shell), [other]]);
     if (win) {
       srv.board.root = join(install, 'app');
       expect((await call('POST', '/projects/open', { path: other })).status).toBe(202);
       expect(started.pop()).toEqual([join(install, 'Kanban95.exe'), [other]]);
-      srv.board.root = fakeRoot(['daemon/src/server.ts']); // a checkout whose shell was never built
-      const none = await call('POST', '/projects/open', { path: other });
-      expect(none.status).toBe(409);
-      expect((await none.json()).error).toMatch(/Kanban95\.cmd/);
-      rmSync(srv.board.root, { recursive: true });
     }
+    srv.board.root = fakeRoot(['daemon/src/server.ts']); // a checkout whose shell was never built
+    const none = await call('POST', '/projects/open', { path: other });
+    expect(none.status).toBe(409);
+    expect((await none.json()).error).toMatch(/npm run dev/);
+    rmSync(srv.board.root, { recursive: true });
     expect((await call('POST', '/projects/open', { path: own })).status).toBe(409); // this board: running
     expect(started).toEqual([]);
   } finally {

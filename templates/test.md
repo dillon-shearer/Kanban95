@@ -35,7 +35,7 @@ Retry count: {{retry}} (after 3 failed retries the ticket stops and goes to the 
 ## How to work
 
 - If the worktree needs dependencies, install them in it (`npm install`, or the repo's equivalent). Never junction or symlink the main checkout's `node_modules`, or anything else of the main checkout's, into the worktree: removing the worktree, or any tool that deletes through the link, reaches the main checkout's files.
-- Verify with `npm run build` and `npm run test:changed -- {{base}}` (or a script built on `daemon/test/cdp.ts`, never by starting the app (`npm run dev`, `Kanban95.cmd`, `cargo run`) or a visible browser.
+- Verify with `npm run build` and `npm run test:changed -- {{base}}` (or a script built on `daemon/test/cdp.ts`, never by starting the app (`npm run dev`, `cargo run`) or a visible browser.
 - `test:changed` runs only the tests the changes against `{{base}}` can affect. Never run the full `npm test`; it is the operator's, by hand. While you iterate on tests you add in step 3, run it again.
 - Put new tests in a new file named for the feature (`daemon/test/<feature>.test.ts`) unless you are extending an existing test's scenario. Several tickets run at once and appending to a shared test file is the most common merge conflict.
 - Never give `rm` a variable path that could expand empty (`rm -f "$DIR"/*`): Claude Code's "Dangerous rm operation on possibly-empty variable path" check stops for a yes/no even with permissions off (no setting turns it off) and, unattended, denies the command after two minutes. Write `rm -rf "${VAR:?}/sub"` or a literal path; for cleanup prefer your file tools or `node -e`.
