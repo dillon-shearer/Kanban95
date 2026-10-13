@@ -8,9 +8,9 @@ A Windows 95-styled desktop kanban that runs AI coding agents for you. Write tic
 
 Get the installer from the [latest Release](https://github.com/dillon-shearer/Kanban95/releases/latest). Pick one file:
 
-- Windows: `Kanban95_<version>_x64-setup.exe`
-- Mac with Apple silicon (M1 and later): `Kanban95_<version>_aarch64.dmg`
-- Mac with Intel: `Kanban95_<version>_x64.dmg`
+- Windows: `Kanban95-<version>-Windows-setup.exe`
+- Mac with Apple silicon (M1 and later): `Kanban95-<version>-Mac-AppleSilicon.dmg`
+- Mac with Intel: `Kanban95-<version>-Mac-Intel.dmg`
 
 Not sure which Mac you have? Apple menu -> About This Mac shows the chip.
 
