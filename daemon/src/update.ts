@@ -15,7 +15,7 @@ export const REPORT = z.discriminatedUnion('state', [
   z.object({ state: z.literal('downloading'), done: z.number().min(0), total: z.number().min(0).nullable() }).strict(),
   z.object({ state: z.literal('installing') }).strict(),
 ]);
-export type Report = z.output<typeof REPORT>;
+type Report = z.output<typeof REPORT>;
 
 export function askForCheck(board: Board) {
   if (!board.shell) return;
@@ -32,7 +32,7 @@ export function relay(board: Board, r: Report) {
   events.emit('event', { update: r });
 }
 
-export function agentsRunning(board: Board): number {
+function agentsRunning(board: Board): number {
   const others = running().filter((e) => e.pid !== process.pid && board.shellId != null && e.shell === board.shellId);
   return holding(board) + others.reduce((n, e) => n + (Number.isInteger(e.agents) ? e.agents : 0), 0);
 }
