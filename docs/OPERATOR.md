@@ -28,7 +28,7 @@ To change the data folder later, use **Settings → Board → Data folder** (Set
 
 ### 1. Brainstorm
 
-**New brainstorm** (or Ctrl+N) opens a terminal with a planner agent in the repo root. Tell it what you want. It reads the code and the brain, proposes tickets, and writes them to the board with `create_ticket` once you agree. The planner cannot write files. Cards appear in Backlog as it creates them.
+**New brainstorm** (or Ctrl+N) opens a terminal with a planner agent in the repo root. Tell it what you want. It reads the code and the brain, proposes tickets, and writes them to the board with `create_ticket` once you agree. The planner does not change the repo; ask it for a file (a prompt, a note) and it writes it where you say, outside the repo (Claude Code only; a Codex planner is read-only). Cards appear in Backlog as it creates them.
 
 ### Operator terminal
 
