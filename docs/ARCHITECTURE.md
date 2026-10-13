@@ -310,7 +310,7 @@ daemon/           src/ (see Daemon above):
                   voice-model.json (the pinned speech model)
                   migrations/*.sql (the repo's board.db)
                   migrations/global/*.sql (the global brain, ~/.kanban95/brain.db)
-                  test/ (test/cdp.ts drives headless Edge/Chrome, test/browser-setup.ts starts one browser per run for it, test/ui.ts is the shared daemon-plus-browser setup of the ui-<area>.test.ts files, which vitest.config.ts runs beside the unit and pty files; test/changed.ts is `npm run test:changed`; test/projects.ts sorts test files into projects and sets the worker count from the machine)
+                  test/ (test/cdp.ts drives headless Edge/Chrome, test/browser-setup.ts starts one browser per run for it, test/ui.ts is the shared daemon-plus-browser setup of the ui-<area>.test.ts files, which vitest.config.ts runs beside the unit and pty files; test/changed.ts is `npm run test:changed`; test/shot.ts is `npm run shot`, a headless WebKit screenshot of a seeded scratch board; test/projects.ts sorts test files into projects and sets the worker count from the machine)
                   tsconfig.json, vitest.config.ts; compiled to dist/ (gitignored)
 ui/               index.html, app.js (data layer and windows), wm.js (window manager), voice.js (mic and transcription), app.css, icons/*.svg (desktop icons), sounds/{ding,chord,done}.wav, vendor/{98.css and fonts, xterm/, transformers/}
 templates/        default prompt templates (brainstorm, operator, plan, execute, test, housekeeping), copied into each repo and kept in step while unedited
