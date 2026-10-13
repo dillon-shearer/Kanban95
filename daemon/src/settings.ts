@@ -7,7 +7,8 @@ import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { copyFileSync, createReadStream, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, rmdirSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { basename, delimiter, dirname, isAbsolute, join, parse, resolve } from 'node:path';
+import * as native from 'node:path';
+import { basename, delimiter, dirname, isAbsolute, join, resolve, win32 } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import * as z from 'zod';
 import type { Ticket } from './api.js';
@@ -360,23 +361,39 @@ const projectList = z.array(z.object({
   colour: z.union([z.string().regex(/^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i, 'must be #rgb or #rrggbb'), z.number().min(0).max(360)]),
 }).strict());
 export type Project = z.output<typeof projectList>[number];
-const storedList = z.array(z.union([
-  projectList.element,
-  z.object({ path: z.string().refine((p) => p !== '' && !isAbsolute(p), 'must be a relative path'), root: z.literal('data'), colour: projectList.element.shape.colour }).strict(),
-]));
+const storedList = z.array(z.object({ path: z.string().min(1), root: z.literal('data').optional(), colour: projectList.element.shape.colour }).strict()
+  .refine((p) => (p.root ? !win32.isAbsolute(p.path) : win32.isAbsolute(p.path)), { path: ['path'], message: 'must be an absolute path, or a relative one with root "data"' }));
+type Stored = z.output<typeof storedList>[number];
 
-const volume = (p: string) =>
-  process.platform === 'win32' ? parse(p).root : /^\/(?:Volumes\/[^/]+|(?:run\/)?media\/[^/]+\/[^/]+)\//.exec(`${p}/`)?.[0];
+type PlatformPath = typeof win32;
+const isWin = (path: PlatformPath) => path.sep === '\\';
+
+export const volume = (p: string, path: PlatformPath = native) =>
+  isWin(path) ? path.parse(p).root : /^\/(?:Volumes\/[^/]+|(?:run\/)?media\/[^/]+\/[^/]+)\//.exec(`${p}/`)?.[0];
+
+export const local = (p: string, path: PlatformPath = native) => (isWin(path) ? /^(?:[a-z]:[\\/]|[\\/]{2}[^\\/])/i.test(p) : p.startsWith('/'));
 
 const carried = () => (same(normal(boardHome()), normal(localHome())) ? undefined : volume(boardHome()));
 
-const toStored = (list: Project[]) => {
-  const root = carried();
-  return list.map((p) => {
-    const rel = root && same(p.path.slice(0, root.length), root) ? p.path.slice(root.length) : '';
-    return rel ? { path: rel, root: 'data', colour: p.colour } : p;
-  });
-};
+export function storeProject(p: Project, root: string | undefined, path: PlatformPath = native): Project | Stored {
+  if (!win32.isAbsolute(p.path)) return { path: p.path.replaceAll('\\', '/'), root: 'data', colour: p.colour };
+  const head = p.path.slice(0, root?.length ?? 0);
+  const rel = root && (isWin(path) ? head.toLowerCase() === root.toLowerCase() : head === root) ? p.path.slice(root.length) : '';
+  return rel ? { path: isWin(path) ? rel.replaceAll('\\', '/') : rel, root: 'data', colour: p.colour } : p;
+}
+
+export function loadProject(p: Stored, home: string, path: PlatformPath = native): Project {
+  if (!p.root) return { path: p.path, colour: p.colour };
+  const root = volume(home, path);
+  return { path: root ? path.join(root, ...p.path.split(/[\\/]/)) : p.path.replaceAll('\\', '/'), colour: p.colour };
+}
+
+const invalid = (file: string, raw: unknown, error: z.ZodError) => new BadConfig(`${file}: ${error.issues.map((i) => {
+  const entry = Array.isArray(raw) && typeof i.path[0] === 'number' ? raw[i.path[0]] : undefined;
+  const at = entry && typeof entry === 'object' && 'path' in entry ? `project ${JSON.stringify(entry.path)}` : 'the list';
+  const key = i.path.slice(1).join('.');
+  return `${at}${key ? ` ${key}` : ''}: ${i.message}`;
+}).join('; ')}`);
 
 /** Absolute, resolved and in the file system's own spelling (case, 8.3 names), so one repo is one entry. */
 export const normal = (p: string) => {
@@ -386,21 +403,23 @@ export const normal = (p: string) => {
     return resolve(p);
   }
 };
-export const gone = (path: string) => !statSync(path, { throwIfNoEntry: false })?.isDirectory();
+export const gone = (path: string) => !local(path) || !statSync(path, { throwIfNoEntry: false })?.isDirectory();
 export const same = (a: string, b: string) => (process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b);
 
 /** A missing file is an empty list. Only the shape is checked on read: a repo deleted since does not break every board. */
 export function readProjects(): Project[] {
   const file = projectsPath();
   if (!existsSync(file)) return [];
-  const r = storedList.safeParse(JSON.parse(readFileSync(file, 'utf8')));
-  if (!r.success) throw new BadConfig(`${file}: ${z.prettifyError(r.error).replaceAll('\n', '; ')}`);
+  const raw = JSON.parse(readFileSync(file, 'utf8'));
+  const r = storedList.safeParse(raw);
+  if (!r.success) throw invalid(file, raw, r.error);
   const home = boardHome();
-  return r.data.map((p) => ('root' in p ? { path: join(volume(home) ?? parse(home).root, p.path), colour: p.colour } : p));
+  return r.data.map((p) => loadProject(p, home));
 }
 
 function saveProjects(list: Project[]) {
-  replace(projectsPath(), JSON.stringify(toStored(list), null, 2) + '\n');
+  const root = carried();
+  replace(projectsPath(), JSON.stringify(list.map((p) => storeProject(p, root)), null, 2) + '\n');
 }
 
 /**
@@ -409,7 +428,7 @@ function saveProjects(list: Project[]) {
  */
 export function writeProjects(value: unknown, keep: string): Project[] {
   const r = projectList.safeParse(value);
-  if (!r.success) throw new BadConfig(`projects.json: ${z.prettifyError(r.error).replaceAll('\n', '; ')}`);
+  if (!r.success) throw invalid('projects.json', value, r.error);
   const list = r.data.map((p) => ({ ...p, path: normal(p.path) }));
   for (const [i, p] of list.entries()) {
     if (!statSync(p.path, { throwIfNoEntry: false })?.isDirectory()) throw new BadConfig(`projects.json: ${p.path} is not a folder`);
