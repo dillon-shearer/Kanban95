@@ -3,7 +3,7 @@
 import { execFile, spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
-import { boardHome, gone, normal, readProjects, same } from './settings.js';
+import { boardHome, dataHome, gone, normal, readProjects, same } from './settings.js';
 
 interface Entry { pid: number; repo: string; port: number; started: string; shell: number | null; agents: number; attention: number }
 
@@ -14,7 +14,7 @@ let own: Entry | null = null;
 /** On daemon start, once it has its port. Returns the removal, which close() calls. */
 export function register(repo: string, port: number, shell: number | null): () => void {
   const file = entryPath(process.pid);
-  mkdirSync(runningDir(), { recursive: true });
+  mkdirSync(join(dataHome(), 'running'), { recursive: true });
   own = { pid: process.pid, repo: normal(repo), port, started: new Date().toISOString(), shell, agents: 0, attention: 0 };
   writeFileSync(file, JSON.stringify(own) + '\n');
   return () => {
