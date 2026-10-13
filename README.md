@@ -106,7 +106,7 @@ The daemon alone: set `KANBAN95_SECRET` to a random string of 32+ characters, ru
 
 ### Building the installer
 
-`npm run installer` (Rust required) builds a per-user NSIS installer at `shell/target/release/bundle/nsis/Kanban95_<version>_x64-setup.exe`. On macOS it builds `Kanban95.app` and a `.dmg` instead. Building downloads the official Node 24 binary from nodejs.org and checks its SHA-256. `Kanban95.exe` opens the board on the folder passed as its argument, else on its working directory. Details: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) -> Packaging.
+`npm run installer` (Node 24 and Rust required; it runs `npm ci` itself) builds a per-user NSIS installer at `shell/target/release/bundle/nsis/Kanban95_<version>_x64-setup.exe`. On macOS it builds `Kanban95.app` and a `.dmg` instead. Building downloads the official Node 24 binary from nodejs.org and checks its SHA-256. `Kanban95.exe` opens the board on the folder passed as its argument, else on its working directory. Details: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) -> Packaging.
 
 Each Release is built from a version tag (`vX.Y.Z`). [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) -> Packaging -> Releases covers tagging, versioning and update signing.
 
