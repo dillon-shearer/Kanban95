@@ -11,17 +11,18 @@
   <form id="setup" class="window k95-setup">
     <div class="title-bar"><div class="title-bar-text">Kanban95 Setup</div></div>
     <div class="window-body">
-      <p>Where should the board keep its data, and which project should it open?</p>
+      <p id="intro">Where should the board keep its data, and which project should it open?</p>
       <div class="field-row-stacked">
         <label for="data">Data folder (settings, models, projects, global brain)</label>
         <input id="data" type="text" required>
       </div>
-      <div class="field-row-stacked">
+      <div id="project-row" class="field-row-stacked">
         <label for="project">Project folder (any existing folder; a plain one becomes a git repo)</label>
         <input id="project" type="text" required>
       </div>
       <p id="error" class="k95-setup-error" role="alert" hidden></p>
       <section class="field-row k95-setup-buttons">
+        <button id="retry" type="button" hidden>Retry</button>
         <button id="next" type="submit" class="default">Next &gt;</button>
       </section>
     </div>

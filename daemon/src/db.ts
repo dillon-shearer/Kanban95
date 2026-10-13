@@ -2,7 +2,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { boardHome } from './settings.js';
+import { dataHome } from './settings.js';
 
 // Brain constants live here, not in api.ts: mcp.ts reads them at load time and api.ts ↔ mcp.ts import each other.
 /** bm25 over brain_fts(title, body, tags): a hit in the title or tags outweighs one in a long body. */
@@ -48,7 +48,7 @@ export function openDb(repo: string, opts: { migrationsDir?: string } = {}): Dat
  * The global brain, ~/.kanban95/brain.db: only the brain tables (migrations/global/). Every board's daemon holds its own
  * connection at once, so WAL (readers never block the one writer) and a busy timeout (a writer waits for another's lock).
  */
-export function openGlobalBrain(home = boardHome(), busyMs = BUSY_MS): DatabaseSync {
+export function openGlobalBrain(home = dataHome(), busyMs = BUSY_MS): DatabaseSync {
   mkdirSync(home, { recursive: true });
   const db = new DatabaseSync(join(home, 'brain.db'));
   // Switching a fresh file to WAL upgrades a shared lock to an exclusive one, and SQLite can return SQLITE_BUSY there
