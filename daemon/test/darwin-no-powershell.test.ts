@@ -1,6 +1,6 @@
 import './home.ts';
 import { execFile, execFileSync, spawn, spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
@@ -30,7 +30,7 @@ const platform = Object.getOwnPropertyDescriptor(process, 'platform')!;
 let repo: string;
 let db: DatabaseSync;
 beforeAll(() => {
-  repo = realpathSync.native(mkdtempSync(join(tmpdir(), 'k95-darwin-')));
+  repo = mkdtempSync(join(tmpdir(), 'k95-darwin-'));
   db = openDb(repo);
   Object.defineProperty(process, 'platform', { value: 'darwin' });
 });
@@ -66,7 +66,7 @@ it('the memory snapshot reads ps, with resident size in KB', async () => {
 });
 
 it('focusing another running board answers focused: false and starts nothing', async () => {
-  const other = realpathSync.native(mkdtempSync(join(tmpdir(), 'k95-darwin-other-')));
+  const other = mkdtempSync(join(tmpdir(), 'k95-darwin-other-'));
   try {
     writeProjects([{ path: repo, colour: 120 }, { path: other, colour: 200 }], repo);
     mkdirSync(join(process.env.KANBAN95_HOME!, 'running'), { recursive: true });

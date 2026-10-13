@@ -3,8 +3,9 @@
 // a board backup of ~/.claude.json, or a ~/.kanban95 that did not exist before.
 // Every temp dir of this run lives under one fresh `k95-run-*` dir (TEMP/TMP point there before the workers start), so a
 // `k95-*` trust entry another worktree's run writes at the same time is not this run's and does not fail it.
+// The run dir is resolved to its long form, so an 8.3 short tmpdir() (CI's RUNNER~1) never reaches a test's paths.
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -19,7 +20,7 @@ const keys = () => {
 const traces = () => ({ bak: existsSync(`${state}.kanban95.bak`), board: existsSync(join(homedir(), '.kanban95')) });
 
 export default function setup() {
-  const run = mkdtempSync(join(tmpdir(), 'k95-run-'));
+  const run = realpathSync.native(mkdtempSync(join(tmpdir(), 'k95-run-')));
   process.env.TEMP = process.env.TMP = process.env.TMPDIR = run;
   const mine = resolve(run).replaceAll('\\', '/') + '/'; // Claude Code's key form (trust.ts)
   const before = traces();

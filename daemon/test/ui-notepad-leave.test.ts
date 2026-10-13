@@ -20,7 +20,7 @@ const area = '[data-win="notepad"] textarea';
 
 beforeAll(() => {
   own = realpathSync.native(repo);
-  other = realpathSync.native(mkdtempSync(join(tmpdir(), 'k95-other-')));
+  other = mkdtempSync(join(tmpdir(), 'k95-other-'));
   writeProjects([{ path: own, colour: 100 }, { path: other, colour: 200 }], own);
   srv.board.shellId = 123;
   srv.board.shell = true;

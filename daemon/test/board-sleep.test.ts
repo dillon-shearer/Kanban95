@@ -1,7 +1,7 @@
 import './home.ts';
 import { execFileSync } from 'node:child_process';
 import { once } from 'node:events';
-import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -47,7 +47,7 @@ afterAll(() => {
   for (const d of dirs) removeTemp(d);
 });
 beforeEach(() => {
-  repo = realpathSync.native(mkdtempSync(join(tmpdir(), 'k95-sleep-')));
+  repo = mkdtempSync(join(tmpdir(), 'k95-sleep-'));
   execFileSync('git', ['init', '-q'], { cwd: repo });
   dirs.push(repo);
   lines.length = 0;

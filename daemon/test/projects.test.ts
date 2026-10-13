@@ -1,7 +1,7 @@
 // ~/.kanban95/projects.json: the daemon lists its own repo on start, and /api/project(s) read and write the list.
 import './home.ts'; // also here, not only in vitest.config.ts: a run from the repo root skips that config and wrote the real home
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { afterAll, beforeAll, expect, it } from 'vitest';
@@ -9,7 +9,7 @@ import { start } from '../src/server.ts';
 import { projectsPath } from '../src/settings.ts';
 
 const repo = () => {
-  const r = realpathSync.native(mkdtempSync(join(tmpdir(), 'k95-proj-')));
+  const r = mkdtempSync(join(tmpdir(), 'k95-proj-'));
   execFileSync('git', ['init', '-q'], { cwd: r });
   return r;
 };
@@ -19,7 +19,7 @@ let plain: string;
 let srv: Awaited<ReturnType<typeof start>>;
 beforeAll(() => {
   [own, other] = [repo(), repo()];
-  plain = realpathSync.native(mkdtempSync(join(tmpdir(), 'k95-plain-')));
+  plain = mkdtempSync(join(tmpdir(), 'k95-plain-'));
   writeFileSync(join(plain, 'file.txt'), 'not a folder');
 });
 afterAll(async () => {

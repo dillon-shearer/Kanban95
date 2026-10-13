@@ -1,12 +1,12 @@
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, realpathSync } from 'node:fs';
+import { mkdirSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, expect, it } from 'vitest';
 import { addProject, project, readProjects } from '../src/settings.ts';
 import { removeTemp } from './home.ts';
 
-const root = realpathSync.native(mkdtempSync(join(tmpdir(), 'k95-short-')));
+const root = mkdtempSync(join(tmpdir(), 'k95-short-'));
 afterAll(() => removeTemp(root));
 
 const shortName = (p: string) =>

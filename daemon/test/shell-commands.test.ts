@@ -1,7 +1,7 @@
 import './home.ts';
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
 import { once } from 'node:events';
-import { mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -12,7 +12,7 @@ import { writeProjects } from '../src/settings.ts';
 const ROOT = resolve(import.meta.dirname, '../..');
 const dirs: string[] = [];
 const repo = () => {
-  const r = realpathSync.native(mkdtempSync(join(tmpdir(), 'k95-shell-')));
+  const r = mkdtempSync(join(tmpdir(), 'k95-shell-'));
   execFileSync('git', ['init', '-q'], { cwd: r });
   dirs.push(r);
   return r;

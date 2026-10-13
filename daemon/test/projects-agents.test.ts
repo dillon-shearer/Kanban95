@@ -1,6 +1,6 @@
 import './home.ts';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { afterAll, beforeAll, expect, it } from 'vitest';
@@ -31,7 +31,7 @@ beforeAll(async () => {
   mkdirSync(join(process.env.USERPROFILE!, '.kanban95'), { recursive: true });
   writeFileSync(join(process.env.USERPROFILE!, '.kanban95', 'models.json'), JSON.stringify({ cli: 'claude', claude: { plan: { model: 'plan-m', effort: 'low' } } }));
   [repo, other] = [0, 1].map(() => {
-    const r = realpathSync.native(mkdtempSync(join(tmpdir(), 'k95-agents-')));
+    const r = mkdtempSync(join(tmpdir(), 'k95-agents-'));
     execFileSync('git', ['init', '-q'], { cwd: r });
     return r;
   });
