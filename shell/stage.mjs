@@ -6,12 +6,12 @@
 import { chmodSync, cpSync, createReadStream, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { execFileSync, execSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 
 export const NODE_VERSION = '24.21.0';
 
 const TARGETS = {
-  'x86_64-pc-windows-msvc': { dist: 'win-x64', ext: 'zip', member: 'node.exe' },
+  'x86_64-pc-windows-msvc': { dist: 'win-x64', ext: 'zip', member: 'node.exe', npm: ['npm', 'npm.cmd', 'npx', 'npx.cmd', 'node_modules/npm'] },
   'aarch64-apple-darwin': { dist: 'darwin-arm64', ext: 'tar.gz', member: 'bin/node' },
   'x86_64-apple-darwin': { dist: 'darwin-x64', ext: 'tar.gz', member: 'bin/node' },
 };
@@ -38,7 +38,7 @@ const sha256 = (file) => new Promise((ok, fail) => {
 
 const tar = process.platform === 'win32' ? join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'tar.exe') : 'tar';
 
-export async function stageNode(target, { cache, out, base = 'https://nodejs.org/dist' }) {
+export async function stageNode(target, { cache, out, npmOut, base = 'https://nodejs.org/dist' }) {
   const t = TARGETS[target];
   if (!t) throw new Error(`unknown target ${target}; one of ${Object.keys(TARGETS).join(', ')}`);
   const dest = join(out, sidecarName(target));
@@ -59,10 +59,15 @@ export async function stageNode(target, { cache, out, base = 'https://nodejs.org
   }
   const tmp = mkdtempSync(join(cache, 'extract-'));
   try {
-    execFileSync(tar, ['-xf', archive, '-C', tmp, `${dir}/${t.member}`], { stdio: 'inherit' });
+    const npm = npmOut && t.npm ? t.npm : [];
+    execFileSync(tar, ['-xf', archive, '-C', tmp, ...[t.member, ...npm].map((m) => `${dir}/${m}`)], { stdio: 'inherit' });
     mkdirSync(out, { recursive: true });
     renameSync(join(tmp, dir, t.member), dest);
     chmodSync(dest, 0o755);
+    for (const m of npm) {
+      mkdirSync(dirname(join(npmOut, m)), { recursive: true });
+      renameSync(join(tmp, dir, m), join(npmOut, m));
+    }
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }
@@ -94,5 +99,8 @@ if (import.meta.main) {
   const root = resolve(import.meta.dirname, '..');
   stageApp(root);
   const shell = resolve(root, 'shell/target');
-  for (const t of targets) console.log(`staged ${await stageNode(t, { cache: join(shell, 'node-download'), out: join(shell, 'sidecar') })}`);
+  const npmOut = join(shell, 'npm');
+  rmSync(npmOut, { recursive: true, force: true });
+  mkdirSync(npmOut);
+  for (const t of targets) console.log(`staged ${await stageNode(t, { cache: join(shell, 'node-download'), out: join(shell, 'sidecar'), npmOut })}`);
 }

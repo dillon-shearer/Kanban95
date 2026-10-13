@@ -91,6 +91,8 @@ fn node(repo: &str) -> Command {
     if !repo.is_empty() {
         cmd.arg(repo);
     }
+    #[cfg(all(windows, not(debug_assertions)))]
+    std::os::windows::process::CommandExt::creation_flags(&mut cmd, 0x0800_0000);
     cmd
 }
 

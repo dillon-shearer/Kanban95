@@ -43,3 +43,30 @@ test('a matching archive puts only the node binary in place under its externalBi
   expect(readFileSync(dest, 'utf8')).toBe('fake node');
   expect(sidecarName('x86_64-pc-windows-msvc')).toBe('node-x86_64-pc-windows-msvc.exe');
 });
+
+test.runIf(process.platform === 'win32')('the Windows target stages npm from the same archive into npmOut, and fails when the archive lacks it', async () => {
+  const win = 'x86_64-pc-windows-msvc';
+  const wname = `node-v${NODE_VERSION}-win-x64`;
+  const src = join(dir, 'win');
+  const tarExe = join(process.env.SystemRoot!, 'System32', 'tar.exe');
+  const pack = (withNpm: boolean) => {
+    rmSync(src, { recursive: true, force: true });
+    mkdirSync(join(src, wname, 'node_modules', 'npm', 'bin'), { recursive: true });
+    for (const f of ['node.exe', 'npm', 'npm.cmd', 'npx', 'npx.cmd']) writeFileSync(join(src, wname, f), f);
+    writeFileSync(join(src, wname, 'node_modules', 'npm', 'bin', 'npm-cli.js'), 'cli');
+    if (!withNpm) rmSync(join(src, wname, 'npm.cmd'));
+    const zip = join(cache, `${wname}.zip`);
+    rmSync(zip, { force: true });
+    execFileSync(tarExe, ['-a', '-cf', zip, '-C', src, wname]);
+    writeFileSync(join(cache, `SHASUMS256-v${NODE_VERSION}.txt`), `${createHash('sha256').update(readFileSync(zip)).digest('hex')}  ${wname}.zip\n`);
+  };
+  const npmOut = join(dir, 'npm');
+  pack(true);
+  await stageNode(win, { cache, out, npmOut, base: offline });
+  expect(readFileSync(join(out, sidecarName(win)), 'utf8')).toBe('node.exe');
+  expect(readFileSync(join(npmOut, 'npm.cmd'), 'utf8')).toBe('npm.cmd');
+  expect(readFileSync(join(npmOut, 'node_modules', 'npm', 'bin', 'npm-cli.js'), 'utf8')).toBe('cli');
+  expect(existsSync(join(npmOut, 'node.exe'))).toBe(false);
+  pack(false);
+  await expect(stageNode(win, { cache, out, npmOut: join(dir, 'npm2'), base: offline })).rejects.toThrow();
+});
