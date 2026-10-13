@@ -9,7 +9,7 @@ import { BRAIN_BODY_MAX, BRAIN_RANK, isConstraintError, SCOPES, type Brains, typ
 import { hasBranch, ticketDiff } from './git.js';
 import { audit, revoke } from './grants.js';
 import { cancelSetup, killGrantSession, killSession, sessions, sessionsOf, type Session } from './launcher.js';
-import { apply, brainstorm, BUMPS, changed, housekeeping, isKanban95, operator, pushBase, Refused, release, releaseInfo, releaseOn, releasePending, relaunch, restartBoard, runnerState, setRunner, tick, type Board, type Bump } from './lifecycle.js';
+import { apply, brainstorm, BUMPS, changed, events, housekeeping, isKanban95, operator, pushBase, Refused, release, releaseInfo, releaseOn, releasePending, relaunch, restartBoard, runnerState, setRunner, tick, type Board, type Bump } from './lifecycle.js';
 import { addOverride, BadConfig, boardHome, dropOverride, gone, globalPath, isOverridable, knownModels, project, projectPath, projectsPath, readProjects, setBoardHome, uncatalogued, writeConfig, writePreferences, writeProjects, type OverridableName } from './settings.js';
 import { isStale, resetTemplate, templatePath, TEMPLATES, unknownVar, VARS, writeTemplate, type TemplateName } from './templates.js';
 import { trustStatus, untrustClaude } from './trust.js';
@@ -17,6 +17,7 @@ import { download, status as voiceStatus } from './voice.js';
 import { limits } from './limits.js';
 import { requirements } from './requirements.js';
 import { busy, checkNow, installNow, relay, REPORT, VERSION } from './update.js';
+import { finishPick, startPick } from './pick.js';
 
 type Json = Record<string, unknown>;
 type Reply = { status: number; body?: unknown; headers?: Record<string, string> };
@@ -506,6 +507,8 @@ const routes: [method: string, path: RegExp, mutation: string | null, handler: (
     relay(board, r.data);
     return { status: 204 };
   }],
+  ['POST', /^\/api\/pick$/, null, ({ board, body }) => startPick(board.shell === true, board.repo, body.kind, (f) => events.emit('event', f))],
+  ['POST', /^\/api\/pick\/([0-9a-f]{32})$/, null, ({ params, body, req }) => finishPick(params[0]!, req.headers.origin, body)],
   ['GET', /^\/api\/release$/, null, ({ board }) => ({ status: 200, body: releaseInfo(board) })],
   ['POST', /^\/api\/release$/, 'board.release', async ({ board, body }) => {
     if (!BUMPS.includes(body.bump as Bump)) throw new HttpError(400, `bump must be one of ${BUMPS.join(', ')}`);

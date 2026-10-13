@@ -96,6 +96,8 @@ In `~/.kanban95/` (or `$KANBAN95_HOME` when set; the board writes operator confi
 
 **Start → Projects** (`POST /api/projects/open` and `/focus`, behind the shell cookie) acts only on a path listed in `projects.json`; any other is `400` before anything runs. Open starts a fixed program (the built shell, or the installed exe) with the listed path as its only argument, through one PowerShell call that reads the command line from its environment, so nothing from the request or the file is parsed as PowerShell. Focus passes only the window title the same way. Open is audited as `projects.open`.
 
+**File and folder dialogs** (`POST /api/pick`, behind the shell cookie) only ask the shell to show a native dialog; the daemon reads and writes nothing for it. The shell posts the chosen path back with the secret and no `Origin`, and the daemon refuses an answer with an `Origin` (`403`), so the page cannot hand itself a path the operator did not pick. The token in the `pick=` line must be lowercase hex or the shell ignores the line, so nothing from it reaches the request line the shell writes.
+
 In an agent CLI's config, one file, only for Claude Code launches: `~/.claude.json` (or `$CLAUDE_CONFIG_DIR/.claude.json`), key `projects["<repo root>"].hasTrustDialogAccepted = true`, so Claude Code does not stop at its workspace-trust prompt in the board's worktrees (operator decision, 2026-10-07). `daemon/src/trust.ts`:
 
 - written only when neither the repo root nor an ancestor is already trusted; one entry per repo, never per worktree (`docs/CLIS.md` → First-run prompts);

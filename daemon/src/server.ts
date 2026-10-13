@@ -84,7 +84,7 @@ const matches = (given: string | null | undefined, secret: string) => given != n
 const authed = (req: IncomingMessage, secret: string) =>
   [...(req.headers.cookie ?? '').matchAll(/(?:^|;\s*)k95(?:-\d+)?=([^;]*)/g)].some((m) => matches(m[1], secret));
 
-async function handle(board: Board | null, self: string, secret: string, req: IncomingMessage, res: ServerResponse, done?: (repo?: string) => void) {
+async function handle(board: Board | null, self: string, secret: string, req: IncomingMessage, res: ServerResponse, setup?: { done: (repo?: string) => void; shell?: boolean }) {
   // The shell loads the UI from this origin, so the CSP must come from here:
   // Tauri only injects its configured CSP into pages it serves itself.
   // 'wasm-unsafe-eval' lets the local speech model's WebAssembly compile (no JS eval). Inline styles are for xterm.js, which
@@ -103,7 +103,7 @@ async function handle(board: Board | null, self: string, secret: string, req: In
   }
   if (url.pathname.startsWith('/api/')) {
     if (!authed(req, secret)) return send(res, 401, 'unauthorized');
-    return board ? handleApi(board, req, res, url) : handleSetup(req, res, url, done!);
+    return board ? handleApi(board, req, res, url) : handleSetup(req, res, url, setup!);
   }
   if (url.pathname === '/mcp') return board ? handleMcp(board, req, res) : send(res, 404, 'not found');
   if (req.method !== 'GET' && req.method !== 'HEAD') return send(res, 405, 'method not allowed');
@@ -309,7 +309,7 @@ export function startSetup(config: Config & { done: (repo?: string) => void }): 
   const secret = config.secret ?? randomBytes(32).toString('hex');
   let self = '';
   const server = createServer((req, res) => {
-    handle(null, self, secret, req, res, config.done).catch(() => send(res, 500, 'internal error'));
+    handle(null, self, secret, req, res, config).catch(() => send(res, 500, 'internal error'));
   });
   return new Promise((ok, fail) => {
     server.once('error', fail);
@@ -345,7 +345,7 @@ if (import.meta.main) {
   }
   const repo = missingHome() ? undefined : process.argv[2] ?? firstProject();
   const wanted = process.env.KANBAN95_PORT ? Number(process.env.KANBAN95_PORT) : 0;
-  const started = await Promise.resolve().then(() => (repo ? start({ secret, port: wanted, repo, shellId, shell }) : startSetup({ secret, port: wanted, done: () => process.exit(75) }))).catch((e) => {
+  const started = await Promise.resolve().then(() => (repo ? start({ secret, port: wanted, repo, shellId, shell }) : startSetup({ secret, port: wanted, shell, done: () => process.exit(75) }))).catch((e) => {
     console.log((e as Error).message);
     process.exit(1);
   });
