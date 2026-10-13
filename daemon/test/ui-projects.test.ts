@@ -56,6 +56,10 @@ describe('ui-projects', { timeout: 60_000 }, () => {
     await until(() => saved()[1].colour === '#ff0000', 'the other colour saved');
     expect(await wall()).toBe('rgb(0, 128, 128)'); // another board's colour leaves this wallpaper alone
     await remove(other);
+    const ask = `document.querySelector('dialog[aria-label="Remove project"]')`;
+    await until(() => page.evaluate(`!!${ask}`), 'the remove confirm');
+    expect(await page.evaluate<string>(`${ask}.textContent`)).toContain(join(other, '.kanban95'));
+    await page.evaluate(`[...${ask}.querySelectorAll('button')].find((b) => b.textContent === 'Remove').click()`);
     // The panel redraws after the reply; a change made before that would save the old list and bring the row back.
     await until(async () => saved().length === 1 && !(await page.evaluate(`!!document.querySelector(${JSON.stringify(row(other))})`)), 'the removal saved and redrawn');
 
