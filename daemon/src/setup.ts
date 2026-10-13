@@ -72,7 +72,7 @@ export async function handleSetup(req: IncomingMessage, res: ServerResponse, url
     return json(res, 200, { repo });
   }
   if (url.pathname !== '/api/setup') return json(res, 404, { error: 'not found' });
-  if (req.method === 'GET') return json(res, 200, { data: boardHome() });
+  if (req.method === 'GET') return json(res, 200, { data: boardHome(), shell: setup.shell === true });
   if (req.method !== 'POST') return json(res, 405, { error: 'method not allowed' });
   try {
     const { data, project } = await body(req);
