@@ -63,7 +63,7 @@ while (!existsSync('go')) await new Promise((r) => setTimeout(r, 25));
   });
 
   it('Reset then Launch kills the blocked setup tree first, and the old setup flags nothing', async () => {
-    const id = ticket('Reset in setup');
+    const id = ticket('Reset in setup', { model: 'hang' });
     expect((await post(`/api/tickets/${id}/launch`)).status).toBe(200);
     await blocked(id, 1);
     const first = pids(id);

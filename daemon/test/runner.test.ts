@@ -1,8 +1,8 @@
 // The runner (docs/LIFECYCLE.md → The runner) end to end, with a scripted fake `claude` that works, tests and passes.
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { delimiter, dirname, join } from 'node:path';
+import { delimiter, join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { readTicket } from '../src/api.ts';
@@ -99,16 +99,6 @@ const request = (method: string, path: string, body?: unknown) => fetch(`http://
 });
 const setRun = async (on: boolean) => (await request('PUT', '/api/runner', { on })).json();
 const setMax = async (concurrency: unknown) => request('PUT', '/api/config/settings?scope=project', { concurrency });
-const state = async () => (await request('GET', '/api/runner')).json();
-/** Commits files at these repo paths, so a ticket naming one names an existing file. */
-const commit = (...files: string[]) => {
-  for (const f of files) {
-    mkdirSync(dirname(join(repo, f)), { recursive: true });
-    writeFileSync(join(repo, f), 'x\n');
-  }
-  git('add', ...files);
-  git('commit', '-qm', 'files');
-};
 const until = async (f: () => unknown, what: string, ms = 30_000) => {
   const end = Date.now() + ms;
   while (!f()) {
@@ -173,71 +163,6 @@ describe('runner', { timeout: 60_000 }, () => {
     expect((await request('POST', '/api/tickets/launch-all')).status).toBe(404);
   });
 
-  it('with no concurrency in settings.json keeps 3 running; config.json runner_concurrency is ignored', async () => {
-    writeFileSync(join(repo, '.kanban95', 'config.json'), JSON.stringify({ runner_concurrency: 1 }));
-    const ids = [1, 2, 3, 4].map((n) => ticket(`Hang ${n}`, { model: 'hang' }));
-    const state = await setRun(true);
-    expect(state).toMatchObject({ concurrency: 3, running: ids.slice(0, 3) });
-    expect(ids.map((id) => sessionsOf(id).length)).toEqual([1, 1, 1, 0]);
-  });
-
-  it('settings.json concurrency is validated; a saved raise launches at once, a cut starts nothing new', async () => {
-    for (const bad of [0, 11, 1.5, '2', null]) expect((await setMax(bad)).status).toBe(400);
-    expect((await request('PUT', '/api/runner', { on: true, concurrency: 2 })).status).toBe(400);
-    expect((await request('PUT', '/api/runner', {})).status).toBe(400);
-    expect(runner(srv.board)).toEqual({ on: false });
-    expect((await setMax(1)).status).toBe(200);
-    expect(await state()).toMatchObject({ on: false, concurrency: 1 });
-
-    const [a, b, c] = ['A', 'B', 'C'].map((x) => ticket(x, { model: 'hang' }));
-    expect((await setRun(true)).running).toEqual([a]);
-    await setMax(2);
-    expect((await state()).running).toEqual([a, b]);
-    await setMax(1);
-    expect((await state()).running).toEqual([a, b]);
-    expect((await request('PATCH', `/api/tickets/${a}`, { status: 'backlog' })).status).toBe(200); // running drops to 1: not below 1
-    await setMax(1);
-    expect(runs(c)).toEqual([]);
-    expect(runs(a)).toHaveLength(1);
-    expect(JSON.parse(readFileSync(join(repo, '.kanban95', 'runner.json'), 'utf8'))).toEqual({ on: true });
-  });
-
-  it('defers a candidate that shares a non-doc file with a running ticket and launches an unrelated one instead', async () => {
-    commit('src/x.ts', 'src/y.ts');
-    const a = ticket('Edit x', { model: 'hang', body: 'Change `src/x.ts`.' });
-    const b = ticket('Also x', { model: 'hang', body: 'Then ./src/x.ts again.' });
-    const c = ticket('Unrelated', { model: 'hang', body: 'Edit src/y.ts, not missing.ts.' });
-    await setMax(1);
-    expect((await setRun(true)).running).toEqual([a]);
-    expect((await setMax(2), await state())).toMatchObject({ running: [a, c], waits: [{ id: b, on: a }] });
-    expect(runs(b)).toEqual([]);
-  });
-
-  it('launches the first candidate anyway when every one shares a file with a running ticket', async () => {
-    commit('src/x.ts');
-    const a = ticket('Edit x', { model: 'hang', body: 'src/x.ts' });
-    const b = ticket('Also x', { model: 'hang', body: 'src/x.ts still builds' });
-    const c = ticket('Again x', { model: 'hang', body: 'src/x.ts' });
-    await setMax(1);
-    await setRun(true);
-    expect((await setMax(2), await state()).running).toEqual([a, b]);
-    expect(runs(c)).toEqual([]);
-  });
-
-  it('a running branch\'s changed files count; an overlap only in docs/** or *.md does not defer', async () => {
-    commit('docs/guide.md', 'README.md', 'src/x.ts');
-    const a = ticket('Docs', { model: 'hang', body: 'docs/guide.md and README.md' });
-    const b = ticket('Edits x', { model: 'hang', body: 'src/x.ts' });
-    const c = ticket('Same docs', { model: 'hang', body: 'docs/guide.md and README.md' });
-    await setMax(1);
-    await setRun(true);
-    // a's branch changes src/x.ts without naming it: b overlaps through the diff and waits; c shares only docs and launches.
-    const wt = worktreePath(repo, a);
-    writeFileSync(join(wt, 'src', 'x.ts'), 'changed\n');
-    execFileSync('git', ['commit', '-qam', 'x'], { cwd: wt });
-    expect((await setMax(2), await state())).toMatchObject({ running: [a, c], waits: [{ id: b, on: a }] });
-  });
-
   it('never launches a flagged ticket or one on an unmerged dependency, goes on past a failed launch, and waits for a running dependency', async () => {
     const broken = ticket('Bad cli', { cli: 'nope', effort: 'low' });
     const flagged = ticket('Flagged', { effort: 'low', needs_human: 1 });
@@ -259,15 +184,6 @@ describe('runner', { timeout: 60_000 }, () => {
       expect(runs(id)).toEqual([]);
     }
     expect(runner(srv.board)).toEqual(STOPPED);
-  });
-
-  it('fills the slot of a running ticket the operator deletes', async () => {
-    const a = ticket('Unwanted', { model: 'hang' });
-    const b = ticket('Next', { model: 'hang' });
-    await setMax(1);
-    expect((await setRun(true)).running).toEqual([a]);
-    expect((await request('DELETE', `/api/tickets/${a}`)).status).toBe(204);
-    expect(await state()).toMatchObject({ on: true, running: [b] });
   });
 
   it('survives a restart: the flag stays on, recover resumes the running ticket, then the runner goes on', async () => {

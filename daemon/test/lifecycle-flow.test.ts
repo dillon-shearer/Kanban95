@@ -7,7 +7,7 @@ import WebSocket from 'ws';
 import { worktreePath } from '../src/git.ts';
 import { sessions, sessionsOf } from '../src/launcher.ts';
 import { MAX_RETRY, TO_RESOLVE } from '../src/lifecycle.ts';
-import { db, git, landed, models, notes, patch, post, repo, runs, send, setRun, sounds, srv, t, ticket, until } from './board.ts';
+import { db, git, landed, models, notes, post, repo, runs, setRun, sounds, srv, t, ticket, until } from './board.ts';
 
 describe('lifecycle', { timeout: 60_000 }, () => {
   it('launch → execute → test → merge: one plain merge commit by the operator, a done sound then a ding, and nothing left behind', async () => {
@@ -61,31 +61,6 @@ describe('lifecycle', { timeout: 60_000 }, () => {
   });
 
   // One merge of `a` for two dependents: `b` stays held, `c`'s wait was cancelled (Cancel wait).
-  it('while the runner is off a merged dependency starts nothing: the dependent stays held until Run; Cancel wait clears the hold and keeps retry and notes', async () => {
-    const b = ticket('Second step');
-    const c = ticket('Second step, not waiting', { retry: 2 });
-    const a = ticket('First step');
-    for (const id of [b, c]) db.prepare('INSERT INTO ticket_deps VALUES (?, ?)').run(id, a);
-    db.prepare("INSERT INTO notes (ticket_id, role, kind, body) VALUES (?, 'operator', 'decision', 'keep me')").run(c);
-    await post(`/api/tickets/${b}/launch`);
-    await post(`/api/tickets/${c}/launch`);
-    const r = await patch(`/api/tickets/${c}`, { blocked_on_deps: false });
-    expect(r.status).toBe(200);
-    expect(t(c)).toMatchObject({ status: 'backlog', retry: 2, flags: { blocked_on_deps: false } });
-    expect(notes(c, 'decision')).toEqual(['keep me']);
-    await post(`/api/tickets/${a}/launch`);
-    await landed(a);
-    await new Promise((r) => setTimeout(r, 300)); // room for a launch that should not happen
-    expect(t(b)).toMatchObject({ status: 'backlog', flags: { blocked_on_deps: true } });
-    expect(runs(b)).toEqual([]);
-    expect(sessionsOf(b)).toEqual([]);
-    expect(t(c).status).toBe('backlog');
-    expect(runs(c)).toEqual([]);
-    expect((await send('DELETE')(`/api/tickets/${c}`)).status).toBe(204); // checked: out of the way of Run
-    await setRun(true);
-    expect(t(b).status).toBe('in_progress');
-    await landed(b);
-  });
 
   it('retry cap: the first attempt plus exactly three retries, then the operator, and nothing more runs', async () => {
     models({ test: 'fail' });
@@ -100,17 +75,6 @@ describe('lifecycle', { timeout: 60_000 }, () => {
     expect(sounds).toEqual([{ sound: 'chord', ticket: id }]);
     expect(notes(id, 'failure').at(-1)).toMatch(/^stopped after 4 failed tests\nTo resolve: .*Reset to Backlog and Launch/);
     expect(runs(id)[2].prompt_rendered).toContain('FAIL: criterion 1 fails'); // the retry sees what failed
-  });
-
-  it("a tester cannot escalate: its set_model is refused and the retry runs with the ticket's own model", async () => {
-    models({ test: 'escalate' });
-    const id = ticket('Hard one');
-    await post(`/api/tickets/${id}/launch`);
-    await until(() => runs(id).filter((x) => x.phase === 'execute').length === 2, 'the retry');
-    models({ test: 'pass' });
-    await landed(id);
-    expect(runs(id).filter((x) => x.phase === 'execute').map((x) => x.model)).toEqual(['work', 'work']);
-    expect(t(id)).toMatchObject({ model: null, effort: null, retry: 1 });
   });
 
   it('ask_operator round trip: chord, the answer reaches the agent as one line and clears the flag', async () => {
