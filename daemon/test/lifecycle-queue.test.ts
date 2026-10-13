@@ -69,7 +69,7 @@ describe('push after merge', { timeout: 60_000 }, () => {
     git('add', `${f}.txt`);
     git('commit', '-qm', `Add ${f} on the base`);
   };
-  const refuse = () => writeFileSync(join(bare, 'hooks', 'pre-receive'), '#!/bin/sh\necho "denied by the remote" >&2\nexit 1\n');
+  const refuse = () => writeFileSync(join(bare, 'hooks', 'pre-receive'), '#!/bin/sh\necho "denied by the remote" >&2\nexit 1\n', { mode: 0o755 });
   const restart = async () => {
     await srv.close();
     await boot();
