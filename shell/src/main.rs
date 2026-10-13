@@ -687,17 +687,32 @@ impl Host {
     }
 }
 
+fn error_dialog(text: &str) {
+    eprintln!("Kanban95: {text}");
+    native_error(text);
+}
+
 /// Native Windows error box: works before any window exists and while the webview is dead.
 #[cfg(windows)]
-fn error_dialog(text: &str) {
+fn native_error(text: &str) {
     use windows_sys::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONERROR, MB_OK, MB_SETFOREGROUND};
     let wide = |s: &str| s.encode_utf16().chain([0]).collect::<Vec<u16>>();
     // SAFETY: both strings are NUL-terminated and outlive the call; a null owner window is allowed.
     unsafe { MessageBoxW(std::ptr::null_mut(), wide(text).as_ptr(), wide("Kanban95").as_ptr(), MB_OK | MB_ICONERROR | MB_SETFOREGROUND) };
 }
 #[cfg(not(windows))]
-fn error_dialog(text: &str) {
-    eprintln!("Kanban95: {text}");
+fn native_error(text: &str) {
+    let shown = std::panic::catch_unwind(|| {
+        rfd::MessageDialog::new()
+            .set_title("Kanban95")
+            .set_description(text)
+            .set_level(rfd::MessageLevel::Error)
+            .set_buttons(rfd::MessageButtons::Ok)
+            .show()
+    });
+    if shown.is_err() {
+        eprintln!("[shell] could not show the error dialog");
+    }
 }
 
 /// Puts this process in a job that kills every member when its last handle closes. Children (node, msedgewebview2)
