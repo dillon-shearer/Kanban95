@@ -80,6 +80,7 @@ function listen() {
       return;
     }
     if (e.update) return onUpdate(e.update);
+    if (e.type === 'pick') return pickDone(e);
     if (e.ticket != null) dirty.add(e.ticket);
     else if (e.ticket === null) projectDirty = true;
     schedule();
@@ -1172,6 +1173,32 @@ const hex = (c) => {
   return g.fillStyle;
 };
 
+const picks = new Map();
+function pickDone(e) {
+  const wait = picks.get(e.token);
+  if (typeof wait === 'function') {
+    picks.delete(e.token);
+    wait(e);
+  } else picks.set(e.token, e);
+}
+function browse(input, kind) {
+  const b = h('button', { type: 'button', class: 'k95-pick k95-browse', title: kind === 'file' ? 'Browse for a file' : 'Browse for a folder',
+    hidden: !projects.hosted[projects.own], onclick: async () => {
+      b.disabled = true;
+      try {
+        const { token } = await api('POST', '/pick', { kind });
+        const r = picks.get(token) ?? await new Promise((ok) => picks.set(token, ok));
+        picks.delete(token);
+        if (r.path) input.value = r.path;
+      } catch (e) {
+        say(e.message);
+      } finally {
+        b.disabled = false;
+      }
+    } }, '...');
+  return b;
+}
+
 /** Settings → Projects: every repo with a board. Each change saves the whole list at once. */
 async function projectsPanel(p) {
   const [own, { path, value, missing }] = await Promise.all([api('GET', '/project'), api('GET', '/projects')]);
@@ -1193,7 +1220,7 @@ async function projectsPanel(p) {
           if ((await dialog('Remove project', h('p', {}, `Removing only forgets this project. Its tickets, notes and brain stay in ${data} and are lost if that folder is deleted.`), ['Remove', 'Cancel'])) === 'Remove') save(list.filter((_, j) => j !== i), 'Project removed.');
         } }, 'Remove')));
     })),
-    h('div', { class: 'field-row' }, h('label', { for: 'project-add' }, 'Folder'), add,
+    h('div', { class: 'field-row' }, h('label', { for: 'project-add' }, 'Folder'), add, browse(add, 'folder'),
       h('button', { onclick: () => save([...list, { path: add.value.trim(), colour: '#008080' }], 'Project added.') }, 'Add')));
   draw();
   if (focusProjectAdd) add.focus();
@@ -1376,7 +1403,7 @@ async function dataFolderPart() {
   };
   return [h('fieldset', { id: 'data-folder-group' }, h('legend', {}, 'Data folder'),
     h('div', { class: 'field-row' }, h('label', { for: 'data-folder-current' }, 'Current'), h('input', { type: 'text', id: 'data-folder-current', readonly: true, size: 40, value: path })),
-    h('div', { class: 'field-row' }, h('label', { for: 'data-folder' }, 'New'), next, h('button', { id: 'data-folder-use', onclick: use }, 'Use this folder')),
+    h('div', { class: 'field-row' }, h('label', { for: 'data-folder' }, 'New'), next, browse(next, 'folder'), h('button', { id: 'data-folder-use', onclick: use }, 'Use this folder')),
     h('p', {}, 'The folder must already exist. Nothing is moved or copied: copy the files by hand first if you want them there.'))];
 }
 /** `tab`: the tab to show, also when the window is already open. */
@@ -1446,7 +1473,7 @@ function openSettings(tab) {
           drawBoard();
         }, 'Saved.');
         return [
-          h('fieldset', {}, h('legend', {}, 'Executables'), CLIS.map((c) => h('div', { class: 'field-row' }, h('label', { class: 'k95-label' }, c), paths[c])),
+          h('fieldset', {}, h('legend', {}, 'Executables'), CLIS.map((c) => h('div', { class: 'field-row' }, h('label', { class: 'k95-label' }, c), paths[c], browse(paths[c], 'file'))),
             h('button', { onclick: () => put({ paths: Object.fromEntries(CLIS.map((c) => [c, paths[c].value.trim()])) }, 'CLI paths saved.') }, 'Save')),
           h('fieldset', {}, h('legend', {}, 'Runner'),
             h('div', { class: 'field-row' }, h('label', { for: 'concurrency' }, 'Tickets running at once'), at),
