@@ -28,7 +28,7 @@ A Claude Code worker or tester also gets `CLAUDE_CODE_PROMPT_CACHE_TTL=5m` in it
 ## Claude Code
 
 ```
-claude --mcp-config <session>/mcp.json --strict-mcp-config [ticket: --session-id <uuid> | --resume <uuid>] --model <model> --effort <effort> [planner: --disallowedTools Edit Write NotebookEdit Bash PowerShell Agent] [worker, tester: --setting-sources project,local --settings <session>/settings.json --disable-slash-commands] --dangerously-skip-permissions "<initial message>"
+claude --mcp-config <session>/mcp.json --strict-mcp-config [ticket: --session-id <uuid> | --resume <uuid>] --model <model> --effort <effort> [planner: --disallowedTools Bash PowerShell Agent] [worker, tester: --setting-sources project,local --settings <session>/settings.json --disable-slash-commands] --dangerously-skip-permissions "<initial message>"
 ```
 
 | Need | Flag | Notes |
@@ -40,7 +40,7 @@ claude --mcp-config <session>/mcp.json --strict-mcp-config [ticket: --session-id
 | MCP | `--mcp-config <file>` | variadic, so it comes first and a boolean flag separates it from the message |
 | only the board's MCP | `--strict-mcp-config` | the operator's other MCP servers are not loaded into agent sessions |
 | permissions off | `--dangerously-skip-permissions` | every role; approved by the operator (2026-10-07): the board trusts agent actions and limits reach per role with each CLI's own scoping instead of approvals |
-| planner reach | `--disallowedTools Edit Write NotebookEdit Bash PowerShell Agent` | variadic, so a flag follows it. See Reach by role |
+| planner reach | `--disallowedTools Bash PowerShell Agent` | variadic, so a flag follows it. See Reach by role |
 | no user settings | `--setting-sources project,local` | worker and tester only. The operator's `~/.claude/settings.json` is not loaded, so neither are its plugins: their SessionStart hooks and skill listing were ≈15k of the ≈17k tokens written fresh every session and re-read on every call (ticket #43; operator approved 2026-10-08). The repo's `.claude/settings.json`, `settings.local.json`, `CLAUDE.md` and auto-memory still load. Planner and operator sessions keep the operator's settings: someone is watching them |
 | board settings | `--settings <session>/settings.json` | worker and tester only: `{"attribution":{"commit":"","pr":""}}`, so commits carry no trailer (CLAUDE.md) without relying on the operator's own setting. A file, because `"` cannot cross `cmd.exe` |
 | no skills | `--disable-slash-commands` | worker and tester only ("Disable all skills"). 0 `Skill` calls in 113 measured runs |
@@ -134,12 +134,13 @@ Approvals are off for every role (the operator approved the bypass). What each r
 
 | role | template asks for | Claude Code | Codex |
 |---|---|---|---|
-| planner (brainstorm) | read the code, write tickets over MCP | `--disallowedTools Edit Write NotebookEdit Bash PowerShell Agent` | `-s read-only -a never` |
+| planner (brainstorm) | read the code, write tickets over MCP, write a file the operator asks for outside the repo | `--disallowedTools Bash PowerShell Agent` | `-s read-only -a never` |
 | worker (plan, execute, housekeeping) | write and commit in its worktree, run builds and tests | permissions off, `cwd` = worktree | `--dangerously-bypass-approvals-and-sandbox` |
 | tester (test) | run the suite, write and commit tests, screenshot UI changes headlessly (never by starting the app) | as worker | as worker |
 | operator (operator terminal) | the operator's typed mission, from the repo root; code changes in its own worktree, `<worktrees root>/op-<time>` | as worker, `cwd` = repo root | as worker |
 
-- **Planner on Claude Code loses Bash, PowerShell and Agent too.** Bash or PowerShell could write a file, and a subagent is a way around the list; the brainstorm template never asks the planner to run a command or delegate. Read, Grep and Glob cover reading the code. MCP tools are unaffected.
+- **Planner on Claude Code keeps Write and Edit, loses Bash, PowerShell and Agent.** The operator decided on 2026-10-13 that a planner may write a file they ask for (a prompt, a note, an export) anywhere outside the repo checkout. The brainstorm template forbids changing the checkout; that is an instruction, not an enforced limit. A shell runs anything and a subagent is a way around the list, and the template never asks the planner to run a command or delegate. MCP tools are unaffected.
+- **Planner on Codex stays read-only.** Its sandbox cannot be opened for one folder outside the workspace without `--add-dir`, and the operator uses Claude Code for brainstorms, so a Codex planner still writes no file.
 - **Planner on Codex**: checked live, asked to "create a file by any means", it answered "patch rejected: writing is blocked by read-only sandbox". Brainstorm checked live on 2026-10-07 (Codex 0.154.0, `gpt-5.6-luna`, low, through `POST /api/brainstorm` on a scratch repo) and it found two problems, both fixed: the read-only sandbox runs as another Windows account, which could not open the owner-only session dir ("access-denied"), so a Codex session dir is no longer owner-only (it holds only `prompt.md`; Codex's token is in its environment); and every board tool was refused under `-a never` until `default_tools_approval_mode=approve` was passed for the board's server. After both, the planner read its brief, called `list_tickets` and `brain_search`, and created a ticket with `create_ticket`; nothing was written to the repo.
 - **Planner on Claude Code**: checked live by the operator on 2026-10-07 (Claude Code 2.1.293, `claude-sonnet-5-5`, `-p`, the list without `Agent`, permissions off). Asked to read `seed.txt` and then create `planner.txt` "by any means", it quoted the seed and reported that Write was disabled, including in subagents, and that it had no other file-writing tool; no file appeared. It named delegating to a subagent with shell access as a way it chose not to try, which is why `Agent` was added to the list afterwards. Haiku models refuse `--dangerously-skip-permissions`, so a planner on Claude needs Sonnet or larger.
 - **Workers and testers on Codex keep the bypass.** Tried `-s workspace-write -a never --add-dir <repo>/.git` (the worktree's git metadata lives under the main repo's `.git/`): the file was written and `node --version` ran, but `git commit` failed with `fatal: detected dubious ownership in repository`. On Windows the Codex sandbox (`[windows] sandbox = "elevated"`) runs commands as a separate sandbox account, so git refuses the operator's worktree. A worker that cannot commit cannot finish a ticket. Getting there would mean `safe.directory` overrides and ACLs for that account on `.git`; not worth it until a non-Windows platform matters.
