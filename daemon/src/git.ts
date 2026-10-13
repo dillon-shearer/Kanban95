@@ -100,6 +100,26 @@ export function initRepo(repo: string): void {
   }
 }
 
+export function volumeType(path: string): string | undefined {
+  try {
+    const device = execFileSync('df', ['-P', path], { encoding: 'utf8', stdio: 'pipe' }).trim().split('\n').pop()!.split(/\s+/)[0];
+    const info = execFileSync('diskutil', ['info', device], { encoding: 'utf8', stdio: 'pipe' });
+    return /Type \(Bundle\):\s*(\S+)/.exec(info)?.[1].toLowerCase();
+  } catch {
+    return undefined;
+  }
+}
+
+export function guardFileMode(repo: string, fsType: (path: string) => string | undefined = volumeType): boolean {
+  if (process.platform !== 'darwin') return false;
+  const type = fsType(repo);
+  if (!type || type === 'apfs' || type.startsWith('hfs')) return false;
+  if (git(repo, 'config', '--local', '--default', '', 'core.fileMode')) return false;
+  git(repo, 'config', '--local', 'core.fileMode', 'false');
+  console.error(`[git] ${repo} is on a ${type} volume, which keeps no file modes: set core.fileMode false`);
+  return true;
+}
+
 /**
  * Creates the ticket's worktree, or returns the existing one (retries and the test phase reuse it). A rejected ticket whose
  * worktree was removed on merge gets a fresh one from the base, which holds its merged work.
@@ -120,14 +140,38 @@ export function createWorktree(repo: string, ticketId: number): { path: string; 
     git(repo, 'worktree', 'move', old, path);
     return { path, branch, base };
   }
-  const dirty = git(repo, 'status', '--porcelain', '--untracked-files=no');
-  if (dirty) throw new Error(`base branch ${base} has uncommitted changes; commit or stash them before launching:\n${dirty}`);
+  const dirty = dirtyMessage(repo);
+  if (dirty) throw new Error(`base branch ${base} has uncommitted changes${dirty}`);
   // A branch left from an earlier cycle is reused when it holds work the base lacks; one already merged (a rejected ticket
   // whose branch survived cleanup) is reset to the base, which has that work and everything since.
   const exists = git(repo, 'branch', '--list', branch) !== '';
   const merged = exists && isAncestor(repo, branch, base);
   git(repo, 'worktree', 'add', ...(exists && !merged ? [path, branch] : [exists ? '-B' : '-b', branch, path, base]));
   return { path, branch, base };
+}
+
+const KINDS: Record<string, string> = { D: 'deleted', M: 'modified', A: 'added', R: 'renamed', C: 'copied', T: 'type changed', U: 'unmerged' };
+
+function dirtyMessage(repo: string): string {
+  const parts = execFileSync('git', ['status', '--porcelain', '-z', '--untracked-files=no'], { cwd: repo, encoding: 'utf8', stdio: 'pipe' }).split('\0');
+  const entries: { xy: string; path: string }[] = [];
+  for (let i = 0; i < parts.length; i++) {
+    if (!parts[i]) continue;
+    const xy = parts[i].slice(0, 2);
+    entries.push({ xy, path: parts[i].slice(3) });
+    if (/[RC]/.test(xy[0])) i++;
+  }
+  if (!entries.length) return '';
+  const counts = new Map<string, number>();
+  for (const { xy } of entries) {
+    const kind = KINDS[xy.includes('U') ? 'U' : xy.includes('D') ? 'D' : (xy[1] !== ' ' ? xy[1] : xy[0])] ?? 'changed';
+    counts.set(kind, (counts.get(kind) ?? 0) + 1);
+  }
+  const summary = [...counts].map(([kind, n]) => `${n} ${kind}`).join(', ');
+  const restore = entries.filter((e) => e.xy[1] === 'D' || e.xy[1] === 'M').map((e) => e.path);
+  const command = restore.length > 10 ? 'git checkout -- .' : `git checkout -- ${restore.map((p) => `"${p}"`).join(' ')}`;
+  const fix = restore.length ? `restore with ${command} in the repo, or commit or stash them before launching` : 'commit or stash them before launching';
+  return ` (${summary}); ${fix}:\n${entries.map((e) => `${e.xy} ${e.path}`).join('\n')}`;
 }
 
 /** The linked worktree `branch` is checked out in, if any. The first entry git lists is the main checkout. */

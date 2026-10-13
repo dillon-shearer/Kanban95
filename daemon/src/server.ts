@@ -10,7 +10,7 @@ import { WebSocketServer } from 'ws';
 import { handleApi } from './api.js';
 import { countBoard, entryPath, register, tellShell } from './boards.js';
 import { openDb, openGlobalBrain } from './db.js';
-import { git, initRepo } from './git.js';
+import { git, guardFileMode, initRepo } from './git.js';
 import { sweep, SWEEP_MS } from './janitor.js';
 import { killAll, launch, sessions } from './launcher.js';
 import { countUnpushed, events, recover, releasePending, tick, watchSilence, type Board } from './lifecycle.js';
@@ -173,6 +173,11 @@ export function start(config: Config = {}): Promise<{
   } catch (e) {
     board.gitError = (e as Error).message;
     console.error(`[git] ${board.gitError}`);
+  }
+  try {
+    guardFileMode(repo);
+  } catch (e) {
+    console.error(`[git] core.fileMode not set: ${(e as Error).message}`);
   }
   try {
     board.startCommit = git(repo, 'rev-parse', '--verify', '-q', 'HEAD');
