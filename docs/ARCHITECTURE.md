@@ -137,15 +137,17 @@ A GitHub Release is cut only by pushing a tag `vX.Y.Z` (a prerelease such as `v0
 
 1. `version` fails with a clear error unless the tag is `v` + `package.json`'s version, before anything is built.
 2. `build` runs `build.yml`'s Windows and macOS jobs (tests included) with `release: true`, which adds `--config shell/tauri.updater.json` (`bundle.createUpdaterArtifacts: true`) to `npm run installer` and passes the signing secrets to it. The extra config must be a `--config` argument: the Tauri CLI does not read a `TAURI_CONFIG` environment variable for bundling. Tauri then writes a `.sig` next to the NSIS setup.exe (the Windows update bundle is the setup.exe itself) and builds `Kanban95.app.tar.gz` plus `.sig` for each Mac target.
-3. `release` downloads both artifacts, renames the Mac update bundles to carry version and arch, writes `latest.json`, and runs `gh release create` for the tag (`--prerelease` when the version has a `-`).
+3. `release` downloads both artifacts, renames every file to say version and platform in plain words (the bundler's names use target triples, and the Mac update bundle is just `Kanban95.app.tar.gz`), writes `latest.json` from the `.sig` files, fills `.github/release-notes.md` (`{{version}}`, `{{base}}` the Release download URL) and runs `gh release create` for the tag with those notes ahead of the generated ones (`--prerelease` when the version has a `-`). The notes open with a Download table and install steps, because a Release cannot group its assets into folders.
 
 The Release holds:
-- `Kanban95_<version>_x64-setup.exe` and `.sig`
-- `Kanban95_<version>_aarch64.dmg`
-- `Kanban95_<version>_x64.dmg`
-- `Kanban95_<version>_aarch64.app.tar.gz` and `.sig`
-- `Kanban95_<version>_x64.app.tar.gz` and `.sig`
+- `Kanban95-<version>-Mac-AppleSilicon.dmg`
+- `Kanban95-<version>-Mac-Intel.dmg`
+- `Kanban95-<version>-Windows-setup.exe` (also the Windows update bundle)
 - `latest.json`
+- `updater-Kanban95-<version>-Mac-AppleSilicon.app.tar.gz`
+- `updater-Kanban95-<version>-Mac-Intel.app.tar.gz`
+
+The `.sig` files are not uploaded: the updater reads each signature from `latest.json` and never fetches a `.sig`.
 
 `latest.json` is the Tauri updater plugin's static manifest: `version`, `notes`, `pub_date` and `platforms` with one entry each for `windows-x86_64`, `darwin-aarch64` and `darwin-x86_64`, each a download `url` on this Release and the `signature` (the content of its `.sig`). `https://github.com/dillon-shearer/Kanban95/releases/latest/download/latest.json` always points at the newest full release; GitHub skips prereleases for `latest`.
 

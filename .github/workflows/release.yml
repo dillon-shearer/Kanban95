@@ -36,29 +36,35 @@ jobs:
       V: ${{ needs.version.outputs.version }}
       GH_TOKEN: ${{ github.token }}
     steps:
+      - uses: actions/checkout@v5
+        with:
+          sparse-checkout: .github
       - uses: actions/download-artifact@v5
         with:
           path: artifacts
       - run: |
-          mkdir out
-          cp "artifacts/kanban95-windows/Kanban95_${V}_x64-setup.exe" "artifacts/kanban95-windows/Kanban95_${V}_x64-setup.exe.sig" out/
-          for t in aarch64:aarch64 x86_64:x64; do
-            b="artifacts/kanban95-macos/${t%%:*}-apple-darwin/release/bundle"
-            a=${t##*:}
-            cp "$b/dmg/Kanban95_${V}_$a.dmg" out/
-            cp "$b/macos/Kanban95.app.tar.gz" "out/Kanban95_${V}_$a.app.tar.gz"
-            cp "$b/macos/Kanban95.app.tar.gz.sig" "out/Kanban95_${V}_$a.app.tar.gz.sig"
+          mkdir out sig
+          w="artifacts/kanban95-windows/Kanban95_${V}_x64-setup.exe"
+          cp "$w" "out/Kanban95-$V-Windows-setup.exe"
+          cp "$w.sig" "sig/Kanban95-$V-Windows-setup.exe.sig"
+          for t in aarch64:aarch64:AppleSilicon x86_64:x64:Intel; do
+            IFS=: read -r triple a name <<< "$t"
+            b="artifacts/kanban95-macos/$triple-apple-darwin/release/bundle"
+            cp "$b/dmg/Kanban95_${V}_$a.dmg" "out/Kanban95-$V-Mac-$name.dmg"
+            cp "$b/macos/Kanban95.app.tar.gz" "out/updater-Kanban95-$V-Mac-$name.app.tar.gz"
+            cp "$b/macos/Kanban95.app.tar.gz.sig" "sig/updater-Kanban95-$V-Mac-$name.app.tar.gz.sig"
           done
           base="https://github.com/$GITHUB_REPOSITORY/releases/download/$GITHUB_REF_NAME"
-          entry() { jq -n --arg url "$base/$1" --rawfile sig "out/$1.sig" '{signature: ($sig | rtrimstr("\n")), url: $url}'; }
+          sed -e "s|{{version}}|$V|g" -e "s|{{base}}|$base|g" .github/release-notes.md > notes.md
+          entry() { jq -n --arg url "$base/$1" --rawfile sig "sig/$1.sig" '{signature: ($sig | rtrimstr("\n")), url: $url}'; }
           jq -n --arg version "$V" --arg pub_date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-            --argjson win "$(entry "Kanban95_${V}_x64-setup.exe")" \
-            --argjson arm "$(entry "Kanban95_${V}_aarch64.app.tar.gz")" \
-            --argjson x64 "$(entry "Kanban95_${V}_x64.app.tar.gz")" \
+            --argjson win "$(entry "Kanban95-$V-Windows-setup.exe")" \
+            --argjson arm "$(entry "updater-Kanban95-$V-Mac-AppleSilicon.app.tar.gz")" \
+            --argjson x64 "$(entry "updater-Kanban95-$V-Mac-Intel.app.tar.gz")" \
             '{version: $version, notes: "", pub_date: $pub_date, platforms: {"windows-x86_64": $win, "darwin-aarch64": $arm, "darwin-x86_64": $x64}}' > out/latest.json
           cat out/latest.json
           ls -l out
       - run: |
           pre=
           case "$V" in *-*) pre=--prerelease ;; esac
-          gh release create "$GITHUB_REF_NAME" out/* --repo "$GITHUB_REPOSITORY" --verify-tag --title "Kanban95 $V" --generate-notes $pre
+          gh release create "$GITHUB_REF_NAME" out/* --repo "$GITHUB_REPOSITORY" --verify-tag --title "Kanban95 $V" --notes-file notes.md --generate-notes $pre
