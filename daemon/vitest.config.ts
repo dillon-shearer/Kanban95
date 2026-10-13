@@ -1,10 +1,16 @@
-import { readdirSync, readFileSync } from 'node:fs';
+import { chmodSync, readdirSync, readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vitest/config';
 
 // home.ts gives every test file a throwaway home; real-home-guard.ts fails the run if the real one was touched anyway.
 // Absolute paths and `root`, so the repo-root vitest.config.mts, which re-exports this one, runs the same files the same way.
 const here = (f: string) => fileURLToPath(new URL(f, import.meta.url));
+if (process.platform === 'darwin') {
+  const prebuilds = join(dirname(createRequire(import.meta.url).resolve('node-pty/package.json')), 'prebuilds');
+  for (const a of ['arm64', 'x64']) try { chmodSync(join(prebuilds, `darwin-${a}`, 'spawn-helper'), 0o755); } catch {}
+}
 // restart.test.ts runs alone, last: next to the ConPTY tests in other workers it once crashed one of them with
 // native heap corruption (0xC0000374) inside node-pty.
 const isolated = ['restart.test.ts'];

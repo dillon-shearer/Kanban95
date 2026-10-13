@@ -8,6 +8,7 @@ import { delimiter, join } from 'node:path';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { type Session } from '../src/launcher.ts';
 import { start } from '../src/server.ts';
+import { fakeCli } from './fake-cli.ts';
 
 const bin = mkdtempSync(join(tmpdir(), 'k95-bin-'));
 // `exit0` exits by itself once up; anything else stays up until killed.
@@ -52,7 +53,7 @@ async function expectGone(pids: number[]) {
 
 beforeAll(() => {
   writeFileSync(join(bin, 'fake.mjs'), FAKE);
-  writeFileSync(join(bin, 'claude.cmd'), `@node "%~dp0fake.mjs" %*\r\n`);
+  fakeCli(bin, 'claude', 'fake.mjs');
   process.env.PATH = bin + delimiter + PATH0;
 });
 afterAll(() => {

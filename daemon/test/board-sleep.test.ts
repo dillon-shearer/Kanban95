@@ -10,6 +10,7 @@ import { brainstorm, changed } from '../src/lifecycle.ts';
 import { start } from '../src/server.ts';
 import { globalPath, writeConfig } from '../src/settings.ts';
 import { removeTemp } from './home.ts';
+import { fakeCli } from './fake-cli.ts';
 
 const FAST = 0.01;
 const bin = mkdtempSync(join(tmpdir(), 'k95-bin-'));
@@ -36,8 +37,7 @@ const boot = async (shell: boolean, sleepAfterMinutes: number) => {
 
 beforeAll(() => {
   writeFileSync(join(bin, 'fake.mjs'), "console.log('FAKE UP'); setInterval(() => {}, 1000);\n");
-  writeFileSync(join(bin, 'claude.cmd'), '@node "%~dp0fake.mjs" %*\r\n');
-  writeFileSync(join(bin, 'claude'), '#!/bin/sh\nexec node "$(dirname "$0")/fake.mjs" "$@"\n', { mode: 0o755 });
+  fakeCli(bin, 'claude', 'fake.mjs');
   process.env.PATH = bin + delimiter + PATH0;
   mkdirSync(process.env.KANBAN95_HOME!, { recursive: true });
   writeFileSync(globalPath('models'), JSON.stringify({ cli: 'claude', claude: { plan: { model: 'm' } } }));

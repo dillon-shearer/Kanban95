@@ -9,6 +9,7 @@ import WebSocket from 'ws';
 import { createWorktree, removeWorktree, worktreePath, worktreesRoot } from '../src/git.ts';
 import { killTree, sessions, type Cli, type Session } from '../src/launcher.ts';
 import { start } from '../src/server.ts';
+import { fakeCli } from './fake-cli.ts';
 
 // Fake `claude` and `codex` first on PATH. Each records its argv, env and cwd in the worktree, echoes typed input,
 // and behaves by model: `exit3` exits 3 at once, anything else stays up until killed.
@@ -49,7 +50,7 @@ const runRow = (id: number) => db.prepare('SELECT * FROM runs WHERE id = ?').get
 
 beforeAll(() => {
   writeFileSync(join(bin, 'fake.mjs'), FAKE);
-  for (const cli of ['claude', 'codex']) writeFileSync(join(bin, `${cli}.cmd`), `@node "%~dp0fake.mjs" %*\r\n`);
+  for (const cli of ['claude', 'codex']) fakeCli(bin, cli, 'fake.mjs');
   process.env.PATH = bin + delimiter + PATH0;
   process.env.KANBAN95_CANARY = 'leaked';
 });

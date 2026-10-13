@@ -10,6 +10,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { worktreePath } from '../src/git.ts';
 import { prepareWorktree, sessions, type Session } from '../src/launcher.ts';
 import { start } from '../src/server.ts';
+import { fakeCli } from './fake-cli.ts';
 
 // The grandchild writes its pid to grand.pid in its cwd and sleeps. On Windows it is detached, so it has no console:
 // node-pty's own kill ends only the processes attached to the pty's console, and a console-less grandchild (headless Edge,
@@ -60,7 +61,7 @@ const temps: string[] = [];
 beforeAll(() => {
   writeFileSync(join(bin, 'grand.mjs'), GRAND);
   writeFileSync(join(bin, 'spawner.mjs'), SPAWNER);
-  writeFileSync(join(bin, 'claude.cmd'), `@node "%~dp0spawner.mjs" %*\r\n`);
+  fakeCli(bin, 'claude', 'spawner.mjs');
   process.env.PATH = bin + delimiter + PATH0;
 });
 afterAll(() => {

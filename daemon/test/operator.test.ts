@@ -13,6 +13,7 @@ import { mint, verify } from '../src/grants.ts';
 import { buildArgv, killTree, sessions, type ArgvIn, type Session } from '../src/launcher.ts';
 import { start } from '../src/server.ts';
 import { fill, loadTemplate, render, VARS, type Ctx } from '../src/templates.ts';
+import { fakeCli } from './fake-cli.ts';
 
 // Fake `claude` first on PATH: it says it is up, then stays up until the board kills it.
 const bin = mkdtempSync(join(tmpdir(), 'k95-bin-'));
@@ -43,7 +44,7 @@ async function call(name: string, args: Record<string, unknown> = {}) {
 
 beforeAll(async () => {
   writeFileSync(join(bin, 'fake.mjs'), "console.log('FAKE UP');\nprocess.stdin.resume();\n");
-  writeFileSync(join(bin, 'claude.cmd'), `@node "%~dp0fake.mjs" %*\r\n`);
+  fakeCli(bin, 'claude', 'fake.mjs');
   process.env.PATH = bin + delimiter + PATH0;
   // Only a plan model: a ticket agent the operator launches fails to start and flags its ticket, which is all these tests need.
   mkdirSync(join(process.env.USERPROFILE!, '.kanban95'), { recursive: true });

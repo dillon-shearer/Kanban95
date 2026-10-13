@@ -8,6 +8,7 @@ import { start } from '../src/server.ts';
 import './memory.ts';
 import { readConfig, writeConfig } from '../src/settings.ts';
 import { removeTemp } from './home.ts';
+import { fakeCli } from './fake-cli.ts';
 
 vi.mock('../src/pty.ts', async (orig) => {
   const real = await orig<typeof import('../src/pty.ts')>();
@@ -56,7 +57,8 @@ const tickets = (srv: Srv, n: number) => Array.from({ length: n }, (_, i) => Num
 const run = async (srv: Srv) => (await request(srv, 'PUT', '/api/runner', { on: true })).json();
 
 beforeAll(() => {
-  writeFileSync(join(bin, 'claude.cmd'), '@echo off\r\n');
+  writeFileSync(join(bin, 'fake.mjs'), '');
+  fakeCli(bin, 'claude', 'fake.mjs');
   process.env.PATH = bin + delimiter + PATH0;
   mkdirSync(process.env.KANBAN95_HOME!, { recursive: true });
   writeConfig('models', { cli: 'claude', claude: { execute: { model: 'hang', effort: 'low' }, test: { model: 'hang', effort: 'low' } } });

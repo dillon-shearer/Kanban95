@@ -9,6 +9,7 @@ import { readTicket } from '../src/api.ts';
 import { worktreePath } from '../src/git.ts';
 import { sessions } from '../src/launcher.ts';
 import { start } from '../src/server.ts';
+import { fakeCli } from './fake-cli.ts';
 
 // Stays up doing nothing until it is killed.
 const FAKE = `console.log('FAKE');\nprocess.stdin.resume();\n`;
@@ -30,7 +31,7 @@ const until = async (f: () => unknown, what: string, ms = 30_000) => {
 
 beforeAll(async () => {
   writeFileSync(join(bin, 'fake.mjs'), FAKE);
-  writeFileSync(join(bin, 'claude.cmd'), `@node "%~dp0fake.mjs" %*\r\n`);
+  fakeCli(bin, 'claude', 'fake.mjs');
   process.env.PATH = bin + delimiter + PATH0;
   mkdirSync(join(process.env.USERPROFILE!, '.kanban95'), { recursive: true });
   writeFileSync(join(process.env.USERPROFILE!, '.kanban95', 'models.json'), JSON.stringify({
