@@ -10,6 +10,7 @@ import { createWorktree, worktreePath } from '../src/git.ts';
 import { sessions, sessionsOf } from '../src/launcher.ts';
 import { candidates, events, runner } from '../src/lifecycle.ts';
 import { start } from '../src/server.ts';
+import './memory.ts';
 
 // Model `hang` stays up doing nothing; any other model commits a file and submits. A test run passes.
 const FAKE = `

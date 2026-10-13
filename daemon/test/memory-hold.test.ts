@@ -10,10 +10,10 @@ import { readTicket } from '../src/api.ts';
 import { sessionsOf } from '../src/launcher.ts';
 import { memory, runner, tick } from '../src/lifecycle.ts';
 import { start } from '../src/server.ts';
+import './memory.ts';
 
 const bin = mkdtempSync(join(tmpdir(), 'k95-bin-'));
 const PATH0 = process.env.PATH;
-const FREE0 = memory.free;
 const LOW = 512 * 1024 ** 2; // under any floor: the floor is at least 2 GiB
 beforeAll(() => {
   writeFileSync(join(bin, 'fake.mjs'), "console.log('FAKE'); process.stdin.resume();\n");
@@ -53,7 +53,6 @@ beforeEach(async () => {
   db = srv.db;
 });
 afterEach(async () => {
-  memory.free = FREE0;
   await srv.close();
   rmSync(repo, { recursive: true, force: true, maxRetries: 8, retryDelay: 400 });
 });
