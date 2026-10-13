@@ -8,6 +8,7 @@ import { entryPath } from '../src/boards.ts';
 import { killTree, sessions } from '../src/launcher.ts';
 import { start } from '../src/server.ts';
 import { writeProjects } from '../src/settings.ts';
+import { fakeCli } from './fake-cli.ts';
 
 const bin = mkdtempSync(join(tmpdir(), 'k95-bin-'));
 const PATH0 = process.env.PATH;
@@ -26,7 +27,7 @@ const agents = async () => (await (await api('GET', '/projects')).json()).agents
 
 beforeAll(async () => {
   writeFileSync(join(bin, 'fake.mjs'), "console.log('FAKE UP');\nprocess.stdin.resume();\n");
-  writeFileSync(join(bin, 'claude.cmd'), `@node "%~dp0fake.mjs" %*\r\n`);
+  fakeCli(bin, 'claude', 'fake.mjs');
   process.env.PATH = bin + delimiter + PATH0;
   mkdirSync(join(process.env.USERPROFILE!, '.kanban95'), { recursive: true });
   writeFileSync(join(process.env.USERPROFILE!, '.kanban95', 'models.json'), JSON.stringify({ cli: 'claude', claude: { plan: { model: 'plan-m', effort: 'low' } } }));

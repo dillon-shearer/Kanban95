@@ -11,6 +11,7 @@ import { sessions, sessionsOf } from '../src/launcher.ts';
 import { candidates, events, runner } from '../src/lifecycle.ts';
 import { start } from '../src/server.ts';
 import './memory.ts';
+import { fakeCli } from './fake-cli.ts';
 
 // Model `hang` stays up doing nothing; any other model commits a file and submits. A test run passes.
 const FAKE = `
@@ -68,7 +69,7 @@ const bin = mkdtempSync(join(tmpdir(), 'k95-bin-'));
 const PATH0 = process.env.PATH;
 beforeAll(() => {
   writeFileSync(join(bin, 'fake.mjs'), FAKE);
-  writeFileSync(join(bin, 'claude.cmd'), `@node "%~dp0fake.mjs" %*\r\n`);
+  fakeCli(bin, 'claude', 'fake.mjs');
   process.env.PATH = bin + delimiter + PATH0;
   mkdirSync(join(process.env.USERPROFILE!, '.kanban95'), { recursive: true });
   writeFileSync(join(process.env.USERPROFILE!, '.kanban95', 'models.json'), JSON.stringify({

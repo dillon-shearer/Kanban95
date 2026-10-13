@@ -11,6 +11,7 @@ import { FIRST_COMMIT, worktreePath, worktreesRoot } from '../src/git.ts';
 import { sessionsOf } from '../src/launcher.ts';
 import { start } from '../src/server.ts';
 import './memory.ts';
+import { fakeCli } from './fake-cli.ts';
 
 // Commits a file holding its own working directory, then submits; a test run passes.
 const FAKE = `
@@ -47,7 +48,7 @@ const bin = mkdtempSync(join(tmpdir(), 'k95-bin-'));
 beforeAll(() => {
   for (const k of CLEARED) delete process.env[k];
   writeFileSync(join(bin, 'fake.mjs'), FAKE);
-  writeFileSync(join(bin, 'claude.cmd'), `@node "%~dp0fake.mjs" %*\r\n`);
+  fakeCli(bin, 'claude', 'fake.mjs');
   process.env.PATH = bin + delimiter + saved.PATH;
   mkdirSync(join(home, '.kanban95'), { recursive: true });
   writeFileSync(join(home, '.kanban95', 'models.json'), JSON.stringify({

@@ -16,6 +16,7 @@ import { events } from '../src/lifecycle.ts';
 import { start } from '../src/server.ts';
 import './memory.ts';
 import { readConfig, writeConfig } from '../src/settings.ts';
+import { fakeCli } from './fake-cli.ts';
 
 // Fake `claude` first on PATH: a scripted agent that talks to /mcp like the real CLI and stays up until the board ends it.
 // The brief's heading says which phase it is in; the model name says how it behaves (see `behave` below).
@@ -106,7 +107,7 @@ process.stdin.resume();
 const PATH0 = process.env.PATH;
 beforeAll(() => {
   writeFileSync(join(bin, 'fake.mjs'), FAKE);
-  writeFileSync(join(bin, 'claude.cmd'), `@node "%~dp0fake.mjs" %*\r\n`);
+  fakeCli(bin, 'claude', 'fake.mjs');
   process.env.PATH = bin + delimiter + PATH0;
 });
 afterAll(() => {

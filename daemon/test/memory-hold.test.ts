@@ -11,13 +11,14 @@ import { sessionsOf } from '../src/launcher.ts';
 import { memory, runner, tick } from '../src/lifecycle.ts';
 import { start } from '../src/server.ts';
 import './memory.ts';
+import { fakeCli } from './fake-cli.ts';
 
 const bin = mkdtempSync(join(tmpdir(), 'k95-bin-'));
 const PATH0 = process.env.PATH;
 const LOW = 512 * 1024 ** 2; // under any floor: the floor is at least 2 GiB
 beforeAll(() => {
   writeFileSync(join(bin, 'fake.mjs'), "console.log('FAKE'); process.stdin.resume();\n");
-  writeFileSync(join(bin, 'claude.cmd'), `@node "%~dp0fake.mjs" %*\r\n`);
+  fakeCli(bin, 'claude', 'fake.mjs');
   process.env.PATH = bin + delimiter + PATH0;
   mkdirSync(join(process.env.USERPROFILE!, '.kanban95'), { recursive: true });
   writeFileSync(join(process.env.USERPROFILE!, '.kanban95', 'models.json'), JSON.stringify({

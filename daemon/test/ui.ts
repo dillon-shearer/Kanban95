@@ -13,6 +13,7 @@ import { sources } from '../src/limits.ts';
 import { start } from '../src/server.ts';
 import './memory.ts';
 import { browser, until, type Page } from './cdp.ts';
+import { fakeCli } from './fake-cli.ts';
 
 // Fake `claude`: asks the operator a question when its model is `ask`, commits the answer and submits; `submit` commits and
 // submits at once. A test run passes, unless its model is `hold`: then it waits.
@@ -100,7 +101,7 @@ beforeAll(async () => {
   git('commit', '-qm', 'init');
   bin = mkdtempSync(join(tmpdir(), 'k95-bin-'));
   writeFileSync(join(bin, 'fake.mjs'), FAKE);
-  writeFileSync(join(bin, 'claude.cmd'), `@node "%~dp0fake.mjs" %*\r\n`);
+  fakeCli(bin, 'claude', 'fake.mjs');
   process.env.PATH = bin + delimiter + PATH0;
   mkdirSync(join(process.env.USERPROFILE!, '.kanban95'), { recursive: true });
   writeFileSync(join(process.env.USERPROFILE!, '.kanban95', 'models.json'), JSON.stringify({

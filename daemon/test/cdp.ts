@@ -11,6 +11,8 @@ const CANDIDATES = [
   'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe',
   'C:/Program Files/Microsoft/Edge/Application/msedge.exe',
   'C:/Program Files/Google/Chrome/Application/chrome.exe',
+  '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+  '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge',
   '/usr/bin/google-chrome',
   '/usr/bin/chromium',
 ];
@@ -33,7 +35,8 @@ export async function launch() {
   const profile = join(dir, 'profile');
   const argv = ['--headless=new', '--remote-debugging-port=0', `--user-data-dir=${profile}`, '--no-first-run',
     // Muted: a headless browser still plays sound, so every test merge and question rang the board's chimes on the operator's speakers.
-    '--no-default-browser-check', '--window-size=1280,720', '--mute-audio', 'about:blank'];
+    '--no-default-browser-check', '--window-size=1280,720', '--mute-audio',
+    '--use-mock-keychain', '--password-store=basic', 'about:blank'];
   // A headed browser opens a window on the operator's desktop while they work; never allow one.
   if (!argv.some((a) => a.startsWith('--headless'))) throw new Error('cdp.ts must start the browser with --headless');
   // Its own home, not the operator's: vitest's globalSetup runs with the real one. Edge 155 (2026-10) never opens its DevTools
