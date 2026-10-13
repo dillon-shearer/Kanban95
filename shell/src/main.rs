@@ -1061,14 +1061,26 @@ fn splash_page(path: &str) -> Option<(&'static str, &'static [u8])> {
     }
 }
 
+fn splash_response(path: &str) -> tauri::http::Response<&'static [u8]> {
+    let (status, kind, body) = match splash_page(path) {
+        Some((kind, body)) => (200, kind, body),
+        None => (404, "text/plain", &b""[..]),
+    };
+    tauri::http::Response::builder().status(status).header("Content-Type", kind).body(body).expect("splash response")
+}
+
 fn splash_url() -> Url {
     let url = if cfg!(windows) { format!("http://{SPLASH_SCHEME}.localhost/") } else { format!("{SPLASH_SCHEME}://localhost/") };
     url.parse().expect("splash url")
 }
 
-fn splash<R: Runtime, M: Manager<R>>(app: &M) -> tauri::Result<WebviewWindow<R>> {
+fn on_splash(to: &Url) -> bool {
     let home = splash_url();
-    WebviewWindowBuilder::new(app, SPLASH, WebviewUrl::CustomProtocol(home.clone()))
+    (to.scheme(), to.host_str(), to.port()) == (home.scheme(), home.host_str(), home.port())
+}
+
+fn splash<R: Runtime, M: Manager<R>>(app: &M) -> tauri::Result<WebviewWindow<R>> {
+    WebviewWindowBuilder::new(app, SPLASH, WebviewUrl::CustomProtocol(splash_url()))
         .title("Kanban95")
         .data_directory(data_dir(app)?)
         .inner_size(320.0, 120.0)
@@ -1076,7 +1088,7 @@ fn splash<R: Runtime, M: Manager<R>>(app: &M) -> tauri::Result<WebviewWindow<R>>
         .decorations(false)
         .resizable(false)
         .always_on_top(true)
-        .on_navigation(move |to| to.origin() == home.origin())
+        .on_navigation(on_splash)
         .on_new_window(|_, _| NewWindowResponse::Deny)
         .on_permission_request(|_, _| PermissionResponse::Deny)
         .build()
@@ -1257,13 +1269,7 @@ fn main() {
     builder
         .manage(host)
         .manage(Pending::default())
-        .register_uri_scheme_protocol(SPLASH_SCHEME, |_, req| {
-            let (status, kind, body) = match splash_page(req.uri().path()) {
-                Some((kind, body)) => (200, kind, body),
-                None => (404, "text/plain", &b""[..]),
-            };
-            tauri::http::Response::builder().status(status).header("Content-Type", kind).body(body).expect("splash response")
-        })
+        .register_uri_scheme_protocol(SPLASH_SCHEME, |_, req| splash_response(req.uri().path()))
         .setup(move |app| {
             let host = setup;
             let (handle, ports) = (app.handle().clone(), host.ports.clone());
@@ -1965,6 +1971,23 @@ mod tests {
         assert!(!at("http://127.0.0.1:41235/", &[41234]) && !at("http://localhost:41234/", &[41234]) && !at("https://127.0.0.1:41234/", &[41234]));
         assert!(at("http://127.0.0.1:41235/?k95=y", &[41234, 41235]) && at("http://127.0.0.1:41234/", &[41234, 41235]));
         assert!(!at("http://127.0.0.1/", &[80]) && !at("http://127.0.0.1:41234/", &[]));
+    }
+
+    #[test]
+    fn the_splash_page_and_icon_are_served_typed_and_its_lock_lets_its_own_url_load() {
+        let page = splash_response("/");
+        assert_eq!(page.status(), 200);
+        assert_eq!(page.headers()["Content-Type"], "text/html");
+        let html = std::str::from_utf8(page.body()).unwrap();
+        assert!(html.contains("<style>") && html.contains("background: #c0c0c0") && html.contains(r#"<img src="icon.png""#));
+        let icon = splash_response("/icon.png");
+        assert_eq!((icon.status().as_u16(), icon.headers()["Content-Type"].to_str().unwrap()), (200, "image/png"));
+        assert!(icon.body().starts_with(b"\x89PNG"));
+        assert_eq!(splash_response("/x").status(), 404);
+        let home = splash_url();
+        assert!(on_splash(&home) && on_splash(&home.join("icon.png").unwrap()));
+        assert!(!on_splash(&"https://example.com/".parse().unwrap()) && !on_splash(&"k95splash://evil/".parse().unwrap()));
+        assert!(!on_splash(&"http://127.0.0.1:41234/".parse().unwrap()));
     }
 
     #[test]
