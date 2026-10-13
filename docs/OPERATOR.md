@@ -230,6 +230,15 @@ If something cannot be done, the status bar says why. Below the projects, after 
 
 **Switch board.** One Kanban95 window can host several boards, like virtual desktops. The first button right of Start, before the pinned icons, two overlapping squares like the Windows Task View button, is always there, even with one project. Click it for a small popup above it with one row per project in Settings → Projects order, except this board. Each row shows the folder name on the project's wallpaper colour, a grey "missing" tag when its folder was deleted or moved (clicking it only says so in the status bar), a small green mark when the board is running, a small red number when that board has tickets waiting on you (its count of flagged tickets, hidden at zero), and an **X** on the right when the board is hosted in this window and runs no agent. Click a row: a board hosted here is switched to ("Switching to <name>…"), one not running starts and takes this window ("Opening <name>…"), one running in another window comes to the front. The **X** closes that board after a confirm. Arrow keys move between rows and Enter picks one. Esc, a click outside or the button again closes the popup; it and the Start menu are never open together. The list is read fresh each time the popup opens. Pop out and open in a new window stay in Start → Projects. The keys Ctrl+Tab, Ctrl+Shift+Tab and Ctrl+1 to Ctrl+9 switch too (Keyboard above). The project list behind those keys and Start → Projects is read at start, when this window gets focus, each time Start or the popup opens and when the board changes.
 
+## A carried drive
+
+You can keep the repo and the data folder on one external drive and move it between a Windows PC and a Mac. The board needs the main checkout to have no uncommitted changes to tracked files: it forks every ticket from it and merges back into it. On a drive formatted exFAT (not APFS), macOS adds files the board guards against:
+
+- `._*` and `.DS_Store`: macOS writes a `._<name>` file beside every file and a `.DS_Store` in folders. Keep both lines in the repo's `.gitignore` (Kanban95's own has them) so they never show in `git status` or get committed.
+- File modes: exFAT has none, so every file can look modified. When a board starts on a Mac and the repo is on a volume that is not APFS or HFS, it sets `core.fileMode false` in the repo if you have not set it, and logs one line. On Windows nothing changes.
+- Missing files: if tracked files are missing or changed in the main checkout, each launch fails and the status bar says how many are deleted or modified and the command to put them back (`git checkout -- <paths>`, run in the repo). Run it, or commit or stash the changes, then launch again.
+- If git prints `non-monotonic index` on every command, delete `.git/objects/pack/._*`.
+
 ## Updates
 
 The installed app looks for a newer GitHub Release when it starts and each time a board comes back from Restart board; a board opened later checks only if the last check was an hour ago or more. `npm run dev` never checks. A check that cannot reach GitHub (offline, rate limited) shows nothing.
