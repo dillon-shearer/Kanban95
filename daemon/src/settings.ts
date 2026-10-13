@@ -7,7 +7,7 @@ import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { copyFileSync, createReadStream, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, rmdirSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { basename, delimiter, dirname, isAbsolute, join, resolve } from 'node:path';
+import { basename, delimiter, dirname, isAbsolute, join, parse, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import * as z from 'zod';
 import type { Ticket } from './api.js';
@@ -360,6 +360,23 @@ const projectList = z.array(z.object({
   colour: z.union([z.string().regex(/^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i, 'must be #rgb or #rrggbb'), z.number().min(0).max(360)]),
 }).strict());
 export type Project = z.output<typeof projectList>[number];
+const storedList = z.array(z.union([
+  projectList.element,
+  z.object({ path: z.string().refine((p) => p !== '' && !isAbsolute(p), 'must be a relative path'), root: z.literal('data'), colour: projectList.element.shape.colour }).strict(),
+]));
+
+const volume = (p: string) =>
+  process.platform === 'win32' ? parse(p).root : /^\/(?:Volumes\/[^/]+|(?:run\/)?media\/[^/]+\/[^/]+)\//.exec(`${p}/`)?.[0];
+
+const carried = () => (same(normal(boardHome()), normal(localHome())) ? undefined : volume(boardHome()));
+
+const toStored = (list: Project[]) => {
+  const root = carried();
+  return list.map((p) => {
+    const rel = root && same(p.path.slice(0, root.length), root) ? p.path.slice(root.length) : '';
+    return rel ? { path: rel, root: 'data', colour: p.colour } : p;
+  });
+};
 
 /** Absolute, resolved and in the file system's own spelling (case, 8.3 names), so one repo is one entry. */
 export const normal = (p: string) => {
@@ -376,13 +393,14 @@ export const same = (a: string, b: string) => (process.platform === 'win32' ? a.
 export function readProjects(): Project[] {
   const file = projectsPath();
   if (!existsSync(file)) return [];
-  const r = projectList.safeParse(JSON.parse(readFileSync(file, 'utf8')));
+  const r = storedList.safeParse(JSON.parse(readFileSync(file, 'utf8')));
   if (!r.success) throw new BadConfig(`${file}: ${z.prettifyError(r.error).replaceAll('\n', '; ')}`);
-  return r.data;
+  const home = boardHome();
+  return r.data.map((p) => ('root' in p ? { path: join(volume(home) ?? parse(home).root, p.path), colour: p.colour } : p));
 }
 
 function saveProjects(list: Project[]) {
-  replace(projectsPath(), JSON.stringify(list, null, 2) + '\n');
+  replace(projectsPath(), JSON.stringify(toStored(list), null, 2) + '\n');
 }
 
 /**
