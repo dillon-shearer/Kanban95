@@ -1467,7 +1467,8 @@ mod tests {
         });
         check(app.handle().clone(), to.clone(), false);
         let (req, daemon) = told.join().unwrap();
-        assert!(req.ends_with(r#"{"current":"0.0.0","state":"available","version":"9.9.9"}"#), "{req}");
+        let current = app.package_info().version.to_string();
+        assert!(req.ends_with(&format!(r#"{{"current":"{current}","state":"available","version":"9.9.9"}}"#)), "{req}");
         assert_eq!(lock(&app.state::<Pending>().0).as_ref().map(|u| u.version.clone()), Some("9.9.9".into()));
 
         let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
