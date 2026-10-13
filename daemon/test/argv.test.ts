@@ -20,11 +20,11 @@ describe('buildArgv', () => {
       '-c', 'mcp_servers.kanban95.bearer_token_env_var=KANBAN95_TOKEN', '-c', 'mcp_servers.kanban95.default_tools_approval_mode=approve', '-c', "projects={'C:\\k95\\worktrees\\r-0011aabb'={trust_level='trusted'},'C:\\r'={trust_level='trusted'}}", ...role, msg];
   // Workers and testers drop the operator's user settings (plugin hooks) and skills; planner and operator sessions keep them.
   const lean = ['--setting-sources', 'project,local', '--settings', 'C:/r/.kanban95/sessions/3/settings.json', '--disable-slash-commands'];
-  // Reach by role: a planner cannot write files; workers and testers run with permissions off.
+  // Reach by role: a planner has no shell or subagent but may write files; workers and testers run with permissions off.
   const rows: [Cli, Role, string, Effort, string[]][] = [
     ['claude', 'worker', 'claude-opus-5-5', 'low', claude('claude-opus-5-5', 'low', ...lean)],
     ['claude', 'tester', 'claude-sonnet-5-5', 'max', claude('claude-sonnet-5-5', 'max', ...lean)],
-    ['claude', 'planner', 'claude-fable-5-1', 'high', claude('claude-fable-5-1', 'high', '--disallowedTools', 'Edit', 'Write', 'NotebookEdit', 'Bash', 'PowerShell', 'Agent')],
+    ['claude', 'planner', 'claude-fable-5-1', 'high', claude('claude-fable-5-1', 'high', '--disallowedTools', 'Bash', 'PowerShell', 'Agent')],
     ['claude', 'operator', 'claude-opus-5-5', 'high', claude('claude-opus-5-5', 'high')],
     ['codex', 'worker', 'gpt-5.6-terra', 'medium', codex('gpt-5.6-terra', 'medium', '--dangerously-bypass-approvals-and-sandbox')],
     ['codex', 'tester', 'gpt-5.6-luna', 'max', codex('gpt-5.6-luna', 'max', '--dangerously-bypass-approvals-and-sandbox')],
@@ -35,6 +35,14 @@ describe('buildArgv', () => {
   ];
   it.each(rows)('%s %s %s %s', (cli, role, model, effort, want) => {
     expect(buildArgv({ ...base, cli, role, model, effort } as ArgvIn)).toEqual(want);
+  });
+
+  it('a Claude planner keeps Write and Edit but never gets a shell or a subagent', () => {
+    const argv = buildArgv({ ...base, cli: 'claude', role: 'planner', model: 'm', effort: 'high' } as ArgvIn);
+    const deny = argv.slice(argv.indexOf('--disallowedTools') + 1, argv.indexOf('--dangerously-skip-permissions'));
+    expect(deny).toEqual(['Bash', 'PowerShell', 'Agent']);
+    expect(argv).not.toContain('Write');
+    expect(argv).not.toContain('Edit');
   });
 
   // A ticket's Claude session is named at launch and continued by that name; Codex has no such flag in use (ponytail in launcher.ts).

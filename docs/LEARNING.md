@@ -52,7 +52,7 @@ Kanban95's daemon is the MCP server, at `http://127.0.0.1:<port>/mcp`, reachable
 
 | role | started for | may, for example | may not |
 |---|---|---|---|
-| planner | a brainstorm with you | create tickets, read the whole board | write files (Codex runs read-only; Claude Code runs without its edit, shell and subagent tools) |
+| planner | a brainstorm with you | create tickets, read the whole board | change the repo checkout (Claude Code runs without its shell and subagent tools and writes a file only outside the repo when you ask; Codex runs read-only) |
 | worker | building one ticket | read its ticket and its dependencies, add notes, ask you, move it to Testing | touch another ticket, move it to Done |
 | tester | checking one ticket | report a test result, move it to Done or back to In Progress | move it to Done without first reporting a pass |
 | operator | an operator terminal you start with a typed mission | anything you could do by hand on the board, on any ticket; edit and commit in the repo | report a test result (only a tester proves a ticket) |

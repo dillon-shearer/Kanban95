@@ -20,11 +20,11 @@ const TOKEN_ENV = 'KANBAN95_TOKEN';
 // ponytail: a grant outlives its session by at most 24 h; in practice teardown revokes it when the pty exits.
 const GRANT_TTL_MS = 24 * 60 * 60 * 1000;
 /**
- * Claude Code tools a planner loses. The brainstorm template asks it to read code and write tickets over MCP, never to edit or
- * run anything; Read, Grep and Glob cover the reading. Bash and PowerShell go too, since either could write a file, and Agent,
+ * Claude Code tools a planner loses. It keeps Write and Edit so it can save a file the operator asks for outside the repo;
+ * the brainstorm template forbids touching the checkout. Bash and PowerShell go, since a shell runs anything, and Agent,
  * since a subagent is a way around the list (the live check's agent named it).
  */
-const PLANNER_DENY = ['Edit', 'Write', 'NotebookEdit', 'Bash', 'PowerShell', 'Agent'];
+const PLANNER_DENY = ['Bash', 'PowerShell', 'Agent'];
 
 /** Workers and testers run without the operator at the keyboard; planner and operator sessions are interactive. */
 const unattended = (role: Role) => role === 'worker' || role === 'tester';
