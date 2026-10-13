@@ -49,7 +49,7 @@ beforeAll(() => {
   git(repo, 'config', 'core.symlinks', 'true');
   writeFileSync(join(repo, 'a.txt'), 'a');
   symlinkSync('a.txt', join(repo, 'link.txt'), 'file');
-  writeFileSync(join(repo, '.gitignore'), 'node_modules/\n.kanban95/\n');
+  writeFileSync(join(repo, '.gitignore'), 'node_modules\n.kanban95/\n');
   git(repo, 'add', '.');
   git(repo, 'commit', '-qm', 'init');
   expect(git(repo, 'ls-files', '-s', 'link.txt')).toMatch(/^120000 /);
