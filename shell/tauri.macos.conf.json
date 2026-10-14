@@ -1,5 +1,6 @@
 {
   "bundle": {
-    "targets": ["app", "dmg"]
+    "targets": ["app", "dmg"],
+    "macOS": { "infoPlist": "Info.macos.plist" }
   }
 }
