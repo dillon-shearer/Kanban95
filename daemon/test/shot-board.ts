@@ -22,6 +22,7 @@ export async function withBoard(zoom: number, shoot: (login: string, base: strin
   try {
     const home = join(scratch, 'home');
     const repo = join(scratch, 'repo');
+    mkdirSync(join(home, 'AppData', 'Local'), { recursive: true });
     process.env.HOME = home;
     process.env.USERPROFILE = home;
     process.env.KANBAN95_HOME = join(home, '.kanban95');
