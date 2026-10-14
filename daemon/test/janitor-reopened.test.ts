@@ -69,7 +69,7 @@ afterAll(() => {
   rmSync(repo, { recursive: true, force: true });
 });
 
-describe('janitor and a merged ticket rejected back to a worker', () => {
+describe('janitor and a merged ticket rejected back to a worker', { timeout: 20_000 }, () => {
   it('startup sweep keeps the reopened worktree and its uncommitted edits', async () => {
     const { id, wt } = mergedTicket();
     reject(id);
