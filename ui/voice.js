@@ -157,8 +157,10 @@ export function micButton(onText) {
         state('error', e.message);
         await dialog('Microphone unavailable', h('div', {},
           h('p', {}, e.name === 'NotAllowedError' ? 'Kanban95 is not allowed to use the microphone.' : `No microphone could be opened (${e.name}).`),
-          h('p', {}, 'Windows: open Privacy & security → Microphone in the Windows Settings app. Turn on "Microphone access" and "Let desktop apps access your microphone", then try again.'),
-          h('p', {}, 'Windows dictation (Win+H) also works in any field.')));
+          /Mac/.test(navigator.userAgent)
+            ? h('p', {}, 'macOS: open System Settings → Privacy & Security → Microphone, turn Kanban95 on, then restart the app.')
+            : [h('p', {}, 'Windows: open Privacy & security → Microphone in the Windows Settings app. Turn on "Microphone access" and "Let desktop apps access your microphone", then try again.'),
+              h('p', {}, 'Windows dictation (Win+H) also works in any field.')]));
         return;
       }
       if (my !== gen) {
