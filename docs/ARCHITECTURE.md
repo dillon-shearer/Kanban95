@@ -393,6 +393,8 @@ The model is pinned in `daemon/voice-model.json`: `onnx-community/whisper-base.e
 
 Checked on Windows 11, WebView2 154 inside the Tauri window: `navigator.gpu` gives an adapter and the model runs on **WebGPU**; a recorded sentence transcribes correctly, about 7 s for the first call (model load included) and 3 s after. In headless Edge (no adapter) it runs on WASM.
 
+Checked on macOS 15.5 (Intel), system WKWebView: `navigator.gpu` gives no adapter, so it runs on **WASM**; the WAV fixture (`merge-queue.wav`, removed from `daemon/test/fixtures/` in ae21189, still in git history) transcribes as "Please add a test for the merge queue.", about 16 s for the first call (model load included) and 3 s after. The download into a data folder on an exFAT drive verifies and renames as on Windows.
+
 ## Working on the board
 
 Gotchas collected while the board was built. Each one cost a phase some time.
@@ -442,6 +444,8 @@ Gotchas collected while the board was built. Each one cost a phase some time.
 - On a volume that is not APFS or HFS (an exFAT SSD shared with Windows), macOS writes an AppleDouble sidecar `._<name>` beside every file and a `.DS_Store` in folders. `.gitignore` lists `._*` and `.DS_Store`, so they never show as untracked and `git add -A` never stages them. A `._*` file inside `.git/objects/pack` makes git fail with `non-monotonic index`; delete `.git/objects/pack/._*` (or run `dot_clean` on the repo).
 - exFAT keeps no file modes, so after a checkout made on Windows every file can show as modified. On start on macOS, `guardFileMode` (`git.ts`) reads the volume type (`df -P` then `diskutil info`) and sets `core.fileMode false` in the repo when it is unset and the volume is not APFS or HFS, with one stderr line. It does nothing on Windows or Linux and never overrides a value already set. Tests pass the volume check in as an argument.
 - A tracked file missing from the working tree blocks every launch (`createWorktree` refuses a dirty base). The refusal counts the changes by kind and names the restore command: `git checkout -- <paths>` for up to 10 unstaged paths, `git checkout -- .` above that.
+- macOS mounts an NTFS drive read-only. A board whose repo or data folder is on one stops at start with "unable to open database file" (`openDb`: board.db in WAL mode cannot create its `-wal`/`-shm`). exFAT works on both systems; WAL, `settings.lock` and the voice download all work on it.
+- Probing a second shell beside a live board on macOS: set `KANBAN95_HOME` and `KANBAN95_SHELL_LOG` to scratch paths, or the probe's failures land in `~/Library/Logs/Kanban95/shell.log` and read as the operator's. `npm run dev` refuses while `KANBAN95_AGENT` is set (every agent's pty has it). The installed shell can be probed by running `/Applications/Kanban95.app/Contents/MacOS/kanban95-shell <repo>` directly, with `KANBAN95_UPDATE_URL` for a local `latest.json`.
 
 **Tests**
 - Imports between `src/` files use `.js` extensions; tests import `../src/x.ts`.
