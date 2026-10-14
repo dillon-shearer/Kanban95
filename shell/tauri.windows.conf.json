@@ -1,6 +1,6 @@
 {
   "bundle": {
     "targets": ["nsis"],
-    "windows": { "nsis": { "installMode": "currentUser" } }
+    "windows": { "nsis": { "installMode": "currentUser", "installerHooks": "installer-hooks.nsh" } }
   }
 }
