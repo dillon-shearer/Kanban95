@@ -11,6 +11,7 @@ import { bootstrap } from './bootstrap.js';
 import { BRAIN_BODY_MAX, openDb, SCOPES } from './db.js';
 import { attachments } from './attachments.js';
 import { fileOn, registeredBoard } from './boards.js';
+import { postDeliverable } from './deliverables.js';
 import { audit, live, verify, type Grant, type Role } from './grants.js';
 import { apply, changed, Refused, type Board } from './lifecycle.js';
 import { EFFORT, readConfig, same, uncatalogued } from './settings.js';
@@ -526,6 +527,25 @@ export const TOOLS: Record<string, Tool<z.ZodRawShape>> = {
       const { note_id } = addNote(c, id, a.passed ? 'summary' : 'failure', body);
       // The report is the verdict: it drives the move, so a tester that stops after reporting cannot strand the ticket in Testing.
       return { note_id, ticket: apply(c.board, id, a.passed ? 'pass' : 'fail').ticket };
+    },
+  }),
+
+  post_deliverable: tool({
+    description:
+      'Put a link to a finished output folder in the operator\x27s Inbox, under a ticket, with a title. folder is an absolute path to an existing folder: in the main checkout, ' +
+      'or outside the repo (a data root, an export folder). Not your worktree: it is removed after the merge. The operator opens it with Open folder. ' +
+      'A second post of the same folder replaces its entry. A path that is not absolute, does not exist or is not a folder is refused. Returns the entry.',
+    access: { worker: 'own', operator: 'any' },
+    level: 3,
+    input: {
+      ticket_id: ticketId,
+      title: z.string().min(1).describe('What the folder holds, one line.'),
+      folder: z.string().min(1).describe('Absolute path to an existing folder.'),
+    },
+    run(c, a) {
+      const id = (c.ticket = own(c, a.ticket_id));
+      readTicket(c.db, id);
+      return postDeliverable(c.db, a.folder, id, a.title);
     },
   }),
 

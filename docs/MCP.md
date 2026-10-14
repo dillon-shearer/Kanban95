@@ -33,6 +33,7 @@ A refused call returns a tool error whose text says why and, for `move_ticket`, 
 | ask_operator | no | own | own | no |
 | request_permission | no | own | own | no |
 | report_test | no | no | own | no |
+| post_deliverable | no | own | no | any |
 | report_cleanup | no | own | no | any |
 
 "own" means the ticket the grant was minted for; a worker or tester may omit `ticket_id` and may not name another ticket. A planner or operator grant has no ticket and must pass `ticket_id`.
@@ -45,7 +46,7 @@ A worker or tester grant reaches further when the operator raises its ticket's `
 - 0: the role's cells above.
 - 1: `move_ticket` any ticket to backlog (a reset) or in_progress (a launch, or a failed test from testing), with the operator's lifecycle guards.
 - 2: also `move_ticket` any running ticket to done without a tester pass; its sessions end and no merge is queued (docs/LIFECYCLE.md → Agent moves under a level).
-- 3: also the operator's cell for `update_ticket`, `delete_ticket`, `set_model`, `add_note`.
+- 3: also the operator's cell for `update_ticket`, `delete_ticket`, `set_model`, `add_note`, `post_deliverable`.
 - 4: the operator's cell for every tool, `move_ticket` to testing included. A worker still never gets `report_test`; `ask_operator`, and a tester's `report_test`, stay on its own ticket.
 
 `read_all` on the ticket, or `workers_read: "all"` in settings.json, lets its worker and tester `get_ticket` and `list_tickets` every ticket. `targets` on the ticket (`ticket_targets`, set by the planner or operator, never by its own worker) name tickets its worker and tester may `get_ticket` and `list_tickets` without depending on them; a target with `edit` also lets the worker `update_ticket` that ticket's body and criteria. A refusal that a higher level would lift ends with "ask for level N with request_permission". Only the operator sets a level or `read_all` (docs/SECURITY.md → MCP).
@@ -225,6 +226,16 @@ Record the structured result of testing a ticket against its acceptance criteria
 | passed | boolean | yes |  |
 | summary | string | yes |  |
 | evidence | string[] \| string | default `[]` |  |
+
+### post_deliverable
+
+Put a link to a finished output folder in the operator's Inbox, under a ticket, with a title. folder is an absolute path to an existing folder: in the main checkout, or outside the repo (a data root, an export folder). Not your worktree: it is removed after the merge. The operator opens it with Open folder. A second post of the same folder replaces its entry. A path that is not absolute, does not exist or is not a folder is refused. Returns the entry.
+
+| argument | type | required | description |
+|---|---|---|---|
+| ticket_id | integer | no | Ticket id. Worker and tester grants are bound to one ticket and may omit it; a planner or operator must give it. |
+| title | string | yes | What the folder holds, one line. |
+| folder | string | yes | Absolute path to an existing folder. |
 
 ### report_cleanup
 
