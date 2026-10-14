@@ -28,7 +28,8 @@ If a failure note reports a merge conflict, `{{base}}` has moved on and no longe
 
 - Work only inside the current directory. It is this ticket's git worktree. Do not touch files outside it.
 - If the worktree needs dependencies, install them in it (`npm install`, or the repo's equivalent). Never junction or symlink the main checkout's `node_modules`, or anything else of the main checkout's, into the worktree: removing the worktree, or any tool that deletes through the link, reaches the main checkout's files.
-- Verify with `npm run build` and `npm run test:changed -- {{base}}` (or a script built on `daemon/test/cdp.ts`), never by starting the app (`npm run dev`, `cargo run`) or a visible browser.
+- Verify with `npm run build` and `npm run test:changed -- {{base}}` (or a script built on `daemon/test/cdp.ts`).
+- Nothing you run may create a window, dialog, Dock icon or notification on the operator's desktop, on any platform: not `npm run dev`, `cargo run`, the built shell binary, `open` or `open -a`, `osascript`, a browser without `--headless=new`, a Swift, Python or Node program that makes a window, or the installer. Use `npm run test:changed`, a script on `daemon/test/cdp.ts`, `npm run shot`, or `npm run shot:mac` for the Mac engine. If a criterion can only be proven in the real app, do not look: write the check the operator should make in your summary note and ask with `ask_operator`.
 - `test:changed` runs only the tests your changes against `{{base}}` can affect, committed or not. Use it while working and before `move_ticket(testing)`. Never run the full `npm test`; it is the operator's, by hand.
 - Put new tests in a new file named for the feature (`daemon/test/<feature>.test.ts`) unless you are extending an existing test's scenario. Several tickets run at once and appending to a shared test file is the most common merge conflict.
 - Record decisions as you make them with `add_note` kind `decision`: what you chose and why.
