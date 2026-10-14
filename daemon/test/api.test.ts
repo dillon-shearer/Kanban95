@@ -113,6 +113,19 @@ describe('tickets', () => {
     expect(cleared.depends_on).toEqual([]);
   });
 
+  it('targets name existing tickets, are not dependencies, and drop with a deleted target', async () => {
+    const a = await (await call('POST', '/api/tickets', { title: 'ta' })).json();
+    const t = await (await call('POST', '/api/tickets', { title: 'tt', targets: [{ id: a.id, edit: true }] })).json();
+    expect(t).toMatchObject({ depends_on: [], targets: [{ id: a.id, edit: true }] });
+    expect((await call('PATCH', `/api/tickets/${t.id}`, { targets: [{ id: 9999 }] })).status).toBe(400);
+    expect((await call('PATCH', `/api/tickets/${t.id}`, { targets: [a.id] })).status).toBe(400);
+    expect((await call('PATCH', `/api/tickets/${t.id}`, { targets: [{ id: t.id }] })).status).toBe(400);
+    expect((await (await call('GET', `/api/tickets/${t.id}`)).json()).targets).toEqual([{ id: a.id, edit: true }]);
+    expect((await (await call('PATCH', `/api/tickets/${t.id}`, { targets: [{ id: a.id }] })).json()).targets).toEqual([{ id: a.id, edit: false }]);
+    expect((await call('DELETE', `/api/tickets/${a.id}`)).status).toBe(204);
+    expect((await (await call('GET', `/api/tickets/${t.id}`)).json()).targets).toEqual([]);
+  });
+
   it('lists notes, runs and audit per ticket', async () => {
     const t = await (await call('POST', '/api/tickets', { title: 'n' })).json();
     srv.db.prepare("INSERT INTO notes (ticket_id, role, kind, body) VALUES (?, 'worker', 'plan', 'do it')").run(t.id);

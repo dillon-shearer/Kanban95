@@ -52,7 +52,7 @@ export function renderMcpDoc(): string {
     `- 3: also the operator's cell for ${Object.entries(TOOLS).filter(([, t]) => t.level === 3).map(([n]) => `\`${n}\``).join(', ')}.`,
     '- 4: the operator\'s cell for every tool, `move_ticket` to testing included. A worker still never gets `report_test`; `ask_operator`, and a tester\'s `report_test`, stay on its own ticket.',
     '',
-    '`read_all` on the ticket, or `workers_read: "all"` in settings.json, lets its worker and tester `get_ticket` and `list_tickets` every ticket. A refusal that a higher level would lift ends with "ask for level N with request_permission". Only the operator sets a level or `read_all` (docs/SECURITY.md → MCP).',
+    '`read_all` on the ticket, or `workers_read: "all"` in settings.json, lets its worker and tester `get_ticket` and `list_tickets` every ticket. `targets` on the ticket (`ticket_targets`, set by the planner or operator, never by its own worker) name tickets its worker and tester may `get_ticket` and `list_tickets` without depending on them; a target with `edit` also lets the worker `update_ticket` that ticket\'s body and criteria. A refusal that a higher level would lift ends with "ask for level N with request_permission". Only the operator sets a level or `read_all` (docs/SECURITY.md → MCP).',
     '',
     '## Tools',
   ];
