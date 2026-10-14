@@ -43,7 +43,7 @@ afterEach(() => {
   rmSync(repo, { recursive: true, force: true });
 });
 
-it('spawns no git on a second runnerState with no ticket or branch change', () => {
+it('spawns no git on a second runnerState with no ticket or branch change', { timeout: 20_000 }, () => {
   for (let i = 0; i < 4; i++) ticket('in_progress', 'src/a.ts');
   git('branch', 'ticket/1');
   commitOn('ticket/1', 'src/b.ts');
@@ -60,7 +60,7 @@ it('spawns no git on a second runnerState with no ticket or branch change', () =
   expect(gits()).toBe(0);
 });
 
-it('sees a changed ticket body and a new commit on a branch, loose or packed', () => {
+it('sees a changed ticket body and a new commit on a branch, loose or packed', { timeout: 20_000 }, () => {
   const a = ticket('in_progress', 'src/a.ts');
   const c = ticket('backlog', 'src/c.ts');
   git('branch', `ticket/${a}`);

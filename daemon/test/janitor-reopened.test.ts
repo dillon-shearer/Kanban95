@@ -21,6 +21,15 @@ vi.mock('../src/git.ts', async (orig) => {
   };
   return { ...g, removeWorktree };
 });
+vi.mock('node:child_process', async (orig) => {
+  const real = await orig<typeof import('node:child_process')>();
+  const execFile = (...args: unknown[]) => {
+    const cb = args.findLast((a) => typeof a === 'function') as ((e: Error | null, out: string, err: string) => void) | undefined;
+    setImmediate(() => cb?.(null, '', ''));
+    return {};
+  };
+  return { ...real, execFile };
+});
 
 let repo: string;
 let db: DatabaseSync;
