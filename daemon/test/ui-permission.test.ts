@@ -36,7 +36,7 @@ describe('ui-permission', { timeout: 60_000 }, () => {
       expect(answers(yes.id)).toEqual([{ body: 'approved: level 3; retry the refused call now' }]);
       expect(yes.written).toContain('approved: level 3; retry the refused call now');
 
-      await until(() => page.evaluate(`!!document.querySelector('${box(no.id)}')`), 'the second request');
+      await until(() => page.evaluate(`!document.querySelector('${box(yes.id)}') && !!document.querySelector('${box(no.id)}')`), 'the second request alone');
       await click(`${box(no.id)} button:last-child`);
       await until(() => ticketRow(no.id).needs_human === 0, 'the denied flag to clear', 5000);
       expect(ticketRow(no.id).agent_level).toBe(0);

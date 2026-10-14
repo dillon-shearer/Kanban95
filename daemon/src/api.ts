@@ -10,7 +10,7 @@ import { hasBranch, ticketDiff } from './git.js';
 import { audit, revoke } from './grants.js';
 import { cancelSetup, killGrantSession, killSession, sessions, sessionsOf, type Session } from './launcher.js';
 import { apply, brainstorm, BUMPS, changed, events, housekeeping, isKanban95, operator, pushBase, Refused, release, releaseInfo, releaseOn, releasePending, relaunch, restartBoard, runnerState, setRunner, tick, type Board, type Bump } from './lifecycle.js';
-import { addOverride, BadConfig, boardHome, dropOverride, gone, globalPath, isOverridable, knownModels, project, projectPath, projectsPath, readProjects, setBoardHome, uncatalogued, writeConfig, writePreferences, writeProjects, type OverridableName } from './settings.js';
+import { addOverride, BadConfig, boardHome, dropOverride, gone, globalPath, isOverridable, knownModels, project, projectPath, projectsPath, readProjects, setBoardHome, uncatalogued, writeConfig, writeLastBoard, writePreferences, writeProjects, type OverridableName } from './settings.js';
 import { isStale, resetTemplate, templatePath, TEMPLATES, unknownVar, VARS, writeTemplate, type TemplateName } from './templates.js';
 import { bootstrap } from './bootstrap.js';
 import { trustStatus, untrustClaude } from './trust.js';
@@ -613,6 +613,10 @@ const routes: [method: string, path: RegExp, mutation: string | null, handler: (
     if (!dropOverride(name, board.repo)) throw new HttpError(404, `${name} has no project copy`);
     if (name === 'settings') settingsChanged(board);
     return { status: 200, body: configView(board, name, url, 'project') };
+  }],
+  ['POST', /^\/api\/last-board$/, null, ({ board, body }) => {
+    if (body.window !== 'own') writeLastBoard(board.repo);
+    return { status: 204 };
   }],
   // ~/.kanban95/projects.json (Settings → Projects): the whole list in `value` both ways. /api/project is this board's entry,
   // with its folder name, for the wallpaper and the window title. A PUT that drops this board's own project is refused.

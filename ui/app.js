@@ -34,7 +34,7 @@ let runner = { on: false, concurrency: 3, running: [], left: 0, backlog: 0, wait
 let models = null; // models.json this board runs on (this repo's copy, else the global file), for the cards' default model and effort
 // Sounds stay off until /config/settings loads: listen() starts first, and a ding in that gap ignored the operator's choice.
 // `terminals` is absent until then too, so no session is opened or passed over before the operator's phases are known.
-const SETTINGS = { paths: {}, sounds: { merge: false, attention: false, done: false }, voice: { backend: 'local', mode: 'push' }, housekeeping: { auto: true, every: 10 }, idle_minutes: 20, zoom: 1, push_after_merge: true, sleepAfterMinutes: 30, concurrency: 3, updateCheck: true, release: false, workers_read: 'deps' };
+const SETTINGS = { paths: {}, sounds: { merge: false, attention: false, done: false }, voice: { backend: 'local', mode: 'push' }, housekeeping: { auto: true, every: 10 }, idle_minutes: 20, zoom: 1, push_after_merge: true, sleepAfterMinutes: 30, concurrency: 3, updateCheck: true, release: false, workers_read: 'deps', startup: 'last' };
 let settings = { ...SETTINGS };
 let limits = null; // GET /api/limits: { rows, errors, fetched_at }, null until the first answer
 const views = new Map(); // open window id → redraw(Set of changed ticket ids | undefined)
@@ -1267,8 +1267,9 @@ function browse(input, kind) {
 
 /** Settings → Projects: every repo with a board. Each change saves the whole list at once. */
 async function projectsPanel(p) {
-  const [own, { path, value, missing }] = await Promise.all([api('GET', '/project'), api('GET', '/projects')]);
+  const [own, { path, value, missing }, global] = await Promise.all([api('GET', '/project'), api('GET', '/projects'), api('GET', '/config/settings')]);
   let list = value;
+  let startup = settingsFrom(global.value).startup;
   const save = (next, ok) => act(async () => {
     list = (await api('PUT', '/projects', { value: next })).value;
     await paintProject();
@@ -1276,6 +1277,10 @@ async function projectsPanel(p) {
   }, ok);
   const add = h('input', { type: 'text', id: 'project-add', placeholder: 'C:\\path\\to\\folder', style: 'flex: 1' });
   const draw = () => p.replaceChildren(h('p', {}, `${path}. A board's own project cannot be removed.`),
+    h('div', { class: 'field-row' }, h('label', { for: 'startup' }, 'Start here'),
+      h('select', { id: 'startup', onchange: (e) => act(async () => { startup = (await putSettings('global', { startup: e.target.value })).startup; }, 'Start here saved.') },
+        h('option', { value: 'last', selected: startup === 'last' }, 'Last opened'),
+        list.map((x) => h('option', { value: x.path, selected: x.path === startup }, folder(x.path))))),
     table(['Project', 'Path', 'Colour', ''], list.map((x, i) => {
       const self = x.path === own.path; // both spelled by the daemon
       return h('tr', { 'data-project': x.path }, h('td', {}, x.path.split(/[\\/]/).pop() + (self ? ' (this board)' : missing[x.path] ? ' (missing)' : '')), h('td', {}, x.path),
@@ -1856,7 +1861,7 @@ const START = [
   { label: 'Restart board', run: restartBoard },
   { label: 'Release board…', run: releaseBoard },
   '-',
-  { get label() { return `Kanban95 v${appVersion}`; }, disabled: true },
+  { get label() { return appVersion ? `Kanban95 v${appVersion}` : 'Kanban95'; }, disabled: true },
 ];
 
 /** Desktop icons for the Start menu's first entries, under every window: click selects, double-click or Enter opens. The same
@@ -1974,11 +1979,11 @@ async function boot() {
   refreshLimits(); // a CLI start each, ~10 s: not awaited
   setInterval(refreshLimits, 5 * 60_000); // the daemon's cache lives as long, so this reads fresh numbers
   listen();
+  api('POST', '/last-board', location.hash === '#own' ? { window: 'own' } : {}).catch(() => {});
   paintProject().catch((e) => say(e.message));
-  const [list, update] = await Promise.all([api('GET', '/tickets'), api('GET', '/update'), loadSettings(), loadModels().catch(() => { models = null; }), ui.load()]);
-  appVersion = update.version;
-  canRelease = update.release;
-  kanban95 = update.kanban95;
+  const update = api('GET', '/update');
+  const modelsIn = loadModels().catch(() => { models = null; });
+  const [list] = await Promise.all([api('GET', '/tickets'), loadSettings(), ui.load()]);
   for (const s of ui.get('k95.collapsed') ?? ['done']) collapsed.add(s); // nothing saved: Done starts folded
   loadView(ui.get('k95.view'));
   for (const t of list) tickets.set(t.id, t);
@@ -1989,9 +1994,15 @@ async function boot() {
     seed(id, r);
     LAYOUT[id]();
   }
-  await refreshShared();
+  console.log(`First paint: ${Math.round(performance.now())} ms`);
+  update.then((u) => {
+    appVersion = u.version;
+    canRelease = u.release;
+    kanban95 = u.kanban95;
+    if (u.offer) offerUpdate(u.offer);
+  }, (e) => say(e.message));
+  await Promise.all([modelsIn, refreshShared()]);
   redraw();
-  if (update.offer) offerUpdate(update.offer);
   if (!(await checkReady()) && !models) say('No model catalog yet: Start → Settings → Agents, then Save, before launching.');
 }
 
