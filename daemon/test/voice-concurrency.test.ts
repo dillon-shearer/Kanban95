@@ -67,7 +67,9 @@ it('a daemon killed mid-download releases the lock, and the next attempt clears 
   const m = manifest('killed', [good('onnx/model.onnx')]);
   const child = spawn(process.execPath, script(m), { env: { ...process.env, KANBAN95_HOME: home }, stdio: 'ignore' });
   await new Promise<void>((r) => (started = r));
-  await new Promise((r) => setTimeout(r, 100));
+  for (const end = Date.now() + 10_000; !existsSync(modelDir(m)) || parts(m).length === 0; await new Promise((r) => setTimeout(r, 5))) {
+    if (Date.now() > end) throw new Error('the child never opened its part file');
+  }
   child.kill();
   await new Promise((r) => child.once('exit', r));
   expect(parts(m)).toHaveLength(1);
