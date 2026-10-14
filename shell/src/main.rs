@@ -182,6 +182,7 @@ const SHOW_WAIT: Duration = Duration::from_secs(10);
 
 const CHECK_EVERY: Duration = Duration::from_secs(60 * 60);
 const RELOAD_QUIET: Duration = Duration::from_secs(30);
+const BROWSER_EXITED: &str = "browser process exited";
 
 /// A command a daemon prints on stdout after its port line (docs/ARCHITECTURE.md -> Hosted boards).
 #[derive(Debug, PartialEq, Clone, Copy)]
@@ -240,6 +241,7 @@ enum Effect {
     Show { label: String, like: Option<String> },
     Hide(String),
     Navigate { label: String, url: Url, title: String },
+    Recreate { label: String, url: Url, title: String },
     Own(String, bool),
     Focus(String),
     Close(String),
@@ -655,8 +657,14 @@ impl Host {
             return;
         }
         b.reloaded = Some(Instant::now());
-        self.log(&format!("[shell] board {repo}: webview {kind}, reloading"));
-        fx.push(Effect::Navigate { label: label(repo), url: url(b.port, &b.secret, b.place), title: title(Some(repo.clone())) });
+        let (label, url, title) = (label(repo), url(b.port, &b.secret, b.place), title(Some(repo.clone())));
+        if kind == BROWSER_EXITED {
+            self.log(&format!("[shell] board {repo}: webview {kind}, recreating the window"));
+            fx.push(Effect::Recreate { label, url, title });
+        } else {
+            self.log(&format!("[shell] board {repo}: webview {kind}, reloading"));
+            fx.push(Effect::Navigate { label, url, title });
+        }
         drop(t);
         self.emit(fx);
     }
@@ -989,6 +997,15 @@ fn pick<R: Runtime>(app: &AppHandle<R>, to: Daemon, window: String, folder: bool
 #[derive(Default)]
 struct Pending(Mutex<Option<Update>>);
 
+/// Board windows destroyed to be reopened under the same label. Their `Destroyed` is not an operator close, and the
+/// exit Tauri requests when the last window goes is refused while one is pending.
+#[derive(Default)]
+struct Recreating(Mutex<BTreeSet<String>>);
+
+fn recreating<R: Runtime, M: Manager<R>>(app: &M, label: Option<&str>) -> bool {
+    app.try_state::<Recreating>().is_some_and(|r| label.map_or(!lock(&r.0).is_empty(), |l| lock(&r.0).contains(l)))
+}
+
 async fn find<R: Runtime>(app: &AppHandle<R>) -> Result<Option<Update>, String> {
     updater(app)?.check().await.map_err(|e| e.to_string())
 }
@@ -1251,7 +1268,7 @@ fn follow_page_fullscreen<R: Runtime>(w: &WebviewWindow<R>) {
                 let kind = match kind {
                     COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_EXITED => "render process exited",
                     COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_UNRESPONSIVE => "render process unresponsive",
-                    COREWEBVIEW2_PROCESS_FAILED_KIND_BROWSER_PROCESS_EXITED => "browser process exited",
+                    COREWEBVIEW2_PROCESS_FAILED_KIND_BROWSER_PROCESS_EXITED => BROWSER_EXITED,
                     _ => return Ok(()),
                 };
                 if let Some(host) = failed_win.try_state::<Arc<Host>>() {
@@ -1450,6 +1467,63 @@ fn apply<R: Runtime>(app: &AppHandle<R>, ports: &Ports, fx: Effect) {
                 navigate_keeping_fullscreen(&w, url);
             }
         }
+        Effect::Recreate { label, url, title } => {
+            let Some(w) = app.get_webview_window(&label) else { return };
+            let Some(r) = app.try_state::<Recreating>() else { return };
+            let full = w.is_fullscreen().unwrap_or(false);
+            let max = w.is_maximized().unwrap_or(false);
+            let min = w.is_minimized().unwrap_or(false);
+            let shown = w.is_visible().unwrap_or(false);
+            let focused = w.is_focused().unwrap_or(false);
+            let place = w.outer_position().ok().zip(w.inner_size().ok());
+            lock(&r.0).insert(label.clone());
+            if w.destroy().is_err() {
+                lock(&r.0).remove(&label);
+                return;
+            }
+            let (app, ports) = (app.clone(), ports.clone());
+            std::thread::spawn(move || {
+                let end = Instant::now() + Duration::from_secs(5);
+                while app.get_webview_window(&label).is_some() && Instant::now() < end {
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+                let made = window(&app, &label, url, title, ports.clone());
+                if let Some(r) = app.try_state::<Recreating>() {
+                    lock(&r.0).remove(&label);
+                }
+                let w = match made {
+                    Ok(w) => w,
+                    Err(e) => {
+                        let line = format!("[shell] could not recreate a window: {e}");
+                        eprintln!("{line}");
+                        log(&log_path(), &line);
+                        if board_windows(&app).is_empty() {
+                            app.exit(1);
+                        }
+                        return;
+                    }
+                };
+                if let Some((at, size)) = place {
+                    let _ = w.set_position(at);
+                    let _ = w.set_size(size);
+                }
+                if full {
+                    let _ = w.set_fullscreen(true);
+                } else if max {
+                    let _ = w.maximize();
+                }
+                follow_page_fullscreen(&w);
+                no_transitions(&w);
+                if shown {
+                    let _ = w.show();
+                    if min {
+                        let _ = w.minimize();
+                    } else if focused {
+                        let _ = w.set_focus();
+                    }
+                }
+            });
+        }
         Effect::Own(label, own) => {
             if let Some(w) = app.get_webview_window(&label) {
                 let _ = w.eval(if own { "history.replaceState(null, '', '#own')" } else { "history.replaceState(null, '', location.pathname + location.search)" });
@@ -1530,6 +1604,7 @@ fn main() {
     builder
         .manage(host)
         .manage(Pending::default())
+        .manage(Recreating::default())
         .register_uri_scheme_protocol(SPLASH_SCHEME, |_, req| splash_response(req.uri().path()))
         .setup(move |app| {
             let host = setup;
@@ -1548,14 +1623,16 @@ fn main() {
         })
         .on_window_event(|w, event| match event {
             WindowEvent::CloseRequested { api, .. } if w.label() == SPLASH => api.prevent_close(),
-            WindowEvent::Destroyed =>w.state::<Arc<Host>>().window_closed(w.label()),
+            WindowEvent::Destroyed if !recreating(w, Some(w.label())) => w.state::<Arc<Host>>().window_closed(w.label()),
             _ => {}
         })
         .build(tauri::generate_context!())
         .expect("tauri build")
         .run(|app, event| {
-            if let RunEvent::Exit = event {
-                app.state::<Arc<Host>>().shutdown();
+            match event {
+                RunEvent::ExitRequested { code: None, api, .. } if recreating(app, None) => api.prevent_exit(),
+                RunEvent::Exit => app.state::<Arc<Host>>().shutdown(),
+                _ => {}
             }
         });
 }
@@ -1844,6 +1921,28 @@ mod tests {
         lock(&host.table).boards.get_mut("k95-b").unwrap().reloaded = Instant::now().checked_sub(RELOAD_QUIET);
         host.process_failed(&label("k95-b"), "render process unresponsive");
         assert_eq!(navigated(&seen), [(label("k95-b"), 41002)]);
+        host.shutdown();
+    }
+
+    #[test]
+    fn a_browser_process_exit_recreates_each_board_window_and_keeps_its_daemon() {
+        let (host, seen) = host(|repo, _| up(if repo == "k95-a" { 41001 } else { 41002 }, ""));
+        host.first("k95-a", host.start("k95-a").unwrap());
+        open_loaded(&host, "k95-b");
+        host.command(Verb::Popout, "k95-b", None);
+        take(&seen);
+
+        host.process_failed(&label("k95-a"), BROWSER_EXITED);
+        host.process_failed(&label("k95-b"), BROWSER_EXITED);
+        let fx = take(&seen);
+        assert!(matches!(&fx[..], [Effect::Recreate { label: a, url: ua, .. }, Effect::Recreate { label: b, url: ub, .. }]
+            if *a == label("k95-a") && ua.port() == Some(41001) && ua.fragment().is_none()
+            && *b == label("k95-b") && ub.port() == Some(41002) && ub.fragment() == Some("own")), "{fx:?}");
+        assert_eq!(hosted(&host), [("k95-a".into(), Place::Docked), ("k95-b".into(), Place::Own)]);
+        assert!(lock(&host.table).boards.values_mut().all(|b| b.child.try_wait().ok().flatten().is_none()), "no daemon stopped");
+
+        host.process_failed(&label("k95-a"), BROWSER_EXITED);
+        assert_eq!(take(&seen), [], "a second failure within 30s is left alone");
         host.shutdown();
     }
 
