@@ -58,31 +58,12 @@ Living document. Update it in the same change that alters the schema.
 - `~/.kanban95/models/whisper-base.en.lock`: an empty SQLite file whose write lock one daemon holds while it downloads the model, so boards downloading at once take turns (`locked` in `daemon/src/voice.ts`). Safe to delete when no download runs.
 - Nothing in the database leaves the machine. There is no sync, no telemetry, no export yet (export is explicit when it arrives).
 - Backup and restore: the board's state is the `.kanban95/` folder in the repo (`board.db` and its `-wal` file, `templates/`, `ui.json`, attachments). Copying it while the daemon is stopped is a complete backup, and copying it back is a complete restore.
+- The Random Work, Variant Tool and Portfolio Website boards were imported from the old AI Task Board (`C:\Users\dills\ai-task-board\data\tasks.db`) on 2026-10-14, with ticket ids equal to the old task numbers. The one-off importer was removed afterwards.
 - The daemon is the only writer. The UI goes through REST, agents go through MCP (`docs/MCP.md`).
 
 ## Migrations
 
 `daemon/migrations/NNN-name.sql`, applied in filename order by `openDb` at every start; the global brain's own files are in `daemon/migrations/global/`, applied the same way by `openGlobalBrain`. Each file runs in its own transaction and is recorded in `schema_migrations(version, applied_at)`; a second start applies nothing. A failing file is rolled back and the daemon refuses to start, so the database is always at a whole version. Never edit an applied migration; add the next number. Each file runs under `BEGIN IMMEDIATE` and is checked again once the write lock is held, so two daemons starting at once on the shared global brain apply it once.
-
-## Importing from AI Task Board
-
-A one-off command moves one board from the old AI Task Board's SQLite file into a new Kanban95 board. It is temporary and goes once the boards are moved.
-
-    node daemon/dist/import-ai-task-board.js <old tasks.db> "<board name>" <target folder>
-
-It opens the old file read only and the target with `openDb`, so the target gets the real migrations. An unknown board name prints the names that exist and exits 1. A target that already has any ticket exits 1 without writing: the importer never merges. Everything is written in one transaction. It prints one count line per table and every dropped item with the reason.
-
-Mapping:
-- `tasks` -> `tickets`. `id` is the old `task_number`, so `P3-T145` becomes `#145`.
-- Ticket `body`: a line "Imported from AI Task Board <ref>", the old description, then sections Deliverable, Relevant files, Task context (`agent_context`) and Session handoff when not empty.
-- Ticket `criteria`: one line per acceptance check, the command then `-- <note>` when there is one.
-- Ticket `status`: `completed` and `closed` -> `done`; `backlog` and `in_progress` -> `backlog`.
-- Ticket `created_at` and `updated_at`: kept, written as ISO 8601 UTC.
-- Ticket `tags`: old tags lowercased; one that is not `[a-z0-9-]+` is dropped.
-- `depends:PX-TY` with this board's project number and an existing task -> a `ticket_deps` row on ticket Y. Any other depends tag is dropped and the body gets a "Depended on <ref>" line.
-- `comments` -> `notes`, kind `decision`. Author `human` -> role `operator`, `agent` -> role `worker`.
-- Vault `knowledge/*.md` and `playbooks/*.md` under `<first repo path>\brain\` -> `brain` rows. Title from the frontmatter (or the filename), body after the frontmatter cut to 1500 characters, tags the frontmatter tags plus the channel. `status: superseded` notes, `archive/` and `episodes/` are skipped. No vault folder: the brain is skipped and the command says so.
-- `traps` -> `brain` rows titled "Trap: <file_key>", body the content plus "Source: <source_ref>", tags `trap <file_key>`. Superseded traps are skipped.
 
 ## Conventions
 
