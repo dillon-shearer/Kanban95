@@ -6,11 +6,14 @@ export const MAX_ATTACHMENT = 10 << 20;
 
 export const attachmentDir = (repo: string, ticketId: number) => join(repo, '.kanban95', 'attachments', String(ticketId));
 
-/** A ticket's attachments by name, with the absolute path an agent opens. */
+/** A ticket's attachments by name, with the absolute path an agent opens. macOS metadata (`._*` AppleDouble files, `.DS_Store`) is left out. */
 export function attachments(repo: string, ticketId: number): { name: string; path: string; size: number }[] {
   const dir = attachmentDir(repo, ticketId);
   if (!existsSync(dir)) return [];
-  return readdirSync(dir).sort().map((name) => ({ name, path: join(dir, name), size: statSync(join(dir, name)).size }));
+  return readdirSync(dir)
+    .filter((name) => !name.startsWith('._') && name !== '.DS_Store')
+    .sort()
+    .map((name) => ({ name, path: join(dir, name), size: statSync(join(dir, name)).size }));
 }
 
 /**
