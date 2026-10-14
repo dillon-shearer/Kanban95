@@ -29,7 +29,7 @@ export const templatePath = (repo: string, name: TemplateName) => join(templates
 /** `{name: sha256}` of the shipped default each copy was last copied or reset from. */
 export const shippedPath = (repo: string) => join(templatesDir(repo), '.shipped.json');
 /** The text an unrecorded copy had before a start replaced it, kept until the next start (git-ignored). */
-export const replacedPath = (repo: string, name: TemplateName) => join(templatesDir(repo), `${name}.replaced.md`);
+export const replacedPath = (repo: string, name: string) => join(templatesDir(repo), `${name}.replaced.md`);
 const shipped = (name: string) => readFileSync(join(DEFAULTS_DIR, `${name}.md`), 'utf8');
 const sha256 = (text: string) => createHash('sha256').update(text).digest('hex');
 
@@ -70,7 +70,7 @@ export function initTemplates(repo: string) {
   mkdirSync(templatesDir(repo), { recursive: true });
   const rec = readShipped(repo);
   const before = JSON.stringify(rec);
-  for (const name of Object.keys(TEMPLATES) as TemplateName[]) {
+  for (const name of [...Object.keys(TEMPLATES), 'bootstrap']) {
     rmSync(replacedPath(repo, name), { force: true }); // shown once: the start after a replacement removes it
     const text = shipped(name);
     const hash = sha256(text);

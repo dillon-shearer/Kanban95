@@ -229,6 +229,7 @@ Every `/api/*` request needs the `k95` cookie holding the shell secret, or gets 
 | POST | `/api/pick/<token>` | the shell's answer, `{path}` or `{cancelled: true}`. `403` with an `Origin` header, so the page cannot answer itself; `404` for a token that is not the open request's; `400` for another body. Not audited |
 | GET | `/api/release` | the Release board dialog: `{version, next: {patch, minor, major}}`, the version in `package.json` and what each bump makes of it; `409` outside the Kanban95 repo |
 | POST | `/api/release` | `{bump}` (`patch`, `minor` or `major`): Release board, run in the merge queue, audited `board.release`. `409` with the reason when it may not start, `502` with npm's or git's message when a step fails (the commit and tag are taken back), else `{tag, runner}` (`docs/LIFECYCLE.md` → Release board) |
+| POST | `/api/tickets/bootstrap` | Set up this board: creates the starter tickets from `.kanban95/templates/bootstrap.md` in Backlog, tagged `setup`, each depending on the one before (`daemon/src/bootstrap.ts`); `201` with the tickets, `409` once the board has a `setup` ticket, `400` when the file has no `## <title>` sections |
 | POST | `/api/tickets/housekeeping` | creates a housekeeping ticket and launches it (the Housekeeping button) |
 | GET | `/api/tickets/:id/diff` | `{diff}`: the worktree against its fork point, uncommitted tracked changes included; `null` without a worktree |
 | GET | `/api/inbox` | what flagged tickets wait on: unanswered `question` notes, and the newest `failure` note when no newer question is open (`kind`, `body`, `role`, `created_at`, and the ticket's `title`, `status`, `merged_at`) |
@@ -289,6 +290,7 @@ package.json      npm workspace root: build / test / dev scripts
 daemon/           src/ (see Daemon above):
                     api.ts
                     attachments.ts
+                    bootstrap.ts
                     boards.ts
                     context.ts
                     db.ts
@@ -317,7 +319,7 @@ daemon/           src/ (see Daemon above):
                   test/ (test/cdp.ts drives headless Edge/Chrome, test/browser-setup.ts starts one browser per run for it, test/ui.ts is the shared daemon-plus-browser setup of the ui-<area>.test.ts files, which vitest.config.ts runs beside the unit and pty files; test/changed.ts is `npm run test:changed`; test/shot.ts is `npm run shot`, a headless WebKit screenshot of a seeded scratch board, and test/shot-mac.ts with test/shot-mac.swift is `npm run shot:mac`, the same in the system WKWebView, both seeded by test/shot-board.ts; test/projects.ts sorts test files into projects and sets the worker count from the machine)
                   tsconfig.json, vitest.config.ts; compiled to dist/ (gitignored)
 ui/               index.html, app.js (data layer and windows), wm.js (window manager), voice.js (mic and transcription), app.css, icons/*.svg (desktop icons), sounds/{ding,chord,done}.wav, vendor/{98.css and fonts, xterm/, transformers/}
-templates/        default prompt templates (brainstorm, operator, plan, execute, test, housekeeping), copied into each repo and kept in step while unedited
+templates/        default prompt templates (brainstorm, operator, plan, execute, test, housekeeping) and bootstrap.md (the starter ticket set), copied into each repo and kept in step while unedited
 skills/           the Claude Code plugin `kanban95` (.claude-plugin/plugin.json and one folder per skill; docs/AGENTS.md)
 shell/            Cargo.toml, build.rs, tauri.conf.json, tauri.bundle.json (installer overlay), tauri.updater.json (release builds: updater bundles), tauri.windows.conf.json and tauri.macos.conf.json (bundle targets), Info.macos.plist (macOS mic usage text), stage.mjs (stages the installed daemon and its Node sidecar), src/main.rs, icons/ (Packaging → Icons)
 docs/             this file, LEARNING.md (guided tour for newcomers), OPERATOR.md (driving the board), img/ (its screenshots), LIFECYCLE.md (state machine, merge queue, janitor), CLIS.md (how each CLI is launched), DATA.md (schema), AGENTS.md (what agents receive and how they behave), SECURITY.md (grants, audit, network), MCP.md (generated tool reference)

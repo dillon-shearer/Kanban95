@@ -34,6 +34,8 @@ Empty values render as `(none)`, except `{{diff}}` outside a test session (empty
 | `housekeeping.md` | worker | execute | clean stale docs, dead modules, leftover artefacts |
 | `test.md` | tester | test | check the work against the criteria |
 
+`bootstrap.md` sits beside them but is not a prompt: it is the starter ticket set a new board gets once (`docs/OPERATOR.md` → Set up a new board). A planner or operator terminal that creates a board, or is told to set one up, calls `bootstrap_board` instead of writing those tickets itself; the tool refuses once the board has a `setup` ticket.
+
 A repo renders its own copies in `.kanban95/templates/`, copied from `templates/`. On daemon start an unedited copy is replaced by a changed default; a copy edited in Settings → Prompts is kept and shown stale (`docs/ARCHITECTURE.md` describes the `.shipped.json` record). When a ticket adds a template variable, the running board is still the old build and refuses every launch whose template names it. Order: merge, then restart the board, which refreshes the unedited copies. Never write the new variable into `.kanban95/templates/` by hand before that restart.
 
 ## Expected behaviour

@@ -12,6 +12,7 @@ import { cancelSetup, killGrantSession, killSession, sessions, sessionsOf, type 
 import { apply, brainstorm, BUMPS, changed, events, housekeeping, isKanban95, operator, pushBase, Refused, release, releaseInfo, releaseOn, releasePending, relaunch, restartBoard, runnerState, setRunner, tick, type Board, type Bump } from './lifecycle.js';
 import { addOverride, BadConfig, boardHome, dropOverride, gone, globalPath, isOverridable, knownModels, project, projectPath, projectsPath, readProjects, setBoardHome, uncatalogued, writeConfig, writePreferences, writeProjects, type OverridableName } from './settings.js';
 import { isStale, resetTemplate, templatePath, TEMPLATES, unknownVar, VARS, writeTemplate, type TemplateName } from './templates.js';
+import { bootstrap } from './bootstrap.js';
 import { trustStatus, untrustClaude } from './trust.js';
 import { download, status as voiceStatus } from './voice.js';
 import { limits } from './limits.js';
@@ -412,7 +413,8 @@ const routes: [method: string, path: RegExp, mutation: string | null, handler: (
     return { status: 200, body: runnerState(board) };
   }],
   ['POST', /^\/api\/tickets\/(\d+)\/merge$/, 'tickets.merge', ({ board, params }) => ({ status: 200, body: apply(board, Number(params[0]), 'merge').ticket })],
-  ['POST', /^\/api\/tickets\/housekeeping$/, 'tickets.housekeeping', ({ board }) => ({
+  ['POST', /^\/api\/tickets\/bootstrap$/, 'tickets.bootstrap', ({ board }) => ({ status: 201, body: bootstrap(board, null) })],
+  ['POST', /^\/api\/tickets\/housekeeping$/,'tickets.housekeeping', ({ board }) => ({
     status: 201, body: housekeeping(board, 'Started by the operator from the Housekeeping button. Follow the housekeeping brief.'),
   })],
   ['GET', /^\/api\/tickets\/(\d+)\/diff$/, null, ({ board, params }) => {

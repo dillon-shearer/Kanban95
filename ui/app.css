@@ -109,6 +109,8 @@ fieldset {
 .k95-toolbar { display: flex; gap: 4px; flex-wrap: wrap; flex: none; align-items: center; }
 .k95-filter { width: 220px; height: 16px; margin-left: auto; }
 .k95-columns { flex: 1; min-height: 0; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px; }
+.k95-empty { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; }
+.k95-empty > .window { width: 320px; }
 .col { min-width: 0; min-height: 0; margin: 0; padding: 4px; display: flex; flex-direction: column; }
 .col > legend { cursor: pointer; }
 .col > legend.alert { color: #c00000; }

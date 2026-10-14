@@ -15,7 +15,7 @@ Living document. Update it in the same change that alters the schema.
   - `k95.layout` (the startup layout, `[{id, x, y, w, h, max?, dw, dh}]` bottom-most first)
   - `k95.view` (the Board's `{filter, sort: {backlog, in_progress, testing, done}}`; an old single `sort` string applies to every column, an old `group` is ignored)
   - `k95.win.<key>` (a window's `{x, y, w, h, max?, dw, dh}` under its window id, `dw`×`dh` being the desktop in screen px it was saved on, so it scales to another screen; terminals take slots and save nothing)
-- `<repo>/.kanban95/templates/`: the repo's prompt templates (`<name>.md`, committed, operator-editable) and `.shipped.json`, `{"<name>": "<sha256 hex>"}`, the hash of the shipped default each copy was last copied or reset from. The daemon writes both: a missing copy on start, an unedited copy (its hash equals the record) when the default changed, a copy with no entry that differs from the default, and on Reset. A copy with an entry it no longer matches is edited and never overwritten. `<name>.replaced.md` (git-ignored) holds the old text of a copy replaced for having no entry, until the next start deletes it. Absent or unreadable `.shipped.json` means no entries.
+- `<repo>/.kanban95/templates/`: the repo's prompt templates and `bootstrap.md`, the starter ticket set (`<name>.md`, committed, operator-editable) and `.shipped.json`, `{"<name>": "<sha256 hex>"}`, the hash of the shipped default each copy was last copied or reset from. The daemon writes both: a missing copy on start, an unedited copy (its hash equals the record) when the default changed, a copy with no entry that differs from the default, and on Reset. A copy with an entry it no longer matches is edited and never overwritten. `<name>.replaced.md` (git-ignored) holds the old text of a copy replaced for having no entry, until the next start deletes it. Absent or unreadable `.shipped.json` means no entries.
 - `<repo>/.kanban95/config.json`: optional, committed, no secrets. The daemon never writes it: a write would dirty a repo that commits it, and a dirty base refuses launches and merges. Read by the lifecycle. Keys:
   - `operator: { model, effort }` (either or both; the operator terminal's model and effort; each one left out comes from the `operator` phase in `models.json`, and with no model there the CLI runs its own default).
   - `worktree_setup` (a shell command run once in each new ticket worktree before its first agent, `npm ci` in this repo; `docs/LIFECYCLE.md` → Worktree setup).
@@ -168,6 +168,7 @@ A grant is live when `revoked_at IS NULL AND expires_at > now`. Rows are kept af
   - `operator.launch`
   - `runner.set`
   - `tickets.answer`
+  - `tickets.bootstrap`
   - `tickets.create`
   - `tickets.delete`
   - `tickets.housekeeping`

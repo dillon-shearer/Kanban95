@@ -28,6 +28,22 @@ To change the data folder later, use **Settings → Board → Data folder** (Set
 
 A board can be set up and still not able to run a ticket. `GET /api/ready` checks, in order: git is found (`git`), `git config user.name` and `user.email` resolve in the repo (`identity`), the base branch has a commit (`commit`), the base has no uncommitted changes to tracked files (`clean`), `models.json` (this project's copy or the global one) names a CLI for execute and test (`models`), that CLI is found (`cli`), Claude Code trusts the repo's worktrees root (`trust`; the board writes it on the first Claude launch, and Codex needs none), and Run is on (`runner`). Each failing item carries a one-line fix. When the board is not ready and has a Backlog ticket, the Board's status bar shows "Not ready: <fix of the first failing item>" on load; click it to open the **Readiness** window, which lists every item with its state and fix and has **Check again**. A brainstorm or operator terminal gets the same list in its brief, and on a board with no done tickets it reports what is not ready before anything else.
 
+### Set up a new board
+
+A board with no tickets shows a small panel, "This board is empty", in the Board window with a **Set up this board** button; New brainstorm stays in the Start menu for planning your own work. The button creates the starter tickets from `<repo>/.kanban95/templates/bootstrap.md` in Backlog, in file order, each depending on the one before and tagged `setup`: write the board's intention into the project preferences, record the build and test commands, choose local-only or push, and confirm readiness with a smoke ticket. No model is called. The panel goes once any ticket exists. It runs once per board: with a `setup` ticket already on the board it is refused. An agent told to set up a board does the same with the `bootstrap_board` tool (planner and operator grants).
+
+`bootstrap.md` is copied from `templates/` on daemon start and kept in step like the prompt templates; edit the repo copy to change the set. Each `## <title>` starts a ticket, the text under it is the body, and the lines after a `Criteria:` line are its acceptance criteria, one per line. Text before the first title is ignored, and a file with no titles is refused.
+
+### Starting a new board
+
+First pick how the board will publish. A plain folder with no remote: merges land locally and nothing is pushed. A GitHub clone without push: leave the branch's upstream unset, or untick Push after merge in Settings -> Board -> Git. A GitHub clone with push: run `git push -u origin <branch>` once.
+
+Then add the project in Settings -> Projects or Start -> Projects and open its board. Open the Readiness window ([Readiness](#readiness)) and fix every item. Press Set up this board ([Set up a new board](#set-up-a-new-board)) and work the setup tickets. After that, use a brainstorm or the operator terminal for real work.
+
+Agents on a new board start at reach level 0. Unlock more per ticket with Approve in the Inbox or in the Ticket window. An agent asked to create a board adds the project with `PUT /api/projects` (or asks you to), calls `bootstrap_board`, and stops.
+
+Common snags: a repo on exFAT (the board trusts it; run git by hand with `GIT_CONFIG_*` set), a repo with no git identity (set `user.name` and `user.email`), a repo under OneDrive (move it out), and a stale `models.json` (Readiness flags it).
+
 ### When the app will not start
 
 The error box ends with "Details:" and the path of the shell log: `%LOCALAPPDATA%\Kanban95\shell.log` on Windows, `~/Library/Logs/Kanban95/shell.log` on macOS. It holds one timestamped line per failure that stopped a board or an update (Node.js missing, a daemon that did not start or kept stopping, a window that would not open, a failed update) and nothing else. Read the last lines, or send them along with a bug report; they hold no keys or secrets.
