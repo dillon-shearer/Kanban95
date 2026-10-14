@@ -170,13 +170,13 @@ export function cancelSetup(ticketId: number): Promise<void> {
  * Rejects with the command and its last output lines, or SetupCancelled. A setup still running for the ticket is cancelled
  * and this one waits for its shell to close, so two never run in one worktree.
  */
-export function prepareWorktree(repo: string, ticketId: number, command?: string, timeoutMs = SETUP_TIMEOUT_MS): Promise<void> | null {
+export function prepareWorktree(repo: string, ticketId: number, command?: string, timeoutMs = SETUP_TIMEOUT_MS, base?: string): Promise<void> | null {
   const prev = setups.get(ticketId);
-  if (!prev && (!command || setupDone(repo, ticketId, command).done)) return null;
+  if (!prev && (!command || setupDone(repo, ticketId, command, base).done)) return null;
   const me: Setup = { cancelled: false, closed: Promise.resolve() };
   const run = (prev ? cancelSetup(ticketId) : Promise.resolve()).then(() => {
     if (me.cancelled) throw new SetupCancelled('worktree_setup was cancelled');
-    const { done, marker, path } = setupDone(repo, ticketId, command);
+    const { done, marker, path } = setupDone(repo, ticketId, command, base);
     if (done || !command) return;
     return runSetup(me, command, path, marker, timeoutMs);
   });
@@ -187,8 +187,8 @@ export function prepareWorktree(repo: string, ticketId: number, command?: string
   return run;
 }
 
-function setupDone(repo: string, ticketId: number, command?: string) {
-  const wt = createWorktree(repo, ticketId);
+function setupDone(repo: string, ticketId: number, command?: string, base?: string) {
+  const wt = createWorktree(repo, ticketId, base);
   const marker = resolve(wt.path, git(wt.path, 'rev-parse', '--git-path', 'kanban95-setup-done'));
   return { done: !command || existsSync(marker), marker, path: wt.path };
 }
@@ -295,9 +295,9 @@ function resumable(db: DatabaseSync, ticketId: number, phase: string): string | 
 }
 
 /** `resume`: continue the phase's killed Claude Code conversation when there is one (`resumable`); otherwise a fresh session. */
-export function launch(d: Daemon, o: { ticketId: number; template: TicketTemplate; resume?: boolean } & RunSettings): Session {
+export function launch(d: Daemon, o: { ticketId: number; template: TicketTemplate; resume?: boolean; base?: string } & RunSettings): Session {
   const { role, phase } = TEMPLATES[o.template];
-  const wt = createWorktree(d.repo, o.ticketId);
+  const wt = createWorktree(d.repo, o.ticketId, o.base);
   // ponytail: Codex always starts fresh with the failure notes in its brief; upgrade is to record the session id Codex prints
   // and launch `codex resume <id>` (docs/CLIS.md → Resuming a killed session).
   const prior = o.resume && o.cli === 'claude' ? resumable(d.db, o.ticketId, phase) : undefined;

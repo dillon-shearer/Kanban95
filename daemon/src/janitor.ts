@@ -36,13 +36,13 @@ const remove = (repo: string, path: string): string | undefined => {
  * ten seconds before it is given up and audited as an error. Every try first checks the ticket is still done with the same
  * merged_at, so a rejection during the retries keeps the new cycle's worktree.
  */
-export async function cleanTicket(b: Board, id: number): Promise<void> {
+export async function cleanTicket(b: Board, id: number, base?: string): Promise<void> {
   const path = worktreePath(b.repo, id);
   const cycle = landed(b.db, id);
   for (let attempt = 1; ; attempt++) {
     if (!cycle || landed(b.db, id) !== cycle) return log(b.db, id, 'janitor.worktree', { path, skipped: 'reopened' });
     try {
-      const { branchDeleted } = removeWorktree(b.repo, id, true);
+      const { branchDeleted } = removeWorktree(b.repo, id, true, undefined, base);
       log(b.db, id, 'janitor.worktree', { path, branchDeleted });
       return;
     } catch (e) {

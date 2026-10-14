@@ -180,12 +180,14 @@ export function guardFileMode(repo: string, fsType: (path: string) => string | u
  * Creates the ticket's worktree, or returns the existing one (retries and the test phase reuse it). A rejected ticket whose
  * worktree was removed on merge gets a fresh one from the base, which holds its merged work.
  * Refuses when the base branch has uncommitted changes to tracked files: the ticket would silently fork without them.
- * Untracked files do not count; they are not part of any commit either way.
+ * Untracked files do not count; they are not part of any commit either way. `override` is the ticket's own base
+ * (`ticketBase` in lifecycle.ts); when it is not the checked-out branch, the main checkout's changes are not checked.
  */
-export function createWorktree(repo: string, ticketId: number): { path: string; branch: string; base: string } {
+export function createWorktree(repo: string, ticketId: number, override?: string): { path: string; branch: string; base: string } {
   const path = worktreePath(repo, ticketId);
   const branch = branchName(ticketId);
-  const base = git(repo, 'rev-parse', '--abbrev-ref', 'HEAD');
+  const current = git(repo, 'rev-parse', '--abbrev-ref', 'HEAD');
+  const base = override ?? current;
   if (existsSync(path)) return { path, branch, base };
 
   git(repo, 'worktree', 'prune'); // a worktree directory deleted by hand stays registered and blocks its branch
@@ -196,7 +198,7 @@ export function createWorktree(repo: string, ticketId: number): { path: string; 
     git(repo, 'worktree', 'move', old, path);
     return { path, branch, base };
   }
-  const dirty = dirtyMessage(repo);
+  const dirty = base === current ? dirtyMessage(repo) : '';
   if (dirty) throw new Error(`base branch ${base} has uncommitted changes${dirty}`);
   // A branch left from an earlier cycle is reused when it holds work the base lacks; one already merged (a rejected ticket
   // whose branch survived cleanup) is reset to the base, which has that work and everything since.
@@ -277,17 +279,17 @@ export function isAncestor(repo: string, a: string, b: string): boolean {
 }
 
 /**
- * Merges the base branch (whatever the main checkout has) into the ticket's worktree, as a commit on the ticket branch authored
+ * Merges the base branch (whatever the main checkout has, or the ticket's `override`) into the ticket's worktree, as a commit on the ticket branch authored
  * by the repo's git identity. Runs on submit and again in the merge queue, so conflicts are met here, never in the main checkout.
  * A conflict is aborted, leaving the worktree as it was. Uncommitted tracked changes are refused untouched; untracked files
  * (build output, test leftovers) are ignored. No worktree means nothing to sync. `reason` is the failure note.
  */
-export function syncWorktree(repo: string, ticketId: number): { ok: true } | { ok: false; reason: string } {
+export function syncWorktree(repo: string, ticketId: number, override?: string): { ok: true } | { ok: false; reason: string } {
   const path = worktreePath(repo, ticketId);
   if (!existsSync(path)) return { ok: true };
   const dirty = execFileSync('git', ['status', '--porcelain', '--untracked-files=no'], { cwd: path, encoding: 'utf8' }).trimEnd(); // git() would trim the first line's status column
   if (dirty) return { ok: false, reason: `worktree has uncommitted changes; commit or discard them, then submit again:\n${dirty}` };
-  const base = git(repo, 'rev-parse', '--abbrev-ref', 'HEAD');
+  const base = override ?? git(repo, 'rev-parse', '--abbrev-ref', 'HEAD');
   try {
     git(path, 'merge', '--no-edit', '-m', `Merge ${base} into ${branchName(ticketId)}`, base);
     return { ok: true };
@@ -304,7 +306,7 @@ export function syncWorktree(repo: string, ticketId: number): { ok: true } | { o
  * files is refused and left exactly as it was, links included: cleanliness is checked before anything is unlinked. The janitor
  * forces only once the branch has landed, when what is left is build output and test leftovers.
  */
-export function removeWorktree(repo: string, ticketId: number, force = false, path = worktreePath(repo, ticketId)): { branchDeleted: boolean } {
+export function removeWorktree(repo: string, ticketId: number, force = false, path = worktreePath(repo, ticketId), base?: string): { branchDeleted: boolean } {
   if (existsSync(path)) {
     if (force) {
       unlinkLinks(repo, path);
@@ -312,7 +314,7 @@ export function removeWorktree(repo: string, ticketId: number, force = false, pa
     } else removeIfClean(repo, path);
   }
   try {
-    git(repo, 'branch', '-d', branchName(ticketId));
+    git(repo, 'branch', base !== undefined && isAncestor(repo, branchName(ticketId), base) ? '-D' : '-d', branchName(ticketId));
     return { branchDeleted: true };
   } catch {
     return { branchDeleted: false }; // unmerged or absent: the operator decides
@@ -410,11 +412,11 @@ function intoMain(repo: string, link: string): boolean {
 
 /**
  * For the ticket window: what the ticket's worktree holds (commits and uncommitted tracked changes) against the point where it
- * forked from the repo's current branch. Null when there is no worktree (never launched, or merged and cleaned up).
+ * forked from the repo's current branch (or the ticket's `override`). Null when there is no worktree (never launched, or merged and cleaned up).
  */
-export function ticketDiff(repo: string, ticketId: number): string | null {
+export function ticketDiff(repo: string, ticketId: number, override?: string): string | null {
   const path = worktreePath(repo, ticketId);
   if (!existsSync(path)) return null;
-  const fork = git(path, 'merge-base', 'HEAD', git(repo, 'rev-parse', '--abbrev-ref', 'HEAD'));
+  const fork = git(path, 'merge-base', 'HEAD', override ?? git(repo, 'rev-parse', '--abbrev-ref', 'HEAD'));
   return execFileSync('git', ['diff', '--no-color', '--no-ext-diff', fork], { cwd: path, encoding: 'utf8', maxBuffer: 16 << 20 });
 }

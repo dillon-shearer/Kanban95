@@ -250,6 +250,17 @@ Clean or already up to date: carry on. A conflict runs `git merge --abort` in th
 
 When the queue's sync brings in new commits the ticket lands anyway, without another test run: the worker merged and the tester tested at submit, and the queue sync usually brings in nothing or a little. The upgrade path, marked `ponytail:` in `queueMerge`, is to send the ticket back to testing when the sync touched files the ticket also touched.
 
+### Ticket base
+
+The base is the branch the main checkout has, unless a ticket's tag is mapped to another branch in `.kanban95/config.json` `bases` (`docs/DATA.md`), say `"bases": {"release-1": "main"}` on a board whose checkout is `dev`. Such a ticket uses that branch everywhere the base appears: its worktree forks from it, Sync merges it on submit and in the queue, it is `{{base}}` in the execute and test prompts (and the tester's diff), the ticket window's diff is taken against it, and the merge lands on it. The checked-out branch never enters it. `ticketBase` in `daemon/src/lifecycle.ts`; a ticket with no mapped tag, or a repo with no `bases`, behaves exactly as without the key (`daemon/test/ticket-base.test.ts`).
+
+- **Landing**: when the branch is checked out in some working tree (the main checkout or one the operator added), step 4 of the queue runs there, dirty check included. When none has it, the merge commit is written with `git commit-tree` (the ticket branch's tree, the base and the ticket branch as parents, the title as message) and the branch moved with `git update-ref`, which refuses if it moved meanwhile. This needs the base already merged into the ticket branch, which step 3 has just done.
+- **Push**: the ticket's base is pushed to its own upstream; the status bar's unpushed count stays the checked-out branch's.
+- **Deliverables** are not recorded for such a merge: the files are not in the main checkout.
+- **Cleanup** deletes the ticket branch when it is in the ticket's base (`git branch -d` alone checks only the checked-out branch).
+- **Config errors**: a `bases` that is not an object of tag to branch name, or a ticket whose tags map to two branches, fails the launch, the submit, or flags the merge `unmerged` with the reason. So does a base branch that does not exist.
+- No post-land hook: carrying the landed work on to a superset branch (`git checkout dev && git merge main`) is the operator's.
+
 ## The merge queue
 
 `daemon/src/merge.ts`. One queue for the whole daemon; a merge starts only after the previous one, and its cleanup, has finished. Each job:
