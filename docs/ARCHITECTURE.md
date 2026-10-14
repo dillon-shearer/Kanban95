@@ -35,6 +35,7 @@ Living document. Update it in the same change that alters the shape described he
   - `merge.ts` is the one serialized merge queue.
   - `pick.ts` is the native file or folder dialog the shell opens for the page: one open request per daemon, its token, its result and its 5-minute timeout (Hosted boards, `pick=`).
   - `pty.ts` spawns the CLI in a pseudo-terminal with an env allowlist and keeps a scrollback capped at 2000 lines and 2 MiB.
+  - `ready.ts` is the readiness check behind `GET /api/ready`, the status bar's "Not ready:" line and the brainstorm and operator briefs' `{{ready}}` (`docs/OPERATOR.md` → Readiness).
   - `requirements.ts` asks git, Claude Code and Codex for `--version` for the Requirements list on the setup page and in Settings → Agents (`docs/OPERATOR.md` → First run).
   - `server.ts` is the HTTP plumbing (bind, origin guard, static files, `/health`, routes `/api/*` to `api.ts`).
   - `setup.ts` is first-run setup and the missing-data-folder page: `GET`/`POST /api/setup` (the GET answers `{data, shell}`, the default data folder and whether the shell hosts the page, which shows its Browse buttons only then), `POST /api/setup/retry`, `GET /api/requirements` and the setup page's way to a dialog (`POST /api/pick`, `GET`/`POST /api/pick/<token>`) on a daemon that serves no board, `setupPage` (setup.html as served), and `firstProject` for a start without an argument.
@@ -260,6 +261,7 @@ Every `/api/*` request needs the `k95` cookie holding the shell secret, or gets 
 | GET, DELETE | `/api/trust` | Claude Code's trust entry for this repo root: status, or clear it (`docs/CLIS.md` → First-run prompts) |
 | GET | `/api/limits?refresh=` | `{rows: [{cli, window, used, limit, resets_at}], errors: {claude?, codex?}, fetched_at}`. `used` of `limit` (percent of 100); `resets_at` is ISO for Codex, Claude's own text (`Oct 8, 7:59pm (America/New_York)`) for Claude. Cached 5 min; `refresh` asks the CLIs now. A CLI that fails is in `errors` with why, never its output |
 | GET | `/api/requirements` | `{git, claude, codex}`, each `{found, version}`: the first line of `<exe> --version` (exit 0 within 4 s, all three at once), the CLIs from settings.json `paths` when set, else PATH. Also served by the setup page's daemon |
+| GET | `/api/ready` | `{ready, items: [{id, ok, fix}]}`, items in this order: `git`, `identity`, `commit`, `clean`, `models`, `cli`, `trust`, `runner`; `fix` is a one-line instruction, `''` when ok (`docs/OPERATOR.md` → Readiness) |
 | GET | `/api/voice` | speech model: id, source, revision, license, files with size and SHA-256, `downloaded` (every file on disk matches its pinned hash), `received` (bytes so far while downloading) |
 | POST | `/api/voice/download` | downloads and verifies the model; `502` naming the file on any failure |
 
@@ -300,6 +302,7 @@ daemon/           src/ (see Daemon above):
                     memlog.ts
                     merge.ts
                     pty.ts
+                    ready.ts
                     requirements.ts
                     server.ts
                     settings.ts

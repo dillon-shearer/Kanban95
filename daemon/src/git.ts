@@ -166,7 +166,7 @@ export function createWorktree(repo: string, ticketId: number): { path: string; 
 
 const KINDS: Record<string, string> = { D: 'deleted', M: 'modified', A: 'added', R: 'renamed', C: 'copied', T: 'type changed', U: 'unmerged' };
 
-function dirtyMessage(repo: string): string {
+export function dirtyMessage(repo: string): string {
   const parts = execFileSync('git', ['status', '--porcelain', '-z', '--untracked-files=no'], { cwd: repo, encoding: 'utf8', stdio: 'pipe' }).split('\0');
   const entries: { xy: string; path: string }[] = [];
   for (let i = 0; i < parts.length; i++) {

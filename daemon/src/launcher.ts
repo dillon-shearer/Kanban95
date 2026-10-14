@@ -310,13 +310,14 @@ export function launch(d: Daemon, o: { ticketId: number; template: TicketTemplat
  * A session in the repo root with no ticket, so no worktree and no run row: a brainstorm (planner, optionally seeded with the
  * operator's text) or an operator terminal (the operator's typed mission). Its grant has no ticket and is revoked when the pty exits.
  */
-export function launchRoot(d: Daemon, o: RunSettings & { template: 'brainstorm' | 'operator'; mission?: string }): Session {
+export function launchRoot(d: Daemon, o: RunSettings & { template: 'brainstorm' | 'operator'; mission?: string; ready?: string }): Session {
   const { role } = TEMPLATES[o.template];
   const ctx = buildContext(d.db, d.repo, null, role);
   const text = loadTemplate(d.repo, o.template);
   // A repo copy older than the {{mission}} slot would drop the operator's text without a word.
   if (o.mission && !/\{\{\s*mission\s*\}\}/.test(text)) throw new BadConfig(`${o.template}.md has no {{mission}}: reset it in Settings → Prompts`);
   if (o.mission) ctx.mission = o.mission;
+  if (o.ready) ctx.ready = o.ready;
   const prompt = fill(text, ctx);
   return spawnSession(d, o, { runId: null, ticketId: null, role, phase: o.template, cwd: d.repo, prompt });
 }
