@@ -6,7 +6,7 @@ import { Terminal } from './vendor/xterm/xterm.mjs';
 import { configure, ensureModel, micButton, micEverywhere } from './voice.js';
 import { requirementsList } from './requirements.js';
 import * as ui from './state.js';
-import { close, dialog, dismiss, focus, focused, forget, h, isOpen, menu, open, raise, scale, seed, setTiling, setZoom, snapshot } from './wm.js';
+import { box, close, dialog, dismiss, focus, focused, forget, h, isOpen, menu, open, raise, scale, seed, setTiling, setZoom, snapshot } from './wm.js';
 
 // ---- data ----
 
@@ -664,7 +664,7 @@ function openBoard() {
   // The ▾ on a column's legend: pick that column's sort. It stops the click so the legend does not fold the column.
   const sortPick = (s) => h('span', { class: 'k95-sort', title: 'Sort this column', onclick: (e) => {
     e.stopPropagation();
-    const r = e.currentTarget.getBoundingClientRect();
+    const r = box(e.currentTarget);
     menu(r.left, r.bottom, Object.entries(SORTS).map(([k, label]) => ({ label: `${view.sort[s] === k ? '✓ ' : ''}${label}`,
       run: () => { view.sort[s] = k; saveView(); drawBoard(); } })));
   } }, '▾');
@@ -1337,7 +1337,7 @@ async function openSwitch() {
       }
     } }, h('div', { class: 'window-body' }, ...body));
   document.body.append(m);
-  const r = document.getElementById('switch').getBoundingClientRect();
+  const r = box(document.getElementById('switch'));
   Object.assign(m.style, { left: `${Math.min(r.left, innerWidth - m.offsetWidth * scale()) / scale()}px`, top: `${r.top / scale() - m.offsetHeight}px` });
   addEventListener('pointerdown', switchOff, true);
   (rows[0] ?? m).focus();
@@ -1442,7 +1442,7 @@ function openSettings(tab) {
           // Free text, or ▾ for what the installed CLI offers now (plus the ids already saved for it).
           const pick = h('button', { class: 'k95-pick', title: `Models ${c} offers`, onclick: () => {
             const ids = [...new Set([...known[c], ...PHASES.map((q) => m[c]?.[q]?.model).filter(Boolean)])];
-            const r = pick.getBoundingClientRect();
+            const r = box(pick);
             menu(r.left, r.bottom, ids.length ? ids.map((id) => ({ label: id, run: () => { model.value = id; } }))
               : [{ label: `${c} lists no models: type the id`, disabled: true }]);
           } }, '▾');
@@ -1855,7 +1855,7 @@ async function boot() {
     closeSwitch();
     loadProjectItems(); // for the next opening; this one shows the list as last read
     const m = menu(0, 0, START.filter((s) => s.run !== releaseBoard || canRelease));
-    const r = start.getBoundingClientRect();
+    const r = box(start);
     Object.assign(m.style, { left: `${r.left / scale()}px`, top: `${r.top / scale() - m.offsetHeight}px` });
   });
   document.getElementById('switch').addEventListener('click', openSwitch);
