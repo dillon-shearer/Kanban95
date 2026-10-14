@@ -18,7 +18,7 @@ import { handleMcp } from './mcp.js';
 import { startMemoryLog } from './memlog.js';
 import { idle } from './merge.js';
 import { addProject, dataHome, gone, missingHome, readConfig } from './settings.js';
-import { firstProject, handleSetup, setupPage } from './setup.js';
+import { handleSetup, setupPage, startupProject } from './setup.js';
 import { initTemplates } from './templates.js';
 import { askForCheck } from './update.js';
 import { voiceFile } from './voice.js';
@@ -356,7 +356,7 @@ if (import.meta.main) {
     console.error('KANBAN95_SECRET is missing or shorter than 32 characters: start the board through the shell (npm run dev)');
     process.exit(1);
   }
-  const repo = missingHome() ? undefined : process.argv[2] ?? firstProject();
+  const repo = missingHome() ? undefined : process.argv[2] ?? startupProject();
   const wanted = process.env.KANBAN95_PORT ? Number(process.env.KANBAN95_PORT) : 0;
   const started = await Promise.resolve().then(() => (repo ? start({ secret, port: wanted, repo, shellId, shell }) : startSetup({ secret, port: wanted, shell, done: () => process.exit(75) }))).catch((e) => {
     console.log((e as Error).message);
