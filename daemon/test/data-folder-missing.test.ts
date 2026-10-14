@@ -53,7 +53,9 @@ it('serves the not-found page naming the missing folder, and nothing recreates i
   expect(r.status).toBe(200);
   const html = await r.text();
   expect(html).toContain(notFound(lost));
-  expect(html).toContain(`value="${lost}"`);
+  expect(html).not.toContain(`value="${lost}"`);
+  expect(html).toContain(`value="${localHome()}"`);
+  expect((await (await call('/api/setup')).json()).data).toBe(localHome());
   expect(html).toMatch(/<button id="retry" type="button">/);
   expect(html).toMatch(/<div id="project-row" class="field-row-stacked" hidden>/);
   expect(notFound('X')).not.toMatch(/drive|disk|volume/i);
@@ -84,5 +86,22 @@ it('Next with another existing folder points there and starts on that folder\'s 
   expect(readFileSync(pointerPath(), 'utf8').trim()).toBe(normal(other));
   expect(done).toEqual([normal(second)]);
   expect(existsSync(lost)).toBe(false);
+  await boots(done[0]);
+}, 60_000);
+
+it('Next with the lost folder is refused and does not create it', async () => {
+  const r = await call('/api/setup', { method: 'POST', body: JSON.stringify({ data: lost }) });
+  expect(r.status).toBe(400);
+  expect((await r.json()).error).toMatch(/was not found/);
+  expect(existsSync(lost)).toBe(false);
+  expect(done).toEqual([]);
+});
+
+it('Next with the offered home folder drops the pointer and starts on its first listed project', async () => {
+  list(localHome(), first);
+  const r = await call('/api/setup', { method: 'POST', body: JSON.stringify({ data: localHome() }) });
+  expect(r.status).toBe(200);
+  expect(existsSync(pointerPath())).toBe(false);
+  expect(done).toEqual([normal(first)]);
   await boots(done[0]);
 }, 60_000);
