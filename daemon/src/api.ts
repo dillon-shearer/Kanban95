@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync 
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { dirname, extname, isAbsolute, join, resolve } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
-import { agentsMap, askShell, attentionMap, focusProject, hostedMap, missingMap, NotListed, openProject, othersHosted, runningMap, tellShell } from './boards.js';
+import { agentsMap, askShell, attentionMap, focusProject, hostedMap, keyOk, missingMap, NotListed, openProject, othersHosted, runningMap, tellShell } from './boards.js';
 import { attachmentDir, attachments, MAX_ATTACHMENT, safeName, saveAttachment } from './attachments.js';
 import { BRAIN_BODY_MAX, BRAIN_RANK, isConstraintError, SCOPES, type Brains, type Scope } from './db.js';
 import { hasBranch, ticketDiff } from './git.js';
@@ -773,4 +773,41 @@ export async function handleApi(board: Board, req: IncomingMessage, res: ServerR
     changed(mutation === 'tickets.delete' ? ticketId : id); // the UI refetches it (a deleted ticket answers 404 and leaves the board)
   }
   reply(res, out);
+}
+
+const FILING_MAX = 64 * 1024;
+
+export async function receiveFiling(board: Board, req: IncomingMessage, res: ServerResponse): Promise<void> {
+  if (req.method !== 'POST') return reply(res, { status: 405, body: { error: 'method not allowed' } });
+  if (!keyOk(req.headers['x-k95-key'])) return reply(res, { status: 401, body: { error: 'unauthorized' } });
+  const { db } = board;
+  let f: Json = {};
+  try {
+    const raw = await readRaw(req, FILING_MAX, `body over ${FILING_MAX / 1024} KB`);
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw.toString('utf8'));
+    } catch {
+      throw new HttpError(400, 'body is not JSON');
+    }
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) throw new HttpError(400, 'body must be an object');
+    f = parsed as Json;
+    const text = (k: string): string => {
+      const v = f[k];
+      if (v !== undefined && typeof v !== 'string') throw new HttpError(400, `${k} must be a string`);
+      return v ?? '';
+    };
+    if (!text('from').trim() || !text('title').trim()) throw new HttpError(400, 'from and title are required');
+    const tags = normaliseTags(f.tags ?? []);
+    const r = db.prepare('INSERT INTO tickets (title, body, criteria, tags) VALUES (?, ?, ?, ?)')
+      .run(text('title'), `Filed from ${text('from')}\n\n${text('body')}`, text('criteria'), tags);
+    const id = Number(r.lastInsertRowid);
+    audit(db, { grant_id: null, ticket_id: id, tool: 'boards.file', args: { from: f.from, title: f.title }, outcome: 'ok' });
+    changed(id);
+    reply(res, { status: 201, body: readTicket(db, id) });
+  } catch (e) {
+    const status = e instanceof HttpError ? e.status : 500;
+    audit(db, { grant_id: null, ticket_id: null, tool: 'boards.file', args: { from: f.from, title: f.title }, outcome: 'error' });
+    reply(res, { status, body: { error: status === 500 ? 'internal error' : (e as Error).message } });
+  }
 }
