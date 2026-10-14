@@ -1764,6 +1764,8 @@ name = "kanban95-shell"
 version = "0.0.0"
 dependencies = [
  "getrandom 0.3.4",
+ "objc2-foundation",
+ "objc2-web-kit",
  "rfd",
  "serde_json",
  "tauri",
