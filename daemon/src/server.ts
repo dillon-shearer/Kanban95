@@ -52,6 +52,7 @@ export interface Config {
   secret?: string;
   shellId?: number | null;
   shell?: boolean;
+  listening?: (port: number, board: Board) => void;
 }
 
 /** Rejects any bind address other than loopback. The daemon is never reachable off-host. */
@@ -183,7 +184,7 @@ export function start(config: Config = {}): Promise<{
     }
   });
   let self = '';
-  const board: Board = { db, brain, repo, port: 0, shellId: config.shellId ?? null, shell: config.shell };
+  const board: Board = { db, brain, repo, port: 0, shellId: config.shellId ?? null, shell: config.shell, starting: true };
   step('git init', () => {
     try {
       initRepo(repo); // a plain folder becomes a local repo with one commit (docs/ARCHITECTURE.md → Daemon lifetime)
@@ -191,26 +192,6 @@ export function start(config: Config = {}): Promise<{
       board.gitError = (e as Error).message;
       console.error(`[git] ${board.gitError}`);
     }
-  });
-  step('file mode', () => {
-    try {
-      guardFileMode(repo);
-    } catch (e) {
-      console.error(`[git] core.fileMode not set: ${(e as Error).message}`);
-    }
-  });
-  step('template commit', () => {
-    if (board.gitError) return;
-    try {
-      commitPaths(repo, templates, 'Update the board prompt templates to the shipped defaults');
-    } catch (e) {
-      console.error(`[git] template defaults not committed: ${(e as Error).message}`);
-    }
-  });
-  step('rev-parse', () => {
-    try {
-      board.startCommit = git(repo, 'rev-parse', '--verify', '-q', 'HEAD');
-    } catch { /* no commits yet: nothing can be stale */ }
   });
   const server = createServer((req, res) => {
     handle(board, self, secret, req, res).catch(() => send(res, 500, 'internal error'));
@@ -288,7 +269,7 @@ export function start(config: Config = {}): Promise<{
   });
   return new Promise((ok, fail) => {
     server.once('error', fail);
-    server.listen(port, host, () => {
+    server.listen(port, host, async () => {
       const addr = server.address();
       if (!addr || typeof addr === 'string') return fail(new Error('no address'));
       self = `${LOOPBACK}:${addr.port}`;
@@ -301,11 +282,37 @@ export function start(config: Config = {}): Promise<{
       };
       events.on('change', count);
       count();
+      config.listening?.(addr.port, board);
+      const later = () => new Promise<void>((r) => setImmediate(r));
+      await later();
+      step('file mode', () => {
+        try {
+          guardFileMode(repo);
+        } catch (e) {
+          console.error(`[git] core.fileMode not set: ${(e as Error).message}`);
+        }
+      });
+      step('template commit', () => {
+        if (board.gitError) return;
+        try {
+          commitPaths(repo, templates, 'Update the board prompt templates to the shipped defaults');
+        } catch (e) {
+          console.error(`[git] template defaults not committed: ${(e as Error).message}`);
+        }
+      });
+      step('rev-parse', () => {
+        try {
+          board.startCommit = git(repo, 'rev-parse', '--verify', '-q', 'HEAD');
+        } catch { /* no commits yet: nothing can be stale */ }
+      });
+      await later();
       // Janitor and recovery on start, the janitor again once a day (docs/LIFECYCLE.md).
       step('janitor', () => sweep(board).catch(() => {}));
       void countUnpushed(board); // the status bar's "N commits not pushed"
+      await later();
       step('release', () => releasePending(board));
       step('recover', () => recover(board));
+      board.starting = false;
       step('tick', () => tick(board)); // the runner picks up where it was
       const daily = setInterval(() => sweep(board).catch(() => {}), SWEEP_MS).unref();
       const unwatch = watchSilence(board);
@@ -381,22 +388,28 @@ if (import.meta.main) {
   }
   const repo = missingHome() ? undefined : process.argv[2] ?? startupProject();
   const wanted = process.env.KANBAN95_PORT ? Number(process.env.KANBAN95_PORT) : 0;
-  const started = await Promise.resolve().then(() => (repo ? start({ secret, port: wanted, repo, shellId, shell }) : startSetup({ secret, port: wanted, shell, done: () => process.exit(75) }))).catch((e) => {
+  const handshake = (port: number) => console.log(`KANBAN95 port=${port}`);
+  let leaving = false;
+  // Restart board (POST /api/restart): the same shutdown as close(), so killed agents stay unflagged and recover() resumes
+  // them, then exit 75, which the shell takes as "start me again" (docs/ARCHITECTURE.md -> Restart board).
+  const listening = (port: number, board: Board) => {
+    handshake(port);
+    board.shutdown = (code) => {
+      if (leaving) return;
+      leaving = true;
+      // ponytail: a session whose pty never exits would hold close() forever; 15 s cap, a per-step timeout if that bites.
+      setTimeout(() => process.exit(code), 15_000).unref();
+      begun.then((s) => (s as Awaited<ReturnType<typeof start>>).close()).finally(() => process.exit(code));
+    };
+  };
+  const begun = Promise.resolve().then(() => (repo ? start({ secret, port: wanted, repo, shellId, shell, listening }) : startSetup({ secret, port: wanted, shell, done: () => process.exit(75) })));
+  const started = await begun.catch((e) => {
     console.log((e as Error).message);
     process.exit(1);
   });
-  const { port } = started;
-  console.log(`KANBAN95 port=${port}`);
+  if (!repo) handshake(started.port);
   if (repo) {
-    const { board, close } = started as Awaited<ReturnType<typeof start>>;
-    // Restart board (POST /api/restart): the same shutdown as close(), so killed agents stay unflagged and recover() resumes
-    // them, then exit 75, which the shell takes as "start me again" (docs/ARCHITECTURE.md -> Restart board).
-    board.shutdown = (code) => {
-      if (board.closing) return;
-      // ponytail: a session whose pty never exits would hold close() forever; 15 s cap, a per-step timeout if that bites.
-      setTimeout(() => process.exit(code), 15_000).unref();
-      close().finally(() => process.exit(code));
-    };
+    const { board } = started as Awaited<ReturnType<typeof start>>;
     // The parent (Tauri shell) holds our stdin. When it dies the pipe closes and we leave with it, agents' process trees first:
     // on Windows the shell's job object would end them too, on macOS nothing would.
     process.stdin.on('end', () => board.shutdown!(0));

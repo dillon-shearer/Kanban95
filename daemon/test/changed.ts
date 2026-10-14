@@ -27,6 +27,7 @@ export function mapped(paths: string[], testDir: string): string[] {
     if (p.startsWith('daemon/migrations/global/')) out.add('brain-global.test.ts');
     else if (p.startsWith('daemon/migrations/')) out.add('db.test.ts');
     if (p === 'shell/stage.mjs') out.add('stage-node.test.ts');
+    if (p === 'daemon/src/server.ts') out.add('start-early-port.test.ts').add('start-git-timeout.test.ts');
     if (DOC_TESTS[p]) out.add(DOC_TESTS[p]);
   }
   return [...out].filter((f) => tests.includes(f)).sort();

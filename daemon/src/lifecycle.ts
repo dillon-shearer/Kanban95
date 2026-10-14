@@ -167,6 +167,7 @@ export interface Board {
   gitError?: string;
   /** `git rev-parse HEAD` in the repo when the daemon started; unset in a repo with no commits. */
   startCommit?: string;
+  starting?: boolean;
   /** A merge since start changed what the running daemon was built from: 'shell' when shell/ changed too (docs/OPERATOR.md → Restart board). */
   stale?: false | 'daemon' | 'shell';
   /** The board's own restart after a merge (restartWhenIdle): under way, or its build failed and it waits for the operator or the next merge. */
@@ -927,7 +928,7 @@ let ticking = false;
  * A ticket held on a running one is not "nothing": the runner waits for that merge. A board stale on daemon code launches no candidate.
  */
 export function tick(b: Board) {
-  if (ticking || b.closing) return;
+  if (ticking || b.closing || b.starting) return;
   restartWhenIdle(b);
   if (!runner(b).on) return;
   ticking = true; // its own launches call apply, which calls tick
