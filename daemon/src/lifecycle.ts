@@ -571,12 +571,14 @@ async function mergeJob(b: Board, id: number, since: number) {
   // to send it back to testing when the sync touched files the ticket also touched.
   // Retry merge after a failed push: the branch is already in the base, so only the push is left.
   const inBase = isAncestor(b.repo, branchName(id), 'HEAD');
+  const head = git(b.repo, 'rev-parse', 'HEAD');
   const s = inBase ? { ok: true as const } : syncWorktree(b.repo, id);
   if (!s.ok) return void (await Promise.all(apply(b, id, 'conflict', { note: { role: 'tester', kind: 'failure', body: s.reason }, auto: true }).pending));
   mark('merge-start', `t${id}`);
-  const r = inBase ? { ok: true as const } : await merge(b.repo, id, t.title, () => readTicket(b.db, id).status === 'done');
+  const moved = () => git(b.repo, 'rev-parse', 'HEAD') !== head;
+  const r = inBase ? { ok: true as const } : await merge(b.repo, id, t.title, () => readTicket(b.db, id).status === 'done' && !moved());
   mark('merge-end', `t${id}`, !r ? 'skipped' : r.ok ? 'ok' : r.dirty ? 'dirty' : 'conflict');
-  if (!r) return;
+  if (!r) return void (readTicket(b.db, id).status === 'done' && moved() && queueMerge(b, id, since));
   // Rejected while git merge ran: the work landed, but the ticket is a worker's again and its next pass merges again.
   if (r.ok && readTicket(b.db, id).status !== 'done') return;
   let out;
