@@ -1,7 +1,7 @@
 // Agent-facing MCP at /mcp. A bearer grant picks the role; TOOLS below is both the enforcement table and the source of docs/MCP.md.
 import { readFileSync } from 'node:fs';
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { resolve } from 'node:path';
+import { basename, resolve } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
@@ -9,9 +9,10 @@ import * as z from 'zod';
 import { brainAdd, brainDelete, brainGet, brains, brainSearch, brainUpdate, deleteTicket, normaliseTags, readTicket, setDeps, transaction } from './api.js';
 import { BRAIN_BODY_MAX, SCOPES } from './db.js';
 import { attachments } from './attachments.js';
+import { fileOn, runningBoard } from './boards.js';
 import { audit, live, verify, type Grant, type Role } from './grants.js';
 import { apply, changed, Refused, type Board } from './lifecycle.js';
-import { EFFORT, uncatalogued } from './settings.js';
+import { EFFORT, same, uncatalogued } from './settings.js';
 
 const STATUS = ['backlog', 'in_progress', 'testing', 'done'] as const;
 /** Where each role may move a ticket: its own, or for the operator any. The planner never moves anything. */
@@ -109,6 +110,32 @@ export const TOOLS: Record<string, Tool<z.ZodRawShape>> = {
       });
       c.ticket = id;
       return readTicket(c.db, id);
+    },
+  }),
+
+  file_on_board: tool({
+    description:
+      'File a ticket on another Kanban95 board running on this machine, for a bug or gap in that project you hit and cannot fix here. ' +
+      'project is the folder name or absolute path as listed in projects.json. The ticket lands in the Backlog of that board with no model or effort, ' +
+      'its body starting "Filed from <this repo folder> #<your ticket>". A board that is not running is never started: the call fails and names the running boards, ' +
+      'so note it on your ticket instead. Filing on your own board is create_ticket with the limits of your role. Returns the board name and the new ticket.',
+    access: { planner: 'yes', worker: 'yes; own board as create_ticket', tester: 'other boards only', operator: 'yes' },
+    input: {
+      project: z.string().min(1).describe('Folder name or absolute path of the target project, as in projects.json.'),
+      title: z.string().min(1).describe('Short imperative title.'),
+      body: z.string().default('').describe('What is wrong or missing and how you hit it, markdown.'),
+      criteria: z.string().default('').describe('Acceptance criteria, one checkable statement per line.'),
+      tags: z.array(z.string()).optional().describe('Grouping tags, each lowercase a-z, 0-9 and - only.'),
+    },
+    async run(c, a) {
+      const { repo, name, entry } = runningBoard(a.project);
+      if (same(repo, c.board.repo)) {
+        if (!(c.grant.role in TOOLS.create_ticket.access)) throw new Deny(`${an(c.grant.role)} may not create a ticket on its own board`);
+        return { project: name, ticket: TOOLS.create_ticket.run(c, { title: a.title, body: a.body, criteria: a.criteria, tags: a.tags, depends_on: [] }) };
+      }
+      const ref = c.grant.ticket_id ?? (c.grant.role === 'operator' ? 'operator' : 'brainstorm');
+      const from = `${basename(c.board.repo)} #${ref}`;
+      return { project: name, ticket: await fileOn(entry, name, { from, title: a.title, body: a.body, criteria: a.criteria, tags: a.tags ?? [] }) };
     },
   }),
 
@@ -410,7 +437,7 @@ export const TOOLS: Record<string, Tool<z.ZodRawShape>> = {
 function registerTools(server: McpServer, board: Board, grant: Grant) {
   const { db } = board;
   for (const [name, t] of Object.entries(TOOLS)) {
-    server.registerTool(name, { description: t.description, inputSchema: t.input }, (args) => {
+    server.registerTool(name, { description: t.description, inputSchema: t.input }, async (args) => {
       const a = args as Record<string, unknown>;
       const c: Call = { board, db, grant, ticket: typeof a.ticket_id === 'number' ? a.ticket_id : grant.ticket_id };
       let outcome: 'ok' | 'denied' | 'error' = 'ok';
@@ -418,7 +445,7 @@ function registerTools(server: McpServer, board: Board, grant: Grant) {
       try {
         if (!live(db, grant.id)) throw new Deny('unauthorized: this grant was revoked or has expired');
         if (!(grant.role in t.access)) throw new Deny(`${an(grant.role)} may not call ${name}`);
-        text = JSON.stringify(t.run(c, a), null, 2);
+        text = JSON.stringify(await t.run(c, a), null, 2);
       } catch (e) {
         outcome = e instanceof Deny || e instanceof Refused ? 'denied' : 'error';
         text = (e as Error).message;

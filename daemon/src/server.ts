@@ -7,7 +7,7 @@ import { extname, resolve, sep } from 'node:path';
 import { pipeline } from 'node:stream';
 import type { DatabaseSync } from 'node:sqlite';
 import { WebSocketServer } from 'ws';
-import { handleApi } from './api.js';
+import { handleApi, receiveFiling } from './api.js';
 import { countBoard, entryPath, register, tellShell } from './boards.js';
 import { openDb, openGlobalBrain } from './db.js';
 import { git, guardFileMode, initRepo } from './git.js';
@@ -101,6 +101,7 @@ async function handle(board: Board | null, self: string, secret: string, req: In
     res.writeHead(302, { 'Set-Cookie': `${COOKIE}-${self.split(':')[1]}=${secret}; HttpOnly; SameSite=Strict; Path=/`, Location: '/', 'Content-Length': 0 });
     return res.end();
   }
+  if (url.pathname === '/api/boards/file' && board) return receiveFiling(board, req, res);
   if (url.pathname.startsWith('/api/')) {
     if (!authed(req, secret)) return send(res, 401, 'unauthorized');
     return board ? handleApi(board, req, res, url) : handleSetup(req, res, url, setup!);
