@@ -6,7 +6,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import * as z from 'zod';
-import { brainAdd, brainDelete, brainGet, brains, brainSearch, brainUpdate, deleteTicket, normaliseTags, readTicket, setDeps, transaction } from './api.js';
+import { brainAdd, brainDelete, brainGet, brains, brainSearch, brainUpdate, deleteTicket, normaliseTags, PERMISSION, readTicket, setDeps, transaction } from './api.js';
 import { bootstrap } from './bootstrap.js';
 import { BRAIN_BODY_MAX, SCOPES } from './db.js';
 import { attachments } from './attachments.js';
@@ -441,6 +441,31 @@ export const TOOLS: Record<string, Tool<z.ZodRawShape>> = {
     run(c, a) {
       const id = (c.ticket = own(c, a.ticket_id));
       const { noteId } = apply(c.board, id, 'ask', { note: { role: c.grant.role, kind: 'question', body: a.question } });
+      return { question_id: noteId };
+    },
+  }),
+
+  request_permission: tool({
+    description:
+      'Ask the operator to raise your ticket\x27s agent level or turn on read all, when a call was refused with "ask for level N with request_permission". Give level (above the ticket\x27s current one), read_all: true, or both, and a reason saying which call needs it and why. ' +
+      'The ticket is flagged needs_human and the operator sees Approve and Deny in the Inbox; the answer is typed into your session as one line. On "approved", retry the refused call: the new level applies from the next call. ' +
+      'Refused when the ticket already has what you ask for, or while an earlier request is unanswered. Returns the question id.',
+    access: { worker: 'own', tester: 'own' },
+    input: {
+      level: z.number().int().min(1).max(MAX_LEVEL).optional().describe(`Agent level to ask for, 1 to ${MAX_LEVEL} (docs/MCP.md → Levels).`),
+      read_all: z.boolean().optional().describe('true to ask to read every ticket on the board.'),
+      reason: z.string().min(1).describe('Which refused call needs this and why.'),
+    },
+    run(c, a) {
+      const id = (c.ticket = own(c, undefined));
+      if (a.level === undefined && !a.read_all) throw new Deny('give level, read_all: true, or both');
+      if (a.level !== undefined && a.level <= c.level) throw new Deny(`the ticket already has level ${c.level}; retry the refused call`);
+      if (a.read_all && c.readAll) throw new Deny('the ticket already reads all tickets; retry the refused call');
+      const open = c.db.prepare(`SELECT 1 FROM notes q WHERE q.ticket_id = ? AND q.kind = 'question' AND q.body LIKE '${PERMISSION} %'
+        AND NOT EXISTS (SELECT 1 FROM notes a WHERE a.ticket_id = q.ticket_id AND a.kind = 'answer' AND a.id > q.id)`).get(id);
+      if (open) throw new Deny('an earlier request_permission on this ticket is still unanswered; wait for the operator\x27s answer');
+      const head = [PERMISSION, a.level !== undefined && `level=${a.level}`, a.read_all && 'read_all=1'].filter(Boolean).join(' ');
+      const { noteId } = apply(c.board, id, 'ask', { note: { role: c.grant.role, kind: 'question', body: `${head}\n${a.reason}` } });
       return { question_id: noteId };
     },
   }),

@@ -31,6 +31,7 @@ A refused call returns a tool error whose text says why and, for `move_ticket`, 
 | brain_delete | yes | no | no | yes |
 | brain_search | yes | yes | yes | yes |
 | ask_operator | no | own | own | no |
+| request_permission | no | own | own | no |
 | report_test | no | no | own | no |
 | report_cleanup | no | own | no | any |
 
@@ -201,6 +202,16 @@ Ask the human operator a question you cannot resolve from the ticket, the brain 
 |---|---|---|---|
 | ticket_id | integer | no | Ticket id. Worker and tester grants are bound to one ticket and may omit it; a planner or operator must give it. |
 | question | string | yes |  |
+
+### request_permission
+
+Ask the operator to raise your ticket's agent level or turn on read all, when a call was refused with "ask for level N with request_permission". Give level (above the ticket's current one), read_all: true, or both, and a reason saying which call needs it and why. The ticket is flagged needs_human and the operator sees Approve and Deny in the Inbox; the answer is typed into your session as one line. On "approved", retry the refused call: the new level applies from the next call. Refused when the ticket already has what you ask for, or while an earlier request is unanswered. Returns the question id.
+
+| argument | type | required | description |
+|---|---|---|---|
+| level | integer | no | Agent level to ask for, 1 to 4 (docs/MCP.md → Levels). |
+| read_all | boolean | no | true to ask to read every ticket on the board. |
+| reason | string | yes | Which refused call needs this and why. |
 
 ### report_test
 
