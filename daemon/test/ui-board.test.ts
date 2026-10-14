@@ -81,7 +81,8 @@ describe('ui-board', { timeout: 60_000 }, () => {
     const field = () => page.evaluate<string | null>(`(() => { const f = document.querySelector('.k95-held'); return f.hidden ? null : f.textContent; })()`);
     await page.goto(base);
     await until(() => column(held[1]), 'the cards');
-    expect(await field()).toBe('2 waiting to launch by themselves');
+    expect(await field()).toBe('2 held');
+    expect(await page.evaluate('document.querySelector(".k95-held").title')).toBe('2 waiting to launch by themselves');
     expect(await page.evaluate<string[]>(`[...document.querySelectorAll('.k95-toolbar button')].map((b) => b.textContent)`))
       .toEqual(['Launch', 'Stop', 'New brainstorm', 'Housekeeping']);
 
@@ -93,7 +94,7 @@ describe('ui-board', { timeout: 60_000 }, () => {
     db.prepare(`UPDATE tickets SET status = 'done', merged_at = 'x' WHERE id IN (${[dep, ...held].join(',')})`).run();
   });
 
-  it('a base ahead of its upstream at start shows "N commits not pushed"; Push pushes it and the field goes', async () => {
+  it('a base ahead of its upstream at start shows "N not pushed"; Push pushes it and the field goes', async () => {
     const bare = mkdtempSync(join(tmpdir(), 'k95-remote-'));
     const remote = (...a: string[]) => execFileSync('git', a, { cwd: bare, encoding: 'utf8' }).trim();
     const field = () => page.evaluate<string | null>(`(() => { const f = document.querySelector('.k95-unpushed'); return f.hidden ? null : f.querySelector('span').textContent; })()`);
@@ -109,7 +110,8 @@ describe('ui-board', { timeout: 60_000 }, () => {
       await countUnpushed(srv.board); // what daemon start runs
       await page.goto(base);
       await until(() => page.evaluate(`!!document.querySelector('.k95-unpushed')`), 'the status bar');
-      await until(async () => (await field()) === '2 commits not pushed', 'the unpushed field');
+      await until(async () => (await field()) === '2 not pushed', 'the unpushed field');
+      expect(await page.evaluate('document.querySelector(".k95-unpushed").title')).toBe('2 commits not pushed');
       await page.evaluate(`document.querySelector('.k95-unpushed button').click()`);
       await until(async () => (await field()) === null, 'the field gone');
       expect(await statusBar()).toBe('Pushed.');

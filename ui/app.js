@@ -134,8 +134,9 @@ function pick(t, e) {
     selection.clear();
     for (const id of ids.slice(a, b + 1)) selection.add(id);
   } else {
-    if (!e.ctrlKey) selection.clear();
-    if (e.ctrlKey && selection.has(t.id)) selection.delete(t.id);
+    const add = e.ctrlKey || e.metaKey;
+    if (!add) selection.clear();
+    if (add && selection.has(t.id)) selection.delete(t.id);
     else selection.add(t.id);
     anchor = t.id;
   }
@@ -708,12 +709,16 @@ function openBoard() {
     runField.textContent = runField.title = runner.gitError ?? (runner.hold ? holdLine(runner.hold) : runnerLine(runner)); // gitError: GET /api/runner, set at start
     runField.hidden = !runField.textContent;
     const held = heldTickets().length;
-    heldField.textContent = held ? `${held} waiting to launch by themselves` : '';
+    heldField.textContent = held ? `${held} held` : '';
+    heldField.title = held ? `${held} waiting to launch by themselves` : '';
     heldField.hidden = !held;
-    unpushedText.textContent = `${runner.unpushed} commit${runner.unpushed === 1 ? '' : 's'} not pushed`;
+    unpushedText.textContent = `${runner.unpushed} not pushed`;
+    unpushedField.title = `${runner.unpushed} commit${runner.unpushed === 1 ? '' : 's'} not pushed`;
     unpushedField.hidden = !runner.unpushed;
     const rel = runner.release;
-    releaseField.textContent = rel ? `release pending (${rel.commits} commit${rel.commits === 1 ? '' : 's'} since ${rel.since})` : '';
+    const commits = rel ? `${rel.commits} commit${rel.commits === 1 ? '' : 's'}` : '';
+    releaseField.textContent = rel ? `release: ${commits}` : '';
+    releaseField.title = rel ? `release pending (${commits} since ${rel.since})` : '';
     releaseField.hidden = !rel;
   });
   drawBoard();

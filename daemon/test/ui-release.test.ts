@@ -45,7 +45,8 @@ describe('ui-release', { timeout: 60_000 }, () => {
       srv.board.release = { since: 'v1.2.3', commits: 4 };
       changed(null);
       await until(async () => !(await field())[1], 'the release text');
-      expect(await field()).toEqual(['release pending (4 commits since v1.2.3)', false]);
+      expect(await field()).toEqual(['release: 4 commits', false]);
+      expect(await page.evaluate('document.querySelector(".k95-release-pending").title')).toBe('release pending (4 commits since v1.2.3)');
     } finally {
       srv.board.release = undefined;
       changed(null);
