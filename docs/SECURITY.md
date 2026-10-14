@@ -224,7 +224,7 @@ What an attacker who controls the GitHub repo or its releases could and could no
 ## Threats this does not address yet
 
 - Same-user isolation: see A malicious agent in a worktree → What it can reach. The worktree is the blast radius for what an agent is asked to do, not for what a hostile agent or local malware can do.
-- No MCP tool touches the filesystem yet (`report_cleanup` records paths, it does not delete them).
+- No MCP tool writes to the filesystem yet (`report_cleanup` records paths, it does not delete them). `post_deliverable` only checks that a folder exists; the folder opens in the file manager only when the operator clicks Open folder.
 - If the daemon itself dies, its ptys die with it; their session dirs (which hold a bearer for Claude Code) and grants stay until the next daemon start, when the janitor removes and revokes them. Grants still expire on their TTL (24 h) if the daemon never starts again.
 - Each start's microphone grant is saved in the WebView2 profile under that start's origin (WebView2's default), so old `127.0.0.1:<port>` entries pile up there. Harmless, since no other page can load in the window.
 - `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=<n>` opens the board's webview to DevTools, release builds included. Only a process that can set the shell's environment can do it, which is the same-user ceiling above, not a new hole.
