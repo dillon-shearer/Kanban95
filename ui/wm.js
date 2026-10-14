@@ -44,8 +44,9 @@ export function setZoom(f) {
 // into slots 0..n-1 in reading order, in the order of the slot each last held, new ones after. The grid is the first SLOTS
 // row whose count covers n. The last row's members share the full region width (5 → 3 on top, 2 below at half the width
 // each), so there is never a hole. Every change that adds or removes a member repacks: open, close,
-// minimize, restore, maximize, unmaximize, drag-out, rejoin, and a change of the region. Dragged or resized, a tiled window
-// is free: it stays where it was left and the rest repack; a double-click on its title bar makes it a member again, after
+// minimize, restore, maximize, unmaximize, drag-out, rejoin, and a change of the region.
+// Dragged by its title bar or resized from an edge, a tiled window is free: it stays where it was left and the rest repack. A click inside it, a repack while the pointer is down, or a
+// release without a press on its title bar or edge never frees it; a double-click on its title bar makes it a member again, after
 // the others. Past the last row's count a window is not tiled: it stays where it opened (`place`) and joins when one
 // leaves. `setTiling(false)` (Settings → Board,
 // `terminals.tile`) stops tiling: terminals open at the least-covered spot and stay where they are dragged.
