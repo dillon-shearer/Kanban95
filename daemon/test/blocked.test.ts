@@ -35,6 +35,7 @@ describe('Blocked', { timeout: 60_000 }, () => {
   it('a Blocked in_progress ticket stays Blocked across a move and a daemon restart, which resumes no agent on it', async () => {
     const id = ticket('Parked mid-run', { status: 'in_progress', blocked: 1 });
     const other = ticket('Running', { status: 'in_progress' });
+    createWorktree(srv.board.repo, other);
     expect((await post(`/api/tickets/${id}/launch`)).status).toBe(409);
     expect((await post(`/api/tickets/${id}/restart`)).status).toBe(409);
     expect((await patch(`/api/tickets/${id}`, { status: 'testing' })).status).toBe(200);
