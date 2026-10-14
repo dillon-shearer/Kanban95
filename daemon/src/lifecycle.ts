@@ -213,13 +213,18 @@ type Note = { role: Role | 'operator'; kind: 'question' | 'answer' | 'failure'; 
 export function apply(b: Board, id: number, event: Event, x: { note?: Note; answer?: string; auto?: boolean } = {}) {
   const t = readTicket(b.db, id);
   const row = pick(facts(b, t), event);
+  const blocked = t.flags.blocked;
+  if (blocked && STARTS.includes(event)) {
+    if (x.auto) return { ticket: t, noteId: undefined, pending: [] as Promise<void>[] };
+    throw new Refused(`cannot ${event} a Blocked ticket: Unblock it first`);
+  }
   // The one gate on the board starting an agent by itself (`auto`: a released dependent, a conflict sent back): while the
   // runner is off it starts nothing. A backlog launch is not applied at all, so the ticket stays held; any other row is
   // written without its spawn and kept in `held`, and tick() starts that agent when Run is turned on. A board stale on
   // daemon code starts no backlog ticket either (restartWhenIdle); a running ticket's conflict retry still goes ahead.
   const spawns = x.auto === true && row.effects.includes('spawn_execute');
   if (spawns && t.status === 'backlog' && (b.stale === 'daemon' || !runner(b).on)) return { ticket: t, noteId: undefined, pending: [] as Promise<void>[] };
-  const hold = spawns && !runner(b).on;
+  const hold = spawns && !blocked && !runner(b).on;
   if (hold) held.add(id);
   if (event === 'submit') {
     // The tester tests the branch with the base merged in, so stale code never spends a tester round.
@@ -250,8 +255,9 @@ export function apply(b: Board, id: number, event: Event, x: { note?: Note; answ
   const pending: Promise<void>[] = [];
   for (const e of effects) {
     switch (e) {
-      case 'spawn_execute': if (!hold) spawn(b, id, t.template as 'execute' | 'housekeeping', resume); break;
+      case 'spawn_execute': if (!hold && !blocked) spawn(b, id, t.template as 'execute' | 'housekeeping', resume); break;
       case 'spawn_test':
+        if (blocked) break;
         if (event === 'submit') queueTest(b, id);
         else {
           spawn(b, id, 'test', resume);
@@ -269,7 +275,7 @@ export function apply(b: Board, id: number, event: Event, x: { note?: Note; answ
         }
         void cancelSetup(id);
         break;
-      case 'enqueue_merge': queueMerge(b, id); break;
+      case 'enqueue_merge': if (!blocked) queueMerge(b, id); break;
       case 'note': break; // written above, in the transaction
       case 'answer_pty':
         // Text, then Enter as its own write: Claude Code reads one burst as a paste, where \r is a newline, not Enter.
@@ -295,6 +301,8 @@ export function apply(b: Board, id: number, event: Event, x: { note?: Note; answ
  * ponytail: in memory, so a restart forgets them and recover resumes them whatever the runner says; upgrade is a column.
  */
 const held = new Set<number>();
+
+const STARTS: Event[] = ['launch', 'resume', 'restart', 'reject', 'merge'];
 
 /** An answer is typed into a terminal: a newline would submit half of it, so it becomes one line. */
 const oneLine = (s: string) => s.replace(/\s*[\r\n]+\s*/g, ' ').trim();
@@ -322,7 +330,7 @@ function spawn(b: Board, id: number, template: 'execute' | 'housekeeping' | 'tes
     const after = async () => {
       await setup;
       const t = readTicket(b.db, id);
-      if (spawns.get(id) === me && !b.closing && t.status === status && !t.flags.needs_human && !sessionsOf(id).length) go();
+      if (spawns.get(id) === me && !b.closing && t.status === status && !t.flags.needs_human && !t.flags.blocked && !sessionsOf(id).length) go();
     };
     void after().catch((e) => {
       try {
@@ -355,7 +363,7 @@ function drainTests(b: Board) {
     } catch {
       t = undefined;
     }
-    if (t?.status !== 'testing' || t.flags.needs_human || sessionsOf(id).some((s) => !s.outcome)) {
+    if (t?.status !== 'testing' || t.flags.needs_human || t.flags.blocked || sessionsOf(id).some((s) => !s.outcome)) {
       testQueue.delete(id);
       continue;
     }
@@ -405,7 +413,7 @@ function exited(b: Board, s: Session) {
     try {
       const t = b.closing ? undefined : readTicket(b.db, id);
       // Launch on a running ticket with no agent starts its phase again; a ticket moved, flagged or relaunched meanwhile is left be.
-      if (t?.status === (s.phase === 'test' ? 'testing' : 'in_progress') && !t.flags.needs_human && !sessionsOf(id).length) apply(b, id, 'launch');
+      if (t?.status === (s.phase === 'test' ? 'testing' : 'in_progress') && !t.flags.needs_human && !t.flags.blocked && !sessionsOf(id).length) apply(b, id, 'launch');
     } catch (e) {
       if (!(e instanceof Refused)) console.error('[lifecycle]', e); // deleted meanwhile, say: nothing to start
     }
@@ -569,7 +577,7 @@ async function mergeJob(b: Board, id: number, since: number) {
   if (readTicket(b.db, id).status !== 'done') return;
   await Promise.all(sessionsOf(id).map((s) => s.done)); // the tester's pty is still closing
   const t = readTicket(b.db, id);
-  if (t.status !== 'done' || t.merged_at) return; // reset, rejected or moved by hand while it waited
+  if (t.status !== 'done' || t.merged_at || t.flags.blocked) return; // reset, rejected, moved by hand or Blocked while it waited
   // No branch means nothing to land (an imported ticket, or one that never forked a worktree), as when moved to Done by hand.
   if (!hasBranch(b.repo, id)) {
     b.db.prepare("UPDATE tickets SET merged_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?").run(id);
@@ -587,7 +595,11 @@ async function mergeJob(b: Board, id: number, since: number) {
   if (!s.ok) return void (await Promise.all(apply(b, id, 'conflict', { note: { role: 'tester', kind: 'failure', body: s.reason }, auto: true }).pending));
   mark('merge-start', `t${id}`);
   const moved = () => git(b.repo, 'rev-parse', 'HEAD') !== head;
-  const r = inBase ? { ok: true as const } : await merge(b.repo, id, t.title, () => readTicket(b.db, id).status === 'done' && !moved());
+  const wanted = () => {
+    const n = readTicket(b.db, id);
+    return n.status === 'done' && !n.flags.blocked && !moved();
+  };
+  const r = inBase ? { ok: true as const } : await merge(b.repo, id, t.title, wanted);
   mark('merge-end', `t${id}`, !r ? 'skipped' : r.ok ? 'ok' : r.dirty ? 'dirty' : 'conflict');
   if (!r) return void (readTicket(b.db, id).status === 'done' && moved() && queueMerge(b, id, since));
   if (r.ok && !inBase) {
@@ -761,21 +773,21 @@ export function setRunner(b: Board, on: boolean, why?: string) {
   if (on) tick(b);
 }
 
-/** Tickets the runner waits on: unflagged and running, or done and not merged yet. A flagged one waits for the operator instead. */
+/** Tickets the runner waits on: unflagged and running, or done and not merged yet. A flagged or Blocked one waits for the operator instead. */
 const running = (b: Board) => (b.db.prepare(`
-  SELECT id FROM tickets WHERE needs_human = 0 AND (status IN ('in_progress', 'testing') OR (status = 'done' AND merged_at IS NULL))
+  SELECT id FROM tickets WHERE needs_human = 0 AND blocked = 0 AND (status IN ('in_progress', 'testing') OR (status = 'done' AND merged_at IS NULL))
   ORDER BY id`).all() as { id: number }[]).map((r) => r.id);
 
 const EFFORT_RANK: Record<string, number> = { low: 0, medium: 1, high: 2, max: 3 };
 const lines = (s: string) => s.split(/\r?\n/).filter((l) => l.trim()).length;
 
 /**
- * Backlog tickets the runner may launch, next first: unflagged, every dependency merged.
+ * Backlog tickets the runner may launch, next first: unflagged, not Blocked, every dependency merged.
  * ponytail: effort then criteria lines is a rough size; upgrade to a size estimate the planner writes on each ticket.
  */
 export function candidates(b: Board): number[] {
   const rows = b.db.prepare(`
-    SELECT id, effort, criteria FROM tickets t WHERE status = 'backlog' AND needs_human = 0 AND NOT EXISTS (
+    SELECT id, effort, criteria FROM tickets t WHERE status = 'backlog' AND needs_human = 0 AND blocked = 0 AND NOT EXISTS (
       SELECT 1 FROM ticket_deps d JOIN tickets x ON x.id = d.depends_on_id WHERE d.ticket_id = t.id AND x.merged_at IS NULL)`).all() as
     { id: number; effort: string | null; criteria: string }[];
   const rank = (r: (typeof rows)[number]) => EFFORT_RANK[r.effort ?? 'medium'];
@@ -842,7 +854,8 @@ export function runnerState(b: Board) {
   const waits = [...overlaps(b, cs)].map(([id, on]) => ({ id, on }));
   const restart = b.restart === 'failed' ? 'failed' : b.shell && b.shutdown ? 'self' : 'manual';
   const r = runner(b);
-  return { ...r, concurrency: limit(b), running: running(b), left: cs.length, backlog: n, waits, stale: b.stale ?? false, unpushed: b.unpushed ?? 0,
+  const ids = running(b);
+  return { ...r, concurrency: limit(b), running: ids, setup: ids.filter(settingUp), left: cs.length, backlog: n, waits, stale: b.stale ?? false, unpushed: b.unpushed ?? 0,
     ...(b.release && { release: { pending: true, ...b.release } }), ...(b.stale === 'daemon' && { hold: { finish: toFinish(b), terminals: terminals(), restart } }), ...(b.gitError && { gitError: b.gitError }), ...(b.lowMemory && { lowMemory: { ...b.lowMemory, waiting: testersWaiting() } }) };
 }
 
@@ -923,8 +936,8 @@ export function tick(b: Board) {
     // A conflict sent back to its worker while the runner was off (apply's hold): that worker starts first, unless the
     // operator has moved the ticket on since.
     for (const id of held) {
-      const t = b.db.prepare('SELECT status, needs_human FROM tickets WHERE id = ?').get(id) as { status: string; needs_human: number } | undefined;
-      const go = t?.status === 'in_progress' && !t.needs_human && !sessionsOf(id).length;
+      const t = b.db.prepare('SELECT status, needs_human, blocked FROM tickets WHERE id = ?').get(id) as { status: string; needs_human: number; blocked: number } | undefined;
+      const go = t?.status === 'in_progress' && !t.needs_human && !t.blocked && !sessionsOf(id).length;
       held.delete(id);
       if (go) apply(b, id, 'launch');
     }
@@ -955,7 +968,7 @@ export const RESTARTED = 'agent exited without reporting (the daemon restarted)'
  * it is queued again.
  */
 export function recover(b: Board) {
-  const running = b.db.prepare("SELECT id, status FROM tickets WHERE status IN ('in_progress', 'testing') AND needs_human = 0").all() as { id: number; status: string }[];
+  const running = b.db.prepare("SELECT id, status FROM tickets WHERE status IN ('in_progress', 'testing') AND needs_human = 0 AND blocked = 0").all() as { id: number; status: string }[];
   for (const { id, status } of running) {
     if (sessionsOf(id).length > 0) continue;
     const role = status === 'testing' ? 'tester' : 'worker';
@@ -963,7 +976,7 @@ export function recover(b: Board) {
     b.db.prepare("INSERT INTO notes (ticket_id, role, kind, body) VALUES (?, ?, 'failure', ?)").run(id, role, RESTARTED);
     apply(b, id, 'launch');
   }
-  for (const { id } of b.db.prepare("SELECT id FROM tickets WHERE status = 'done' AND merged_at IS NULL AND needs_human = 0").all() as { id: number }[]) {
+  for (const { id } of b.db.prepare("SELECT id FROM tickets WHERE status = 'done' AND merged_at IS NULL AND needs_human = 0 AND blocked = 0").all() as { id: number }[]) {
     queueMerge(b, id);
   }
 }

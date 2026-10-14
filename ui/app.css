@@ -132,6 +132,7 @@ fieldset {
 .badge.default { color: #555; font-style: italic; }
 .badge.flag { background: #a00; color: #fff; border-color: #600; }
 .badge.hold { background: #ffffc0; }
+.badge.blocked { background: #404040; color: #fff; border-color: #000; }
 .badge.run { background: navy; color: #fff; }
 .badge.tag { background: #c0e0ff; }
 .badge.level { background: #ffd8a8; }
