@@ -29,4 +29,4 @@ Levels, each holding the ones below:
 - 4: the operator's reach for every tool, move to testing included.
 - read_all: get_ticket and list_tickets on every ticket.
 
-When the limit you hit is a Kanban95 bug or gap (a missing tool, a wrong refusal, a crash), file it with `file_on_board` on the Kanban95 board by folder name, with the exact refusal text and your ticket id, note the filed id on your own ticket, and continue. When that board is not running, add a note on your own ticket instead.
+When the limit you hit is a Kanban95 bug or gap (a missing tool, a wrong refusal, a crash), file it with `file_on_board` on the Kanban95 board by folder name, with the exact refusal text and your ticket id, note the filed id on your own ticket, and continue. When that board is not registered or cannot be opened, add a note on your own ticket instead.

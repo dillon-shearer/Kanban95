@@ -6,11 +6,11 @@ import type { DatabaseSync } from 'node:sqlite';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import * as z from 'zod';
-import { brainAdd, brainDelete, brainGet, brains, brainSearch, brainUpdate, deleteTicket, normaliseTags, PERMISSION, readTicket, setDeps, setTargets, targetsOf, transaction } from './api.js';
+import { brainAdd, brainDelete, brainGet, brains, brainSearch, brainUpdate, deleteTicket, fileTicket, normaliseTags, PERMISSION, readTicket, setDeps, setTargets, targetsOf, transaction } from './api.js';
 import { bootstrap } from './bootstrap.js';
-import { BRAIN_BODY_MAX, SCOPES } from './db.js';
+import { BRAIN_BODY_MAX, openDb, SCOPES } from './db.js';
 import { attachments } from './attachments.js';
-import { fileOn, runningBoard } from './boards.js';
+import { fileOn, registeredBoard } from './boards.js';
 import { audit, live, verify, type Grant, type Role } from './grants.js';
 import { apply, changed, Refused, type Board } from './lifecycle.js';
 import { EFFORT, readConfig, same, uncatalogued } from './settings.js';
@@ -166,10 +166,11 @@ export const TOOLS: Record<string, Tool<z.ZodRawShape>> = {
 
   file_on_board: tool({
     description:
-      'File a ticket on another Kanban95 board running on this machine, for a bug or gap in that project you hit and cannot fix here. ' +
+      'File a ticket on another Kanban95 board registered on this machine, for a bug or gap in that project you hit and cannot fix here. ' +
       'project is the folder name or absolute path as listed in projects.json. The ticket lands in the Backlog of that board with no model or effort, ' +
-      'its body starting "Filed from <this repo folder> #<your ticket>". A board that is not running is never started: the call fails and names the running boards, ' +
-      'so note it on your ticket instead. Filing on your own board is create_ticket with the limits of your role. Returns the board name and the new ticket.',
+      'its body starting "Filed from <this repo folder> #<your ticket>". A board that is not running is opened for the call and closed again; a running board stays running. ' +
+      'An unregistered name or a board whose folder is gone fails and names the registered boards. Filing on your own board is create_ticket with the limits of your role. ' +
+      'Returns the board name, started (true when the board was not running and was opened and closed for this call) and the new ticket.',
     access: { planner: 'yes', worker: 'yes; own board as create_ticket', tester: 'other boards only', operator: 'yes' },
     input: {
       project: z.string().min(1).describe('Folder name or absolute path of the target project, as in projects.json.'),
@@ -179,14 +180,27 @@ export const TOOLS: Record<string, Tool<z.ZodRawShape>> = {
       tags: z.array(z.string()).optional().describe('Grouping tags, each lowercase a-z, 0-9 and - only.'),
     },
     async run(c, a) {
-      const { repo, name, entry } = runningBoard(a.project);
+      const { repo, name, entry, names } = registeredBoard(a.project);
       if (same(repo, c.board.repo)) {
         if (!(c.as in TOOLS.create_ticket.access)) throw new Deny(`${an(c.grant.role)} may not create a ticket on its own board${ask(c.need)}`);
-        return { project: name, ticket: TOOLS.create_ticket.run(c, { title: a.title, body: a.body, criteria: a.criteria, tags: a.tags, depends_on: [] }) };
+        return { project: name, started: false, ticket: TOOLS.create_ticket.run(c, { title: a.title, body: a.body, criteria: a.criteria, tags: a.tags, depends_on: [] }) };
       }
       const ref = c.grant.ticket_id ?? (c.grant.role === 'operator' ? 'operator' : 'brainstorm');
       const from = `${basename(c.board.repo)} #${ref}`;
-      return { project: name, ticket: await fileOn(entry, name, { from, title: a.title, body: a.body, criteria: a.criteria, tags: a.tags ?? [] }) };
+      const f = { from, title: a.title, body: a.body, criteria: a.criteria, tags: a.tags ?? [] };
+      if (entry) return { project: name, started: false, ticket: await fileOn(entry, name, f) };
+      let db: DatabaseSync;
+      try {
+        db = openDb(repo);
+      } catch (e) {
+        throw new Error(`${name} could not be started: ${(e as Error).message}. Registered boards: ${names}`);
+      }
+      try {
+        db.exec('PRAGMA busy_timeout = 5000');
+        return { project: name, started: true, ticket: readTicket(db, fileTicket(db, f)) };
+      } finally {
+        db.close();
+      }
     },
   }),
 

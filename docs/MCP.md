@@ -75,7 +75,7 @@ No arguments.
 
 ### file_on_board
 
-File a ticket on another Kanban95 board running on this machine, for a bug or gap in that project you hit and cannot fix here. project is the folder name or absolute path as listed in projects.json. The ticket lands in the Backlog of that board with no model or effort, its body starting "Filed from <this repo folder> #<your ticket>". A board that is not running is never started: the call fails and names the running boards, so note it on your ticket instead. Filing on your own board is create_ticket with the limits of your role. Returns the board name and the new ticket.
+File a ticket on another Kanban95 board registered on this machine, for a bug or gap in that project you hit and cannot fix here. project is the folder name or absolute path as listed in projects.json. The ticket lands in the Backlog of that board with no model or effort, its body starting "Filed from <this repo folder> #<your ticket>". A board that is not running is opened for the call and closed again; a running board stays running. An unregistered name or a board whose folder is gone fails and names the registered boards. Filing on your own board is create_ticket with the limits of your role. Returns the board name, started (true when the board was not running and was opened and closed for this call) and the new ticket.
 
 | argument | type | required | description |
 |---|---|---|---|

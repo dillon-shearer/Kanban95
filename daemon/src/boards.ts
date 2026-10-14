@@ -101,17 +101,17 @@ export function hostedMap(shell: number | null | undefined): Record<string, bool
 
 export interface Filing { from: string; title: string; body: string; criteria: string; tags: string[] }
 
-export function runningBoard(project: string): { repo: string; name: string; entry: Entry } {
-  const live = running();
-  const names = live.map((e) => basename(e.repo)).sort().join(', ') || 'none';
+export function registeredBoard(project: string): { repo: string; name: string; entry?: Entry; names: string } {
   const list = readProjects();
+  const names = list.map((p) => basename(p.path)).sort().join(', ') || 'none';
   const hits = isAbsolute(project) ? list.filter((p) => same(p.path, normal(project))) : list.filter((p) => same(basename(p.path), project));
-  if (hits.length > 1) throw new Error(`${project} names ${hits.length} projects; give the absolute path. Running boards: ${names}`);
-  if (!hits.length) throw new Error(`${project} is not in projects.json. Running boards: ${names}`);
+  if (hits.length > 1) throw new Error(`${project} names ${hits.length} projects; give the absolute path. Registered boards: ${names}`);
+  if (!hits.length) throw new Error(`${project} is not in projects.json. Registered boards: ${names}`);
   const repo = hits[0].path;
-  const entry = live.find((e) => same(e.repo, repo));
-  if (!entry) throw new Error(`${basename(repo)} is not running. Running boards: ${names}`);
-  return { repo, name: basename(repo), entry };
+  const name = basename(repo);
+  const entry = running().find((e) => same(e.repo, repo));
+  if (!entry && gone(repo)) throw new Error(`${name} is missing: its folder ${repo} was deleted or moved. Registered boards: ${names}`);
+  return { repo, name, entry, names };
 }
 
 export async function fileOn(entry: Entry, name: string, f: Filing): Promise<unknown> {
