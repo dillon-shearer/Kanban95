@@ -1894,8 +1894,15 @@ mod tests {
         let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         std::env::set_var(UPDATE_URL, format!("http://127.0.0.1:{}/latest.json", closed.local_addr().unwrap().port()));
         drop(closed);
+        let scratch = std::env::temp_dir().join(format!("k95-update-check-{}.log", std::process::id()));
+        let _ = std::fs::remove_file(&scratch);
+        std::env::set_var("KANBAN95_SHELL_LOG", &scratch);
         check(app.handle().clone(), to, false);
+        std::env::remove_var("KANBAN95_SHELL_LOG");
         std::env::remove_var(UPDATE_URL);
+        let logged = std::fs::read_to_string(&scratch).unwrap_or_default();
+        let _ = std::fs::remove_file(&scratch);
+        assert!(logged.contains("update check failed"), "{logged}");
         daemon.set_nonblocking(true).unwrap();
         assert!(daemon.accept().is_err(), "a failed automatic check tells the daemon nothing");
     }
