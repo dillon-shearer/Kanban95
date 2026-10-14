@@ -385,7 +385,7 @@ export function writePreferences(value: unknown, repo?: string): string {
 export const projectsPath = () => join(boardHome(), 'projects.json');
 const DEFAULT_COLOUR = '#008080';
 const projectList = z.array(z.object({
-  path: z.string().refine(isAbsolute, 'must be an absolute path'),
+  path: z.string().refine((p) => isAbsolute(p) || foreign(p), 'must be an absolute path'),
   colour: z.union([z.string().regex(/^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i, 'must be #rgb or #rrggbb'), z.number().min(0).max(360)]),
 }).strict());
 export type Project = z.output<typeof projectList>[number];
@@ -400,6 +400,7 @@ export const volume = (p: string, path: PlatformPath = native) =>
   isWin(path) ? path.parse(p).root : /^\/(?:Volumes\/[^/]+|(?:run\/)?media\/[^/]+\/[^/]+)\//.exec(`${p}/`)?.[0];
 
 export const local = (p: string, path: PlatformPath = native) => (isWin(path) ? /^(?:[a-z]:[\\/]|[\\/]{2}[^\\/])/i.test(p) : p.startsWith('/'));
+export const foreign = (p: string, path: PlatformPath = native) => !isWin(path) && !local(p, path) && local(p, win32);
 
 const carried = () => (same(normal(boardHome()), normal(localHome())) ? undefined : volume(boardHome()));
 
@@ -457,9 +458,9 @@ function saveProjects(list: Project[]) {
 export function writeProjects(value: unknown, keep: string): Project[] {
   const r = projectList.safeParse(value);
   if (!r.success) throw invalid('projects.json', value, r.error);
-  const list = r.data.map((p) => ({ ...p, path: normal(p.path) }));
+  const list = r.data.map((p) => (foreign(p.path) ? p : { ...p, path: normal(p.path) }));
   for (const [i, p] of list.entries()) {
-    if (!statSync(p.path, { throwIfNoEntry: false })?.isDirectory()) throw new BadConfig(`projects.json: ${p.path} is not a folder`);
+    if (!foreign(p.path) && !statSync(p.path, { throwIfNoEntry: false })?.isDirectory()) throw new BadConfig(`projects.json: ${p.path} is not a folder`);
     if (list.findIndex((q) => same(q.path, p.path)) !== i) throw new BadConfig(`projects.json: ${p.path} is listed twice`);
   }
   if (!list.some((p) => same(p.path, normal(keep)))) throw new BadConfig(`projects.json: this board's own project ${normal(keep)} cannot be removed`);
