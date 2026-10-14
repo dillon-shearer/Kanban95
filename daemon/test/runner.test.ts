@@ -151,7 +151,7 @@ describe('runner', { timeout: 60_000 }, () => {
     const a = ticket('First');
     const b = ticket('Second');
     await setMax(1);
-    expect(await setRun(true)).toEqual({ on: true, concurrency: 1, running: [a], left: 1, backlog: 1, waits: [], stale: false, unpushed: 0 });
+    expect(await setRun(true)).toEqual({ on: true, concurrency: 1, running: [a], setup: [], left: 1, backlog: 1, waits: [], stale: false, unpushed: 0 });
     expect(t(b).status).toBe('backlog');
     expect(runs(b)).toEqual([]);
     await landed(a);
@@ -212,7 +212,7 @@ describe('runner', { timeout: 60_000 }, () => {
     for (const id of held) dep(id, gate);
     await setMax(1);
     await setRun(true);
-    expect(await setRun(false)).toEqual({ on: false, concurrency: 1, running: [a], left: 1, backlog: 4, waits: [], stale: false, unpushed: 0, cleared: 2 });
+    expect(await setRun(false)).toEqual({ on: false, concurrency: 1, running: [a], setup: [], left: 1, backlog: 4, waits: [], stale: false, unpushed: 0, cleared: 2 });
     expect(held.map((id) => t(id).flags.blocked_on_deps)).toEqual([false, false]);
     expect((await request('PUT', '/api/runner', { on: 'yes' })).status).toBe(400);
     await landed(a);

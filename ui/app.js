@@ -188,6 +188,7 @@ function card(t) {
     ...(t.tags ? t.tags.split(' ').map((g) => badge(g, 'tag')) : []),
     t.template === 'housekeeping' && badge('housekeeping'),
     live(t.id).length > 0 && badge(runText(live(t.id)[0]), 'run'),
+    !live(t.id).length && runner.setup?.includes(t.id) && badge('setting up', 'run'),
     t.flags.needs_human && badge('needs human', 'flag'),
     t.flags.blocked && badge('blocked', 'blocked'),
     t.flags.blocked_on_deps && badge(`waits on #${t.depends_on.join(', #')}`, 'hold'),

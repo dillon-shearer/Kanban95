@@ -846,7 +846,8 @@ export function runnerState(b: Board) {
   const waits = [...overlaps(b, cs)].map(([id, on]) => ({ id, on }));
   const restart = b.restart === 'failed' ? 'failed' : b.shell && b.shutdown ? 'self' : 'manual';
   const r = runner(b);
-  return { ...r, concurrency: limit(b), running: running(b), left: cs.length, backlog: n, waits, stale: b.stale ?? false, unpushed: b.unpushed ?? 0,
+  const ids = running(b);
+  return { ...r, concurrency: limit(b), running: ids, setup: ids.filter(settingUp), left: cs.length, backlog: n, waits, stale: b.stale ?? false, unpushed: b.unpushed ?? 0,
     ...(b.release && { release: { pending: true, ...b.release } }), ...(b.stale === 'daemon' && { hold: { finish: toFinish(b), terminals: terminals(), restart } }), ...(b.gitError && { gitError: b.gitError }), ...(b.lowMemory && { lowMemory: { ...b.lowMemory, waiting: testersWaiting() } }) };
 }
 
