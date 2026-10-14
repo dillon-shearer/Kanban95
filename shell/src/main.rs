@@ -8,7 +8,7 @@ use std::io::{BufRead, BufReader};
 use std::process::{Child, ChildStdout, Command, Stdio};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant};
-use tauri::webview::{NewWindowResponse, PermissionKind, PermissionResponse};
+use tauri::webview::{NewWindowResponse, PageLoadEvent, PermissionKind, PermissionResponse};
 use tauri::{AppHandle, Manager, RunEvent, Runtime, Url, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent};
 use tauri_plugin_updater::{Update, Updater, UpdaterExt};
 
@@ -178,6 +178,8 @@ const SPLASH: &str = "splash";
 
 const SPLASH_AFTER: Duration = Duration::from_millis(400);
 
+const SHOW_WAIT: Duration = Duration::from_secs(10);
+
 const CHECK_EVERY: Duration = Duration::from_secs(60 * 60);
 
 /// A command a daemon prints on stdout after its port line (docs/ARCHITECTURE.md -> Hosted boards).
@@ -264,6 +266,7 @@ struct Board {
     restarting: Option<u64>,
     pending: Option<Child>,
     stopping: Option<Instant>,
+    waiting: Option<Instant>,
 }
 
 #[derive(Default)]
@@ -271,6 +274,7 @@ struct Table {
     boards: BTreeMap<String, Board>,
     main: String,
     opening: BTreeSet<String>,
+    splash: bool,
     closing: Vec<(Child, Instant)>,
     done: bool,
     restarts: u64,
@@ -364,7 +368,7 @@ impl Host {
                 }
             }
         });
-        Board { child: s.child, port: s.port, secret: s.secret, place, crashed, restarting: None, pending: None, stopping: None }
+        Board { child: s.child, port: s.port, secret: s.secret, place, crashed, restarting: None, pending: None, stopping: None, waiting: None }
     }
 
     fn restart(self: &Arc<Self>, repo: String, gen: u64, requested: bool) {
@@ -443,16 +447,21 @@ impl Host {
                 (rx.recv().unwrap_or_else(|_| Err("The Kanban95 daemon's handshake was lost.".into())), true)
             }
         };
-        let gone = splash.then_some(Effect::Splash(false));
         match shake {
             Ok((port, lines)) => {
                 self.first(&repo, Started { child, port, secret, lines });
-                let created = open(&repo, &lock(&self.table).boards[&repo]);
-                let shown = Effect::Show { label: label(&repo), like: None };
-                self.emit([Some(created), Some(shown), gone].into_iter().flatten().collect());
+                let created = {
+                    let mut t = lock(&self.table);
+                    t.splash = splash;
+                    let b = t.boards.get_mut(&repo).expect("hosted");
+                    b.waiting = Some(Instant::now() + SHOW_WAIT);
+                    open(&repo, b)
+                };
+                self.emit(vec![created]);
                 true
             }
             Err(e) => {
+                let gone = splash.then_some(Effect::Splash(false));
                 let _ = child.kill();
                 let _ = child.wait();
                 self.emit(gone.into_iter().chain([Effect::Error(e), Effect::Exit(1)]).collect());
@@ -469,7 +478,9 @@ impl Host {
             return;
         }
         let place = t.boards.get(&repo).map(|b| b.place);
+        let waiting = t.boards.get(&repo).is_some_and(|b| b.waiting.is_some());
         match (verb, place) {
+            (Verb::Open | Verb::Switch | Verb::Popout | Verb::Dock, Some(_)) if waiting => eprintln!("[shell] ignored {verb:?} for {repo}: its page is still loading"),
             (Verb::Open | Verb::Popout, Some(Place::Own)) => fx.push(Effect::Focus(label(&repo))),
             (Verb::Open | Verb::Switch, Some(Place::Docked)) => take_main(&mut t, &repo, &mut fx),
             (Verb::Open, None) => {
@@ -481,7 +492,7 @@ impl Host {
             }
             (Verb::Popout, Some(Place::Docked)) => {
                 if t.main == repo {
-                    let Some(other) = t.boards.iter().find(|(r, b)| **r != repo && b.place == Place::Docked).map(|(r, _)| r.clone()) else {
+                    let Some(other) = t.boards.iter().find(|(r, b)| **r != repo && b.place == Place::Docked && b.waiting.is_none()).map(|(r, _)| r.clone()) else {
                         eprintln!("[shell] {repo} is the only board in the main window; it stays there");
                         return;
                     };
@@ -558,10 +569,10 @@ impl Host {
                 let _ = s.child.wait();
             }
             Ok(s) => {
-                let b = self.board(s, Place::Docked, false, false);
+                let mut b = self.board(s, Place::Docked, false, false);
+                b.waiting = Some(Instant::now() + SHOW_WAIT);
                 fx.push(open(&repo, &b));
                 t.boards.insert(repo.clone(), b);
-                take_main(&mut t, &repo, &mut fx);
                 self.sync(&t);
             }
             Err(e) => {
@@ -575,11 +586,34 @@ impl Host {
         self.emit(fx);
     }
 
+    /// A board window's page finished loading: a new board waiting for it takes the main window.
+    fn loaded(&self, window: &str) {
+        let mut fx = vec![];
+        let mut t = lock(&self.table);
+        if t.done {
+            return;
+        }
+        if let Some(repo) = t.boards.iter().find(|(r, b)| b.waiting.is_some() && label(r) == window).map(|(r, _)| r.clone()) {
+            self.reveal(&mut t, &repo, &mut fx);
+        }
+        drop(t);
+        self.emit(fx);
+    }
+
+    fn reveal(&self, t: &mut Table, repo: &str, fx: &mut Vec<Effect>) {
+        t.boards.get_mut(repo).expect("hosted").waiting = None;
+        take_main(t, repo, fx);
+        if std::mem::take(&mut t.splash) {
+            fx.push(Effect::Splash(false));
+        }
+    }
+
     /// Drops a board from the table and closes its window; if it was the shown docked board, another takes its place.
     fn remove(&self, t: &mut Table, repo: &str, fx: &mut Vec<Effect>) -> Option<Board> {
         let b = t.boards.remove(repo)?;
         if t.main == repo {
-            let next = t.boards.iter().find(|(_, b)| b.place == Place::Docked).or_else(|| t.boards.iter().next());
+            let mut ready = t.boards.iter().filter(|(_, b)| b.waiting.is_none());
+            let next = ready.clone().find(|(_, b)| b.place == Place::Docked).or_else(|| ready.next());
             if let Some(next) = next.map(|(r, _)| r.clone()) {
                 let nb = t.boards.get_mut(&next).expect("hosted");
                 if nb.place == Place::Own {
@@ -647,6 +681,11 @@ impl Host {
         for (repo, b) in t.boards.iter_mut().filter(|(_, b)| b.restarting.is_none() && b.stopping.is_some_and(|until| now >= until)) {
             eprintln!("[shell] {repo}: daemon did not stop in {STOP_WAIT:?} for its restart; killing it");
             let _ = b.child.kill();
+        }
+        let late: Vec<_> = t.boards.iter().filter(|(_, b)| b.waiting.is_some_and(|until| now >= until)).map(|(r, _)| r.clone()).collect();
+        for repo in late {
+            eprintln!("[shell] {repo}: the page did not load in {SHOW_WAIT:?}; showing its window anyway");
+            self.reveal(&mut t, &repo, &mut fx);
         }
         let exited: Vec<_> = t
             .boards
@@ -1124,6 +1163,13 @@ fn window<R: Runtime, M: Manager<R>>(app: &M, label: &str, url: Url, title: Stri
             PermissionKind::Microphone => PermissionResponse::Allow,
             _ => PermissionResponse::Deny,
         })
+        .on_page_load(|w, load| {
+            if load.event() == PageLoadEvent::Finished {
+                if let Some(host) = w.try_state::<Arc<Host>>() {
+                    host.loaded(w.label());
+                }
+            }
+        })
         .build()
 }
 
@@ -1600,6 +1646,12 @@ mod tests {
         lock(&host.table).boards.iter().map(|(r, b)| (r.clone(), b.place)).collect()
     }
 
+    fn open_loaded(host: &Arc<Host>, repo: &str) {
+        host.command(Verb::Open, repo, None);
+        until("the board", || hosted(host).iter().any(|(r, _)| r == repo));
+        host.loaded(&label(repo));
+    }
+
     #[test]
     fn parses_every_command_and_nothing_else() {
         assert_eq!(parse("KANBAN95 open=C:\\a b\\c"), Some((Verb::Open, "C:\\a b\\c")));
@@ -1686,7 +1738,9 @@ mod tests {
             _ => format!("{}{}", save_shell_id(&file), up(41002, "")),
         });
         host.first("k95-a", host.start("k95-a").unwrap());
-        until("the second board", || shown(&seen).contains(&(label("k95-b"), Some(label("k95-a")))));
+        until("the second board", || hosted(&host).len() == 2);
+        host.loaded(&label("k95-b"));
+        assert!(shown(&seen).contains(&(label("k95-b"), Some(label("k95-a")))));
         assert_eq!(std::fs::read_to_string(&id_file).unwrap().trim(), std::process::id().to_string());
         assert_eq!(hosted(&host), [("k95-a".into(), Place::Docked), ("k95-b".into(), Place::Docked)]);
         assert_eq!(lock(&host.table).main, "k95-b");
@@ -1732,8 +1786,9 @@ mod tests {
         host.command(Verb::Open, "k95-b", None);
         until("the second board", || hosted(&host).len() == 2);
         let fx = take(&seen);
-        assert!(matches!(&fx[..], [Effect::Open { label: b, url, .. }, ..] if *b == label("k95-b") && url.port() == Some(41002) && url.fragment().is_none()), "{fx:?}");
-        assert_eq!(fx[1..], [show("k95-b", Some("k95-a")), Effect::Hide(label("k95-a"))]);
+        assert!(matches!(&fx[..], [Effect::Open { label: b, url, .. }] if *b == label("k95-b") && url.port() == Some(41002) && url.fragment().is_none()), "{fx:?}");
+        host.loaded(&label("k95-b"));
+        assert_eq!(take(&seen), [show("k95-b", Some("k95-a")), Effect::Hide(label("k95-a"))]);
 
         host.command(Verb::Switch, "k95-a", None);
         assert_eq!(take(&seen), [show("k95-a", Some("k95-b")), Effect::Hide(label("k95-b"))]);
@@ -1749,8 +1804,7 @@ mod tests {
     fn switch_popout_and_dock_move_boards_between_the_windows() {
         let (host, seen) = host(|repo, _| up(if repo == "k95-a" { 41001 } else { 41002 }, ""));
         host.first("k95-a", host.start("k95-a").unwrap());
-        host.command(Verb::Open, "k95-b", None);
-        until("the second board", || hosted(&host).len() == 2);
+        open_loaded(&host, "k95-b");
         let b_pid = pid(&host, "k95-b");
         host.command(Verb::Switch, "k95-a", None);
         take(&seen);
@@ -1790,8 +1844,7 @@ mod tests {
         let (host, seen) = host(|repo, _| up(41000 + repo.len() as u16, ""));
         host.first("k95-a", host.start("k95-a").unwrap());
         for repo in ["k95-bb", "k95-ccc"] {
-            host.command(Verb::Open, repo, None);
-            until("the board", || hosted(&host).iter().any(|(r, _)| r == repo));
+            open_loaded(&host, repo);
         }
         host.command(Verb::Popout, "k95-a", None);
         take(&seen);
@@ -1829,7 +1882,7 @@ mod tests {
         });
         host.first("k95-a", host.start("k95-a").unwrap());
         let a = pid(&host, "k95-a");
-        host.command(Verb::Open, "k95-b", None);
+        open_loaded(&host, "k95-b");
         until("the crashing board to be dropped", || {
             host.tick();
             lock(&seen).iter().any(|f| matches!(f, Effect::Error(_)))
@@ -1858,8 +1911,7 @@ mod tests {
         });
         host.first("k95-a", host.start("k95-a").unwrap());
         let a = pid(&host, "k95-a");
-        host.command(Verb::Open, "k95-b", None);
-        until("the second board", || hosted(&host).len() == 2);
+        open_loaded(&host, "k95-b");
         host.command(Verb::Switch, "k95-a", None);
         let b = pid(&host, "k95-b");
         take(&seen);
@@ -1897,8 +1949,7 @@ mod tests {
     fn shutdown_kills_every_daemon_and_stops_the_supervisor() {
         let (host, _) = host(|repo, _| up(if repo == "k95-a" { 41001 } else { 41002 }, ""));
         host.first("k95-a", host.start("k95-a").unwrap());
-        host.command(Verb::Open, "k95-b", None);
-        until("the second board", || hosted(&host).len() == 2);
+        open_loaded(&host, "k95-b");
         let pids = [pid(&host, "k95-a"), pid(&host, "k95-b")];
         host.command(Verb::Popout, "k95-b", None);
         host.shutdown();
@@ -1927,6 +1978,7 @@ mod tests {
             stalled(&host, "k95-b").is_some()
         });
         let p = stalled(&host, "k95-b").unwrap();
+        host.loaded(&label("k95-b"));
         let began = Instant::now();
         assert!(host.tick());
         host.command(Verb::Switch, "k95-a", None);
@@ -2175,10 +2227,16 @@ mod tests {
     const PAUSE: &str = "sleep 1;";
 
     #[test]
-    fn the_splash_shows_only_after_400_ms_and_goes_before_the_board_or_the_error() {
+    fn the_splash_shows_only_after_400_ms_and_goes_after_the_board_is_shown_or_before_the_error() {
         let boot = |line: String| {
             let (host, seen) = host(|_, _| unreachable!());
             let ok = host.boot("k95-a".into(), spawn(stand_in(line)).unwrap(), Instant::now());
+            if ok {
+                assert!(!lock(&seen).iter().any(|f| matches!(f, Effect::Show { .. } | Effect::Splash(false))), "no show before the page loaded");
+                assert!(host.tick());
+                assert!(!lock(&seen).iter().any(|f| matches!(f, Effect::Show { .. } | Effect::Splash(false))), "no show before the page loaded");
+                host.loaded(&label("k95-a"));
+            }
             let fx: Vec<String> = std::mem::take(&mut *lock(&seen))
                 .into_iter()
                 .map(|f| match f {
@@ -2206,6 +2264,55 @@ mod tests {
         let (ok, hosted, fx) = boot(format!("{PAUSE}echo nope"));
         assert!(!ok && hosted == 0);
         assert_eq!(fx, ["splash true", "splash false", "error", "exit 1"]);
+    }
+
+    #[test]
+    fn a_new_board_is_shown_only_once_its_page_loaded_and_a_board_that_never_loads_after_the_fallback() {
+        let (host, seen) = host(|repo, _| up(41000 + repo.len() as u16, ""));
+        host.first("k95-a", host.start("k95-a").unwrap());
+        host.command(Verb::Open, "k95-bb", None);
+        until("the second board", || hosted(&host).len() == 2);
+        assert!(host.tick());
+        let fx = take(&seen);
+        assert!(matches!(&fx[..], [Effect::Open { label: b, .. }] if *b == label("k95-bb")), "{fx:?}");
+        assert_eq!(lock(&host.table).main, "k95-a");
+        host.command(Verb::Switch, "k95-bb", None);
+        host.loaded(&label("k95-a"));
+        assert!(take(&seen).is_empty(), "a switch to it or another board's load shows nothing");
+        host.loaded(&label("k95-bb"));
+        assert_eq!(take(&seen), [show("k95-bb", Some("k95-a")), Effect::Hide(label("k95-a"))]);
+        assert_eq!(lock(&host.table).main, "k95-bb");
+        host.loaded(&label("k95-bb"));
+        assert!(take(&seen).is_empty(), "a later load of a shown board changes nothing");
+
+        let began = Instant::now();
+        host.command(Verb::Open, "k95-ccc", None);
+        until("the third board", || hosted(&host).len() == 3);
+        let end = began + SHOW_WAIT + Duration::from_secs(5);
+        while shown(&seen).is_empty() {
+            assert!(Instant::now() < end, "not shown within the fallback");
+            assert!(host.tick());
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        assert!(began.elapsed() >= SHOW_WAIT, "shown before the fallback: {:?}", began.elapsed());
+        assert_eq!(take(&seen)[1..], [show("k95-ccc", Some("k95-bb")), Effect::Hide(label("k95-bb"))]);
+        assert_eq!(lock(&host.table).main, "k95-ccc");
+        host.shutdown();
+    }
+
+    #[test]
+    fn closing_a_board_still_waiting_to_be_shown_drops_its_show_and_keeps_main() {
+        let (host, seen) = host(|repo, _| up(41000 + repo.len() as u16, ""));
+        host.first("k95-a", host.start("k95-a").unwrap());
+        host.command(Verb::Open, "k95-bb", None);
+        until("the second board", || hosted(&host).len() == 2);
+        take(&seen);
+        host.command(Verb::Close, "k95-bb", None);
+        host.loaded(&label("k95-bb"));
+        assert!(host.tick());
+        assert_eq!(take(&seen), [Effect::Close(label("k95-bb"))]);
+        assert_eq!((hosted(&host), lock(&host.table).main.clone()), (vec![("k95-a".into(), Place::Docked)], "k95-a".into()));
+        host.shutdown();
     }
 
     #[test]
