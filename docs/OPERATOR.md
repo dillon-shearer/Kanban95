@@ -28,6 +28,8 @@ To change the data folder later, use **Settings → Board → Data folder** (Set
 
 The error box ends with "Details:" and the path of the shell log: `%LOCALAPPDATA%\Kanban95\shell.log` on Windows, `~/Library/Logs/Kanban95/shell.log` on macOS. It holds one timestamped line per failure that stopped a board or an update (Node.js missing, a daemon that did not start or kept stopping, a window that would not open, a failed update) and nothing else. Read the last lines, or send them along with a bug report; they hold no keys or secrets.
 
+On macOS, if the message says a project or data folder "is on a drive mounted read-only", the drive is most likely NTFS: macOS mounts NTFS read-only and the board cannot write its database there. Reformat the drive as exFAT, which works on both Windows and macOS.
+
 ## A full cycle
 
 ### 1. Brainstorm
@@ -232,7 +234,7 @@ If something cannot be done, the status bar says why. Below the projects, after 
 
 ## A carried drive
 
-You can keep the repo and the data folder on one external drive and move it between a Windows PC and a Mac. The board needs the main checkout to have no uncommitted changes to tracked files: it forks every ticket from it and merges back into it. On a drive formatted exFAT (not APFS), macOS adds files the board guards against:
+You can keep the repo and the data folder on one external drive and move it between a Windows PC and a Mac. Format it exFAT, not NTFS: macOS mounts NTFS read-only, and a board whose repo or data folder is there will not start (the error names the folder and says the drive is mounted read-only). The board needs the main checkout to have no uncommitted changes to tracked files: it forks every ticket from it and merges back into it. On a drive formatted exFAT (not APFS), macOS adds files the board guards against:
 
 - `._*` and `.DS_Store`: macOS writes a `._<name>` file beside every file and a `.DS_Store` in folders. Keep both lines in the repo's `.gitignore` (Kanban95's own has them) so they never show in `git status` or get committed.
 - File modes: exFAT has none, so every file can look modified. When a board starts on a Mac and the repo is on a volume that is not APFS or HFS, it sets `core.fileMode false` in the repo if you have not set it, and logs one line. On Windows nothing changes.
