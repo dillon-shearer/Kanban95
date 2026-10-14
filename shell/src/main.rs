@@ -1,6 +1,6 @@
-// Kanban95 shell: hosts one daemon per open project, shows one in the main window and popped-out ones in their own
-// windows, restarts a daemon once if it dies, shows an error dialog when one cannot run, and takes every daemon and
-// WebView2 down with it on every exit path.
+// Kanban95 shell: hosts one daemon per open project, keeps one window per board, shows one docked board at a time and
+// popped-out ones beside it, restarts a daemon once if it dies, shows an error dialog when one cannot run, and takes
+// every daemon and WebView2 down with it on every exit path.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -174,8 +174,6 @@ const RESTART_REQUESTED: i32 = 75;
 /// How long a closed daemon gets to shut down after stdin EOF, as the daemon's own cap, before it is killed.
 const STOP_WAIT: Duration = Duration::from_secs(15);
 
-const MAIN: &str = "main";
-
 const SPLASH: &str = "splash";
 
 const SPLASH_AFTER: Duration = Duration::from_millis(400);
@@ -235,8 +233,11 @@ struct Daemon {
 /// What the host asks of the windows and the updater, applied by `apply` in the app and recorded in tests.
 #[derive(Debug, PartialEq)]
 enum Effect {
-    Show { label: String, url: Url, title: String },
     Open { label: String, url: Url, title: String },
+    Show { label: String, like: Option<String> },
+    Hide(String),
+    Navigate { label: String, url: Url, title: String },
+    Own(String, bool),
     Focus(String),
     Close(String),
     Splash(bool),
@@ -296,13 +297,20 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-/// A popped-out window's label, from the repo path.
+/// A board's window label, from the repo path.
 fn label(repo: &str) -> String {
     format!("board-{}", fnv(repo))
 }
 
-fn show(label: &str, repo: &str, b: &Board) -> Effect {
-    Effect::Show { label: label.into(), url: url(b.port, &b.secret, b.place), title: title(Some(repo.into())) }
+fn open(repo: &str, b: &Board) -> Effect {
+    Effect::Open { label: label(repo), url: url(b.port, &b.secret, b.place), title: title(Some(repo.into())) }
+}
+
+fn take_main(t: &mut Table, repo: &str, fx: &mut Vec<Effect>) {
+    let like = (t.main != repo && t.boards.contains_key(&t.main)).then(|| label(&t.main));
+    fx.push(Effect::Show { label: label(repo), like: like.clone() });
+    fx.extend(like.map(Effect::Hide));
+    t.main = repo.into();
 }
 
 impl Host {
@@ -394,11 +402,7 @@ impl Host {
             (Ok((port, secret, lines)), Some(child)) => {
                 let (place, crashed) = (old.place, old.crashed);
                 let b = self.board(Started { child, port, secret, lines }, place, crashed, requested);
-                match place {
-                    Place::Own => fx.push(show(&label(repo), repo, &b)),
-                    Place::Docked if t.main == repo => fx.push(show(MAIN, repo, &b)),
-                    Place::Docked => {}
-                }
+                fx.push(Effect::Navigate { label: label(repo), url: url(b.port, &b.secret, place), title: title(Some(repo.into())) });
                 t.boards.insert(repo.into(), b);
                 self.sync(&t);
             }
@@ -442,9 +446,10 @@ impl Host {
         let gone = splash.then_some(Effect::Splash(false));
         match shake {
             Ok((port, lines)) => {
-                let main = url(port, &secret, Place::Docked);
                 self.first(&repo, Started { child, port, secret, lines });
-                self.emit([Some(Effect::Open { label: MAIN.into(), url: main, title: title(Some(repo)) }), gone].into_iter().flatten().collect());
+                let created = open(&repo, &lock(&self.table).boards[&repo]);
+                let shown = Effect::Show { label: label(&repo), like: None };
+                self.emit([Some(created), Some(shown), gone].into_iter().flatten().collect());
                 true
             }
             Err(e) => {
@@ -466,10 +471,7 @@ impl Host {
         let place = t.boards.get(&repo).map(|b| b.place);
         match (verb, place) {
             (Verb::Open | Verb::Popout, Some(Place::Own)) => fx.push(Effect::Focus(label(&repo))),
-            (Verb::Open | Verb::Switch, Some(Place::Docked)) => {
-                fx.push(show(MAIN, &repo, &t.boards[&repo]));
-                t.main = repo;
-            }
+            (Verb::Open | Verb::Switch, Some(Place::Docked)) => take_main(&mut t, &repo, &mut fx),
             (Verb::Open, None) => {
                 if t.opening.insert(repo.clone()) {
                     let host = self.clone();
@@ -483,19 +485,17 @@ impl Host {
                         eprintln!("[shell] {repo} is the only board in the main window; it stays there");
                         return;
                     };
-                    fx.push(show(MAIN, &other, &t.boards[&other]));
+                    fx.push(Effect::Show { label: label(&other), like: Some(label(&repo)) });
                     t.main = other;
                 }
-                let b = t.boards.get_mut(&repo).expect("hosted");
-                b.place = Place::Own;
-                fx.push(Effect::Open { label: label(&repo), url: url(b.port, &b.secret, b.place), title: title(Some(repo.clone())) });
+                t.boards.get_mut(&repo).expect("hosted").place = Place::Own;
+                fx.push(Effect::Own(label(&repo), true));
+                fx.push(Effect::Show { label: label(&repo), like: None });
             }
             (Verb::Dock, Some(Place::Own)) => {
-                let b = t.boards.get_mut(&repo).expect("hosted");
-                b.place = Place::Docked;
-                fx.push(Effect::Close(label(&repo)));
-                fx.push(show(MAIN, &repo, b));
-                t.main = repo;
+                t.boards.get_mut(&repo).expect("hosted").place = Place::Docked;
+                fx.push(Effect::Own(label(&repo), false));
+                take_main(&mut t, &repo, &mut fx);
             }
             (Verb::Close, Some(_)) => self.close(&mut t, &repo, &mut fx),
             (Verb::Restart, Some(_)) => {
@@ -542,10 +542,7 @@ impl Host {
             if t.done {
                 return;
             }
-            match t.boards.iter().find(|(_, b)| b.port == to.port) {
-                Some((repo, b)) if b.place == Place::Own => label(repo),
-                _ => MAIN.into(),
-            }
+            label(t.boards.iter().find(|(_, b)| b.port == to.port).map_or(&t.main, |(repo, _)| repo))
         };
         self.emit(vec![Effect::Pick { to: to.clone(), window, folder, token: token.into() }]);
     }
@@ -562,9 +559,9 @@ impl Host {
             }
             Ok(s) => {
                 let b = self.board(s, Place::Docked, false, false);
-                fx.push(show(MAIN, &repo, &b));
+                fx.push(open(&repo, &b));
                 t.boards.insert(repo.clone(), b);
-                t.main = repo;
+                take_main(&mut t, &repo, &mut fx);
                 self.sync(&t);
             }
             Err(e) => {
@@ -578,24 +575,22 @@ impl Host {
         self.emit(fx);
     }
 
-    /// Drops a board from the table, closes its own window, and moves the main window off it if it showed it.
+    /// Drops a board from the table and closes its window; if it was the shown docked board, another takes its place.
     fn remove(&self, t: &mut Table, repo: &str, fx: &mut Vec<Effect>) -> Option<Board> {
         let b = t.boards.remove(repo)?;
-        if b.place == Place::Own {
-            fx.push(Effect::Close(label(repo)));
-        }
         if t.main == repo {
             let next = t.boards.iter().find(|(_, b)| b.place == Place::Docked).or_else(|| t.boards.iter().next());
             if let Some(next) = next.map(|(r, _)| r.clone()) {
                 let nb = t.boards.get_mut(&next).expect("hosted");
                 if nb.place == Place::Own {
                     nb.place = Place::Docked;
-                    fx.push(Effect::Close(label(&next)));
+                    fx.push(Effect::Own(label(&next), false));
                 }
-                fx.push(show(MAIN, &next, nb));
+                fx.push(Effect::Show { label: label(&next), like: Some(label(repo)) });
                 t.main = next;
             }
         }
+        fx.push(Effect::Close(label(repo)));
         self.sync(t);
         Some(b)
     }
@@ -618,10 +613,10 @@ impl Host {
         if t.done {
             return;
         }
-        let repo = t.boards.iter().find(|(r, b)| b.place == Place::Own && label(r) == window).map(|(r, _)| r.clone());
-        if let Some(repo) = repo {
-            t.boards.get_mut(&repo).expect("hosted").place = Place::Docked;
-            self.close(&mut t, &repo, &mut fx);
+        match t.boards.iter().find(|(r, _)| label(r) == window).map(|(r, b)| (r.clone(), b.place)) {
+            Some((repo, Place::Own)) => self.close(&mut t, &repo, &mut fx),
+            Some((_, Place::Docked)) => fx.push(Effect::Exit(0)),
+            None => {}
         }
         drop(t);
         self.emit(fx);
@@ -1106,13 +1101,14 @@ fn splash<R: Runtime, M: Manager<R>>(app: &M) -> tauri::Result<WebviewWindow<R>>
         .build()
 }
 
-/// A board window, locked to the hosted daemons' origins. It holds no Tauri capability (there is no `capabilities/`
-/// dir), so every IPC command is refused for it: the UI talks to the daemon over HTTP and never calls Tauri.
+/// A board window, hidden until shown, locked to the hosted daemons' origins. It holds no Tauri capability (there is no
+/// `capabilities/` dir), so every IPC command is refused for it: the UI talks to the daemon over HTTP and never calls Tauri.
 fn window<R: Runtime, M: Manager<R>>(app: &M, label: &str, url: Url, title: String, ports: Ports) -> tauri::Result<WebviewWindow<R>> {
     WebviewWindowBuilder::new(app, label, WebviewUrl::External(url))
         .title(title)
         .data_directory(data_dir(app)?)
         .inner_size(1280.0, 720.0)
+        .visible(false)
         // Any top-level navigation off a hosted daemon's origin is cancelled, and the CSP keeps frames and fetches on
         // the origin. No new window opens: an https one goes to the system browser, anything else is dropped.
         .on_navigation(move |to| on_daemon(to, &lock(&ports)))
@@ -1137,11 +1133,7 @@ fn window<R: Runtime, M: Manager<R>>(app: &M, label: &str, url: Url, title: Stri
 #[cfg(windows)]
 fn follow_page_fullscreen<R: Runtime>(w: &WebviewWindow<R>) {
     use std::{cell::Cell, rc::Rc};
-    use webview2_com::{
-        CallDevToolsProtocolMethodCompletedHandler, ContainsFullScreenElementChangedEventHandler,
-        NavigationCompletedEventHandler, NavigationStartingEventHandler,
-    };
-    use windows_core::w;
+    use webview2_com::{ContainsFullScreenElementChangedEventHandler, NavigationCompletedEventHandler, NavigationStartingEventHandler};
     let win = w.clone();
     let _ = w.with_webview(move |wv| {
         // SAFETY: COM calls on the live controller, on the main thread where with_webview runs this.
@@ -1175,12 +1167,7 @@ fn follow_page_fullscreen<R: Runtime>(w: &WebviewWindow<R>) {
                 let mut full = windows_core::BOOL::default();
                 core.ContainsFullScreenElement(&mut full)?;
                 if !full.as_bool() && win.is_fullscreen().unwrap_or(false) {
-                    let done = CallDevToolsProtocolMethodCompletedHandler::create(Box::new(|_, _| Ok(())));
-                    core.CallDevToolsProtocolMethod(
-                        w!("Runtime.evaluate"),
-                        w!(r#"{"expression":"document.documentElement.requestFullscreen()","userGesture":true}"#),
-                        &done,
-                    )?;
+                    set_page_fullscreen(&core, true)?;
                 }
                 Ok(())
             }));
@@ -1190,6 +1177,109 @@ fn follow_page_fullscreen<R: Runtime>(w: &WebviewWindow<R>) {
 }
 #[cfg(not(windows))]
 fn follow_page_fullscreen<R: Runtime>(_: &WebviewWindow<R>) {}
+
+#[cfg(windows)]
+unsafe fn set_page_fullscreen(core: &webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2, full: bool) -> windows_core::Result<()> {
+    use webview2_com::CallDevToolsProtocolMethodCompletedHandler;
+    use windows_core::w;
+    let done = CallDevToolsProtocolMethodCompletedHandler::create(Box::new(|_, _| Ok(())));
+    let call = if full {
+        w!(r#"{"expression":"document.documentElement.requestFullscreen()","userGesture":true}"#)
+    } else {
+        w!(r#"{"expression":"document.fullscreenElement && document.exitFullscreen()"}"#)
+    };
+    core.CallDevToolsProtocolMethod(w!("Runtime.evaluate"), call, &done)
+}
+
+#[cfg(windows)]
+fn page_fullscreen<R: Runtime>(w: &WebviewWindow<R>, full: bool) {
+    let _ = w.with_webview(move |wv| {
+        // SAFETY: COM calls on the live controller, on the main thread where with_webview runs this.
+        unsafe {
+            if let Ok(core) = wv.controller().CoreWebView2() {
+                let _ = set_page_fullscreen(&core, full);
+            }
+        }
+    });
+}
+#[cfg(not(windows))]
+fn page_fullscreen<R: Runtime>(_: &WebviewWindow<R>, _: bool) {}
+
+#[cfg(windows)]
+fn no_transitions<R: Runtime>(w: &WebviewWindow<R>) {
+    use windows_sys::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_TRANSITIONS_FORCEDISABLED};
+    if let Ok(hwnd) = w.hwnd() {
+        let off: i32 = 1;
+        // SAFETY: a live window handle and a 4-byte BOOL that outlives the call.
+        unsafe { DwmSetWindowAttribute(hwnd.0 as _, DWMWA_TRANSITIONS_FORCEDISABLED as _, &off as *const i32 as _, 4) };
+    }
+}
+#[cfg(not(windows))]
+fn no_transitions<R: Runtime>(_: &WebviewWindow<R>) {}
+
+#[cfg(target_os = "macos")]
+fn leave_fullscreen<R: Runtime>(w: &WebviewWindow<R>) {
+    use objc2_foundation::NSString;
+    use objc2_web_kit::{WKFullscreenState, WKWebView};
+    let page_full = |w: &WebviewWindow<R>| {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let _ = w.with_webview(move |wv| {
+            let state = unsafe { (*wv.inner().cast::<WKWebView>()).fullscreenState() };
+            let _ = tx.send(state != WKFullscreenState::NotInFullscreen);
+        });
+        rx.recv_timeout(Duration::from_secs(1)).unwrap_or(false)
+    };
+    let full = |w: &WebviewWindow<R>| w.is_fullscreen().unwrap_or(false) || page_full(w);
+    if !full(w) {
+        return;
+    }
+    let _ = w.with_webview(|wv| unsafe {
+        let js = NSString::from_str("document.fullscreenElement && document.exitFullscreen();0");
+        (*wv.inner().cast::<WKWebView>()).evaluateJavaScript_completionHandler(&js, None);
+    });
+    let _ = w.set_fullscreen(false);
+    let end = Instant::now() + Duration::from_secs(2);
+    while full(w) && Instant::now() < end {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+#[cfg(not(target_os = "macos"))]
+fn leave_fullscreen<R: Runtime>(_: &WebviewWindow<R>) {}
+
+fn take_place<R: Runtime>(b: &WebviewWindow<R>, a: &WebviewWindow<R>) {
+    if a.is_minimized().unwrap_or(false) {
+        return;
+    }
+    leave_fullscreen(a);
+    leave_fullscreen(b);
+    let full = a.is_fullscreen().unwrap_or(false);
+    if !full && b.is_fullscreen().unwrap_or(false) {
+        let _ = b.set_fullscreen(false);
+        page_fullscreen(b, false);
+    }
+    let (Ok(at), Ok(size)) = (a.outer_position(), a.inner_size()) else { return };
+    if full {
+        if !b.is_fullscreen().unwrap_or(false) {
+            let _ = b.set_fullscreen_on_monitor(tauri::PhysicalPosition::new(at.x as f64 + size.width as f64 / 2.0, at.y as f64 + size.height as f64 / 2.0));
+            page_fullscreen(b, true);
+        }
+    } else if a.is_maximized().unwrap_or(false) {
+        if !b.is_maximized().unwrap_or(false) {
+            let screen = |w: &WebviewWindow<R>| w.current_monitor().ok().flatten().map(|m| *m.position());
+            if screen(b) != screen(a) {
+                let _ = b.set_position(at);
+            }
+            let _ = b.maximize();
+        }
+    } else {
+        let _ = b.set_position(at);
+        let _ = b.set_size(size);
+    }
+}
+
+fn board_windows<R: Runtime>(app: &AppHandle<R>) -> Vec<WebviewWindow<R>> {
+    app.webview_windows().into_values().filter(|w| w.label() != SPLASH).collect()
+}
 
 #[cfg(target_os = "macos")]
 fn navigate_keeping_fullscreen<R: Runtime>(w: &WebviewWindow<R>, url: Url) {
@@ -1235,15 +1325,12 @@ fn navigate_keeping_fullscreen<R: Runtime>(w: &WebviewWindow<R>, url: Url) {
 
 fn apply<R: Runtime>(app: &AppHandle<R>, ports: &Ports, fx: Effect) {
     match fx {
-        Effect::Show { label, url, title } => {
-            if let Some(w) = app.get_webview_window(&label) {
-                let _ = w.set_title(&title);
-                navigate_keeping_fullscreen(&w, url);
-            }
-        }
         Effect::Open { label, url, title } => match window(app, &label, url, title, ports.clone()) {
-            Ok(w) => follow_page_fullscreen(&w),
-            Err(e) if label == MAIN => {
+            Ok(w) => {
+                follow_page_fullscreen(&w);
+                no_transitions(&w);
+            }
+            Err(e) if board_windows(app).is_empty() => {
                 error_dialog(&format!("Could not open the board window: {e}"));
                 app.exit(1);
             }
@@ -1253,6 +1340,33 @@ fn apply<R: Runtime>(app: &AppHandle<R>, ports: &Ports, fx: Effect) {
                 log(&log_path(), &line);
             }
         },
+        Effect::Show { label, like } => {
+            if let Some(w) = app.get_webview_window(&label) {
+                if let Some(a) = like.and_then(|l| app.get_webview_window(&l)) {
+                    take_place(&w, &a);
+                }
+                let _ = w.show();
+                let _ = w.unminimize();
+                let _ = w.set_focus();
+            }
+        }
+        Effect::Hide(label) => {
+            let shown = board_windows(app).into_iter().any(|w| w.label() != label && w.is_visible().unwrap_or(false));
+            if let (true, Some(w)) = (shown, app.get_webview_window(&label)) {
+                let _ = w.hide();
+            }
+        }
+        Effect::Navigate { label, url, title } => {
+            if let Some(w) = app.get_webview_window(&label) {
+                let _ = w.set_title(&title);
+                navigate_keeping_fullscreen(&w, url);
+            }
+        }
+        Effect::Own(label, own) => {
+            if let Some(w) = app.get_webview_window(&label) {
+                let _ = w.eval(if own { "history.replaceState(null, '', '#own')" } else { "history.replaceState(null, '', location.pathname + location.search)" });
+            }
+        }
         Effect::Splash(true) => {
             if let Err(e) = splash(app) {
                 let line = format!("[shell] could not open the splash: {e}");
@@ -1263,7 +1377,7 @@ fn apply<R: Runtime>(app: &AppHandle<R>, ports: &Ports, fx: Effect) {
         Effect::Splash(false) => {
             if let Some(w) = app.get_webview_window(SPLASH) {
                 let _ = w.hide();
-                if app.get_webview_window(MAIN).is_some() {
+                if !board_windows(app).is_empty() {
                     let _ = w.destroy();
                 }
             }
@@ -1346,8 +1460,7 @@ fn main() {
         })
         .on_window_event(|w, event| match event {
             WindowEvent::CloseRequested { api, .. } if w.label() == SPLASH => api.prevent_close(),
-            WindowEvent::Destroyed if w.label() == MAIN => w.app_handle().exit(0),
-            WindowEvent::Destroyed => w.state::<Arc<Host>>().window_closed(w.label()),
+            WindowEvent::Destroyed =>w.state::<Arc<Host>>().window_closed(w.label()),
             _ => {}
         })
         .build(tauri::generate_context!())
@@ -1441,14 +1554,32 @@ mod tests {
         }
     }
 
-    fn shown(seen: &Mutex<Vec<Effect>>) -> Vec<(String, u16)> {
+    fn shown(seen: &Mutex<Vec<Effect>>) -> Vec<(String, Option<String>)> {
         lock(seen)
             .iter()
             .filter_map(|f| match f {
-                Effect::Show { label, url, .. } => Some((label.clone(), url.port()?)),
+                Effect::Show { label, like } => Some((label.clone(), like.clone())),
                 _ => None,
             })
             .collect()
+    }
+
+    fn navigated(seen: &Mutex<Vec<Effect>>) -> Vec<(String, u16)> {
+        lock(seen)
+            .iter()
+            .filter_map(|f| match f {
+                Effect::Navigate { label, url, .. } => Some((label.clone(), url.port()?)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn take(seen: &Mutex<Vec<Effect>>) -> Vec<Effect> {
+        std::mem::take(&mut *lock(seen))
+    }
+
+    fn show(repo: &str, like: Option<&str>) -> Effect {
+        Effect::Show { label: label(repo), like: like.map(label) }
     }
 
     fn pid(host: &Host, repo: &str) -> u32 {
@@ -1517,7 +1648,7 @@ mod tests {
         let secret = lock(&host.table).boards["k95-a"].secret.clone();
         let (to, window, folder, token) = picks().remove(0);
         assert_eq!(picks().len(), 1);
-        assert_eq!((&to, window.as_str(), folder, token.as_str()), (&Daemon { port, secret: secret.clone() }, MAIN, true, "0a1b"));
+        assert_eq!((&to, window.as_str(), folder, token.as_str()), (&Daemon { port, secret: secret.clone() }, label("k95-a").as_str(), true, "0a1b"));
 
         let server = std::thread::spawn(move || {
             let mut reqs = vec![];
@@ -1555,7 +1686,7 @@ mod tests {
             _ => format!("{}{}", save_shell_id(&file), up(41002, "")),
         });
         host.first("k95-a", host.start("k95-a").unwrap());
-        until("the second board", || shown(&seen).contains(&(MAIN.into(), 41002)));
+        until("the second board", || shown(&seen).contains(&(label("k95-b"), Some(label("k95-a")))));
         assert_eq!(std::fs::read_to_string(&id_file).unwrap().trim(), std::process::id().to_string());
         assert_eq!(hosted(&host), [("k95-a".into(), Place::Docked), ("k95-b".into(), Place::Docked)]);
         assert_eq!(lock(&host.table).main, "k95-b");
@@ -1595,42 +1726,81 @@ mod tests {
     }
 
     #[test]
+    fn a_first_open_creates_the_boards_window_and_a_switch_shows_and_hides_kept_windows_without_navigating() {
+        let (host, seen) = host(|repo, _| up(if repo == "k95-a" { 41001 } else { 41002 }, ""));
+        host.first("k95-a", host.start("k95-a").unwrap());
+        host.command(Verb::Open, "k95-b", None);
+        until("the second board", || hosted(&host).len() == 2);
+        let fx = take(&seen);
+        assert!(matches!(&fx[..], [Effect::Open { label: b, url, .. }, ..] if *b == label("k95-b") && url.port() == Some(41002) && url.fragment().is_none()), "{fx:?}");
+        assert_eq!(fx[1..], [show("k95-b", Some("k95-a")), Effect::Hide(label("k95-a"))]);
+
+        host.command(Verb::Switch, "k95-a", None);
+        assert_eq!(take(&seen), [show("k95-a", Some("k95-b")), Effect::Hide(label("k95-b"))]);
+        host.command(Verb::Switch, "k95-b", None);
+        assert_eq!(take(&seen), [show("k95-b", Some("k95-a")), Effect::Hide(label("k95-a"))]);
+        host.command(Verb::Open, "k95-b", None);
+        assert_eq!(take(&seen), [show("k95-b", None)], "the shown board is only brought to the front");
+        assert_eq!(lock(&host.table).main, "k95-b");
+        host.shutdown();
+    }
+
+    #[test]
     fn switch_popout_and_dock_move_boards_between_the_windows() {
         let (host, seen) = host(|repo, _| up(if repo == "k95-a" { 41001 } else { 41002 }, ""));
         host.first("k95-a", host.start("k95-a").unwrap());
         host.command(Verb::Open, "k95-b", None);
         until("the second board", || hosted(&host).len() == 2);
         let b_pid = pid(&host, "k95-b");
-        let effects = |seen: &Mutex<Vec<Effect>>| std::mem::take(&mut *lock(seen));
-        effects(&seen);
-
         host.command(Verb::Switch, "k95-a", None);
-        assert_eq!(shown(&seen), [(MAIN.into(), 41001)]);
-        effects(&seen);
+        take(&seen);
 
         host.command(Verb::Popout, "k95-a", None);
-        let fx = effects(&seen);
-        assert!(matches!(&fx[..], [Effect::Show { label: main, .. }, Effect::Open { label: own, url, .. }] if main == MAIN && *own == label("k95-a") && url.port() == Some(41001) && url.fragment() == Some("own")), "{fx:?}");
+        assert_eq!(take(&seen), [show("k95-b", Some("k95-a")), Effect::Own(label("k95-a"), true), show("k95-a", None)]);
         assert_eq!(lock(&host.table).main, "k95-b");
 
         host.command(Verb::Popout, "k95-b", None);
-        assert!(effects(&seen).is_empty(), "the only docked board stays in the main window");
+        assert!(take(&seen).is_empty(), "the only docked board stays docked");
         assert_eq!(hosted(&host), [("k95-a".into(), Place::Own), ("k95-b".into(), Place::Docked)]);
 
+        host.command(Verb::Switch, "k95-b", None);
+        assert_eq!(take(&seen), [show("k95-b", None)], "a popped-out window is left as it is");
+
         host.command(Verb::Dock, "k95-a", None);
-        let fx = effects(&seen);
-        assert!(matches!(&fx[..], [Effect::Close(own), Effect::Show { label: main, url, .. }] if *own == label("k95-a") && main == MAIN && url.port() == Some(41001) && url.fragment().is_none()), "{fx:?}");
+        assert_eq!(take(&seen), [Effect::Own(label("k95-a"), false), show("k95-a", Some("k95-b")), Effect::Hide(label("k95-b"))]);
         assert_eq!(hosted(&host), [("k95-a".into(), Place::Docked), ("k95-b".into(), Place::Docked)]);
 
         host.command(Verb::Popout, "k95-b", None);
-        assert!(matches!(&effects(&seen)[..], [Effect::Open { .. }]));
+        assert_eq!(take(&seen), [Effect::Own(label("k95-b"), true), show("k95-b", None)], "a hidden board's window is shown as it was");
         host.window_closed(&label("k95-b"));
+        assert_eq!(take(&seen), [Effect::Close(label("k95-b"))]);
         assert_eq!(hosted(&host), [("k95-a".into(), Place::Docked)]);
         until("the popped-out board's daemon to stop", || {
             host.tick();
             !alive(b_pid)
         });
-        assert!(effects(&seen).is_empty(), "the main window stays on its board");
+        assert!(take(&seen).is_empty(), "the docked window stays on its board");
+        host.window_closed(&label("k95-a"));
+        assert_eq!(take(&seen), [Effect::Exit(0)], "closing the docked window exits the shell");
+        host.shutdown();
+    }
+
+    #[test]
+    fn close_board_closes_its_window_and_a_shown_one_gives_its_place_to_the_next() {
+        let (host, seen) = host(|repo, _| up(41000 + repo.len() as u16, ""));
+        host.first("k95-a", host.start("k95-a").unwrap());
+        for repo in ["k95-bb", "k95-ccc"] {
+            host.command(Verb::Open, repo, None);
+            until("the board", || hosted(&host).iter().any(|(r, _)| r == repo));
+        }
+        host.command(Verb::Popout, "k95-a", None);
+        take(&seen);
+
+        host.command(Verb::Close, "k95-bb", None);
+        assert_eq!(take(&seen), [Effect::Close(label("k95-bb"))], "a hidden board's window just closes");
+        host.command(Verb::Close, "k95-ccc", None);
+        assert_eq!(take(&seen), [Effect::Own(label("k95-a"), false), show("k95-a", Some("k95-ccc")), Effect::Close(label("k95-ccc"))]);
+        assert_eq!((hosted(&host), lock(&host.table).main.clone()), (vec![("k95-a".into(), Place::Docked)], "k95-a".into()));
         host.shutdown();
     }
 
@@ -1668,8 +1838,10 @@ mod tests {
         assert!(matches!(fx.iter().find(|f| matches!(f, Effect::Error(_))), Some(Effect::Error(e)) if e.contains("stopped again")));
         assert!(!fx.iter().any(|f| matches!(f, Effect::Exit(_))));
         drop(fx);
-        let main = |p| (MAIN.to_string(), p);
-        assert_eq!(shown(&seen), [main(41002), main(41003), main(41004), main(41001)]);
+        let b = || label("k95-b");
+        assert_eq!(navigated(&seen), [(b(), 41003), (b(), 41004)]);
+        assert_eq!(shown(&seen), [(b(), Some(label("k95-a"))), (label("k95-a"), Some(b()))]);
+        assert_eq!(lock(&seen).last(), Some(&Effect::Close(b())));
         assert_eq!(hosted(&host), [("k95-a".into(), Place::Docked)]);
         assert_eq!(pid(&host, "k95-a"), a);
         assert!(host.tick());
@@ -1690,6 +1862,7 @@ mod tests {
         until("the second board", || hosted(&host).len() == 2);
         host.command(Verb::Switch, "k95-a", None);
         let b = pid(&host, "k95-b");
+        take(&seen);
         let began = Instant::now();
         host.command(Verb::Restart, "k95-b", None);
         host.command(Verb::Restart, "k95-b", None);
@@ -1705,7 +1878,8 @@ mod tests {
         assert!(!nb.crashed && nb.stopping.is_none() && nb.port == 41003);
         assert_eq!(t.main, "k95-a");
         drop(t);
-        assert_eq!(shown(&seen).last(), Some(&(MAIN.into(), 41001)), "a board off screen restarts off screen");
+        let fx = take(&seen);
+        assert!(matches!(&fx[..], [Effect::Navigate { label: l, url, .. }] if *l == label("k95-b") && url.port() == Some(41003)), "only the restarted board's own hidden window loads the new port: {fx:?}");
         assert!(!lock(&seen).iter().any(|f| matches!(f, Effect::Error(_))));
         host.shutdown();
     }
@@ -1716,7 +1890,7 @@ mod tests {
         host.first("k95-a", host.start("k95-a").unwrap());
         until("the shell to finish", || !host.tick());
         let fx = lock(&seen);
-        assert!(matches!(&fx[..], [Effect::Error(e), Effect::Exit(1)] if e.contains("nope")), "{fx:?}");
+        assert!(matches!(&fx[..], [Effect::Error(e), Effect::Close(l), Effect::Exit(1)] if e.contains("nope") && *l == label("k95-a")), "{fx:?}");
     }
 
     #[test]
@@ -1756,7 +1930,7 @@ mod tests {
         let began = Instant::now();
         assert!(host.tick());
         host.command(Verb::Switch, "k95-a", None);
-        assert_eq!(shown(&seen).last(), Some(&(MAIN.into(), 41001)));
+        assert_eq!(shown(&seen).last(), Some(&(label("k95-a"), Some(label("k95-b")))));
         host.command(Verb::Close, "k95-b", None);
         assert!(began.elapsed() < Duration::from_secs(2), "nothing waited on the stalled handshake");
         assert_eq!(hosted(&host), [("k95-a".into(), Place::Docked)]);
@@ -2008,7 +2182,8 @@ mod tests {
             let fx: Vec<String> = std::mem::take(&mut *lock(&seen))
                 .into_iter()
                 .map(|f| match f {
-                    Effect::Open { label, .. } => format!("open {label}"),
+                    Effect::Open { label: l, .. } => format!("open {}", if l == label("k95-a") { "a" } else { "?" }),
+                    Effect::Show { like: None, .. } => "show".into(),
                     Effect::Splash(on) => format!("splash {on}"),
                     Effect::Error(_) => "error".into(),
                     Effect::Exit(code) => format!("exit {code}"),
@@ -2021,10 +2196,10 @@ mod tests {
         };
         let (ok, hosted, fx) = boot(up(41501, ""));
         assert!(ok && hosted == 1);
-        assert_eq!(fx, ["open main"]);
+        assert_eq!(fx, ["open a", "show"]);
         let (ok, hosted, fx) = boot(format!("{PAUSE}{}", up(41502, "")));
         assert!(ok && hosted == 1);
-        assert_eq!(fx, ["splash true", "open main", "splash false"]);
+        assert_eq!(fx, ["splash true", "open a", "show", "splash false"]);
         let (ok, hosted, fx) = boot("echo nope".into());
         assert!(!ok && hosted == 0);
         assert_eq!(fx, ["error", "exit 1"]);
@@ -2132,7 +2307,7 @@ mod tests {
     fn webview_cannot_call_any_tauri_command() {
         let app = with_updater();
         let origin: tauri::Url = "http://127.0.0.1:41234/".parse().unwrap();
-        let w = window(&app, MAIN, origin.clone(), "Kanban95".into(), Arc::new(Mutex::new(vec![41234]))).unwrap();
+        let w = window(&app, &label("k95-a"), origin.clone(), "Kanban95".into(), Arc::new(Mutex::new(vec![41234]))).unwrap();
         for cmd in [
             "plugin:app|version",
             "plugin:window|close",
