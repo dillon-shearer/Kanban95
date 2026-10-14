@@ -285,7 +285,7 @@ Transcription runs inside the board's window with a local Whisper model. Audio n
 
 ![Download dialog](img/voice-download.png)
 
-If the microphone is blocked, the board says how to allow it: Privacy & security → Microphone in the Windows Settings app, with "Microphone access" and "Let desktop apps access your microphone" on. The board itself never asks: the window grants itself the microphone and nothing else.
+If the microphone is blocked, the board says how to allow it: Privacy & security → Microphone in the Windows Settings app, with "Microphone access" and "Let desktop apps access your microphone" on. On macOS the first press of a mic shows the system prompt asking to let Kanban95 use the microphone; press **Allow**. If you pressed Don't Allow, turn Kanban95 on in System Settings → Privacy & Security → Microphone, then restart the app. The board itself never asks: the window grants itself the microphone and nothing else.
 
 **Zero-code fallback: Win+H.** Windows' own dictation works in any field of the board, including the terminals, with nothing to set up. It is Windows' feature and its privacy terms, not the board's; the mic button is the board's own path.
 
