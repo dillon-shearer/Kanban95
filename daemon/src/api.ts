@@ -5,6 +5,7 @@ import { dirname, extname, isAbsolute, join, resolve } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { agentsMap, askShell, attentionMap, focusProject, hostedMap, keyOk, missingMap, NotListed, openProject, othersHosted, runningMap, tellShell } from './boards.js';
 import { attachmentDir, attachments, MAX_ATTACHMENT, safeName, saveAttachment } from './attachments.js';
+import { dismissDeliverable, listDeliverables, openDeliverable } from './deliverables.js';
 import { BRAIN_BODY_MAX, BRAIN_RANK, isConstraintError, SCOPES, type Brains, type Scope } from './db.js';
 import { hasBranch, ticketDiff } from './git.js';
 import { audit, revoke } from './grants.js';
@@ -465,6 +466,20 @@ const routes: [method: string, path: RegExp, mutation: string | null, handler: (
         OR (n.kind = 'failure' AND n.id = (SELECT max(id) FROM notes m WHERE m.ticket_id = n.ticket_id AND m.kind IN ('failure', 'question'))))
       ORDER BY n.id`).all() as { kind: string; body: string }[]).map((n) => ({ ...n, permission: n.kind === 'question' ? permissionOf(n.body) : null })),
   })],
+  ['GET', /^\/api\/deliverables$/, null, ({ db }) => ({ status: 200, body: listDeliverables(db) })],
+  ['DELETE', /^\/api\/deliverables$/, 'deliverables.dismiss', ({ db, body }) => {
+    if (!dismissDeliverable(db, String(body.folder))) throw new HttpError(404, 'no such entry');
+    changed(null);
+    return { status: 204 };
+  }],
+  ['POST', /^\/api\/deliverables\/open$/, 'deliverables.open', ({ board, db, body }) => {
+    try {
+      openDeliverable(db, board.repo, String(body.folder));
+    } catch (e) {
+      throw new HttpError(404, (e as Error).message);
+    }
+    return { status: 204 };
+  }],
   ['POST', /^\/api\/brain$/, 'brain.add', ({ board, body }) => {
     const { title, body: text, tags = '' } = brainFields(body, false);
     return { status: 201, body: brainAdd(brains(board), scopeOf(body.scope), { title: title!, body: text!, tags }, null) };

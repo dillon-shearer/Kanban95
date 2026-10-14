@@ -106,6 +106,9 @@ The REST API presents `read_all` as a boolean, the two flags as `flags: { needs_
 ### ticket_targets
 `(ticket_id, target_id, edit)`, both ids FK to `tickets` with `ON DELETE CASCADE`, so deleting either ticket drops the row. `edit` is 0/1, default 0. A ticket cannot target itself. A target is a ticket this ticket's worker and tester may `get_ticket` and `list_tickets`; with `edit` its worker may also `update_ticket` the target's body and criteria (`docs/MCP.md` → Levels). It is not a dependency: it never blocks, orders or merges anything. Set by the planner or operator (`create_ticket`/`update_ticket` `targets`, or the Ticket window over `PATCH /api/tickets/:id`), never by the ticket's own worker. Added in `009-ticket-targets.sql`.
 
+### deliverables
+`(folder TEXT PK, ticket_id, title, merged_at)`: one Inbox entry per deliverable folder, `topic/deliverable` relative to the repo root. After a merge lands, the merge queue upserts a row for the folder of every file the merge added or changed, cut to its first two segments; files at the root and under a dotfolder give none, deleted files are left out. A later merge on the same folder overwrites the row (ticket, title, time), so there is one row per folder. `ticket_id` is not a foreign key and `title` is a copy, so the entry outlives the ticket. Dismiss deletes the row. Added in `010-deliverables.sql`; `daemon/src/deliverables.ts`.
+
 ### notes
 | column | type | notes |
 |---|---|---|
@@ -169,6 +172,8 @@ A grant is live when `revoked_at IS NULL AND expires_at > now`. Rows are kept af
   - `brain.update`
   - `brainstorm.launch`
   - `config.write`
+  - `deliverables.dismiss`
+  - `deliverables.open`
   - `grants.revoke`
   - `operator.launch`
   - `runner.set`
