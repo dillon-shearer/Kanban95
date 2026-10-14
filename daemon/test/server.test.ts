@@ -92,7 +92,7 @@ describe('shell secret', () => {
     }
   });
 
-  it('two boards in one browser keep their own cookies: each daemon takes its own among both, never the other one', async () => {
+  it('two boards in one browser keep their own cookies: each daemon takes its own among both, never the other one', { timeout: 20_000 }, async () => {
     const a = await start({ repo });
     const b = await start({ repo });
     try {

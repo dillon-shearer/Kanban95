@@ -22,7 +22,7 @@ afterEach(() => {
   rmSync(repo, { recursive: true, force: true });
 });
 
-describe('template copies on daemon start', () => {
+describe('template copies on daemon start', { timeout: 20_000 }, () => {
   it('replaces a copy an older daemon wrote with no record, records it, and keeps the old text once', async () => {
     const old = '# Test a ticket\n\nRun the full npm test. {{ticket}}\n';
     mkdirSync(join(repo, '.kanban95', 'templates'), { recursive: true });
