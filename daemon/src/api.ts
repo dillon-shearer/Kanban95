@@ -47,6 +47,13 @@ const TICKET_FIELDS: Record<string, 'string' | 'int' | 'bool'> = {
 };
 const NULLABLE = new Set(['cli', 'model', 'effort']);
 const TAG = /^[a-z0-9-]+$/;
+export const PERMISSION = 'PERMISSION';
+const permissionOf = (body: string) => {
+  const m = /^PERMISSION((?: (?:level=[1-9]|read_all=1))+)$/.exec(body.split('\n', 1)[0]);
+  if (!m) return null;
+  const level = /level=(\d)/.exec(m[1]);
+  return { level: level ? Number(level[1]) : null, read_all: m[1].includes('read_all=1') };
+};
 
 /**
  * Tags as stored: distinct lowercase tokens joined by one space. A string splits on commas and whitespace; an array gives
@@ -425,12 +432,12 @@ const routes: [method: string, path: RegExp, mutation: string | null, handler: (
   // question is open, the failure that flagged it. `merged_at` tells the Inbox whether Retry merge applies.
   ['GET', /^\/api\/inbox$/, null, ({ db }) => ({
     status: 200,
-    body: db.prepare(`
+    body: (db.prepare(`
       SELECT n.id, n.ticket_id, n.role, n.kind, n.body, n.created_at, t.title, t.status, t.merged_at FROM notes n JOIN tickets t ON t.id = n.ticket_id
       WHERE t.needs_human = 1 AND (
         (n.kind = 'question' AND NOT EXISTS (SELECT 1 FROM notes a WHERE a.ticket_id = n.ticket_id AND a.kind = 'answer' AND a.id > n.id))
         OR (n.kind = 'failure' AND n.id = (SELECT max(id) FROM notes m WHERE m.ticket_id = n.ticket_id AND m.kind IN ('failure', 'question'))))
-      ORDER BY n.id`).all(),
+      ORDER BY n.id`).all() as { kind: string; body: string }[]).map((n) => ({ ...n, permission: n.kind === 'question' ? permissionOf(n.body) : null })),
   })],
   ['POST', /^\/api\/brain$/, 'brain.add', ({ board, body }) => {
     const { title, body: text, tags = '' } = brainFields(body, false);

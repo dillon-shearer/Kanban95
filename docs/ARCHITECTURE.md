@@ -232,7 +232,7 @@ Every `/api/*` request needs the `k95` cookie holding the shell secret, or gets 
 | POST | `/api/tickets/bootstrap` | Set up this board: creates the starter tickets from `.kanban95/templates/bootstrap.md` in Backlog, tagged `setup`, each depending on the one before (`daemon/src/bootstrap.ts`); `201` with the tickets, `409` once the board has a `setup` ticket, `400` when the file has no `## <title>` sections |
 | POST | `/api/tickets/housekeeping` | creates a housekeeping ticket and launches it (the Housekeeping button) |
 | GET | `/api/tickets/:id/diff` | `{diff}`: the worktree against its fork point, uncommitted tracked changes included; `null` without a worktree |
-| GET | `/api/inbox` | what flagged tickets wait on: unanswered `question` notes, and the newest `failure` note when no newer question is open (`kind`, `body`, `role`, `created_at`, and the ticket's `title`, `status`, `merged_at`) |
+| GET | `/api/inbox` | what flagged tickets wait on: unanswered `question` notes, and the newest `failure` note when no newer question is open (`kind`, `body`, `role`, `created_at`, and the ticket's `title`, `status`, `merged_at`); `permission` is `{level, read_all}` for a `request_permission` question, else null |
 | POST | `/api/brain` | add a note: `title`, `body` (at most 1500 characters), optional `tags` |
 | PATCH | `/api/brain/<id>` | edit a note in place: any of `title`, `body`, `tags`; 404 for an unknown id |
 | DELETE | `/api/brain/<id>` | delete a note; 404 for an unknown id |

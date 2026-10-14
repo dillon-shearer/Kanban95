@@ -1119,6 +1119,21 @@ function openInbox() {
             (q.status === 'in_progress' || q.status === 'testing') && h('button', { onclick: () => restart(q.ticket_id) }, 'Restart'),
             q.status !== 'done' && t && h('button', { onclick: () => reset([t]) }, 'Reset to Backlog')));
       }
+      if (q.permission) {
+        const { level, read_all } = q.permission;
+        const asked = [level !== null && `level ${level}`, read_all && 'read all'].filter(Boolean).join(', ');
+        const reply = (answer) => api('POST', `/tickets/${q.ticket_id}/answer`, { answer });
+        const approve = async () => {
+          await api('PATCH', `/tickets/${q.ticket_id}`, { ...(level !== null && { agent_level: level }), ...(read_all && { read_all: true }) });
+          await reply(`approved: ${asked}; retry the refused call now`);
+        };
+        return h('fieldset', { class: 'k95-permission', 'data-ticket': q.ticket_id }, legend,
+          h('div', { class: 'note-head' }, `${fmt(q.created_at)} · the ${q.role} asks for ${asked}${level !== null ? ` (${LEVELS[level]})` : ''}:`),
+          h('pre', {}, q.body.split('\n').slice(1).join('\n')),
+          h('div', { class: 'field-row' },
+            h('button', { onclick: () => act(approve, `Approved ${asked} for #${q.ticket_id}.`) }, 'Approve'),
+            h('button', { onclick: () => act(() => reply('denied'), `Denied #${q.ticket_id}.`) }, 'Deny')));
+      }
       const answer = h('textarea', { rows: 3, placeholder: 'Your answer' });
       return h('fieldset', { class: 'k95-question', 'data-ticket': q.ticket_id }, legend,
         h('div', { class: 'note-head' }, `${fmt(q.created_at)} · the ${q.role} asks:`), h('pre', {}, q.body),
