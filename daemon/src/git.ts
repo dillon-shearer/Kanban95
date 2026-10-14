@@ -5,7 +5,30 @@ import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { INNER_GITIGNORE } from './db.js';
 import { localHome, repoKey } from './settings.js';
 
-export const git = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: 'pipe' }).trim();
+export type GitCap = { ms: number; spent: boolean };
+let cap: GitCap | undefined;
+
+export function git(cwd: string, ...args: string[]): string {
+  if (cap?.spent) throw Object.assign(new Error(`git ${args[0]} skipped: an earlier git did not answer within ${cap.ms / 1000} s`), { code: 'ETIMEDOUT' });
+  try {
+    return execFileSync('git', args, { cwd, encoding: 'utf8', stdio: 'pipe', timeout: cap?.ms }).trim();
+  } catch (e) {
+    if (cap && timedOut(e)) cap.spent = true;
+    throw e;
+  }
+}
+
+export function gitWithin<T>(c: GitCap, f: () => T): T {
+  const was = cap;
+  cap = c;
+  try {
+    return f();
+  } finally {
+    cap = was;
+  }
+}
+
+export const timedOut = (e: unknown) => (e as { code?: unknown }).code === 'ETIMEDOUT';
 
 /**
  * Windows' STATUS_DLL_INIT_FAILED (0xC0000142) as an exit code: the process never ran its first line. On a loaded machine
@@ -94,6 +117,7 @@ export function initRepo(repo: string): void {
   } catch (e) {
     const { code, stderr } = e as { code?: string; stderr?: string };
     const reason = code === 'ENOENT' ? 'git is not installed or not on PATH; install it'
+      : timedOut(e) ? `git did not answer within ${(cap?.ms ?? 0) / 1000} s (a hook, a credential or signing prompt, or a .git/index.lock left behind); fix it in the repo`
       : /tell me who you are|auto-detection is disabled|empty ident/i.test(stderr ?? '')
         ? 'git has no user.name or user.email; set both with git config --global'
         : (stderr ?? '').trim().split(/\r?\n/).pop() || (e as Error).message;

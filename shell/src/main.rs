@@ -135,15 +135,17 @@ fn spawn(mut cmd: Command) -> Result<(Child, String, ChildStdout), String> {
 
 const HANDSHAKE_WAIT: Duration = Duration::from_secs(60);
 
-fn handshake(out: ChildStdout) -> Result<(u16, Lines), String> {
+const OPEN_WAIT: Duration = Duration::from_secs(20);
+
+fn handshake(out: ChildStdout, wait: Duration) -> Result<(u16, Lines), String> {
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let mut lines = BufReader::new(out).lines();
         let first = lines.next().and_then(Result::ok).unwrap_or_default();
         let _ = tx.send((first, lines));
     });
-    let Ok((first, lines)) = rx.recv_timeout(HANDSHAKE_WAIT) else {
-        return Err(format!("The Kanban95 daemon did not say its port within {HANDSHAKE_WAIT:?}.\n\nCheck the console for the daemon's error."));
+    let Ok((first, lines)) = rx.recv_timeout(wait) else {
+        return Err(format!("The Kanban95 daemon did not say its port within {wait:?}.\n\nCheck the console for the daemon's error."));
     };
     match first.strip_prefix("KANBAN95 port=").and_then(|p| p.trim().parse().ok()) {
         Some(port) => Ok((port, lines)),
@@ -154,9 +156,9 @@ fn handshake(out: ChildStdout) -> Result<(u16, Lines), String> {
 }
 
 /// Starts a daemon and waits for its handshake; a daemon that fails it is killed.
-fn start(cmd: Command) -> Result<Started, String> {
+fn start(cmd: Command, wait: Duration) -> Result<Started, String> {
     let (mut child, secret, out) = spawn(cmd)?;
-    match handshake(out) {
+    match handshake(out, wait) {
         Ok((port, lines)) => Ok(Started { child, port, secret, lines }),
         Err(e) => {
             let _ = child.kill();
@@ -242,7 +244,7 @@ enum Effect {
     Exit(i32),
     Check { to: Daemon, manual: bool },
     Install(Daemon),
-    Tell(Daemon, String),
+    Tell(Daemon, &'static str, String),
     Pick { to: Daemon, window: String, folder: bool, token: String },
 }
 
@@ -315,7 +317,7 @@ impl Host {
     }
 
     fn start(&self, repo: &str) -> Result<Started, String> {
-        start((self.launch)(repo))
+        start((self.launch)(repo), OPEN_WAIT)
     }
 
     fn emit(&self, fx: Vec<Effect>) {
@@ -349,7 +351,7 @@ impl Host {
                         Some((folder, token)) => host.pick(&me, folder, token),
                         None => eprintln!("[shell] ignored a pick line without a kind and token"),
                     },
-                    Some((verb, path)) => host.command(verb, path),
+                    Some((verb, path)) => host.command(verb, path, Some(&me)),
                     None => {}
                 }
             }
@@ -377,7 +379,7 @@ impl Host {
             let _ = child.wait();
             return;
         }
-        let shake = handshake(out).map(|(port, lines)| (port, secret, lines));
+        let shake = handshake(out, HANDSHAKE_WAIT).map(|(port, lines)| (port, secret, lines));
         self.restarted(&repo, gen, requested, shake);
     }
 
@@ -428,7 +430,7 @@ impl Host {
             if std::env::var_os("KANBAN95_SPLASH_TEST").is_some() {
                 std::thread::sleep(Duration::from_secs(3));
             }
-            let _ = tx.send(handshake(out));
+            let _ = tx.send(handshake(out, HANDSHAKE_WAIT));
         });
         let (shake, splash) = match rx.recv_timeout(SPLASH_AFTER.saturating_sub(spawned.elapsed())) {
             Ok(shake) => (shake, false),
@@ -454,7 +456,7 @@ impl Host {
         }
     }
 
-    fn command(self: &Arc<Self>, verb: Verb, path: &str) {
+    fn command(self: &Arc<Self>, verb: Verb, path: &str, from: Option<&Daemon>) {
         let repo = key(path);
         let mut fx = vec![];
         let mut t = lock(&self.table);
@@ -471,7 +473,8 @@ impl Host {
             (Verb::Open, None) => {
                 if t.opening.insert(repo.clone()) {
                     let host = self.clone();
-                    std::thread::spawn(move || host.open(repo));
+                    let from = from.cloned();
+                    std::thread::spawn(move || host.open(repo, from));
                 }
             }
             (Verb::Popout, Some(Place::Docked)) => {
@@ -517,7 +520,7 @@ impl Host {
             match verb {
                 _ if !self.installed => {
                     eprintln!("[shell] not the installed app: no update check");
-                    (verb == Verb::CheckNow).then(|| Effect::Tell(to.clone(), failed("Only the installed Kanban95 app checks for updates.")))
+                    (verb == Verb::CheckNow).then(|| Effect::Tell(to.clone(), UPDATE_REPORT, failed("Only the installed Kanban95 app checks for updates.")))
                 }
                 Verb::Update => Some(Effect::Install(to.clone())),
                 Verb::Check if !fresh && t.checked.is_some_and(|at| at.elapsed() < CHECK_EVERY) => {
@@ -547,7 +550,7 @@ impl Host {
         self.emit(vec![Effect::Pick { to: to.clone(), window, folder, token: token.into() }]);
     }
 
-    fn open(self: &Arc<Self>, repo: String) {
+    fn open(self: &Arc<Self>, repo: String, from: Option<Daemon>) {
         let started = self.start(&repo);
         let mut fx = vec![];
         let mut t = lock(&self.table);
@@ -564,7 +567,12 @@ impl Host {
                 t.main = repo;
                 self.sync(&t);
             }
-            Err(e) => fx.push(Effect::Error(e)),
+            Err(e) => {
+                if let Some(to) = from {
+                    fx.push(Effect::Tell(to, OPEN_REPORT, serde_json::json!({ "path": repo, "error": e }).to_string()));
+                }
+                fx.push(Effect::Error(e));
+            }
         }
         drop(t);
         self.emit(fx);
@@ -887,8 +895,12 @@ fn post(to: &Daemon, path: &str, body: &str, what: &str) {
     }
 }
 
+const UPDATE_REPORT: &str = "/api/update/shell";
+
+const OPEN_REPORT: &str = "/api/open/shell";
+
 fn tell(to: &Daemon, body: &str) {
-    post(to, "/api/update/shell", body, "an update report");
+    post(to, UPDATE_REPORT, body, "an update report");
 }
 
 fn answer_pick(to: &Daemon, token: &str, picked: Option<std::path::PathBuf>) {
@@ -1277,8 +1289,9 @@ fn apply<R: Runtime>(app: &AppHandle<R>, ports: &Ports, fx: Effect) {
             let app = app.clone();
             std::thread::spawn(move || install(app, to));
         }
-        Effect::Tell(to, body) => {
-            std::thread::spawn(move || tell(&to, &body));
+        Effect::Tell(to, path, body) => {
+            let what = if path == OPEN_REPORT { "an open failure" } else { "an update report" };
+            std::thread::spawn(move || post(&to, path, &body, what));
         }
         Effect::Pick { to, window, folder, token } => pick(app, to, window, folder, token),
     }
@@ -1552,34 +1565,64 @@ mod tests {
     }
 
     #[test]
+    fn an_open_whose_daemon_never_says_its_port_is_told_to_the_daemon_that_asked_within_the_open_wait() {
+        let (host, seen) = host(|repo, _| match repo {
+            "k95-a" => up(41001, &format!("echo KANBAN95 open=k95-b{THEN}")),
+            _ => WAIT.into(),
+        });
+        let began = Instant::now();
+        host.first("k95-a", host.start("k95-a").unwrap());
+        let told = || {
+            lock(&seen).iter().find_map(|f| match f {
+                Effect::Tell(to, OPEN_REPORT, body) => Some((to.clone(), body.clone())),
+                _ => None,
+            })
+        };
+        let end = began + OPEN_WAIT + Duration::from_secs(5);
+        while told().is_none() {
+            assert!(Instant::now() < end, "no open failure told within {OPEN_WAIT:?}");
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        let (to, body) = told().unwrap();
+        let secret = lock(&host.table).boards["k95-a"].secret.clone();
+        assert_eq!(to, Daemon { port: 41001, secret });
+        let body: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(body["path"], "k95-b");
+        assert!(body["error"].as_str().unwrap().contains("did not say its port within 20s"), "{body}");
+        assert!(lock(&seen).iter().any(|f| matches!(f, Effect::Error(e) if e.contains("within 20s"))));
+        assert_eq!(hosted(&host), [("k95-a".into(), Place::Docked)]);
+        host.shutdown();
+    }
+
+    #[test]
     fn switch_popout_and_dock_move_boards_between_the_windows() {
         let (host, seen) = host(|repo, _| up(if repo == "k95-a" { 41001 } else { 41002 }, ""));
         host.first("k95-a", host.start("k95-a").unwrap());
-        host.command(Verb::Open, "k95-b");
+        host.command(Verb::Open, "k95-b", None);
         until("the second board", || hosted(&host).len() == 2);
         let b_pid = pid(&host, "k95-b");
         let effects = |seen: &Mutex<Vec<Effect>>| std::mem::take(&mut *lock(seen));
         effects(&seen);
 
-        host.command(Verb::Switch, "k95-a");
+        host.command(Verb::Switch, "k95-a", None);
         assert_eq!(shown(&seen), [(MAIN.into(), 41001)]);
         effects(&seen);
 
-        host.command(Verb::Popout, "k95-a");
+        host.command(Verb::Popout, "k95-a", None);
         let fx = effects(&seen);
         assert!(matches!(&fx[..], [Effect::Show { label: main, .. }, Effect::Open { label: own, url, .. }] if main == MAIN && *own == label("k95-a") && url.port() == Some(41001) && url.fragment() == Some("own")), "{fx:?}");
         assert_eq!(lock(&host.table).main, "k95-b");
 
-        host.command(Verb::Popout, "k95-b");
+        host.command(Verb::Popout, "k95-b", None);
         assert!(effects(&seen).is_empty(), "the only docked board stays in the main window");
         assert_eq!(hosted(&host), [("k95-a".into(), Place::Own), ("k95-b".into(), Place::Docked)]);
 
-        host.command(Verb::Dock, "k95-a");
+        host.command(Verb::Dock, "k95-a", None);
         let fx = effects(&seen);
         assert!(matches!(&fx[..], [Effect::Close(own), Effect::Show { label: main, url, .. }] if *own == label("k95-a") && main == MAIN && url.port() == Some(41001) && url.fragment().is_none()), "{fx:?}");
         assert_eq!(hosted(&host), [("k95-a".into(), Place::Docked), ("k95-b".into(), Place::Docked)]);
 
-        host.command(Verb::Popout, "k95-b");
+        host.command(Verb::Popout, "k95-b", None);
         assert!(matches!(&effects(&seen)[..], [Effect::Open { .. }]));
         host.window_closed(&label("k95-b"));
         assert_eq!(hosted(&host), [("k95-a".into(), Place::Docked)]);
@@ -1597,7 +1640,7 @@ mod tests {
         host.first("k95-a", host.start("k95-a").unwrap());
         let a = pid(&host, "k95-a");
         let began = Instant::now();
-        host.command(Verb::Close, "k95-a");
+        host.command(Verb::Close, "k95-a", None);
         until("the shell to finish", || !host.tick());
         assert!(began.elapsed() < Duration::from_secs(10), "stopped by EOF, not by the 15 s kill");
         assert!(!alive(a));
@@ -1616,7 +1659,7 @@ mod tests {
         });
         host.first("k95-a", host.start("k95-a").unwrap());
         let a = pid(&host, "k95-a");
-        host.command(Verb::Open, "k95-b");
+        host.command(Verb::Open, "k95-b", None);
         until("the crashing board to be dropped", || {
             host.tick();
             lock(&seen).iter().any(|f| matches!(f, Effect::Error(_)))
@@ -1643,13 +1686,13 @@ mod tests {
         });
         host.first("k95-a", host.start("k95-a").unwrap());
         let a = pid(&host, "k95-a");
-        host.command(Verb::Open, "k95-b");
+        host.command(Verb::Open, "k95-b", None);
         until("the second board", || hosted(&host).len() == 2);
-        host.command(Verb::Switch, "k95-a");
+        host.command(Verb::Switch, "k95-a", None);
         let b = pid(&host, "k95-b");
         let began = Instant::now();
-        host.command(Verb::Restart, "k95-b");
-        host.command(Verb::Restart, "k95-b");
+        host.command(Verb::Restart, "k95-b", None);
+        host.command(Verb::Restart, "k95-b", None);
         until("the restarted board", || {
             host.tick();
             lock(&host.table).boards.get("k95-b").is_some_and(|x| x.restarting.is_none() && x.child.id() != b)
@@ -1680,15 +1723,15 @@ mod tests {
     fn shutdown_kills_every_daemon_and_stops_the_supervisor() {
         let (host, _) = host(|repo, _| up(if repo == "k95-a" { 41001 } else { 41002 }, ""));
         host.first("k95-a", host.start("k95-a").unwrap());
-        host.command(Verb::Open, "k95-b");
+        host.command(Verb::Open, "k95-b", None);
         until("the second board", || hosted(&host).len() == 2);
         let pids = [pid(&host, "k95-a"), pid(&host, "k95-b")];
-        host.command(Verb::Popout, "k95-b");
+        host.command(Verb::Popout, "k95-b", None);
         host.shutdown();
         assert!(pids.iter().all(|p| !alive(*p)));
         assert!(hosted(&host).is_empty() && lock(&host.ports).is_empty());
         assert!(!host.tick());
-        host.command(Verb::Open, "k95-c");
+        host.command(Verb::Open, "k95-c", None);
         assert!(lock(&host.table).opening.is_empty(), "nothing starts once the shell is exiting");
     }
 
@@ -1704,7 +1747,7 @@ mod tests {
             _ => WAIT.into(),
         });
         host.first("k95-a", host.start("k95-a").unwrap());
-        host.command(Verb::Open, "k95-b");
+        host.command(Verb::Open, "k95-b", None);
         until("the stalled restart", || {
             host.tick();
             stalled(&host, "k95-b").is_some()
@@ -1712,9 +1755,9 @@ mod tests {
         let p = stalled(&host, "k95-b").unwrap();
         let began = Instant::now();
         assert!(host.tick());
-        host.command(Verb::Switch, "k95-a");
+        host.command(Verb::Switch, "k95-a", None);
         assert_eq!(shown(&seen).last(), Some(&(MAIN.into(), 41001)));
-        host.command(Verb::Close, "k95-b");
+        host.command(Verb::Close, "k95-b", None);
         assert!(began.elapsed() < Duration::from_secs(2), "nothing waited on the stalled handshake");
         assert_eq!(hosted(&host), [("k95-a".into(), Place::Docked)]);
         until("the stalled child to be killed", || {
@@ -1751,7 +1794,7 @@ mod tests {
             .filter_map(|f| match f {
                 Effect::Check { to, manual } => Some((to.port, if *manual { "now" } else { "auto" })),
                 Effect::Install(to) => Some((to.port, "install")),
-                Effect::Tell(to, body) => Some((to.port, if body.contains("installed") { "dev" } else { "tell" })),
+                Effect::Tell(to, UPDATE_REPORT, body) => Some((to.port, if body.contains("installed") { "dev" } else { "tell" })),
                 _ => None,
             })
             .collect()

@@ -10,7 +10,7 @@ import { WebSocketServer } from 'ws';
 import { handleApi, receiveFiling } from './api.js';
 import { countBoard, entryPath, register, tellShell } from './boards.js';
 import { openDb, openGlobalBrain } from './db.js';
-import { commitPaths, git, guardFileMode, initRepo } from './git.js';
+import { commitPaths, git, gitWithin, guardFileMode, initRepo, type GitCap } from './git.js';
 import { sweep, SWEEP_MS } from './janitor.js';
 import { killAll, launch, sessions } from './launcher.js';
 import { countUnpushed, events, recover, releasePending, tick, watchSilence, type Board } from './lifecycle.js';
@@ -140,6 +140,8 @@ async function serveFile(req: IncomingMessage, res: ServerResponse, file: string
 
 type Launch = Parameters<typeof launch>[1];
 
+const START_GIT_MS = 5_000;
+
 export function start(config: Config = {}): Promise<{
   port: number;
   db: DatabaseSync;
@@ -151,45 +153,65 @@ export function start(config: Config = {}): Promise<{
   const { host, port } = validateConfig(config);
   const repo = config.repo ?? process.cwd();
   const secret = config.secret ?? randomBytes(32).toString('hex');
-  dataHome();
+  const budget: GitCap = { ms: START_GIT_MS, spent: false };
+  let at = performance.now();
+  const step = <T>(name: string, f: () => T): T => {
+    try {
+      return gitWithin(budget, f);
+    } finally {
+      const now = performance.now();
+      console.error(`[start] ${name} ${Math.round(now - at)}`);
+      at = now;
+    }
+  };
+  step('data home', () => dataHome());
   if (gone(repo)) throw new Error(`project folder ${repo} does not exist: it was deleted or moved`);
-  const db = openDb(repo);
+  const db = step('db', () => openDb(repo));
   let brain: DatabaseSync;
   try {
-    brain = openGlobalBrain();
+    brain = step('brain', () => openGlobalBrain());
   } catch (e) {
     db.close();
     throw e;
   }
-  const templates = initTemplates(repo);
-  try {
-    addProject(repo); // Settings → Projects lists every repo a board has run on
-  } catch (e) {
-    console.error(`projects.json not updated: ${(e as Error).message}`); // stderr: stdout's first line is the handshake
-  }
+  const templates = step('templates', () => initTemplates(repo));
+  step('projects', () => {
+    try {
+      addProject(repo); // Settings → Projects lists every repo a board has run on
+    } catch (e) {
+      console.error(`projects.json not updated: ${(e as Error).message}`); // stderr: stdout's first line is the handshake
+    }
+  });
   let self = '';
   const board: Board = { db, brain, repo, port: 0, shellId: config.shellId ?? null, shell: config.shell };
-  try {
-    initRepo(repo); // a plain folder becomes a local repo with one commit (docs/ARCHITECTURE.md → Daemon lifetime)
-  } catch (e) {
-    board.gitError = (e as Error).message;
-    console.error(`[git] ${board.gitError}`);
-  }
-  try {
-    guardFileMode(repo);
-  } catch (e) {
-    console.error(`[git] core.fileMode not set: ${(e as Error).message}`);
-  }
-  if (!board.gitError) {
+  step('git init', () => {
+    try {
+      initRepo(repo); // a plain folder becomes a local repo with one commit (docs/ARCHITECTURE.md → Daemon lifetime)
+    } catch (e) {
+      board.gitError = (e as Error).message;
+      console.error(`[git] ${board.gitError}`);
+    }
+  });
+  step('file mode', () => {
+    try {
+      guardFileMode(repo);
+    } catch (e) {
+      console.error(`[git] core.fileMode not set: ${(e as Error).message}`);
+    }
+  });
+  step('template commit', () => {
+    if (board.gitError) return;
     try {
       commitPaths(repo, templates, 'Update the board prompt templates to the shipped defaults');
     } catch (e) {
       console.error(`[git] template defaults not committed: ${(e as Error).message}`);
     }
-  }
-  try {
-    board.startCommit = git(repo, 'rev-parse', '--verify', '-q', 'HEAD');
-  } catch { /* no commits yet: nothing can be stale */ }
+  });
+  step('rev-parse', () => {
+    try {
+      board.startCommit = git(repo, 'rev-parse', '--verify', '-q', 'HEAD');
+    } catch { /* no commits yet: nothing can be stale */ }
+  });
   const server = createServer((req, res) => {
     handle(board, self, secret, req, res).catch(() => send(res, 500, 'internal error'));
   });
@@ -271,7 +293,8 @@ export function start(config: Config = {}): Promise<{
       if (!addr || typeof addr === 'string') return fail(new Error('no address'));
       self = `${LOOPBACK}:${addr.port}`;
       board.port = addr.port;
-      const unregister = register(repo, addr.port, board.shellId ?? null); // Start → Projects on the other boards sees this one running
+      step('listen', () => {});
+      const unregister = step('register', () => register(repo, addr.port, board.shellId ?? null)); // Start → Projects on the other boards sees this one running
       const count = () => {
         countBoard(sessions.size, (db.prepare('SELECT count(*) AS n FROM tickets WHERE needs_human = 1').get() as { n: number }).n);
         doze();
@@ -279,11 +302,11 @@ export function start(config: Config = {}): Promise<{
       events.on('change', count);
       count();
       // Janitor and recovery on start, the janitor again once a day (docs/LIFECYCLE.md).
-      sweep(board).catch(() => {});
+      step('janitor', () => sweep(board).catch(() => {}));
       void countUnpushed(board); // the status bar's "N commits not pushed"
-      releasePending(board);
-      recover(board);
-      tick(board); // the runner picks up where it was
+      step('release', () => releasePending(board));
+      step('recover', () => recover(board));
+      step('tick', () => tick(board)); // the runner picks up where it was
       const daily = setInterval(() => sweep(board).catch(() => {}), SWEEP_MS).unref();
       const unwatch = watchSilence(board);
       const stopMemoryLog = startMemoryLog(repo, () => sessions.values());

@@ -1,7 +1,7 @@
 // UI-facing REST under /api. Operator-only (no grant); every mutation writes an audit row.
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { dirname, extname, isAbsolute, join, resolve } from 'node:path';
+import { basename, dirname, extname, isAbsolute, join, resolve } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { agentsMap, askShell, attentionMap, focusProject, hostedMap, keyOk, missingMap, NotListed, openProject, othersHosted, runningMap, tellShell } from './boards.js';
 import { attachmentDir, attachments, MAX_ATTACHMENT, safeName, saveAttachment } from './attachments.js';
@@ -542,6 +542,15 @@ const routes: [method: string, path: RegExp, mutation: string | null, handler: (
     const r = REPORT.safeParse(body);
     if (!r.success) throw new HttpError(400, `bad update report: ${r.error.issues[0]?.message}`);
     relay(board, r.data);
+    return { status: 204 };
+  }],
+  ['POST', /^\/api\/open\/shell$/, null, ({ board, body, req }) => {
+    if (req.headers.origin !== undefined || !board.shell) throw new HttpError(403, 'only the shell reports a failed open');
+    const { path, error } = body as { path?: unknown; error?: unknown };
+    if (typeof path !== 'string' || !path || typeof error !== 'string' || !error || path.length > 4096 || error.length > 2000) {
+      throw new HttpError(400, 'bad open report: path and error must be non-empty strings');
+    }
+    events.emit('event', { type: 'open-failed', folder: basename(path), reason: error.replace(/\s+/g, ' ').trim() });
     return { status: 204 };
   }],
   ['POST', /^\/api\/pick$/, null, ({ board, body }) => startPick(board.shell === true, board.repo, body.kind, (f) => events.emit('event', f))],
