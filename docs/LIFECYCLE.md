@@ -243,6 +243,8 @@ A git in any step that did not run at all (Processes that never started, above) 
 
 A job whose branch is already in the base (`git merge-base --is-ancestor ticket/<id> HEAD`) skips steps 3 and 4 and only pushes. That is Retry merge after a failed push, and also a daemon that stopped between the merge and the push: `recover` queues the unflagged, unmerged done ticket again and it is pushed then.
 
+A job whose ticket has no `ticket/<id>` branch (an imported ticket, or one that never forked a worktree) has nothing to land: it sets `merged_at` and releases dependents, as a hand move into Done does, with no conflict note, retry or push. Without this, `recover` sent every such done ticket back to In Progress on each restart (`daemon/test/lifecycle-merge.test.ts`).
+
 ### Push
 
 With `push_after_merge` on (`~/.kanban95/settings.json`, default on, Settings → Board → Git), the queue runs `git push <remote> <base>:<branch>` in the main checkout, where `<remote>` and `<branch>` are the base's upstream (`branch.<base>.remote` and `branch.<base>.merge`). Only then is the ticket `merged` (`merged_at`, cleanup). The push sends the whole base, so any earlier commits the upstream lacks go with it. It runs inside the queue job, so pushes never run beside a merge. `push` in `daemon/src/merge.ts`.

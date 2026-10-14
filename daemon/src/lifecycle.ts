@@ -6,7 +6,7 @@ import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { readTicket, transaction, type Ticket } from './api.js';
-import { branchName, git, gitNotRun, isAncestor, notStarted, syncWorktree, worktreePath } from './git.js';
+import { branchName, git, gitNotRun, hasBranch, isAncestor, notStarted, syncWorktree, worktreePath } from './git.js';
 import { revoke, type Role } from './grants.js';
 import { cleanTicket } from './janitor.js';
 import { cancelSetup, killSession, launch, launchRoot, prepareWorktree, SetupCancelled, sessions, sessionsOf, settingUp, transcriptSize, type Session } from './launcher.js';
@@ -565,6 +565,12 @@ async function mergeJob(b: Board, id: number, since: number) {
   await Promise.all(sessionsOf(id).map((s) => s.done)); // the tester's pty is still closing
   const t = readTicket(b.db, id);
   if (t.status !== 'done' || t.merged_at) return; // reset, rejected or moved by hand while it waited
+  // No branch means nothing to land (an imported ticket, or one that never forked a worktree), as when moved to Done by hand.
+  if (!hasBranch(b.repo, id)) {
+    b.db.prepare("UPDATE tickets SET merged_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?").run(id);
+    releaseDependents(b, id);
+    return void changed(id);
+  }
   // Main is merged into the worktree first, so the merge into the main checkout is conflict-free by construction; merge.ts's
   // abort stays as a safety net.
   // ponytail: lands even when the sync brought in new commits (the worker merged and the tester tested at submit); upgrade is

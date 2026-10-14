@@ -120,6 +120,14 @@ describe('lifecycle', { timeout: 180_000 }, () => {
 
   });
 
+  it('a done ticket with no branch (imported, or never forked) is closed by the queue, not sent back as a conflict', async () => {
+    const id = ticket('Imported done', { status: 'done' });
+    expect((await post(`/api/tickets/${id}/merge`)).status).toBe(200);
+    await until(() => t(id).merged_at, 'closed');
+    expect(t(id)).toMatchObject({ status: 'done', retry: 0, flags: { needs_human: false } });
+    expect(notes(id, 'failure')).toEqual([]);
+  });
+
   describe('a dirty main checkout', () => {
     const wait0 = { ...DIRTY_WAIT };
     afterEach(() => Object.assign(DIRTY_WAIT, wait0));
