@@ -74,7 +74,7 @@ To start tickets yourself, select them and press **Launch**, runner on or off. A
 
 ![The board](img/board.png)
 
-Each card shows its id, title, model, effort and CLI (grey italic means "the phase default from Settings"), then its tags (light blue; set them in the ticket window's **Tags** field, comma or space separated, lowercase letters, digits and `-`), and badges for what needs attention: the agent's phase and how long it has run, e.g. **execute 4m** or **test 1h12m** (an agent is working on it; updated every minute, so a long test run that shows a growing time is not stuck), **needs human** (red), **retry n**, **merged**, **housekeeping** (a ticket the board filed to clean up).
+Each card shows its id, title, model, effort and CLI (grey italic means "the phase default from Settings"), then its tags (light blue; set them in the ticket window's **Tags** field, comma or space separated, lowercase letters, digits and `-`), and badges for what needs attention: the agent's phase and how long it has run, e.g. **execute 4m** or **test 1h12m** (an agent is working on it; updated every minute, so a long test run that shows a growing time is not stuck), **needs human** (red), **retry n**, **L1** to **L4** (the ticket's agent level, below), **merged**, **housekeeping** (a ticket the board filed to clean up).
 
 ### 3. Watch, or don't
 
@@ -102,7 +102,7 @@ When the board restarts, every agent it was running is killed. Tickets that were
 
 ![Inbox](img/inbox.png)
 
-For anything else, open the ticket (double-click the card): the Notes tab has the failure notes (it opens at the latest note), Runs has each run's exact prompt and terminal output, Diff shows what the worktree changed. Text you type in the Ticket tab stays while you look at other tabs and when the ticket changes underneath; it is only kept once you press **Save**. Closing a ticket window (Esc, X, the taskbar button's Close alone or in a selection, or the ticket being deleted) with unsaved edits asks "Discard changes?": **Cancel** keeps the window and your text, **Discard** closes it. A New ticket window asks the same.
+For anything else, open the ticket (double-click the card): the Notes tab has the failure notes (it opens at the latest note), Runs has each run's exact prompt and terminal output, Diff shows what the worktree changed. Text you type in the Ticket tab stays while you look at other tabs and when the ticket changes underneath; it is only kept once you press **Save**. Below the fields, **Agent level** and **Read all tickets** widen what this ticket's worker and tester may do on other tickets, for every run of the ticket, from the next tool call: 0 is its own ticket only; 1 lets it launch and reset any ticket; 2 also move any running ticket to Done without a test (no merge is queued; use Retry merge to land it); 3 also edit, re-model, note and delete empty Backlog tickets; 4 gives it your own operator reach, except proving a ticket. Read all tickets lets it read the whole board. Press **Save** to apply them. An agent cannot change either (`docs/MCP.md` → Levels). Closing a ticket window (Esc, X, the taskbar button's Close alone or in a selection, or the ticket being deleted) with unsaved edits asks "Discard changes?": **Cancel** keeps the window and your text, **Discard** closes it. A New ticket window asks the same.
 
 ![Ticket window, Runs tab](img/ticket-runs.png)
 
@@ -131,7 +131,7 @@ If you review a Done ticket and it is not right, **Reject** it (card menu, or th
 
 What the Settings window holds, one subject per tab:
 
-- **Agents**: the default CLI, model and effort per phase, CLI paths, trusted folders (**Clear Claude trust**), runner concurrency (Tickets running at once, `concurrency` in `settings.json`, default 3), silent agents, housekeeping
+- **Agents**: the default CLI, model and effort per phase, CLI paths, trusted folders (**Clear Claude trust**), runner concurrency (Tickets running at once, `concurrency` in `settings.json`, default 3), Workers read (own ticket and dependencies, the default, or all tickets: `workers_read` in `settings.json`), silent agents, housekeeping
 - **Prompts**: preferences, templates
 - **Board**: zoom, sounds, which phases open a terminal by themselves, push after merge, voice (speech model, mic button mode)
 - **Projects**: the repos this board knows

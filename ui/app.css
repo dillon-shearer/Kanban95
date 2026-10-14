@@ -134,6 +134,7 @@ fieldset {
 .badge.hold { background: #ffffc0; }
 .badge.run { background: navy; color: #fff; }
 .badge.tag { background: #c0e0ff; }
+.badge.level { background: #ffd8a8; }
 .status-bar { flex: none; }
 .k95-status, .k95-runner { flex: 1 1 0; min-width: 0; }
 .k95-release-pending, .k95-unpushed, .k95-held { flex: none; }

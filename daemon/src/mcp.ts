@@ -13,7 +13,7 @@ import { attachments } from './attachments.js';
 import { fileOn, runningBoard } from './boards.js';
 import { audit, live, verify, type Grant, type Role } from './grants.js';
 import { apply, changed, Refused, type Board } from './lifecycle.js';
-import { EFFORT, same, uncatalogued } from './settings.js';
+import { EFFORT, readConfig, same, uncatalogued } from './settings.js';
 
 const STATUS = ['backlog', 'in_progress', 'testing', 'done'] as const;
 /** Where each role may move a ticket: its own, or for the operator any. The planner never moves anything. */
@@ -23,6 +23,14 @@ const MOVE_TARGETS: Record<Role, readonly (typeof STATUS)[number][]> = {
   tester: ['done', 'in_progress'],
   operator: ['in_progress', 'testing', 'done'],
 };
+const LEVEL_MOVES: readonly (typeof STATUS)[number][][] = [
+  [],
+  ['backlog', 'in_progress'],
+  ['backlog', 'in_progress', 'done'],
+  ['backlog', 'in_progress', 'done'],
+  ['backlog', 'in_progress', 'testing', 'done'],
+];
+const MAX_LEVEL = LEVEL_MOVES.length - 1;
 /** Grants without a ticket: they see the whole board and name the ticket on every ticket tool. */
 const unbound = (r: Role) => r === 'planner' || r === 'operator';
 const an = (r: Role) => `${r === 'operator' ? 'an' : 'a'} ${r}`;
@@ -39,12 +47,13 @@ const scope = z.enum(SCOPES).default('project')
 /** A refusal. Audited as `denied`; anything else thrown is `error`. */
 class Deny extends Error {}
 
-type Call = { board: Board; db: DatabaseSync; grant: Grant; ticket: number | null };
+type Call = { board: Board; db: DatabaseSync; grant: Grant; ticket: number | null; as: Role; level: number; readAll: boolean; need?: number };
 /** A role present in `access` may call the tool; the text is the matrix cell in docs/MCP.md. */
 type Access = Partial<Record<Role, string>>;
 interface Tool<S extends z.ZodRawShape> {
   description: string;
   access: Access;
+  level?: number;
   input: S;
   run: (c: Call, args: z.output<z.ZodObject<S>>) => unknown;
 }
@@ -53,14 +62,30 @@ const tool = <S extends z.ZodRawShape>(t: Tool<S>) => t as unknown as Tool<z.Zod
 const ticketId = z.number().int().positive().optional()
   .describe('Ticket id. Worker and tester grants are bound to one ticket and may omit it; a planner or operator must give it.');
 
-/** Resolves the ticket a call is about. Worker/tester: their own, a foreign id is a scope denial. Planner/operator: the explicit id. */
+const ask = (need: number | undefined) => (need === undefined ? '' : `; ask for level ${need} with request_permission`);
+
+/** Resolves the ticket a call is about. In a worker/tester cell: its own, a foreign id is a scope denial. In an operator cell: the id given, else its own. */
 function own(c: Call, id: number | undefined): number {
-  if (unbound(c.grant.role)) {
+  if (unbound(c.as)) {
+    id ??= c.grant.ticket_id ?? undefined;
     if (id === undefined) throw new Error(`ticket_id is required for ${an(c.grant.role)} grant`);
     return id;
   }
-  if (id !== undefined && id !== c.grant.ticket_id) throw new Deny(`this grant is scoped to ticket ${c.grant.ticket_id}`);
+  if (id !== undefined && id !== c.grant.ticket_id) throw new Deny(`this grant is scoped to ticket ${c.grant.ticket_id}${ask(c.need)}`);
   return c.grant.ticket_id!;
+}
+
+function reach(board: Board, grant: Grant, t: Tool<z.ZodRawShape>): Pick<Call, 'as' | 'level' | 'readAll' | 'need'> {
+  if (unbound(grant.role)) return { as: grant.role, level: 0, readAll: true };
+  const row = board.db.prepare('SELECT agent_level, read_all FROM tickets WHERE id = ?').get(grant.ticket_id) as { agent_level: number; read_all: number } | undefined;
+  const level = row?.agent_level ?? 0;
+  let all = false;
+  try {
+    all = readConfig('settings', board.repo).workers_read === 'all';
+  } catch {}
+  const from = t.level ?? MAX_LEVEL;
+  const widens = 'operator' in t.access;
+  return { as: widens && level >= from ? 'operator' : grant.role, level, readAll: row?.read_all === 1 || all, need: widens && level < from ? from : undefined };
 }
 const exists = (db: DatabaseSync, id: number) => db.prepare('SELECT 1 FROM tickets WHERE id = ?').get(id) !== undefined;
 /** A Backlog ticket this grant created: the only kind a worker may edit beyond its own, or delete. */
@@ -95,11 +120,11 @@ export const TOOLS: Record<string, Tool<z.ZodRawShape>> = {
       effort: z.enum(EFFORT).optional().describe('Effort override; omit for the phase default.'),
     },
     run(c, a) {
-      const worker = c.grant.role === 'worker';
+      const worker = c.as === 'worker';
       if (worker && (a.model !== undefined || a.effort !== undefined)) throw new Deny('a worker may not set model or effort; the follow-up runs on the operator\x27s defaults');
       const bad = a.model && uncatalogued(a.model, null, c.board.repo);
       if (bad) throw new Error(bad);
-      const body = worker ? `Filed by #${c.grant.ticket_id}\n\n${a.body}` : a.body;
+      const body = c.grant.ticket_id !== null ? `Filed by #${c.grant.ticket_id}\n\n${a.body}` : a.body;
       const tags = normaliseTags(a.tags ?? []);
       const id = transaction(c.db, () => {
         const r = c.db
@@ -144,7 +169,7 @@ export const TOOLS: Record<string, Tool<z.ZodRawShape>> = {
     async run(c, a) {
       const { repo, name, entry } = runningBoard(a.project);
       if (same(repo, c.board.repo)) {
-        if (!(c.grant.role in TOOLS.create_ticket.access)) throw new Deny(`${an(c.grant.role)} may not create a ticket on its own board`);
+        if (!(c.as in TOOLS.create_ticket.access)) throw new Deny(`${an(c.grant.role)} may not create a ticket on its own board${ask(c.need)}`);
         return { project: name, ticket: TOOLS.create_ticket.run(c, { title: a.title, body: a.body, criteria: a.criteria, tags: a.tags, depends_on: [] }) };
       }
       const ref = c.grant.ticket_id ?? (c.grant.role === 'operator' ? 'operator' : 'brainstorm');
@@ -162,6 +187,7 @@ export const TOOLS: Record<string, Tool<z.ZodRawShape>> = {
       worker: `own, ${WORKER_FIELDS.join('/')} only; its Backlog follow-ups, ${FOLLOWUP_FIELDS.join('/')}`,
       operator: 'any ticket',
     },
+    level: 3,
     input: {
       ticket_id: ticketId,
       title: z.string().min(1).optional(),
@@ -173,14 +199,14 @@ export const TOOLS: Record<string, Tool<z.ZodRawShape>> = {
     run(c, { ticket_id, depends_on, tags, ...rest }) {
       const cols: Record<string, unknown> = { ...rest, tags: tags && normaliseTags(tags) };
       // A worker's Backlog follow-up is the one foreign id it may name; any other goes through own() and its scope denial.
-      const mine = c.grant.role === 'worker' && ticket_id !== undefined && followUp(c.db, c.grant, ticket_id);
+      const mine = c.as === 'worker' && ticket_id !== undefined && followUp(c.db, c.grant, ticket_id);
       const id = (c.ticket = mine ? ticket_id : own(c, ticket_id));
       const given = Object.keys(cols).filter((k) => cols[k] !== undefined);
       if (depends_on) given.push('depends_on');
       if (given.length === 0) throw new Error('nothing to update');
-      if (c.grant.role === 'worker' && !mine) {
+      if (c.as === 'worker' && !mine) {
         const bad = given.filter((k) => !(WORKER_FIELDS as readonly string[]).includes(k));
-        if (bad.length) throw new Deny(`a worker may only update ${WORKER_FIELDS.join(', ')}; not ${bad.join(', ')}`);
+        if (bad.length) throw new Deny(`a worker may only update ${WORKER_FIELDS.join(', ')}; not ${bad.join(', ')}${ask(c.need)}`);
       }
       readTicket(c.db, id);
       transaction(c.db, () => {
@@ -197,13 +223,15 @@ export const TOOLS: Record<string, Tool<z.ZodRawShape>> = {
       'Delete a Backlog ticket made by mistake, with its attachments, exactly as the operator\x27s delete does. A planner may delete a Backlog ticket that has no notes and no runs; ' +
       'a worker may delete only a Backlog follow-up its own grant created with create_ticket. Anything else is refused with the reason. Returns the deleted id.',
     access: { planner: 'Backlog, no notes or runs', worker: 'its Backlog follow-ups', operator: 'Backlog, no notes or runs' },
+    level: 3,
     input: { ticket_id: z.number().int().positive() },
     run(c, a) {
       const id = (c.ticket = a.ticket_id);
       const t = readTicket(c.db, id);
-      if (c.grant.role === 'worker' && t.created_by_grant !== c.grant.id) throw new Deny(`a worker may only delete a ticket its own grant created; ticket ${id} is not one`);
+      const mine = c.grant.role === 'worker' && t.created_by_grant === c.grant.id;
+      if (c.as === 'worker' && !mine) throw new Deny(`a worker may only delete a ticket its own grant created; ticket ${id} is not one${ask(c.need)}`);
       if (t.status !== 'backlog') throw new Deny(`ticket ${id} is in ${t.status}; only a Backlog ticket can be deleted here`);
-      if (c.grant.role !== 'worker') {
+      if (!mine) {
         const count = (table: 'notes' | 'runs') => (c.db.prepare(`SELECT count(*) AS n FROM ${table} WHERE ticket_id = ?`).get(id) as { n: number }).n;
         if (count('notes')) throw new Deny(`ticket ${id} has notes; only the operator can delete it, from the board`);
         if (count('runs')) throw new Deny(`ticket ${id} has runs; only the operator can delete it, from the board`);
@@ -218,6 +246,7 @@ export const TOOLS: Record<string, Tool<z.ZodRawShape>> = {
       'Change the model and/or effort a ticket runs with; give either or both. Lower effort for trivial work and raise it for hard work, do not only escalate. ' +
       'The ticket\x27s model and effort apply to all its execute runs, retries included. Returns the ticket.',
     access: { planner: 'any', operator: 'any' },
+    level: 3,
     input: {
       ticket_id: ticketId,
       model: z.string().min(1).optional().describe('Model id as listed in the board\'s model catalog.'),
@@ -250,16 +279,29 @@ export const TOOLS: Record<string, Tool<z.ZodRawShape>> = {
       tester: `own → ${MOVE_TARGETS.tester.join(' / ')}`,
       operator: `any → ${MOVE_TARGETS.operator.join(' / ')}`,
     },
+    level: 1,
     input: { ticket_id: ticketId, status: z.enum(STATUS) },
     run(c, a) {
+      const { role } = c.grant;
       const id = (c.ticket = own(c, a.ticket_id));
-      const allowed = MOVE_TARGETS[c.grant.role];
-      if (!allowed.includes(a.status)) throw new Deny(`${an(c.grant.role)} may only move ${c.grant.role === 'operator' ? 'a' : 'its'} ticket to: ${allowed.join(', ')}`);
-      // Into in_progress: from backlog it is a launch (only an operator reaches a backlog ticket), from testing a failed test.
+      const mine = id === c.grant.ticket_id;
+      const allowed = unbound(role) ? MOVE_TARGETS[role] : [...new Set([...(mine ? MOVE_TARGETS[role] : []), ...LEVEL_MOVES[c.level]])];
+      if (!allowed.includes(a.status)) {
+        const need = unbound(role) ? -1 : LEVEL_MOVES.findIndex((m) => m.includes(a.status));
+        throw new Deny(`${an(role)} may only move ${unbound(role) ? 'a' : mine ? 'its' : 'another'} ticket to: ${allowed.join(', ')}${ask(need > 0 ? need : undefined)}`);
+      }
+      // Into in_progress: from backlog it is a launch, from testing a failed test.
       const from = readTicket(c.db, id).status;
       // Already there (a tester whose report_test moved it, then followed the old two-step script): nothing to do.
       if (from === a.status) return readTicket(c.db, id);
-      return apply(c.board, id, a.status === 'testing' ? 'submit' : a.status === 'done' ? 'pass' : from === 'backlog' ? 'launch' : 'fail').ticket;
+      if (a.status === 'backlog') return apply(c.board, id, 'reset').ticket;
+      if (a.status !== 'done') return apply(c.board, id, a.status === 'testing' ? 'submit' : from === 'backlog' ? 'launch' : 'fail').ticket;
+      try {
+        return apply(c.board, id, 'pass').ticket;
+      } catch (e) {
+        if (!(e instanceof Refused) || unbound(role) || !LEVEL_MOVES[c.level].includes('done')) throw e;
+        return apply(c.board, id, 'close').ticket;
+      }
     },
   }),
 
@@ -268,6 +310,7 @@ export const TOOLS: Record<string, Tool<z.ZodRawShape>> = {
       'Attach a note to a ticket. Kinds: plan (how you intend to do the work, post it before starting), decision (a choice made and why), ' +
       'failure (what went wrong, for the next attempt), summary (what was done, post it when finished). Notes are shown to the operator and injected into later runs of this ticket. Returns the note id.',
     access: { planner: 'any', worker: 'own', tester: 'own', operator: 'any' },
+    level: 3,
     input: {
       ticket_id: ticketId,
       kind: z.enum(['plan', 'decision', 'failure', 'summary']),
@@ -289,10 +332,10 @@ export const TOOLS: Record<string, Tool<z.ZodRawShape>> = {
     input: { ticket_id: ticketId },
     run(c, a) {
       const { grant } = c;
-      const id = unbound(grant.role) ? own(c, a.ticket_id) : (a.ticket_id ?? grant.ticket_id!);
+      const id = unbound(c.as) ? own(c, a.ticket_id) : (a.ticket_id ?? grant.ticket_id!);
       c.ticket = id;
-      const visible = unbound(grant.role) || id === grant.ticket_id || depsOf(c.db, grant.ticket_id!).includes(id);
-      if (!visible) throw new Deny(`this grant is scoped to ticket ${grant.ticket_id} and its dependencies`);
+      const visible = unbound(c.as) || c.readAll || id === grant.ticket_id || depsOf(c.db, grant.ticket_id!).includes(id);
+      if (!visible) throw new Deny(`this grant is scoped to ticket ${grant.ticket_id} and its dependencies${ask(c.need)}`);
       const ticket = readTicket(c.db, id);
       const notes = c.db.prepare('SELECT id, role, kind, body, created_at FROM notes WHERE ticket_id = ? ORDER BY id').all(id);
       return { ...ticket, attachments: attachments(c.board.repo, id).map((f) => f.path), notes };
@@ -308,7 +351,7 @@ export const TOOLS: Record<string, Tool<z.ZodRawShape>> = {
     run(c, a) {
       const { grant } = c;
       let ids: number[];
-      if (unbound(grant.role)) ids = (c.db.prepare('SELECT id FROM tickets ORDER BY id').all() as { id: number }[]).map((r) => r.id);
+      if (unbound(c.as) || c.readAll) ids = (c.db.prepare('SELECT id FROM tickets ORDER BY id').all() as { id: number }[]).map((r) => r.id);
       else ids = [grant.ticket_id!, ...depsOf(c.db, grant.ticket_id!)];
       return ids
         .map((id) => readTicket(c.db, id))
@@ -355,7 +398,7 @@ export const TOOLS: Record<string, Tool<z.ZodRawShape>> = {
       move_to: z.enum(SCOPES).optional().describe('Move the row to this brain (insert there, delete here).'),
     },
     run(c, { id, scope: s, move_to, ...fields }) {
-      if (move_to !== undefined && move_to !== s && !unbound(c.grant.role)) throw new Deny(`${an(c.grant.role)} may not move a brain row between scopes: name it in your summary note`);
+      if (move_to !== undefined && move_to !== s && !unbound(c.as)) throw new Deny(`${an(c.grant.role)} may not move a brain row between scopes: name it in your summary note${ask(c.need)}`);
       return brainUpdate(brains(c.board), s, id, fields, move_to);
     },
   }),
@@ -453,12 +496,12 @@ function registerTools(server: McpServer, board: Board, grant: Grant) {
   for (const [name, t] of Object.entries(TOOLS)) {
     server.registerTool(name, { description: t.description, inputSchema: t.input }, async (args) => {
       const a = args as Record<string, unknown>;
-      const c: Call = { board, db, grant, ticket: typeof a.ticket_id === 'number' ? a.ticket_id : grant.ticket_id };
+      const c: Call = { board, db, grant, ticket: typeof a.ticket_id === 'number' ? a.ticket_id : grant.ticket_id, ...reach(board, grant, t) };
       let outcome: 'ok' | 'denied' | 'error' = 'ok';
       let text: string;
       try {
         if (!live(db, grant.id)) throw new Deny('unauthorized: this grant was revoked or has expired');
-        if (!(grant.role in t.access)) throw new Deny(`${an(grant.role)} may not call ${name}`);
+        if (!(c.as in t.access)) throw new Deny(`${an(grant.role)} may not call ${name}${ask(c.need)}`);
         text = JSON.stringify(await t.run(c, a), null, 2);
       } catch (e) {
         outcome = e instanceof Deny || e instanceof Refused ? 'denied' : 'error';

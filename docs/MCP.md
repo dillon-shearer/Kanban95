@@ -37,6 +37,18 @@ A refused call returns a tool error whose text says why and, for `move_ticket`, 
 "own" means the ticket the grant was minted for; a worker or tester may omit `ticket_id` and may not name another ticket. A planner or operator grant has no ticket and must pass `ticket_id`.
 The operator role is an operator terminal: an agent the operator starts from the UI with a typed mission, holding the operator's own reach on the board. It never gets `report_test`; only a tester proves a ticket.
 
+### Levels
+
+A worker or tester grant reaches further when the operator raises its ticket's `agent_level` (0 to 4, in the Ticket window). The level holds for every run of that ticket, retries and testers alike, and is read on every call. Each level holds the ones below it:
+
+- 0: the role's cells above.
+- 1: `move_ticket` any ticket to backlog (a reset) or in_progress (a launch, or a failed test from testing), with the operator's lifecycle guards.
+- 2: also `move_ticket` any running ticket to done without a tester pass; its sessions end and no merge is queued (docs/LIFECYCLE.md → Agent moves under a level).
+- 3: also the operator's cell for `update_ticket`, `delete_ticket`, `set_model`, `add_note`.
+- 4: the operator's cell for every tool, `move_ticket` to testing included. A worker still never gets `report_test`; `ask_operator`, and a tester's `report_test`, stay on its own ticket.
+
+`read_all` on the ticket, or `workers_read: "all"` in settings.json, lets its worker and tester `get_ticket` and `list_tickets` every ticket. A refusal that a higher level would lift ends with "ask for level N with request_permission". Only the operator sets a level or `read_all` (docs/SECURITY.md → MCP).
+
 ## Tools
 
 ### create_ticket

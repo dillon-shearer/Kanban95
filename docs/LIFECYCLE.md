@@ -28,6 +28,8 @@ Status is one of **backlog → in_progress → testing → done**. Two flags sit
 | `resume` | the operator, Resume in the card menu or the Inbox, `POST /api/tickets/:id/resume` |
 | `restart` | the operator, Restart in the card menu, the ticket window (Ctrl+R) or the Inbox, `POST /api/tickets/:id/restart` |
 | `reject` | the operator, Reject on a Done card's menu or in its ticket window, `POST /api/tickets/:id/reject` |
+| `reset` | a worker or tester grant's `move_ticket(backlog)`, allowed from level 1 (Agent moves under a level below) |
+| `close` | a worker or tester grant's `move_ticket(done)` on a ticket the tester has not passed, allowed from level 2 (Agent moves under a level below) |
 
 The tester's verdict is the move: `report_test` writes the PASS or FAIL note, then applies `pass` or `fail`, so a tester that stops after reporting cannot leave the ticket in Testing. It is refused, with no note written, on a ticket not in testing. A `move_ticket` to the column the ticket is already in returns the ticket unchanged and raises no event, so an agent following the old report-then-move script is not refused.
 
@@ -64,6 +66,8 @@ The tester's verdict is the move: `report_test` writes the PASS or FAIL note, th
 | done | unpushed | | done | `needs_human` on | failure note with git's message, chord. The merge stays in the base; worktree kept, `merged_at` unset |
 | done | merge | not merged yet | done | | merge queued again |
 | done | reject | no live agent session | in_progress | `needs_human` off, `retry` 0, `merged_at` kept | the operator's reason as an `operator` failure note, execute agent (see Reject below) |
+| running, done | reset | | backlog | `needs_human` off, `blocked_on_deps` off, `retry` 0 | every live session ended (outcome `reset`), no agent started; as the operator's Reset to Backlog |
+| running | close | | done | `needs_human` off, `merged_at` unchanged | every live session ended (outcome `close`), no agent started, no merge queued (see Agent moves under a level below) |
 
 Resume and launch on a running ticket are not in the original spec. Before them, the only way past a silent exit was Reset to Backlog and Launch, which threw away `retry` and the phase. The new prompt carries the exit's failure note like any retry (`attemptNotes` in `daemon/src/context.ts`: failure notes since the latest execute run). Resume is the strict form (only a flagged ticket); Launch on a running ticket also starts an unflagged one with no agent, such as one dragged by hand into a running column.
 
@@ -94,6 +98,12 @@ Reject is how the operator sends a Done ticket they do not accept back to a work
 - **Merged**: its worktree and branch were removed on merge. The launch forks a fresh worktree from the current base, which holds the merged work, so the worker continues from what shipped. If the branch survived (removed by hand, or cleanup failed), `createWorktree` (`daemon/src/git.ts`) resets it to the base when the base already contains it, and reuses it when it holds work the base lacks. `merged_at` keeps the first merge's time until the next `pass` clears it; the next merge is a new merge commit of the same branch, titled with the ticket title as always. While `merged_at` is kept the ticket is not `done`, so the janitor treats its worktree as the new cycle's: the sweep leaves it, and a merge cleanup still retrying stops (audit `janitor.worktree` `skipped: reopened`) instead of removing the worktree the new worker sits in.
 
 The `merge` row is not in the original spec: it is how the operator finishes a flagged merge. They fix the branch in its worktree (merge the base into it and commit) or clean the main checkout, then retry the merge.
+
+### Agent moves under a level
+
+A ticket's `agent_level` (`docs/MCP.md` → Levels) lets its worker and tester grants move other tickets. Into In Progress they use the operator's rows (`launch` from backlog, `fail` from testing) with the same guards. Into Backlog is `reset`, the agent form of Reset to Backlog. Into Done from level 2 is `pass` when the tester reported a pass during the current test run, else `close`.
+
+`close` ends the ticket's live sessions the way a reset does and marks it done. It queues no merge: the work was not tested, so it does not land by itself. A merge already waiting in the queue for the ticket is left alone and lands as usual. `merged_at` is not touched, so an unmerged closed ticket still holds its dependents; the operator lands its branch with Retry merge, or Rejects it to send it back to a worker. A ticket in Backlog has no `close` row: launch it first, or leave it there.
 
 ### Needs human
 

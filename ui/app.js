@@ -34,7 +34,7 @@ let runner = { on: false, concurrency: 3, running: [], left: 0, backlog: 0, wait
 let models = null; // models.json this board runs on (this repo's copy, else the global file), for the cards' default model and effort
 // Sounds stay off until /config/settings loads: listen() starts first, and a ding in that gap ignored the operator's choice.
 // `terminals` is absent until then too, so no session is opened or passed over before the operator's phases are known.
-const SETTINGS = { paths: {}, sounds: { merge: false, attention: false, done: false }, voice: { backend: 'local', mode: 'push' }, housekeeping: { auto: true, every: 10 }, idle_minutes: 20, zoom: 1, push_after_merge: true, sleepAfterMinutes: 30, concurrency: 3, updateCheck: true, release: false };
+const SETTINGS = { paths: {}, sounds: { merge: false, attention: false, done: false }, voice: { backend: 'local', mode: 'push' }, housekeeping: { auto: true, every: 10 }, idle_minutes: 20, zoom: 1, push_after_merge: true, sleepAfterMinutes: 30, concurrency: 3, updateCheck: true, release: false, workers_read: 'deps' };
 let settings = { ...SETTINGS };
 let limits = null; // GET /api/limits: { rows, errors, fetched_at }, null until the first answer
 const views = new Map(); // open window id → redraw(Set of changed ticket ids | undefined)
@@ -191,6 +191,7 @@ function card(t) {
     t.flags.needs_human && badge('needs human', 'flag'),
     t.flags.blocked_on_deps && badge(`waits on #${t.depends_on.join(', #')}`, 'hold'),
     t.retry > 0 && badge(`retry ${t.retry}`),
+    t.agent_level > 0 && badge(`L${t.agent_level}`, 'level'),
     t.merged_at && badge('merged')));
   dragCard(el, t);
   return el;
@@ -871,6 +872,8 @@ function facts(t) {
     ` · retry ${t.retry}`, t.template === 'housekeeping' && ' · housekeeping', t.merged_at && ` · merged ${fmt(t.merged_at)}`);
 }
 
+const LEVELS = ['own ticket', 'launch and reset any', 'also close any', 'also edit any', 'operator reach'];
+
 /** The ticket's own fields: edits an existing ticket, or creates one (`t` null) and swaps the window for the new ticket's. */
 function ticketForm(w, t) {
   const title = h('input', { type: 'text', value: t?.title ?? '' });
@@ -878,10 +881,13 @@ function ticketForm(w, t) {
   const criteria = h('textarea', { rows: 5 }, t?.criteria ?? '');
   const tags = h('input', { type: 'text', 'data-mic': 'off', value: t?.tags.split(' ').join(', ') ?? '', placeholder: 'e.g. ui, daemon' });
   const deps = h('input', { type: 'text', 'data-mic': 'off', value: t?.depends_on.join(', ') ?? '', placeholder: 'e.g. 3, 4' });
-  const snap = () => JSON.stringify([title, body, criteria, tags, deps].map((x) => x.value));
+  const level = h('select', { class: 'k95-level' }, LEVELS.map((l, i) => h('option', { value: i, selected: (t?.agent_level ?? 0) === i }, `${i}: ${l}`)));
+  const readAll = h('input', { type: 'checkbox', class: 'k95-read-all', id: `read-all-${t?.id ?? 'new'}`, checked: t?.read_all ?? false });
+  const snap = () => JSON.stringify([...[title, body, criteria, tags, deps, level].map((x) => x.value), readAll.checked]);
   let saved = snap();
   const save = async () => {
-    const fields = { title: title.value, body: body.value, criteria: criteria.value, tags: tags.value, depends_on: deps.value.split(/[\s,]+/).filter(Boolean).map(Number) };
+    const fields = { title: title.value, body: body.value, criteria: criteria.value, tags: tags.value, depends_on: deps.value.split(/[\s,]+/).filter(Boolean).map(Number),
+      agent_level: Number(level.value), read_all: readAll.checked };
     try {
       if (t) {
         const now = snap();
@@ -905,6 +911,7 @@ function ticketForm(w, t) {
     h('div', { class: 'field-row-stacked' }, h('label', {}, 'Acceptance criteria, one per line'), criteria),
     h('div', { class: 'field-row-stacked' }, h('label', {}, 'Tags, comma or space separated'), tags),
     h('div', { class: 'field-row-stacked' }, h('label', {}, 'Depends on'), deps),
+    h('div', { class: 'field-row' }, h('label', {}, 'Agent level'), level, readAll, h('label', { for: readAll.id }, 'Read all tickets')),
     h('div', { class: 'field-row' }, h('button', { onclick: save }, t ? 'Save' : 'Create'),
       t && h('button', { disabled: t.status !== 'backlog', onclick: () => launch([t]) }, 'Launch'),
       t && h('button', { onclick: () => restart(t.id) }, 'Restart'),
@@ -1489,6 +1496,7 @@ function openSettings(tab) {
         const hkAuto = h('input', { type: 'checkbox', id: 'hk-auto', checked: s.housekeeping.auto });
         const hkEvery = h('input', { type: 'number', id: 'hk-every', min: 1, step: 1, value: s.housekeeping.every });
         const at = h('input', { type: 'number', id: 'concurrency', min: 1, max: 10, step: 1, value: s.concurrency });
+        const reads = h('select', { id: 'workers-read' }, [['deps', 'own ticket and dependencies'], ['all', 'all tickets']].map(([v, l]) => h('option', { value: v, selected: s.workers_read === v }, l)));
         const saveRunner = () => act(async () => {
           Object.assign(s, await putSettings(scope, { concurrency: Number(at.value) }));
           runner = await api('GET', '/runner');
@@ -1500,6 +1508,10 @@ function openSettings(tab) {
           h('fieldset', {}, h('legend', {}, 'Runner'),
             h('div', { class: 'field-row' }, h('label', { for: 'concurrency' }, 'Tickets running at once'), at),
             h('button', { onclick: saveRunner }, 'Save')),
+          h('fieldset', {}, h('legend', {}, 'Workers read'),
+            h('div', { class: 'field-row' }, h('label', { for: 'workers-read' }, 'Workers and testers read'), reads),
+            h('p', {}, "All tickets lets every worker and tester read the whole board, as a ticket's Read all tickets box does."),
+            h('button', { onclick: () => put({ workers_read: reads.value }) }, 'Save')),
           h('fieldset', {}, h('legend', {}, 'Silent agents'),
             h('div', { class: 'field-row' }, h('label', { for: 'idle-minutes' }, 'Flag an agent whose transcript is quiet for (minutes)'), idle),
             h('p', {}, 'Keep it above the 10 min tool timeout, so a long test run is not flagged.'),
