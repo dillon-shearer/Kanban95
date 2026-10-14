@@ -39,11 +39,15 @@ describe('ui-inbox', { timeout: 60_000 }, () => {
       const box = `.k95-flag[data-ticket="${id}"]`;
       await until(() => page.evaluate(`!!document.querySelector('${box}')`), 'the failure in the Inbox');
       expect(await page.evaluate(`document.querySelector('${box} pre').textContent`)).toBe(body);
-      expect(await page.evaluate(`[...document.querySelectorAll('${box} button')].map((b) => b.textContent)`)).toEqual(['Open ticket', 'Retry merge']);
+      expect(await page.evaluate(`[...document.querySelectorAll('${box} button')].map((b) => b.textContent)`)).toEqual(['Operator fix', 'Retry merge']);
+      // Operator fix starts an operator terminal: catch its POST and read the mission it carries.
+      await page.evaluate(`window.k95Op = null; const f = window.fetch; window.fetch = (u, o) => String(u).endsWith('/api/operator') ? (window.k95Op = JSON.parse(o.body).mission, new Promise(() => {})) : f(u, o)`);
       await click(`${box} button`);
-      const facts = `[data-win="ticket-${id}"] .k95-facts`;
-      await until(() => page.evaluate(`!!document.querySelector('${facts}')`), 'the ticket window');
-      expect(await page.evaluate(`document.querySelector('${facts}').textContent`)).toContain('needs human (the Inbox says why)');
+      await until(() => page.evaluate(`window.k95Op !== null`), 'the operator launch');
+      const mission = await page.evaluate<string>(`window.k95Op`);
+      expect(mission).toContain(`Ticket #${id} (Stuck merge)`);
+      expect(mission).toContain(`get_ticket ${id}`);
+      expect(mission).toContain(body);
     } finally {
       db.prepare("UPDATE tickets SET needs_human = 0, merged_at = 'x' WHERE id = ?").run(id);
     }

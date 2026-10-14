@@ -188,6 +188,27 @@ export function dirtyMessage(repo: string): string {
   return ` (${summary}); ${fix}:\n${entries.map((e) => `${e.xy} ${e.path}`).join('\n')}`;
 }
 
+/**
+ * Commits `paths` alone in the main checkout, by the operator's git identity. The board's own writes there on start (new
+ * template defaults) would otherwise leave tracked files modified, and a dirty base refuses every launch. Only a repo that
+ * already tracks one of the paths gets a commit (untracked files never block a launch); paths git ignores are left out, and
+ * other staged changes stay staged and out of it.
+ */
+export function commitPaths(repo: string, paths: string[], subject: string): void {
+  const kept = paths.filter((p) => {
+    try {
+      git(repo, 'check-ignore', '-q', '--', p);
+      return false;
+    } catch {
+      return true;
+    }
+  });
+  if (!kept.length || !git(repo, 'ls-files', '--', ...kept)) return;
+  git(repo, 'add', '--', ...kept);
+  if (!git(repo, 'diff', '--cached', '--name-only', '--', ...kept)) return;
+  git(repo, 'commit', '-q', '-m', subject, '--only', '--', ...kept);
+}
+
 /** The linked worktree `branch` is checked out in, if any. The first entry git lists is the main checkout. */
 function checkedOut(repo: string, branch: string): string | undefined {
   const entry = git(repo, 'worktree', 'list', '--porcelain').split(/\r?\n\r?\n/).slice(1)

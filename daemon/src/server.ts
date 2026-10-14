@@ -10,7 +10,7 @@ import { WebSocketServer } from 'ws';
 import { handleApi, receiveFiling } from './api.js';
 import { countBoard, entryPath, register, tellShell } from './boards.js';
 import { openDb, openGlobalBrain } from './db.js';
-import { git, guardFileMode, initRepo } from './git.js';
+import { commitPaths, git, guardFileMode, initRepo } from './git.js';
 import { sweep, SWEEP_MS } from './janitor.js';
 import { killAll, launch, sessions } from './launcher.js';
 import { countUnpushed, events, recover, releasePending, tick, watchSilence, type Board } from './lifecycle.js';
@@ -161,7 +161,7 @@ export function start(config: Config = {}): Promise<{
     db.close();
     throw e;
   }
-  initTemplates(repo);
+  const templates = initTemplates(repo);
   try {
     addProject(repo); // Settings → Projects lists every repo a board has run on
   } catch (e) {
@@ -179,6 +179,13 @@ export function start(config: Config = {}): Promise<{
     guardFileMode(repo);
   } catch (e) {
     console.error(`[git] core.fileMode not set: ${(e as Error).message}`);
+  }
+  if (!board.gitError) {
+    try {
+      commitPaths(repo, templates, 'Update the board prompt templates to the shipped defaults');
+    } catch (e) {
+      console.error(`[git] template defaults not committed: ${(e as Error).message}`);
+    }
   }
   try {
     board.startCommit = git(repo, 'rev-parse', '--verify', '-q', 'HEAD');

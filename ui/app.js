@@ -382,6 +382,12 @@ async function newOperator() {
   if ((await dialog('New operator terminal', body, ['Start', 'Cancel'])) !== 'Start') return;
   await act(async () => openTerminal(await api('POST', '/operator', { mission: mission.value })), 'Operator terminal started.');
 }
+/** The Inbox's Operator fix: an operator terminal whose mission is the stopped ticket and the note that flagged it. */
+const operatorFix = (q) => act(async () => openTerminal(await api('POST', '/operator', { mission: [
+  `Ticket #${q.ticket_id} (${q.title}) stopped and is in the Inbox. Find the root cause and fix it; read the ticket with get_ticket ${q.ticket_id} first.`,
+  `The ${q.role} note that flagged it:`, q.body,
+  'When it is fixed, tell me whether to Resume, Restart or Reset the ticket, and why.',
+].join('\n\n') })), `Operator terminal started for #${q.ticket_id}.`);
 // runner.hold: a merge changed daemon/, templates/ or package.json since start, so the runner starts nothing new and the
 // board restarts once its running tickets finish (docs/OPERATOR.md → Restart after a merge). `restart` says who restarts it.
 const HOLD_THEN = {
@@ -1113,7 +1119,7 @@ function openInbox() {
         return h('fieldset', { class: 'k95-flag', 'data-ticket': q.ticket_id }, legend,
           h('div', { class: 'note-head' }, `${fmt(q.created_at)} · ${q.role} · stopped:`), h('pre', {}, q.body),
           h('div', { class: 'field-row' },
-            h('button', { onclick: () => openTicket(q.ticket_id) }, 'Open ticket'),
+            h('button', { onclick: () => operatorFix(q) }, 'Operator fix'),
             q.status === 'done' && !q.merged_at && h('button', { onclick: () => act(() => api('POST', `/tickets/${q.ticket_id}/merge`), `Merge of #${q.ticket_id} queued.`) }, 'Retry merge'),
             (q.status === 'in_progress' || q.status === 'testing') && t && h('button', { onclick: () => launch([t], 'resume') }, 'Resume'),
             (q.status === 'in_progress' || q.status === 'testing') && h('button', { onclick: () => restart(q.ticket_id) }, 'Restart'),
