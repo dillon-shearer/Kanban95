@@ -1307,18 +1307,23 @@ async function loadProjectItems() {
 }
 const hostedProjects = () => projects.value.filter((p) => projects.hosted[p.path]);
 
+function projectMenu(p) {
+  const name = folder(p.path);
+  const self = p.path === projects.own;
+  const here = projects.hosted[p.path], live = projects.running[p.path], gone = projects.missing[p.path] && !live;
+  return [
+    { label: 'Open here', disabled: self || gone, run: () => (here ? askShell('switch', p.path) : askShell('open', p.path, { where: 'here' })) },
+    { label: 'Open in new window', disabled: (self && !here) || gone, run: () => (here ? askShell('popout', p.path) : switchProject(p.path, name, live)) },
+    ...(self && here && location.hash === '#own' ? [{ label: 'Dock', run: () => askShell('dock', p.path) }] : []),
+    ...(here ? [{ label: 'Close board', run: () => closeBoard(p.path) }] : []),
+  ];
+}
 function projectItems() {
   if (projects.error) return [{ label: `Projects: ${projects.error}`, disabled: true }];
   return projects.value.map((p) => {
-    const name = folder(p.path);
     const self = p.path === projects.own;
-    const here = projects.hosted[p.path], live = projects.running[p.path], gone = projects.missing[p.path] && !live;
-    return { label: name + (self ? ' (this board)' : live ? ' (running)' : gone ? ' (missing)' : ''), items: [
-      { label: 'Open here', disabled: self || gone, run: () => (here ? askShell('switch', p.path) : askShell('open', p.path, { where: 'here' })) },
-      { label: 'Open in new window', disabled: (self && !here) || gone, run: () => (here ? askShell('popout', p.path) : switchProject(p.path, name, live)) },
-      ...(self && here && location.hash === '#own' ? [{ label: 'Dock', run: () => askShell('dock', p.path) }] : []),
-      ...(here ? [{ label: 'Close board', run: () => closeBoard(p.path) }] : []),
-    ] };
+    const live = projects.running[p.path], gone = projects.missing[p.path] && !live;
+    return { label: folder(p.path) + (self ? ' (this board)' : live ? ' (running)' : gone ? ' (missing)' : ''), items: projectMenu(p) };
   });
 }
 async function switchProject(path, name, live) {
@@ -1354,7 +1359,7 @@ function closeSwitch() {
   return true;
 }
 function switchOff(e) {
-  if (!e.target.closest('.k95-switch, #switch')) closeSwitch();
+  if (!e.target.closest('.k95-switch, #switch, .k95-menu')) closeSwitch();
 }
 async function openSwitch() {
   if (closeSwitch()) return;
@@ -1370,8 +1375,10 @@ async function openSwitch() {
     else switchProject(p.path, folder(p.path), true);
   };
   const list = projects.value.filter((p) => p.path !== projects.own);
+  const rowMenu = (p, x, y) => menu(x, y, projectMenu(p).map((it) => ({ ...it, run: () => { closeSwitch(); it.run(); } })));
   const rows = list.map((p) => h('div', { class: 'k95-switch-row', role: 'menuitem', tabindex: -1, 'data-project': p.path, style: `background: ${cssColour(p.colour)}`,
-    onclick: () => go(p) },
+    onclick: () => go(p),
+    oncontextmenu: (e) => { e.preventDefault(); rowMenu(p, e.clientX, e.clientY); } },
   h('span', { class: 'name' }, folder(p.path)),
   projects.missing[p.path] && !projects.running[p.path] ? h('span', { class: 'gone', title: 'Folder deleted or moved' }, 'missing') : null,
   projects.running[p.path] ? h('span', { class: 'run', title: 'Running' }) : null,
@@ -1390,6 +1397,10 @@ async function openSwitch() {
       } else if (e.key === 'Enter' && i >= 0) {
         e.preventDefault();
         go(list[i]);
+      } else if ((e.key === 'ContextMenu' || (e.shiftKey && e.key === 'F10')) && i >= 0) {
+        e.preventDefault();
+        const b = box(rows[i]);
+        rowMenu(list[i], b.left, b.bottom);
       }
     } }, h('div', { class: 'window-body' }, ...body));
   document.body.append(m);
@@ -1896,9 +1907,9 @@ addEventListener('keydown', (e) => {
   if (e.target.closest?.('.xterm')) return;
   const plainCtrl = e.ctrlKey && !e.shiftKey && !e.altKey;
   if (e.key === 'Escape') {
-    if (closeSwitch()) return;
     const m = document.querySelector('.k95-menu');
     if (m) return m.remove();
+    if (closeSwitch()) return;
     const w = focused();
     if (w) dismiss(w.el.dataset.win);
   } else if (plainCtrl && e.key.toLowerCase() === 'l') {

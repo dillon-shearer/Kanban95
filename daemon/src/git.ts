@@ -1,6 +1,6 @@
 // One git worktree per ticket: <board home>/worktrees/<repo key>/t-<id> on branch ticket/<id>, forked from the repo's current branch.
 import { execFileSync } from 'node:child_process';
-import { existsSync, lstatSync, mkdirSync, readdirSync, readlinkSync, realpathSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, realpathSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { INNER_GITIGNORE } from './db.js';
 import { localHome, repoKey } from './settings.js';
@@ -42,6 +42,7 @@ const SAFE_ENV = ['.env.example', '.env.sample', '.env.template'];
 const FIRST_GITIGNORE = ['node_modules/', 'dist/', 'build/', '.env', '.env.*', ...SAFE_ENV.map((f) => `!${f}`), ...INNER_GITIGNORE.split('\n').filter(Boolean).map((l) => `.kanban95/${l}`)].join('\n') + '\n';
 export const FIRST_COMMIT = 'Start the Kanban95 board';
 const GIT_COPY_MARKS = ['.gitattributes', '.github'];
+export const FIRST_COMMIT_MAX_BYTES = 10 * 1024 * 1024;
 
 /** A path named `.env` or `.env.<anything>`, in any folder, except the usual templates: never in the first commit. Judged by name only. */
 const isSecretPath = (p: string) => {
@@ -53,7 +54,8 @@ const isSecretPath = (p: string) => {
  * On daemon start: makes a plain folder a local repo the board can run on. No `.git`: `git init`. No commit yet: a
  * `.gitignore` unless there is one, then everything is added and committed once as FIRST_COMMIT by the operator's own git
  * identity (`user.useConfigOnly`: git never makes one up from the host name). Env files (isSecretPath) are kept out of it
- * even when no `.gitignore` covers them; one the operator staged before the board ran stops it instead. A repo with commits
+ * even when no `.gitignore` covers them; one the operator staged before the board ran stops it instead. A file over
+ * FIRST_COMMIT_MAX_BYTES is left out too and appended to `.gitignore`, so it stays out of every worktree. A repo with commits
  * is left alone. Steps are logged to stderr (stdout's first line is the handshake). Throws a message for the operator: git
  * missing, no identity, or a staged env file.
  */
@@ -88,6 +90,22 @@ export function initRepo(repo: string): void {
     if (secrets.length) {
       git(repo, 'rm', '-q', '--cached', '--', ...secrets);
       console.error(`[git] left out of the first commit: ${secrets.join(', ')}`);
+    }
+    const large = index().filter((p) => {
+      try {
+        return lstatSync(join(repo, p)).size > FIRST_COMMIT_MAX_BYTES;
+      } catch {
+        return false;
+      }
+    });
+    if (large.length) {
+      git(repo, 'rm', '-q', '--cached', '--', ...large);
+      const ignore = join(repo, '.gitignore');
+      const text = readFileSync(ignore, 'utf8');
+      appendFileSync(ignore, (text && !text.endsWith('\n') ? '\n' : '') + large.map((p) => `/${p.replace(/[*?[\\]/g, '\\$&')}\n`).join(''));
+      git(repo, 'add', '--', '.gitignore');
+      console.error(`[git] left out of the first commit, over ${FIRST_COMMIT_MAX_BYTES / 1024 / 1024} MB, and added to .gitignore: ${large.join(', ')}; `
+        + 'to commit one, remove its line from .gitignore and git add it, or move it out of the folder');
     }
     git(repo, '-c', 'user.useConfigOnly=true', 'commit', '-q', '--allow-empty', '-m', FIRST_COMMIT);
     console.error(`[git] committed the folder as "${FIRST_COMMIT}"`);
