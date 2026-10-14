@@ -85,7 +85,7 @@ A worker or tester refused for reach ("may not call", "scoped to ticket", "ask f
 - read_all: `get_ticket` and `list_tickets` on every ticket.
 - targets: `get_ticket` and `list_tickets` on the tickets its ticket lists as targets, and with `edit` also `update_ticket` of their body and criteria. The planner or operator sets them before launch, so a ticket that must read or rewrite other tickets names them as targets, not as dependencies.
 
-When the limit an agent hits is a Kanban95 bug or gap (a missing tool, a wrong refusal, a crash), it files it with `file_on_board` on the Kanban95 board by folder name, with the exact refusal text and its ticket id, notes the filed id on its own ticket, and continues. When that board is not running, it adds a note on its own ticket instead. `execute.md`, `test.md`, `operator.md`, `brainstorm.md` and the `kanban95-ticket-start` skill all carry this guidance.
+When the limit an agent hits is a Kanban95 bug or gap (a missing tool, a wrong refusal, a crash), it files it with `file_on_board` on the Kanban95 board by folder name, with the exact refusal text and its ticket id, notes the filed id on its own ticket, and continues. A board that is not running is opened for the call and closed again. When that board is not registered or cannot be opened, it adds a note on its own ticket instead. `execute.md`, `test.md`, `operator.md`, `brainstorm.md` and the `kanban95-ticket-start` skill all carry this guidance.
 
 ## Verification
 

@@ -843,6 +843,14 @@ export async function handleApi(board: Board, req: IncomingMessage, res: ServerR
 
 const FILING_MAX = 64 * 1024;
 
+export function fileTicket(db: DatabaseSync, f: { from: string; title: string; body: string; criteria: string; tags: unknown }): number {
+  const r = db.prepare('INSERT INTO tickets (title, body, criteria, tags) VALUES (?, ?, ?, ?)')
+    .run(f.title, `Filed from ${f.from}\n\n${f.body}`, f.criteria, normaliseTags(f.tags));
+  const id = Number(r.lastInsertRowid);
+  audit(db, { grant_id: null, ticket_id: id, tool: 'boards.file', args: { from: f.from, title: f.title }, outcome: 'ok' });
+  return id;
+}
+
 export async function receiveFiling(board: Board, req: IncomingMessage, res: ServerResponse): Promise<void> {
   if (req.method !== 'POST') return reply(res, { status: 405, body: { error: 'method not allowed' } });
   if (!keyOk(req.headers['x-k95-key'])) return reply(res, { status: 401, body: { error: 'unauthorized' } });
@@ -864,11 +872,7 @@ export async function receiveFiling(board: Board, req: IncomingMessage, res: Ser
       return v ?? '';
     };
     if (!text('from').trim() || !text('title').trim()) throw new HttpError(400, 'from and title are required');
-    const tags = normaliseTags(f.tags ?? []);
-    const r = db.prepare('INSERT INTO tickets (title, body, criteria, tags) VALUES (?, ?, ?, ?)')
-      .run(text('title'), `Filed from ${text('from')}\n\n${text('body')}`, text('criteria'), tags);
-    const id = Number(r.lastInsertRowid);
-    audit(db, { grant_id: null, ticket_id: id, tool: 'boards.file', args: { from: f.from, title: f.title }, outcome: 'ok' });
+    const id = fileTicket(db, { from: text('from'), title: text('title'), body: text('body'), criteria: text('criteria'), tags: f.tags ?? [] });
     changed(id);
     reply(res, { status: 201, body: readTicket(db, id) });
   } catch (e) {

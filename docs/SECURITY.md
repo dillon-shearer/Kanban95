@@ -50,7 +50,8 @@ Without it any local process (a script in another terminal, an agent in a worktr
 
 - **Minted by `register()`** in `daemon/src/boards.ts`, 32 random bytes as hex, new on every start, and written into the daemon's own `~/.kanban95/running/<pid>.json`. That directory is in the operator's home, so a process that can read it is already the operator's.
 - **Checked** in the `X-K95-Key` header as a constant-time compare of SHA-256 digests. Missing or wrong is `401`, with no ticket and no audit row. A body over 64 KB is `413`. Never logged, never in an audit row.
-- **What it allows**: one Backlog ticket with no model or effort, its body starting `Filed from <source folder> #<ticket>`. Nothing else: no launch, no edit, no read. Filing is never a launch: a target that is not running is an error to the agent, never a started board, and the ticket waits in Backlog for the operator.
+- **What it allows**: one Backlog ticket with no model or effort, its body starting `Filed from <source folder> #<ticket>`. Nothing else: no launch, no edit, no read. Filing is never a launch, and the ticket waits in Backlog for the operator.
+- **A target that is not running** is not started as a board: the calling daemon opens that project's `.kanban95/board.db` itself (only for a project in `projects.json` whose folder exists), writes the same ticket and `boards.file` audit row the route would, and closes it. No key is used, no daemon starts, no agent launches, so the target is still not running afterwards; the result has `started: true`.
 - **Audited on both boards**: `file_on_board` on the caller with its grant, `boards.file` on the target with grant null.
 - Filing on the caller's own board is `create_ticket` with that role's limits, so a worker's follow-up rules still hold there and a tester is refused.
 - **Ceiling.** Any same-user process can read the key and file tickets. The ticket only sits in Backlog, so the harm is noise the operator deletes.
