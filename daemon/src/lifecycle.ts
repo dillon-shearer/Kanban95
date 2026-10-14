@@ -370,7 +370,7 @@ function drainTests(b: Board) {
   if (was !== b.lowMemory) changed(null);
 }
 
-export const testersWaiting = () => [...testQueue];
+const testersWaiting = () => [...testQueue];
 
 /** Agents that Windows failed to start, by ticket: how many times in a row (START_RETRY). */
 const unstarted = new Map<number, number>();
