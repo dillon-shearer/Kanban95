@@ -1285,6 +1285,10 @@ fn apply<R: Runtime>(app: &AppHandle<R>, ports: &Ports, fx: Effect) {
 }
 
 fn main() {
+    if std::env::var_os("KANBAN95_AGENT").is_some() {
+        eprintln!("Kanban95 is already running; agents verify headlessly, see docs/AGENTS.md");
+        std::process::exit(1);
+    }
     kill_children_with_us();
     add_login_path();
     // The shell's first argument, if any, is the repo of its first board. Without one (Start menu, Dock) the daemon decides,
