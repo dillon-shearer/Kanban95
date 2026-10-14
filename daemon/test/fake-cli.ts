@@ -3,7 +3,7 @@ import { writeFileSync } from 'node:fs';
 import { delimiter, join } from 'node:path';
 
 export function fakeCli(bin: string, name: string, script: string) {
-  writeFileSync(join(bin, `${name}.cmd`), `@if defined K95_PROBE (node --check "%~dp0${script}" & exit /b)\r\n@node "%~dp0${script}" %*\r\n`);
+  writeFileSync(join(bin, `${name}.cmd`), `@if defined K95_PROBE (node --check "%~dp0${script}" && exit /b 0 || exit /b 1)\r\n@node "%~dp0${script}" %*\r\n`);
   writeFileSync(join(bin, name), `#!/bin/sh\n[ -n "$K95_PROBE" ] && exec node --check "$(dirname "$0")/${script}"\nexec node "$(dirname "$0")/${script}" "$@"\n`, { mode: 0o755 });
   checkCli(name, bin + delimiter + process.env.PATH);
 }
