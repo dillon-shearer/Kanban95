@@ -18,6 +18,7 @@ A refused call returns a tool error whose text says why and, for `move_ticket`, 
 |------|---|---|---|---|
 | create_ticket | yes | yes, Backlog follow-up, no model/effort | no | yes |
 | bootstrap_board | once per board | no | no | once per board |
+| file_on_board | yes | yes; own board as create_ticket | other boards only | yes |
 | update_ticket | any ticket | own, body/criteria only; its Backlog follow-ups, title/body/criteria/tags/depends_on | no | any ticket |
 | delete_ticket | Backlog, no notes or runs | its Backlog follow-ups | no | Backlog, no notes or runs |
 | set_model | any | no | no | any |
@@ -57,6 +58,18 @@ Create a ticket in the backlog. Give it a title, a body that says what to build 
 Create the starter ticket set for a new board from .kanban95/templates/bootstrap.md: one Backlog ticket per section, in order, each depending on the one before, tagged setup. Call it when you create a board or are told to set one up. Refused once the board has a ticket tagged setup, so it runs once. Returns the tickets.
 
 No arguments.
+
+### file_on_board
+
+File a ticket on another Kanban95 board running on this machine, for a bug or gap in that project you hit and cannot fix here. project is the folder name or absolute path as listed in projects.json. The ticket lands in the Backlog of that board with no model or effort, its body starting "Filed from <this repo folder> #<your ticket>". A board that is not running is never started: the call fails and names the running boards, so note it on your ticket instead. Filing on your own board is create_ticket with the limits of your role. Returns the board name and the new ticket.
+
+| argument | type | required | description |
+|---|---|---|---|
+| project | string | yes | Folder name or absolute path of the target project, as in projects.json. |
+| title | string | yes | Short imperative title. |
+| body | string | default `""` | What is wrong or missing and how you hit it, markdown. |
+| criteria | string | default `""` | Acceptance criteria, one checkable statement per line. |
+| tags | string[] | no | Grouping tags, each lowercase a-z, 0-9 and - only. |
 
 ### update_ticket
 

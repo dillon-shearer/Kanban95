@@ -1,11 +1,12 @@
 // The other boards on this machine (Start → Projects): the running registry ~/.kanban95/running/<pid>.json, and opening
 // or focusing another project's board. One daemon per process, so the pid names the entry.
 import { execFile, spawn } from 'node:child_process';
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { basename, dirname, join, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { boardHome, dataHome, gone, normal, readProjects, same } from './settings.js';
 
-interface Entry { pid: number; repo: string; port: number; started: string; shell: number | null; agents: number; attention: number }
+interface Entry { pid: number; repo: string; port: number; started: string; shell: number | null; agents: number; attention: number; key?: string }
 
 const runningDir = () => join(boardHome(), 'running');
 export const entryPath = (pid: number) => join(runningDir(), `${pid}.json`);
@@ -15,7 +16,7 @@ let own: Entry | null = null;
 export function register(repo: string, port: number, shell: number | null): () => void {
   const file = entryPath(process.pid);
   mkdirSync(join(dataHome(), 'running'), { recursive: true });
-  own = { pid: process.pid, repo: normal(repo), port, started: new Date().toISOString(), shell, agents: 0, attention: 0 };
+  own = { pid: process.pid, repo: normal(repo), port, started: new Date().toISOString(), shell, agents: 0, attention: 0, key: randomBytes(32).toString('hex') };
   writeFileSync(file, JSON.stringify(own) + '\n');
   return () => {
     own = null;
@@ -29,6 +30,9 @@ export function countBoard(agents: number, attention: number): void {
   own.attention = attention;
   try { writeFileSync(entryPath(own.pid), JSON.stringify(own) + '\n'); } catch {}
 }
+
+const digest = (s: string) => createHash('sha256').update(s).digest();
+export const keyOk = (given: unknown) => typeof given === 'string' && !!own?.key && timingSafeEqual(digest(given), digest(own.key));
 
 /** EPERM: the pid exists but belongs to someone else, so it is alive. */
 function alive(pid: number): boolean {
@@ -93,6 +97,39 @@ export const attentionMap = () => sumMap('attention');
 export function hostedMap(shell: number | null | undefined): Record<string, boolean> {
   const live = running();
   return Object.fromEntries(readProjects().map((p) => [p.path, shell != null && live.some((e) => same(e.repo, p.path) && e.shell === shell)]));
+}
+
+export interface Filing { from: string; title: string; body: string; criteria: string; tags: string[] }
+
+export function runningBoard(project: string): { repo: string; name: string; entry: Entry } {
+  const live = running();
+  const names = live.map((e) => basename(e.repo)).sort().join(', ') || 'none';
+  const list = readProjects();
+  const hits = isAbsolute(project) ? list.filter((p) => same(p.path, normal(project))) : list.filter((p) => same(basename(p.path), project));
+  if (hits.length > 1) throw new Error(`${project} names ${hits.length} projects; give the absolute path. Running boards: ${names}`);
+  if (!hits.length) throw new Error(`${project} is not in projects.json. Running boards: ${names}`);
+  const repo = hits[0].path;
+  const entry = live.find((e) => same(e.repo, repo));
+  if (!entry) throw new Error(`${basename(repo)} is not running. Running boards: ${names}`);
+  return { repo, name: basename(repo), entry };
+}
+
+export async function fileOn(entry: Entry, name: string, f: Filing): Promise<unknown> {
+  if (!entry.key) throw new Error(`${name} runs an older Kanban95 that cannot take a filed ticket`);
+  let r: Response;
+  try {
+    r = await fetch(`http://127.0.0.1:${entry.port}/api/boards/file`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-K95-Key': entry.key },
+      body: JSON.stringify(f),
+      signal: AbortSignal.timeout(10_000),
+    });
+  } catch (e) {
+    throw new Error(`${name} did not answer: ${(e as Error).message}`);
+  }
+  const out = await r.json().catch(() => ({})) as { error?: string };
+  if (!r.ok) throw new Error(`${name} refused the ticket (${r.status}): ${out.error ?? r.statusText}`);
+  return out;
 }
 
 type Verb = 'open' | 'switch' | 'popout' | 'dock' | 'close' | 'restart' | 'check' | 'checknow' | 'update' | 'pick';
