@@ -964,13 +964,14 @@ export const RESTARTED = 'agent exited without reporting (the daemon restarted)'
  * Daemon start: no agent survives a restart. The agent did nothing wrong, so a running, unflagged ticket is resumed once: the
  * agent for its phase starts again in the same worktree, continuing its Claude Code conversation (launcher `resumable`) or
  * else fresh with the note in its prompt. If that agent then exits
- * without reporting, the ordinary exit row flags it. A done ticket that never merged and is not flagged was cut off mid-queue:
- * it is queued again.
+ * without reporting, the ordinary exit row flags it. A running ticket with no worktree never had an agent (imported or set
+ * in the db that way): it waits for Launch, so a migration cannot start hundreds of agents before the port line. A done ticket
+ * that never merged and is not flagged was cut off mid-queue: it is queued again.
  */
 export function recover(b: Board) {
   const running = b.db.prepare("SELECT id, status FROM tickets WHERE status IN ('in_progress', 'testing') AND needs_human = 0 AND blocked = 0").all() as { id: number; status: string }[];
   for (const { id, status } of running) {
-    if (sessionsOf(id).length > 0) continue;
+    if (sessionsOf(id).length > 0 || !existsSync(worktreePath(b.repo, id))) continue;
     const role = status === 'testing' ? 'tester' : 'worker';
     // ponytail: no Pause yet; when it lands, a paused board flags here (apply 'exit' with RESTARTED) instead.
     b.db.prepare("INSERT INTO notes (ticket_id, role, kind, body) VALUES (?, ?, 'failure', ?)").run(id, role, RESTARTED);

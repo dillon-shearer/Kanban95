@@ -82,6 +82,7 @@ function listen() {
     }
     if (e.update) return onUpdate(e.update);
     if (e.type === 'pick') return pickDone(e);
+    if (e.type === 'open-failed') return say(`${e.folder} did not open: ${e.reason}`);
     if (e.ticket != null) dirty.add(e.ticket);
     else if (e.ticket === null) projectDirty = true;
     schedule();
