@@ -51,7 +51,7 @@ describe('tickets', () => {
     expect(created.status).toBe(201);
     const t = await created.json();
     expect(t).toMatchObject({ id: 1, title: 'first', status: 'backlog', effort: 'low', retry: 0, depends_on: [] });
-    expect(t.flags).toEqual({ needs_human: false, blocked_on_deps: false });
+    expect(t.flags).toEqual({ needs_human: false, blocked_on_deps: false, blocked: false });
 
     const patched = await call('PATCH', '/api/tickets/1', { status: 'in_progress', needs_human: true, effort: null });
     expect(patched.status).toBe(200);

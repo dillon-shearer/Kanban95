@@ -207,7 +207,7 @@ Every `/api/*` request needs the `k95` cookie holding the shell secret, or gets 
 
 | method | path | notes |
 |---|---|---|
-| GET, POST | `/api/tickets` | list / create. Body fields: `title` (required), `body`, `criteria`, `status`, `cli`, `model`, `effort`, `retry`, `needs_human`, `blocked_on_deps`, `depends_on: number[]` |
+| GET, POST | `/api/tickets` | list / create. Body fields: `title` (required), `body`, `criteria`, `status`, `cli`, `model`, `effort`, `retry`, `needs_human`, `blocked_on_deps`, `blocked`, `depends_on: number[]` |
 | GET, PATCH, DELETE | `/api/tickets/:id` | same fields on PATCH; `null` clears `cli`/`model`/`effort`; a PATCH that moves the ticket to `backlog` first ends its live sessions (`runs.outcome` = `reset`, grants revoked, ptys killed); DELETE ends them too and also removes `.kanban95/attachments/<id>/` |
 | GET | `/api/tickets/:id/notes` `/audit` | rows for that ticket, oldest first |
 | GET | `/api/tickets/:id/runs` | that ticket's runs, oldest first, without `prompt_rendered` and `scrollback`; `has_scrollback` (boolean) says whether output was kept |

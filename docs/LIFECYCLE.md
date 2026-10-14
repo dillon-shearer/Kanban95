@@ -4,7 +4,7 @@ Living document. How a ticket moves itself from Launch to merged, and what the b
 
 ## Columns and flags
 
-Status is one of **backlog → in_progress → testing → done**. Two flags sit beside it: `needs_human` (the operator is needed: a question, a silent exit, an agent silent for `idle_minutes`, the retry cap, a merge conflict (on submit or in the merge queue) at the retry cap, a main checkout still dirty after the merge queue's wait, a merge whose git never ran, a merge that landed but could not be pushed) and `blocked_on_deps` (launched, but waiting for a dependency to merge). A ticket also records `retry` (failed tests and merge conflicts so far) and `merged_at` (when its branch landed and, with `push_after_merge` on, was pushed).
+Status is one of **backlog → in_progress → testing → done**. Two flags sit beside it: `needs_human` (the operator is needed: a question, a silent exit, an agent silent for `idle_minutes`, the retry cap, a merge conflict (on submit or in the merge queue) at the retry cap, a main checkout still dirty after the merge queue's wait, a merge whose git never ran, a merge that landed but could not be pushed) and `blocked_on_deps` (launched, but waiting for a dependency to merge). A third, `blocked`, is the operator's own (Blocked, below). A ticket also records `retry` (failed tests and merge conflicts so far) and `merged_at` (when its branch landed and, with `push_after_merge` on, was pushed).
 
 ## Events
 
@@ -218,6 +218,18 @@ Agents already running carry on, and the operator's own Launch, Resume, Restart 
 ### Cancel wait
 
 `PATCH /api/tickets/:id {"blocked_on_deps": false}` clears a hold and nothing else: status, `retry` and notes stay, and a later merge of the dependency launches nothing; the ticket starts when the operator launches it or the runner picks it up as a candidate. The card menu's **Cancel wait** sends it for the selected held cards; **Stop** clears every held Backlog ticket at once (The runner, above). Reset to Backlog also clears the hold, but resets `retry` and `needs_human` too. No event is needed: no status changes and no effect runs. The Board's status bar shows "n waiting to launch by themselves" while any Backlog ticket has `blocked_on_deps` on.
+
+### Blocked
+
+`PATCH /api/tickets/:id {"blocked": true}` parks a ticket by hand; `{"blocked": false}` clears it. Only the operator sets it: no MCP tool takes it, and `update_ticket` drops a `blocked` field like any field it does not know. While it is set, whatever the status:
+
+- Launch, Resume, Restart, Reject and Retry merge are refused (409, "cannot launch a Blocked ticket: Unblock it first"); the same events sent by the board itself (a released dependent, a conflict sent back) are skipped.
+- The runner never picks it (`candidates`) and does not count it as running, so it holds no slot and no restart after a merge waits for it.
+- A live agent is not stopped. Its report still moves the ticket (a submit goes to Testing, a pass to Done), but no tester or worker is started and nothing is queued for merge. A merge already queued is skipped when its turn comes. A move into Done by hand queues no merge.
+- A daemon restart resumes no agent on it and queues no merge for it.
+- Its dependents wait on it with `blocked_on_deps`, as on any unmerged dependency.
+
+The flag is a column (`010-ticket-blocked.sql`), so it survives status moves (by hand or by an agent), Reset to Backlog and restarts. Clearing it starts nothing: a Backlog ticket is a candidate again, and a running or Done ticket waits for Launch or Retry merge. The card menu's **Block** and **Unblock** act on the whole selection; the Ticket window has the same button; the card shows a dark `blocked` badge; the filter word `is:blocked` shows only Blocked cards (`daemon/test/blocked.test.ts`, `daemon/test/ui-blocked.test.ts`).
 
 ### Worktree setup
 
