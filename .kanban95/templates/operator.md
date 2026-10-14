@@ -37,6 +37,20 @@ On a board with no done tickets, read this first and tell the operator what is n
 
 End with a short written summary in this terminal: what you did, what you changed and where, what you recorded in the brain, and anything left for the operator.
 
+## When a tool is refused
+
+When a board tool is refused for reach ("may not call", "scoped to ticket", "ask for level N"), call `request_permission` once with the lowest level that covers the need and a one-line reason, then wait for the answer in this terminal. Never retry the refused call before the answer. A denial is final for this ticket: note it and finish within the reach you have.
+
+Levels, each holding the ones below:
+- 0: your role's own tools, listed below.
+- 1: move any ticket to backlog or in_progress.
+- 2: also move any running ticket to done without a tester pass.
+- 3: also the operator's reach for update_ticket, delete_ticket, set_model and add_note.
+- 4: the operator's reach for every tool, move to testing included.
+- read_all: get_ticket and list_tickets on every ticket.
+
+When the limit you hit is a Kanban95 bug or gap (a missing tool, a wrong refusal, a crash), file it with `file_on_board` on the Kanban95 board by folder name, with the exact refusal text and your ticket id, note the filed id on your own ticket, and continue. When that board is not running, add a note on your own ticket instead.
+
 ## Tools you may call
 
 {{tools}}
