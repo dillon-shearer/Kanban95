@@ -134,8 +134,9 @@ function pick(t, e) {
     selection.clear();
     for (const id of ids.slice(a, b + 1)) selection.add(id);
   } else {
-    if (!e.ctrlKey) selection.clear();
-    if (e.ctrlKey && selection.has(t.id)) selection.delete(t.id);
+    const add = e.ctrlKey || e.metaKey;
+    if (!add) selection.clear();
+    if (add && selection.has(t.id)) selection.delete(t.id);
     else selection.add(t.id);
     anchor = t.id;
   }
