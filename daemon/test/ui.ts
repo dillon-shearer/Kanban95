@@ -97,8 +97,8 @@ beforeAll(async () => {
   page = await browser();
   // As the shell does: open on ?k95=<secret>, which the daemon trades for a cookie and redirects to /.
   await page.send('Page.navigate', { url: `${base}?k95=${srv.secret}` });
-  await until(() => page.evaluate(`document.readyState === 'complete' && location.href === ${JSON.stringify(base)}`), 'the redirect to /');
-}, 30_000); // measured 0.8 to 1.4 s with the files in parallel: a tab, not a browser start
+  await until(() => page.evaluate(`document.readyState === 'complete' && location.href === ${JSON.stringify(base)}`), 'the redirect to /', 60_000);
+}, 90_000); // 1 s on an idle machine; up to 25 s with four files in parallel while other tickets' tests load it
 afterAll(async () => {
   await page?.close();
   await srv?.close();
