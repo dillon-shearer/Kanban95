@@ -100,7 +100,7 @@ export function initRepo(repo: string): void {
   }
 }
 
-export function volumeType(path: string): string | undefined {
+function volumeType(path: string): string | undefined {
   try {
     const device = execFileSync('df', ['-P', path], { encoding: 'utf8', stdio: 'pipe' }).trim().split('\n').pop()!.split(/\s+/)[0];
     const info = execFileSync('diskutil', ['info', device], { encoding: 'utf8', stdio: 'pipe' });
