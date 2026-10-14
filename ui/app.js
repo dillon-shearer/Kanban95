@@ -87,7 +87,7 @@ function listen() {
     else if (e.ticket === null) projectDirty = true;
     schedule();
   };
-  // Only Restart board reconnects: the shell navigates this window to the new daemon, which reloads the page.
+  // Only Restart board reconnects: the shell navigates this board's window to the new daemon, which reloads the page.
   ws.onclose = () => {
     if (!restarting) return say('Lost the connection to the daemon. Restart Kanban95.');
     say('Restarting…');
@@ -1358,6 +1358,7 @@ async function askShell(verb, path, extra = {}) {
   await notepadSave?.();
   try {
     await api('POST', `/projects/${verb}`, { path, ...extra });
+    if (verb === 'switch') say('');
   } catch (e) {
     say(e.message);
   }
@@ -1980,13 +1981,14 @@ async function boot() {
   document.getElementById('limits').addEventListener('click', openLimits);
   desktopIcons();
   loadProjectItems();
-  addEventListener('focus', loadProjectItems);
+  const lastBoard = () => api('POST', '/last-board', location.hash === '#own' ? { window: 'own' } : {}).catch(() => {});
+  addEventListener('focus', () => { loadProjectItems(); lastBoard(); });
   clock();
   setInterval(clock, 10_000);
   refreshLimits(); // a CLI start each, ~10 s: not awaited
   setInterval(refreshLimits, 5 * 60_000); // the daemon's cache lives as long, so this reads fresh numbers
   listen();
-  api('POST', '/last-board', location.hash === '#own' ? { window: 'own' } : {}).catch(() => {});
+  lastBoard();
   paintProject().catch((e) => say(e.message));
   const update = api('GET', '/update');
   const modelsIn = loadModels().catch(() => { models = null; });
