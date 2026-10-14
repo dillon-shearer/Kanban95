@@ -171,8 +171,8 @@ describe('stdout rule', () => {
       .map(({ f, line }) => `${f}: ${line}`);
     expect(hits).toEqual([
       'boards.ts: process.stdout.write(`KANBAN95 ${verb}=${path && normal(path)}${rest && \' \' + rest}\\n`);',
+      'server.ts: const handshake = (port: number) => console.log(`KANBAN95 port=${port}`);',
       'server.ts: console.log((e as Error).message);',
-      'server.ts: console.log(`KANBAN95 port=${port}`);',
     ]);
   });
 });

@@ -401,21 +401,19 @@ if (import.meta.main) {
       setTimeout(() => process.exit(code), 15_000).unref();
       begun.then((s) => (s as Awaited<ReturnType<typeof start>>).close()).finally(() => process.exit(code));
     };
+    // The parent (Tauri shell) holds our stdin. When it dies the pipe closes and we leave with it, agents' process trees first:
+    // on Windows the shell's job object would end them too, on macOS nothing would.
+    process.stdin.on('end', () => board.shutdown!(0));
+    process.on('exit', () => rmSync(entryPath(process.pid), { force: true })); // the running entry, also without close()
+    askForCheck(board);
   };
   const begun = Promise.resolve().then(() => (repo ? start({ secret, port: wanted, repo, shellId, shell, listening }) : startSetup({ secret, port: wanted, shell, done: () => process.exit(75) })));
   const started = await begun.catch((e) => {
     console.log((e as Error).message);
     process.exit(1);
   });
-  if (!repo) handshake(started.port);
-  if (repo) {
-    const { board } = started as Awaited<ReturnType<typeof start>>;
-    // The parent (Tauri shell) holds our stdin. When it dies the pipe closes and we leave with it, agents' process trees first:
-    // on Windows the shell's job object would end them too, on macOS nothing would.
-    process.stdin.on('end', () => board.shutdown!(0));
-    process.on('exit', () => rmSync(entryPath(process.pid), { force: true })); // the running entry, also without close()
-    askForCheck(board);
-  } else {
+  if (!repo) {
+    handshake(started.port);
     process.stdin.on('end', () => process.exit(0));
   }
   process.stdin.resume();
