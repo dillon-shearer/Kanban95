@@ -22,6 +22,7 @@ const traces = () => ({ bak: existsSync(`${state}.kanban95.bak`), board: existsS
 export default function setup() {
   const run = realpathSync.native(mkdtempSync(join(tmpdir(), 'k95-run-')));
   process.env.TEMP = process.env.TMP = process.env.TMPDIR = run;
+  process.env.PSModuleAnalysisCachePath = join(run, 'ModuleAnalysisCache');
   const mine = resolve(run).replaceAll('\\', '/') + '/'; // Claude Code's key form (trust.ts)
   const before = traces();
   return () => {
