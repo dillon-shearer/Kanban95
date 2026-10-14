@@ -129,7 +129,7 @@ describe('ticket scope', () => {
       expect((await call(c(), 'get_ticket')).json).toMatchObject({ id: 3, depends_on: [2], notes: [] });
       expect((await call(c(), 'get_ticket', { ticket_id: 2 })).json).toMatchObject({ id: 2 });
       const denied = await call(c(), 'get_ticket', { ticket_id: 1 });
-      expect(denied).toMatchObject({ denied: true, text: 'this grant is scoped to ticket 3 and its dependencies; ask for level 4 with request_permission' });
+      expect(denied).toMatchObject({ denied: true, text: 'this grant is scoped to ticket 3, its dependencies and its targets; ask for level 4 with request_permission' });
       expect(lastAudit()).toMatchObject({ grant_id: grantIds[`${role}3`], ticket_id: 1, tool: 'get_ticket', outcome: 'denied' });
       expect((await call(c(), 'get_ticket', { ticket_id: 4 })).denied).toBe(true);
       expect((await call(c(), 'list_tickets')).json.map((t: { id: number }) => t.id)).toEqual([3, 2]);
@@ -349,5 +349,34 @@ describe('brain', () => {
 describe('docs', () => {
   it('docs/MCP.md is byte-identical to what the tool definitions render', () => {
     expect(readFileSync(MCP_DOC, 'utf8')).toBe(renderMcpDoc());
+  });
+});
+
+describe('targets', () => {
+  it('targets: a worker reads every target and edits body and criteria of an edit target only; an unlisted ticket stays refused', async () => {
+    const [t5, t6, t7] = ['five', 'six', 'seven'].map((t) => Number(srv.db.prepare('INSERT INTO tickets (title) VALUES (?)').run(t).lastInsertRowid));
+    const host = (await call(planner, 'create_ticket', { title: 'rewrite', targets: [{ id: t5, edit: true }, { id: t6 }] })).json;
+    expect(host).toMatchObject({ depends_on: [], targets: [{ id: t5, edit: true }, { id: t6, edit: false }] });
+    const w = await connect(mint(srv.db, { ticket: host.id, role: 'worker', ttlMs: 60_000 }).token);
+    expect((await call(w, 'get_ticket', { ticket_id: t5 })).json).toMatchObject({ id: t5, title: 'five' });
+    expect((await call(w, 'get_ticket', { ticket_id: t6 })).json).toMatchObject({ id: t6 });
+    expect((await call(w, 'list_tickets')).json.map((t: { id: number }) => t.id)).toEqual([host.id, t5, t6]);
+    expect((await call(w, 'update_ticket', { ticket_id: t5, body: 'rewritten', criteria: 'new' })).json).toMatchObject({ id: t5, body: 'rewritten', criteria: 'new' });
+    expect(lastAudit()).toMatchObject({ ticket_id: t5, tool: 'update_ticket', outcome: 'ok' });
+    expect((await call(w, 'update_ticket', { ticket_id: t5, title: 'renamed' })).text).toMatch(/not title/);
+    expect((await call(w, 'update_ticket', { ticket_id: t6, body: 'x' })).text).toMatch(/scoped to ticket/);
+    for (const tool of ['get_ticket', 'update_ticket'] as const) {
+      const r = await call(w, tool, { ticket_id: t7, ...(tool === 'update_ticket' && { body: 'x' }) });
+      expect(r, tool).toMatchObject({ denied: true });
+      expect(r.text).toMatch(new RegExp(`scoped to ticket ${host.id}`));
+    }
+    expect((await call(w, 'update_ticket', { targets: [{ id: t7, edit: true }] })).text).toMatch(/not targets/);
+    expect((await call(w, 'create_ticket', { title: 'f', targets: [{ id: t7 }] })).text).toMatch(/may not set targets/);
+    const f = (await call(w, 'create_ticket', { title: 'f' })).json;
+    expect((await call(w, 'update_ticket', { ticket_id: f.id, targets: [{ id: t7, edit: true }] })).text).toMatch(/not targets/);
+    expect((await call(planner, 'get_ticket', { ticket_id: t6 })).json).toMatchObject({ body: '' });
+    expect((await call(planner, 'update_ticket', { ticket_id: host.id, targets: [{ id: host.id }] })).text).toMatch(/cannot target itself/);
+    expect((await call(planner, 'update_ticket', { ticket_id: host.id, targets: [] })).json.targets).toEqual([]);
+    expect((await call(w, 'get_ticket', { ticket_id: t5 })).denied).toBe(true);
   });
 });

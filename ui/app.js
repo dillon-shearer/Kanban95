@@ -887,13 +887,17 @@ function ticketForm(w, t) {
   const criteria = h('textarea', { rows: 5 }, t?.criteria ?? '');
   const tags = h('input', { type: 'text', 'data-mic': 'off', value: t?.tags.split(' ').join(', ') ?? '', placeholder: 'e.g. ui, daemon' });
   const deps = h('input', { type: 'text', 'data-mic': 'off', value: t?.depends_on.join(', ') ?? '', placeholder: 'e.g. 3, 4' });
+  const ids = (input) => input.value.split(/[\s,]+/).filter(Boolean).map(Number);
+  const targetList = (edit) => (t?.targets ?? []).filter((x) => x.edit === edit).map((x) => x.id).join(', ');
+  const reads = h('input', { type: 'text', 'data-mic': 'off', value: targetList(false), placeholder: 'e.g. 7, 8' });
+  const edits = h('input', { type: 'text', 'data-mic': 'off', value: targetList(true), placeholder: 'e.g. 9' });
   const level = h('select', { class: 'k95-level' }, LEVELS.map((l, i) => h('option', { value: i, selected: (t?.agent_level ?? 0) === i }, `${i}: ${l}`)));
   const readAll = h('input', { type: 'checkbox', class: 'k95-read-all', id: `read-all-${t?.id ?? 'new'}`, checked: t?.read_all ?? false });
-  const snap = () => JSON.stringify([...[title, body, criteria, tags, deps, level].map((x) => x.value), readAll.checked]);
+  const snap = () => JSON.stringify([...[title, body, criteria, tags, deps, reads, edits, level].map((x) => x.value), readAll.checked]);
   let saved = snap();
   const save = async () => {
-    const fields = { title: title.value, body: body.value, criteria: criteria.value, tags: tags.value, depends_on: deps.value.split(/[\s,]+/).filter(Boolean).map(Number),
-      agent_level: Number(level.value), read_all: readAll.checked };
+    const fields = { title: title.value, body: body.value, criteria: criteria.value, tags: tags.value, depends_on: ids(deps),
+      targets: [...ids(reads).map((id) => ({ id, edit: false })), ...ids(edits).map((id) => ({ id, edit: true }))], agent_level: Number(level.value), read_all: readAll.checked };
     try {
       if (t) {
         const now = snap();
@@ -917,6 +921,8 @@ function ticketForm(w, t) {
     h('div', { class: 'field-row-stacked' }, h('label', {}, 'Acceptance criteria, one per line'), criteria),
     h('div', { class: 'field-row-stacked' }, h('label', {}, 'Tags, comma or space separated'), tags),
     h('div', { class: 'field-row-stacked' }, h('label', {}, 'Depends on'), deps),
+    h('div', { class: 'field-row-stacked' }, h('label', {}, 'Targets its agents may read'), reads),
+    h('div', { class: 'field-row-stacked' }, h('label', {}, 'Targets its worker may also edit (body, criteria)'), edits),
     h('div', { class: 'field-row' }, h('label', {}, 'Agent level'), level, readAll, h('label', { for: readAll.id }, 'Read all tickets')),
     h('div', { class: 'field-row' }, h('button', { onclick: save }, t ? 'Save' : 'Create'),
       t && h('button', { disabled: t.status !== 'backlog', onclick: () => launch([t]) }, 'Launch'),
