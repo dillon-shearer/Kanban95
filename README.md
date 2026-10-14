@@ -35,6 +35,16 @@ The app reads your login shell's PATH, so it finds the same agent CLIs your Term
 
 If the app will not start, the reason is in `~/Library/Logs/Kanban95/shell.log`.
 
+### Updating
+
+The installed app checks GitHub Releases for a new version when it starts. If there is one, it shows a dialog with **Update now** and **Later**. **Later** hides it until the next check.
+
+To check by hand, go to Start -> Settings -> Board -> **Check for updates**.
+
+**Update now** is refused while agents are running. Finish or stop them first.
+
+If the check fails (you are offline, or you have an old version whose check no longer works), download the latest installer from the [latest Release](https://github.com/dillon-shearer/Kanban95/releases/latest) and run it over your existing install. Your settings and board data are kept.
+
 ## What you need
 
 - [git](https://git-scm.com/downloads)
