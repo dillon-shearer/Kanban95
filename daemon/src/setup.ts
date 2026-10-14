@@ -3,7 +3,7 @@ import { statSync } from 'node:fs';
 import { isAbsolute } from 'node:path';
 import { finishPick, readPick, startPick } from './pick.js';
 import { requirements } from './requirements.js';
-import { addProject, BadConfig, boardHome, gone, missingHome, normal, readConfig, readLastBoard, readProjects, same, setBoardHome } from './settings.js';
+import { addProject, BadConfig, boardHome, gone, localHome, missingHome, normal, readConfig, readLastBoard, readProjects, same, setBoardHome } from './settings.js';
 
 export function firstProject(): string | undefined {
   return readProjects().find((p) => !gone(p.path))?.path;
@@ -33,7 +33,7 @@ export function setupPage(html: string): string {
   if (!lost) return html;
   return html
     .replace(/<p id="intro">[^<]*<\/p>/, `<p id="intro">${esc(notFound(lost))}</p>`)
-    .replace('<input id="data" type="text" required>', `<input id="data" type="text" required value="${esc(lost)}">`)
+    .replace('<input id="data" type="text" required>', `<input id="data" type="text" required value="${esc(localHome())}">`)
     .replace('<div id="project-row" class="field-row-stacked">', '<div id="project-row" class="field-row-stacked" hidden>')
     .replace('<input id="project" type="text" required>', '<input id="project" type="text">')
     .replace('<button id="retry" type="button" hidden>', '<button id="retry" type="button">');
@@ -86,13 +86,14 @@ export async function handleSetup(req: IncomingMessage, res: ServerResponse, url
     return json(res, 200, { repo });
   }
   if (url.pathname !== '/api/setup') return json(res, 404, { error: 'not found' });
-  if (req.method === 'GET') return json(res, 200, { data: boardHome(), shell: setup.shell === true });
+  if (req.method === 'GET') return json(res, 200, { data: missingHome() ? localHome() : boardHome(), shell: setup.shell === true });
   if (req.method !== 'POST') return json(res, 405, { error: 'method not allowed' });
   try {
     const { data, project } = await body(req);
     if (typeof data !== 'string' || !data.trim()) throw new BadConfig('Data folder is empty');
     if (!isAbsolute(data.trim())) throw new BadConfig(`Data folder ${data.trim()} is not a full path`);
     if (missingHome()) {
+      if (gone(data.trim()) && !same(normal(data.trim()), normal(localHome()))) throw new BadConfig(`Data folder ${data.trim()} was not found`);
       setBoardHome(data.trim());
       const repo = firstProject();
       res.once('finish', () => done(repo));

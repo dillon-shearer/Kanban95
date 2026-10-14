@@ -1003,7 +1003,10 @@ struct Pending(Mutex<Option<Update>>);
 struct Recreating(Mutex<BTreeSet<String>>);
 
 fn recreating<R: Runtime, M: Manager<R>>(app: &M, label: Option<&str>) -> bool {
-    app.try_state::<Recreating>().is_some_and(|r| label.map_or(!lock(&r.0).is_empty(), |l| lock(&r.0).contains(l)))
+    // One guard: `map_or`'s default is evaluated eagerly, so locking in both arms deadlocked the main thread.
+    let Some(r) = app.try_state::<Recreating>() else { return false };
+    let set = lock(&r.0);
+    label.map_or(!set.is_empty(), |l| set.contains(l))
 }
 
 async fn find<R: Runtime>(app: &AppHandle<R>) -> Result<Option<Update>, String> {
@@ -2291,6 +2294,19 @@ mod tests {
         let bundle: serde_json::Value = serde_json::from_str(include_str!("../tauri.bundle.json")).unwrap();
         ctx.config_mut().plugins.0.insert("updater".into(), bundle["plugins"]["updater"].clone());
         mock_builder().plugin(tauri_plugin_updater::Builder::new().build()).manage(Pending::default()).build(ctx).unwrap()
+    }
+
+    #[test]
+    fn recreating_answers_without_deadlocking_on_its_own_lock() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let app = mock_builder().manage(Recreating::default()).build(tauri::generate_context!(test = true)).unwrap();
+            let none = (recreating(&app, None), recreating(&app, Some("board-a")));
+            lock(&app.state::<Recreating>().0).insert("board-a".into());
+            let _ = tx.send((none, recreating(&app, None), recreating(&app, Some("board-a")), recreating(&app, Some("board-b"))));
+        });
+        let got = rx.recv_timeout(Duration::from_secs(10)).expect("recreating deadlocked");
+        assert_eq!(got, ((false, false), true, true, false));
     }
 
     fn serve(listener: std::net::TcpListener, reply: String) {
