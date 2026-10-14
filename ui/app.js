@@ -682,9 +682,10 @@ function openBoard() {
       h('button', { onclick: () => launch(picked()) }, 'Launch'),
       run,
       h('button', { onclick: newBrainstorm, title: 'Ctrl+N' }, 'New brainstorm'),
-      h('button', { onclick: housekeeping }, 'Housekeeping')),
+      h('button', { onclick: housekeeping }, 'Housekeeping'),
+      filter),
     cols,
-    h('div', { class: 'status-bar' }, status, runField, releaseField, unpushedField, heldField, h('p', { class: 'status-bar-field k95-filter-field' }, filter)));
+    h('div', { class: 'status-bar' }, status, runField, releaseField, unpushedField, heldField));
   say = (msg) => { status.textContent = msg; status.title = msg; };
   views.set('board', () => {
     const all = [...tickets.values()];
