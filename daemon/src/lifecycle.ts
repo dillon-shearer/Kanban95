@@ -6,6 +6,7 @@ import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { readTicket, transaction, type Ticket } from './api.js';
+import { recordDeliverables } from './deliverables.js';
 import { branchName, git, gitNotRun, hasBranch, isAncestor, notStarted, syncWorktree, worktreePath } from './git.js';
 import { revoke, type Role } from './grants.js';
 import { cleanTicket } from './janitor.js';
@@ -601,6 +602,13 @@ async function mergeJob(b: Board, id: number, since: number) {
   const r = inBase ? { ok: true as const } : await merge(b.repo, id, t.title, wanted);
   mark('merge-end', `t${id}`, !r ? 'skipped' : r.ok ? 'ok' : r.dirty ? 'dirty' : 'conflict');
   if (!r) return void (readTicket(b.db, id).status === 'done' && moved() && queueMerge(b, id, since));
+  if (r.ok && !inBase) {
+    try {
+      recordDeliverables(b.db, b.repo, head, 'HEAD', id, t.title);
+    } catch (e) {
+      console.error('[deliverables]', (e as Error).message);
+    }
+  }
   // Rejected while git merge ran: the work landed, but the ticket is a worker's again and its next pass merges again.
   if (r.ok && readTicket(b.db, id).status !== 'done') return;
   let out;

@@ -30,6 +30,7 @@ const CLIS = ['claude', 'codex'];
 const tickets = new Map();
 let sessions = [];
 let inbox = [];
+let deliverables = [];
 let runner = { on: false, concurrency: 3, running: [], left: 0, backlog: 0, waits: [], unpushed: 0 }; // GET /api/runner: the Run button and its status-bar line
 let models = null; // models.json this board runs on (this repo's copy, else the global file), for the cards' default model and effort
 // Sounds stay off until /config/settings loads: listen() starts first, and a ding in that gap ignored the operator's choice.
@@ -58,7 +59,7 @@ async function refreshTicket(id) {
   }
 }
 async function refreshShared() {
-  [sessions, inbox, runner] = await Promise.all([api('GET', '/sessions'), api('GET', '/inbox'), api('GET', '/runner')]);
+  [sessions, inbox, deliverables, runner] = await Promise.all([api('GET', '/sessions'), api('GET', '/inbox'), api('GET', '/deliverables'), api('GET', '/runner')]);
   openNewTerminals();
   taskbar();
   tickRunBadges();
@@ -1125,10 +1126,10 @@ function openInbox() {
   if (w.body.firstChild) return;
   let shown = null;
   const draw = () => {
-    const ids = inbox.map((q) => q.id).join();
+    const ids = [...inbox.map((q) => q.id), ...deliverables.map((d) => `${d.folder}@${d.merged_at}`)].join();
     if (ids === shown) return; // unchanged: keep whatever the operator is typing
     shown = ids;
-    w.body.replaceChildren(...(inbox.length ? inbox.map((q) => {
+    w.body.replaceChildren(...(inbox.length || deliverables.length ? [...inbox.map((q) => {
       const legend = h('legend', {}, `#${q.ticket_id} ${q.title}`);
       if (q.kind === 'failure') {
         // The note ends with "To resolve: …" (docs/LIFECYCLE.md → Needs human); the buttons are the actions it names.
@@ -1162,7 +1163,11 @@ function openInbox() {
         h('div', { class: 'note-head' }, `${fmt(q.created_at)} · the ${q.role} asks:`), h('pre', {}, q.body),
         h('div', { class: 'field-row' }, answer),
         h('button', { onclick: () => act(() => api('POST', `/tickets/${q.ticket_id}/answer`, { answer: answer.value }), `Answer sent to #${q.ticket_id}.`) }, 'Answer'));
-    }) : [h('p', {}, 'Nothing needs you.')]));
+    }), ...deliverables.map((d) => h('fieldset', { class: 'k95-deliverable', 'data-folder': d.folder }, h('legend', {}, d.folder),
+      h('div', { class: 'note-head' }, `#${d.ticket_id} ${d.title} · merged ${fmt(d.merged_at)}`),
+      h('div', { class: 'field-row' },
+        h('button', { onclick: () => act(() => api('POST', '/deliverables/open', { folder: d.folder })) }, 'Open folder'),
+        h('button', { onclick: () => act(() => api('DELETE', '/deliverables', { folder: d.folder })) }, 'Dismiss'))))] : [h('p', {}, 'Nothing needs you.')]));
   };
   views.set('inbox', draw);
   draw();
@@ -1882,7 +1887,7 @@ function desktopIcons() {
 function taskbar() {
   document.getElementById('agents').textContent = `${sessions.length} agent${sessions.length === 1 ? '' : 's'}`;
   const q = document.getElementById('inbox-count');
-  q.textContent = `Inbox ${inbox.length}`;
+  q.textContent = `Inbox ${inbox.length + deliverables.length}`;
   q.classList.toggle('flag', inbox.length > 0);
   document.getElementById('restart-badge').hidden = !runner.stale;
   // The most constrained window of any CLI, e.g. "Claude 62%"; the tooltip lists them all.
