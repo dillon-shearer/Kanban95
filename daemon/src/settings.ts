@@ -125,6 +125,8 @@ function readOnlyVolume(dir: string): boolean {
 
 export function setBoardHome(dir: string) {
   if (!isAbsolute(dir)) throw new BadConfig(`data folder ${dir} is not an absolute path`);
+  const root = volume(dir);
+  if (root && !statSync(root, { throwIfNoEntry: false })?.isDirectory()) throw new BadConfig(`Data folder ${dir} was not found`);
   mkdirSync(dir, { recursive: true });
   if (same(normal(dir), normal(localHome()))) return rmSync(pointerPath(), { force: true });
   mkdirSync(localHome(), { recursive: true });

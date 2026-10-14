@@ -1,8 +1,8 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, it } from 'vitest';
-import { configPath, readPreferences, runSettings, writeConfig, writePreferences } from '../src/settings.js';
+import { BadConfig, configPath, pointerPath, readPreferences, runSettings, setBoardHome, writeConfig, writePreferences } from '../src/settings.js';
 
 const set = process.env.KANBAN95_HOME!;
 afterEach(() => void (process.env.KANBAN95_HOME = set));
@@ -78,4 +78,17 @@ it('zoom defaults to 1 and takes 0.8 to 2; 3, 0.5 and a string are refused', () 
   expect(() => writeConfig('settings', { zoom: 3 })).toThrow(/zoom/);
   expect(() => writeConfig('settings', { zoom: 0.5 })).toThrow(/zoom/);
   expect(() => writeConfig('settings', { zoom: '1.5' })).toThrow(/zoom/);
+});
+
+it('setBoardHome refuses a folder on a root that is not there and creates nothing', () => {
+  const root = process.platform === 'win32'
+    ? [...'ZYXWVUTSRQPONMLKJIHGFED'].map((l) => `${l}:\\`).find((r) => !statSync(r, { throwIfNoEntry: false }))!
+    : '/Volumes/k95-not-connected/';
+  const dir = join(root, 'k95', 'data');
+  const pointer = existsSync(pointerPath());
+  expect(() => setBoardHome(dir)).toThrow(BadConfig);
+  expect(() => setBoardHome(dir)).toThrow(/was not found/);
+  expect(existsSync(dir)).toBe(false);
+  expect(existsSync(root)).toBe(false);
+  expect(existsSync(pointerPath())).toBe(pointer);
 });
