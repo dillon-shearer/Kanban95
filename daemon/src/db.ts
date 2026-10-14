@@ -2,7 +2,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { dataHome } from './settings.js';
+import { dataHome, onReadOnly } from './settings.js';
 
 // Brain constants live here, not in api.ts: mcp.ts reads them at load time and api.ts ↔ mcp.ts import each other.
 /** bm25 over brain_fts(title, body, tags): a hit in the title or tags outweighs one in a long body. */
@@ -22,6 +22,10 @@ const BUSY_MS = 5000;
 export const INNER_GITIGNORE = 'board.db\nboard.db-*\nsessions/\nattachments/\nmemory.log\nnotepad.md\nrunner.json\nui.json\ntemplates/*.replaced.md\n';
 
 export function openDb(repo: string, opts: { migrationsDir?: string } = {}): DatabaseSync {
+  return onReadOnly('Project folder', repo, () => openBoard(repo, opts));
+}
+
+function openBoard(repo: string, opts: { migrationsDir?: string }): DatabaseSync {
   const dir = join(repo, '.kanban95');
   mkdirSync(dir, { recursive: true });
   const ignore = join(dir, '.gitignore');
@@ -49,6 +53,10 @@ export function openDb(repo: string, opts: { migrationsDir?: string } = {}): Dat
  * connection at once, so WAL (readers never block the one writer) and a busy timeout (a writer waits for another's lock).
  */
 export function openGlobalBrain(home = dataHome(), busyMs = BUSY_MS): DatabaseSync {
+  return onReadOnly('Data folder', home, () => openBrain(home, busyMs));
+}
+
+function openBrain(home: string, busyMs: number): DatabaseSync {
   mkdirSync(home, { recursive: true });
   const db = new DatabaseSync(join(home, 'brain.db'));
   // Switching a fresh file to WAL upgrades a shared lock to an exclusive one, and SQLite can return SQLITE_BUSY there

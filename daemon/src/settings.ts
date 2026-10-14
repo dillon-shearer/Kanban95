@@ -5,7 +5,7 @@
 // models.json, settings.json and preferences.md may have a per-project copy in projects/<repo key>/, used whole instead of the global file.
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { copyFileSync, createReadStream, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, rmdirSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { accessSync, constants, copyFileSync, createReadStream, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, rmdirSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir, userInfo } from 'node:os';
 import * as native from 'node:path';
 import { basename, delimiter, dirname, isAbsolute, join, resolve, win32 } from 'node:path';
@@ -103,6 +103,24 @@ export function dataHome(): string {
   return dir;
 }
 
+export function onReadOnly<T>(what: string, dir: string, fn: () => T): T {
+  try {
+    return fn();
+  } catch (e) {
+    if (process.platform !== 'darwin' || !readOnlyVolume(dir)) throw e;
+    throw new Error(`${what} ${dir} is on a drive mounted read-only. macOS mounts NTFS drives read-only: reformat the drive as exFAT, which works on both Windows and macOS`, { cause: e });
+  }
+}
+
+function readOnlyVolume(dir: string): boolean {
+  try {
+    accessSync(dir, constants.W_OK);
+    return false;
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code === 'EROFS';
+  }
+}
+
 export function setBoardHome(dir: string) {
   if (!isAbsolute(dir)) throw new BadConfig(`data folder ${dir} is not an absolute path`);
   mkdirSync(dir, { recursive: true });
@@ -173,7 +191,8 @@ export function dropOverride(name: OverridableName, repo: string): boolean {
 const LOCK_MS = 10_000;
 
 function locked<T>(fn: () => T): T {
-  const db = new DatabaseSync(join(dataHome(), 'settings.lock'));
+  const home = dataHome();
+  const db = onReadOnly('Data folder', home, () => new DatabaseSync(join(home, 'settings.lock')));
   try {
     db.exec(`PRAGMA busy_timeout = ${LOCK_MS}`);
     db.exec('BEGIN IMMEDIATE');
