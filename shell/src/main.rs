@@ -1601,6 +1601,14 @@ fn main() {
     if installed {
         builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
     }
+    #[cfg(target_os = "macos")]
+    {
+        builder = builder.on_web_content_process_terminate(|w| {
+            if let Some(host) = w.try_state::<Arc<Host>>() {
+                host.process_failed(w.label(), "content process exited");
+            }
+        });
+    }
     builder
         .manage(host)
         .manage(Pending::default())
