@@ -128,7 +128,7 @@ describe('ui-terminal', { timeout: 60_000 }, () => {
       const box = `.k95-flag[data-ticket="${id}"]`;
       await until(() => page.evaluate(`!!document.querySelector('${box} button')`), 'the failure in the Inbox');
       expect(await page.evaluate(`document.querySelector('${box} pre').textContent`)).toBe('agent exited without reporting');
-      expect(await page.evaluate(`[...document.querySelectorAll('${box} button')].map((b) => b.textContent)`)).toEqual(['Open ticket', 'Resume', 'Restart', 'Reset to Backlog']);
+      expect(await page.evaluate(`[...document.querySelectorAll('${box} button')].map((b) => b.textContent)`)).toEqual(['Operator fix', 'Resume', 'Restart', 'Reset to Backlog']);
       await click(`${box} button:nth-child(3)`);
       await until(() => page.evaluate(`!!document.querySelector('dialog[open]')`), 'the Restart confirm');
       expect(await page.evaluate(`document.querySelector('dialog[open]').textContent`)).toContain(`End the running agent for #${id} and start a new one in the same phase?`);
