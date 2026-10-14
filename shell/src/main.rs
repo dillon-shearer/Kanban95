@@ -9,7 +9,7 @@ use std::process::{Child, ChildStdout, Command, Stdio};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant};
 use tauri::webview::{NewWindowResponse, PageLoadEvent, PermissionKind, PermissionResponse};
-use tauri::{AppHandle, Manager, RunEvent, Runtime, Url, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent};
+use tauri::{AppHandle, Manager, RunEvent, Runtime, Url, WebviewUrl, WebviewWindow, WebviewWindowBuilder, Window, WindowEvent};
 use tauri_plugin_updater::{Update, Updater, UpdaterExt};
 
 /// 32 random bytes from the OS, hex: the shell-to-daemon secret for one daemon run (docs/SECURITY.md).
@@ -1632,20 +1632,26 @@ fn main() {
             });
             Ok(())
         })
-        .on_window_event(|w, event| match event {
-            WindowEvent::CloseRequested { api, .. } if w.label() == SPLASH => api.prevent_close(),
-            WindowEvent::Destroyed if !recreating(w, Some(w.label())) => w.state::<Arc<Host>>().window_closed(w.label()),
-            _ => {}
-        })
+        .on_window_event(on_window_event)
         .build(tauri::generate_context!())
         .expect("tauri build")
-        .run(|app, event| {
-            match event {
-                RunEvent::ExitRequested { code: None, api, .. } if recreating(app, None) => api.prevent_exit(),
-                RunEvent::Exit => app.state::<Arc<Host>>().shutdown(),
-                _ => {}
-            }
-        });
+        .run(on_run_event);
+}
+
+fn on_window_event<R: Runtime>(w: &Window<R>, event: &WindowEvent) {
+    match event {
+        WindowEvent::CloseRequested { api, .. } if w.label() == SPLASH => api.prevent_close(),
+        WindowEvent::Destroyed if !recreating(w, Some(w.label())) => w.state::<Arc<Host>>().window_closed(w.label()),
+        _ => {}
+    }
+}
+
+fn on_run_event<R: Runtime>(app: &AppHandle<R>, event: RunEvent) {
+    match event {
+        RunEvent::ExitRequested { code: None, api, .. } if recreating(app, None) => api.prevent_exit(),
+        RunEvent::Exit => app.state::<Arc<Host>>().shutdown(),
+        _ => {}
+    }
 }
 
 #[cfg(test)]
@@ -2307,6 +2313,67 @@ mod tests {
         });
         let got = rx.recv_timeout(Duration::from_secs(10)).expect("recreating deadlocked");
         assert_eq!(got, ((false, false), true, true, false));
+    }
+
+    #[test]
+    fn a_destroyed_window_reaches_window_closed_only_when_it_is_not_being_recreated() {
+        for (recreate, want) in [(true, vec![]), (false, vec![Effect::Exit(0)])] {
+            let (host, seen) = host(|_, _| up(41020, ""));
+            host.first("k95-a", host.start("k95-a").unwrap());
+            take(&seen);
+            let board = label("k95-a");
+            let (tx, rx) = std::sync::mpsc::channel();
+            let managed = host.clone();
+            std::thread::spawn(move || {
+                let app = mock_builder().manage(managed).manage(Recreating::default()).build(tauri::generate_context!(test = true)).unwrap();
+                if recreate {
+                    lock(&app.state::<Recreating>().0).insert(board.clone());
+                }
+                for l in [SPLASH, board.as_str()] {
+                    let w = WebviewWindowBuilder::new(&app, l, WebviewUrl::default()).build().unwrap();
+                    on_window_event(&w.as_ref().window(), &WindowEvent::Destroyed);
+                }
+                let _ = tx.send(());
+            });
+            rx.recv_timeout(Duration::from_secs(10)).expect("Destroyed deadlocked the main thread on the Recreating lock");
+            assert_eq!(take(&seen), want, "recreating: {recreate}");
+            host.shutdown();
+        }
+    }
+
+    #[test]
+    fn the_exit_requested_when_the_last_window_goes_is_prevented_only_while_a_recreate_is_pending() {
+        for recreate in [true, false] {
+            let (host, _) = host(|_, _| up(41021, ""));
+            let (tx, rx) = std::sync::mpsc::channel();
+            let managed = host.clone();
+            std::thread::spawn(move || {
+                let app = mock_builder().manage(managed).manage(Recreating::default()).build(tauri::generate_context!(test = true)).unwrap();
+                if recreate {
+                    lock(&app.state::<Recreating>().0).insert("board-a".into());
+                }
+                let w = WebviewWindowBuilder::new(&app, "board-a", WebviewUrl::default()).build().unwrap();
+                app.run(move |app, event| {
+                    let what = match &event {
+                        RunEvent::Ready => {
+                            let _ = w.destroy();
+                            None
+                        }
+                        RunEvent::ExitRequested { .. } => Some("exit requested"),
+                        RunEvent::Exit => Some("exit"),
+                        _ => None,
+                    };
+                    on_run_event(app, event);
+                    if let Some(what) = what {
+                        let _ = tx.send(what);
+                    }
+                });
+            });
+            let asked = rx.recv_timeout(Duration::from_secs(10));
+            assert_eq!(asked, Ok("exit requested"), "ExitRequested deadlocked the main thread on the Recreating lock");
+            assert_eq!(rx.recv_timeout(Duration::from_secs(3)).ok(), (!recreate).then_some("exit"), "recreating: {recreate}");
+            host.shutdown();
+        }
     }
 
     fn serve(listener: std::net::TcpListener, reply: String) {
