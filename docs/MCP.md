@@ -16,16 +16,16 @@ A refused call returns a tool error whose text says why and, for `move_ticket`, 
 
 | tool | planner | worker | tester | operator |
 |------|---|---|---|---|
-| create_ticket | yes | yes, Backlog follow-up, no model/effort | no | yes |
+| create_ticket | yes | yes, Backlog follow-up, no model/effort/targets | no | yes |
 | bootstrap_board | once per board | no | no | once per board |
 | file_on_board | yes | yes; own board as create_ticket | other boards only | yes |
-| update_ticket | any ticket | own, body/criteria only; its Backlog follow-ups, title/body/criteria/tags/depends_on | no | any ticket |
+| update_ticket | any ticket | own and its edit targets, body/criteria only; its Backlog follow-ups, title/body/criteria/tags/depends_on | no | any ticket |
 | delete_ticket | Backlog, no notes or runs | its Backlog follow-ups | no | Backlog, no notes or runs |
 | set_model | any | no | no | any |
 | move_ticket | no | own → testing | own → done / in_progress | any → in_progress / testing / done |
 | add_note | any | own | own | any |
-| get_ticket | yes | own + its deps | own + its deps | yes |
-| list_tickets | yes | own + its deps | own + its deps | yes |
+| get_ticket | yes | own + its deps + its targets | own + its deps + its targets | yes |
+| list_tickets | yes | own + its deps + its targets | own + its deps + its targets | yes |
 | brain_add | yes | yes | yes | yes |
 | brain_update | yes, and move_to | yes, not move_to | yes, not move_to | yes, and move_to |
 | brain_delete | yes | no | no | yes |
@@ -48,13 +48,13 @@ A worker or tester grant reaches further when the operator raises its ticket's `
 - 3: also the operator's cell for `update_ticket`, `delete_ticket`, `set_model`, `add_note`.
 - 4: the operator's cell for every tool, `move_ticket` to testing included. A worker still never gets `report_test`; `ask_operator`, and a tester's `report_test`, stay on its own ticket.
 
-`read_all` on the ticket, or `workers_read: "all"` in settings.json, lets its worker and tester `get_ticket` and `list_tickets` every ticket. A refusal that a higher level would lift ends with "ask for level N with request_permission". Only the operator sets a level or `read_all` (docs/SECURITY.md → MCP).
+`read_all` on the ticket, or `workers_read: "all"` in settings.json, lets its worker and tester `get_ticket` and `list_tickets` every ticket. `targets` on the ticket (`ticket_targets`, set by the planner or operator, never by its own worker) name tickets its worker and tester may `get_ticket` and `list_tickets` without depending on them; a target with `edit` also lets the worker `update_ticket` that ticket's body and criteria. A refusal that a higher level would lift ends with "ask for level N with request_permission". Only the operator sets a level or `read_all` (docs/SECURITY.md → MCP).
 
 ## Tools
 
 ### create_ticket
 
-Create a ticket in the backlog. Give it a title, a body that says what to build and why, and acceptance criteria a tester can check one by one (a test passes once, never "N runs in a row"). List depends_on ids when this work must wait for other tickets. Tags (lowercase a-z, 0-9, -) group related tickets on the board. Set model and effort only when the work clearly warrants it: trivial work gets effort low, hard work gets high. A worker files a follow-up or a manual touch it found this way instead of widening its own scope: it lands in Backlog, its body starts with "Filed by #<your ticket>", it runs on the operator's default model and effort, and the worker may fix or delete it while it is still in Backlog. Returns the ticket.
+Create a ticket in the backlog. Give it a title, a body that says what to build and why, and acceptance criteria a tester can check one by one (a test passes once, never "N runs in a row"). List depends_on ids when this work must wait for other tickets. Tags (lowercase a-z, 0-9, -) group related tickets on the board. Set model and effort only when the work clearly warrants it: trivial work gets effort low, hard work gets high. List targets when the work must read other tickets without waiting on them, with edit: true when it must rewrite their body or criteria. A worker files a follow-up or a manual touch it found this way instead of widening its own scope: it lands in Backlog, its body starts with "Filed by #<your ticket>", it runs on the operator's default model and effort, and the worker may fix or delete it while it is still in Backlog. Returns the ticket.
 
 | argument | type | required | description |
 |---|---|---|---|
@@ -62,6 +62,7 @@ Create a ticket in the backlog. Give it a title, a body that says what to build 
 | body | string | default `""` | What to build and why, markdown. |
 | criteria | string | default `""` | Acceptance criteria, one checkable statement per line. |
 | depends_on | integer[] | default `[]` | Ticket ids that must be done before this one starts. |
+| targets | { id: integer, edit: boolean }[] | no | Tickets this ticket's worker and tester may get_ticket and list_tickets, separate from depends_on: a target never blocks or orders anything. Set before the worker launches. |
 | tags | string[] | no | Grouping tags, each lowercase a-z, 0-9 and - only, e.g. ["ui", "daemon"]. |
 | model | string | no | Model override; omit for the phase default. |
 | effort | low \| medium \| high \| max | no | Effort override; omit for the phase default. |
@@ -86,7 +87,7 @@ File a ticket on another Kanban95 board running on this machine, for a bug or ga
 
 ### update_ticket
 
-Edit a ticket's title, body, criteria or dependencies. A worker may only refine the body and criteria of its own ticket, for example to record a clarified scope, and fix any of these fields on a Backlog follow-up it created with create_ticket; use add_note for progress and decisions instead. Omitted fields are left unchanged. Returns the ticket.
+Edit a ticket's title, body, criteria, dependencies or targets. A worker may only refine the body and criteria of its own ticket, for example to record a clarified scope, rewrite the body and criteria of a ticket its own ticket lists as a target with edit: true, and fix any of these fields but targets on a Backlog follow-up it created with create_ticket; use add_note for progress and decisions instead. Omitted fields are left unchanged. Returns the ticket.
 
 | argument | type | required | description |
 |---|---|---|---|
@@ -96,6 +97,7 @@ Edit a ticket's title, body, criteria or dependencies. A worker may only refine 
 | criteria | string | no |  |
 | tags | string[] | no | Replaces the full tag list; [] clears it. |
 | depends_on | integer[] | no | Replaces the full dependency list. |
+| targets | { id: integer, edit: boolean }[] | no | Replaces the full target list; [] clears it. Tickets this ticket's worker and tester may read, and with edit: true its worker may rewrite, separate from depends_on. |
 
 ### delete_ticket
 
@@ -136,7 +138,7 @@ Attach a note to a ticket. Kinds: plan (how you intend to do the work, post it b
 
 ### get_ticket
 
-Read one ticket in full: title, body, acceptance criteria, status, flags, dependencies, model settings, the absolute paths of files the operator attached (screenshots and the like: open them with your file reader), and every note on it in order. A worker or tester may also read the tickets its own ticket depends on, to see what they delivered or decided.
+Read one ticket in full: title, body, acceptance criteria, status, flags, dependencies, model settings, the absolute paths of files the operator attached (screenshots and the like: open them with your file reader), and every note on it in order. A worker or tester may also read the tickets its own ticket depends on, to see what they delivered or decided, and the tickets its own ticket lists as targets; any other ticket is refused unless its ticket has read_all.
 
 | argument | type | required | description |
 |---|---|---|---|
@@ -144,7 +146,7 @@ Read one ticket in full: title, body, acceptance criteria, status, flags, depend
 
 ### list_tickets
 
-List tickets with id, title, status, tags, flags and dependencies, optionally filtered by status. A planner or operator sees the whole board; a worker or tester sees its own ticket and the ones it depends on. Use get_ticket for the body and notes.
+List tickets with id, title, status, tags, flags, dependencies and targets, optionally filtered by status. A planner or operator sees the whole board; a worker or tester sees its own ticket, the ones it depends on and the ones it lists as targets. Use get_ticket for the body and notes.
 
 | argument | type | required | description |
 |---|---|---|---|

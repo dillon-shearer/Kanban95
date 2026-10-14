@@ -70,14 +70,21 @@ export function normaliseTags(v: unknown): string {
   return tags.join(' ');
 }
 
-function ticketColumns(body: Json): { cols: string[]; vals: unknown[]; deps?: number[] } {
+function ticketColumns(body: Json): { cols: string[]; vals: unknown[]; deps?: number[]; targets?: Target[] } {
   const cols: string[] = [];
   const vals: unknown[] = [];
   let deps: number[] | undefined;
+  let targets: Target[] | undefined;
   for (const [k, v] of Object.entries(body)) {
     if (k === 'depends_on') {
       if (!Array.isArray(v) || !v.every(Number.isInteger)) throw new HttpError(400, 'depends_on must be an array of ticket ids');
       deps = v as number[];
+      continue;
+    }
+    if (k === 'targets') {
+      const ok = (x: unknown) => typeof x === 'object' && x !== null && Number.isInteger((x as Target).id) && typeof ((x as Target).edit ?? false) === 'boolean';
+      if (!Array.isArray(v) || !v.every(ok)) throw new HttpError(400, 'targets must be an array of { id, edit }');
+      targets = (v as Target[]).map((x) => ({ id: x.id, edit: x.edit ?? false }));
       continue;
     }
     if (k === 'tags') { cols.push(k); vals.push(normaliseTags(v)); continue; }
@@ -90,14 +97,16 @@ function ticketColumns(body: Json): { cols: string[]; vals: unknown[]; deps?: nu
     cols.push(k);
     vals.push(t === 'bool' ? Number(v) : v);
   }
-  return { cols, vals, deps };
+  return { cols, vals, deps, targets };
 }
 
 export interface Ticket {
   id: number; title: string; body: string; criteria: string; status: string; cli: string | null; model: string | null;
   effort: string | null; tags: string; created_by_grant: number | null; retry: number; agent_level: number; read_all: boolean; template: string; merged_at: string | null; created_at: string; updated_at: string;
-  flags: { needs_human: boolean; blocked_on_deps: boolean }; depends_on: number[];
+  flags: { needs_human: boolean; blocked_on_deps: boolean }; depends_on: number[]; targets: Target[];
 }
+/** A ticket this one's worker and tester may read; with edit, its worker may also update its body and criteria. Not a dependency. */
+export interface Target { id: number; edit: boolean }
 
 export function readTicket(db: DatabaseSync, id: number): Ticket {
   const row = db.prepare('SELECT * FROM tickets WHERE id = ?').get(id) as Json | undefined;
@@ -109,7 +118,22 @@ export function readTicket(db: DatabaseSync, id: number): Ticket {
     read_all: read_all === 1,
     flags: { needs_human: needs_human === 1, blocked_on_deps: blocked_on_deps === 1 },
     depends_on: deps.map((d) => d.depends_on_id as number),
+    targets: targetsOf(db, id),
   } as Ticket;
+}
+
+export const targetsOf = (db: DatabaseSync, id: number): Target[] =>
+  (db.prepare('SELECT target_id, edit FROM ticket_targets WHERE ticket_id = ? ORDER BY target_id').all(id) as { target_id: number; edit: number }[])
+    .map((r) => ({ id: r.target_id, edit: r.edit === 1 }));
+
+export function setTargets(db: DatabaseSync, id: number, targets: Target[]) {
+  db.prepare('DELETE FROM ticket_targets WHERE ticket_id = ?').run(id);
+  const ins = db.prepare('INSERT INTO ticket_targets (ticket_id, target_id, edit) VALUES (?, ?, ?)');
+  for (const t of new Map(targets.map((x) => [x.id, x])).values()) {
+    if (t.id === id) throw new HttpError(400, `ticket ${id} cannot target itself`);
+    if (!db.prepare('SELECT 1 FROM tickets WHERE id = ?').get(t.id)) throw new HttpError(400, `target ${t.id} is not a ticket`);
+    ins.run(id, t.id, Number(t.edit));
+  }
 }
 
 export function setDeps(db: DatabaseSync, id: number, deps: number[]) {
@@ -264,7 +288,7 @@ const routes: [method: string, path: RegExp, mutation: string | null, handler: (
     body: (db.prepare('SELECT id FROM tickets ORDER BY id').all() as { id: number }[]).map((r) => readTicket(db, r.id)),
   })],
   ['POST', /^\/api\/tickets$/, 'tickets.create', ({ board, db, body }) => {
-    const { cols, vals, deps } = ticketColumns(body);
+    const { cols, vals, deps, targets } = ticketColumns(body);
     if (!cols.includes('title')) throw new HttpError(400, 'title is required');
     const bad = typeof body.model === 'string' && uncatalogued(body.model, typeof body.cli === 'string' ? body.cli : null, board.repo);
     if (bad) throw new HttpError(400, bad);
@@ -272,6 +296,7 @@ const routes: [method: string, path: RegExp, mutation: string | null, handler: (
       const r = db.prepare(`INSERT INTO tickets (${cols.join(',')}) VALUES (${cols.map(() => '?').join(',')})`).run(...(vals as never[]));
       const id = Number(r.lastInsertRowid);
       if (deps) setDeps(db, id, deps);
+      if (targets) setTargets(db, id, targets);
       return id;
     });
     return { status: 201, body: readTicket(db, id) };
@@ -280,8 +305,8 @@ const routes: [method: string, path: RegExp, mutation: string | null, handler: (
   ['PATCH', /^\/api\/tickets\/(\d+)$/, 'tickets.update', ({ board, db, params, body }) => {
     const id = Number(params[0]);
     readTicket(db, id);
-    const { cols, vals, deps } = ticketColumns(body);
-    if (cols.length === 0 && !deps) throw new HttpError(400, 'nothing to update');
+    const { cols, vals, deps, targets } = ticketColumns(body);
+    if (cols.length === 0 && !deps && !targets) throw new HttpError(400, 'nothing to update');
     if (typeof body.model === 'string') {
       const bad = uncatalogued(body.model, typeof body.cli === 'string' ? body.cli : readTicket(db, id).cli, board.repo);
       if (bad) throw new HttpError(400, bad);
@@ -294,6 +319,7 @@ const routes: [method: string, path: RegExp, mutation: string | null, handler: (
       if (moved) db.prepare('UPDATE tickets SET needs_human = 0 WHERE id = ?').run(id);
       if (cols.length) db.prepare(`UPDATE tickets SET ${cols.map((c) => `${c} = ?`).join(', ')} WHERE id = ?`).run(...(vals as never[]), id);
       if (deps) setDeps(db, id, deps);
+      if (targets) setTargets(db, id, targets);
     });
     if (moved) endSessions(db, id, body.status === 'backlog' ? 'reset' : 'moved');
     // Into Done unmerged: a branch goes to the merge queue, as a pass would; no branch means nothing to land, so it is closed.

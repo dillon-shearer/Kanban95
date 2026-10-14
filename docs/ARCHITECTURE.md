@@ -419,7 +419,7 @@ Gotchas collected while the board was built. Each one cost a phase some time.
 - A merge that touches `daemon/` or `shell/` takes effect only after a board restart (`npm run dev` rebuilds); `ui/` changes show at once.
 
 **MCP**
-- `TOOLS` in `mcp.ts` is the only place a tool is defined. After changing its `access` or `description`, run `npm run docs:mcp` or the doc test fails. `MOVE_TARGETS` and `WORKER_FIELDS` feed both enforcement and the matrix text. A worker or tester grant's reach beyond its role cell (its ticket's `agent_level` and `read_all`) is worked out only in `reach()`, which sets `Call.as`; a tool's `run` checks `c.as`, never `c.grant.role`, for what it allows, or a level stops widening it.
+- `TOOLS` in `mcp.ts` is the only place a tool is defined. After changing its `access` or `description`, run `npm run docs:mcp` or the doc test fails. `MOVE_TARGETS` and `WORKER_FIELDS` feed both enforcement and the matrix text. A worker or tester grant's reach beyond its role cell (its ticket's `agent_level` and `read_all`) is worked out only in `reach()`; its ticket's `targets` widen only `get_ticket`, `list_tickets` (`readable()`) and `update_ticket` (`editTarget()`), which sets `Call.as`; a tool's `run` checks `c.as`, never `c.grant.role`, for what it allows, or a level stops widening it.
 - A handler refuses by throwing the module-private `Deny`; anything else thrown is audited as `error` and its message goes back to the agent verbatim.
 - `enableJsonResponse: true` returns each tool result as one JSON body. A tool that needs progress notifications would need that switched off for its server.
 - The MCP SDK pulls in express, hono and ajv transitively. Nothing imports them; `node:http` is the only server.

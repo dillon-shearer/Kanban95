@@ -6,7 +6,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import * as z from 'zod';
-import { brainAdd, brainDelete, brainGet, brains, brainSearch, brainUpdate, deleteTicket, normaliseTags, PERMISSION, readTicket, setDeps, transaction } from './api.js';
+import { brainAdd, brainDelete, brainGet, brains, brainSearch, brainUpdate, deleteTicket, normaliseTags, PERMISSION, readTicket, setDeps, setTargets, targetsOf, transaction } from './api.js';
 import { bootstrap } from './bootstrap.js';
 import { BRAIN_BODY_MAX, SCOPES } from './db.js';
 import { attachments } from './attachments.js';
@@ -93,6 +93,14 @@ const followUp = (db: DatabaseSync, grant: Grant, id: number) =>
   db.prepare("SELECT 1 FROM tickets WHERE id = ? AND created_by_grant = ? AND status = 'backlog'").get(id, grant.id) !== undefined;
 const depsOf = (db: DatabaseSync, id: number) =>
   (db.prepare('SELECT depends_on_id FROM ticket_deps WHERE ticket_id = ?').all(id) as { depends_on_id: number }[]).map((r) => r.depends_on_id);
+/** What a worker or tester grant reads without read_all: its own ticket, its dependencies and its targets. */
+const readable = (db: DatabaseSync, id: number) => [...new Set([id, ...depsOf(db, id), ...targetsOf(db, id).map((t) => t.id)])];
+/** A target the grant's ticket lists with edit: its worker may update the target's body and criteria. */
+const editTarget = (db: DatabaseSync, grant: Grant, id: number) => targetsOf(db, grant.ticket_id!).some((t) => t.id === id && t.edit);
+const targets = z.array(z.object({
+  id: z.number().int().positive(),
+  edit: z.boolean().default(false).describe('true also lets the worker update_ticket the target\x27s body and criteria.'),
+})).describe('Tickets this ticket\x27s worker and tester may get_ticket and list_tickets, separate from depends_on: a target never blocks or orders anything. Set before the worker launches.');
 function addNote(c: Call, ticket: number, kind: string, body: string): { note_id: number } {
   const r = c.db.prepare('INSERT INTO notes (ticket_id, role, kind, body) VALUES (?, ?, ?, ?)').run(ticket, c.grant.role, kind, body);
   return { note_id: Number(r.lastInsertRowid) };
@@ -107,14 +115,16 @@ export const TOOLS: Record<string, Tool<z.ZodRawShape>> = {
     description:
       'Create a ticket in the backlog. Give it a title, a body that says what to build and why, and acceptance criteria a tester can check one by one (a test passes once, never "N runs in a row"). ' +
       'List depends_on ids when this work must wait for other tickets. Tags (lowercase a-z, 0-9, -) group related tickets on the board. Set model and effort only when the work clearly warrants it: trivial work gets effort low, hard work gets high. ' +
+      'List targets when the work must read other tickets without waiting on them, with edit: true when it must rewrite their body or criteria. ' +
       'A worker files a follow-up or a manual touch it found this way instead of widening its own scope: it lands in Backlog, its body starts with "Filed by #<your ticket>", ' +
       'it runs on the operator\x27s default model and effort, and the worker may fix or delete it while it is still in Backlog. Returns the ticket.',
-    access: { planner: 'yes', worker: 'yes, Backlog follow-up, no model/effort', operator: 'yes' },
+    access: { planner: 'yes', worker: 'yes, Backlog follow-up, no model/effort/targets', operator: 'yes' },
     input: {
       title: z.string().min(1).describe('Short imperative title.'),
       body: z.string().default('').describe('What to build and why, markdown.'),
       criteria: z.string().default('').describe('Acceptance criteria, one checkable statement per line.'),
       depends_on: z.array(z.number().int().positive()).default([]).describe('Ticket ids that must be done before this one starts.'),
+      targets: targets.optional(),
       tags: z.array(z.string()).optional().describe('Grouping tags, each lowercase a-z, 0-9 and - only, e.g. ["ui", "daemon"].'),
       model: z.string().min(1).optional().describe('Model override; omit for the phase default.'),
       effort: z.enum(EFFORT).optional().describe('Effort override; omit for the phase default.'),
@@ -122,6 +132,7 @@ export const TOOLS: Record<string, Tool<z.ZodRawShape>> = {
     run(c, a) {
       const worker = c.as === 'worker';
       if (worker && (a.model !== undefined || a.effort !== undefined)) throw new Deny('a worker may not set model or effort; the follow-up runs on the operator\x27s defaults');
+      if (worker && a.targets?.length) throw new Deny('a worker may not set targets; they widen another grant, so the planner or operator sets them');
       const bad = a.model && uncatalogued(a.model, null, c.board.repo);
       if (bad) throw new Error(bad);
       const body = c.grant.ticket_id !== null ? `Filed by #${c.grant.ticket_id}\n\n${a.body}` : a.body;
@@ -132,6 +143,7 @@ export const TOOLS: Record<string, Tool<z.ZodRawShape>> = {
           .run(a.title, body, a.criteria, tags, a.model ?? null, a.effort ?? null, c.grant.id);
         const id = Number(r.lastInsertRowid);
         setDeps(c.db, id, a.depends_on);
+        if (a.targets) setTargets(c.db, id, a.targets);
         return id;
       });
       c.ticket = id;
@@ -180,11 +192,12 @@ export const TOOLS: Record<string, Tool<z.ZodRawShape>> = {
 
   update_ticket: tool({
     description:
-      'Edit a ticket\'s title, body, criteria or dependencies. A worker may only refine the body and criteria of its own ticket, for example to record a clarified scope, ' +
-      'and fix any of these fields on a Backlog follow-up it created with create_ticket; use add_note for progress and decisions instead. Omitted fields are left unchanged. Returns the ticket.',
+      'Edit a ticket\'s title, body, criteria, dependencies or targets. A worker may only refine the body and criteria of its own ticket, for example to record a clarified scope, ' +
+      'rewrite the body and criteria of a ticket its own ticket lists as a target with edit: true, ' +
+      'and fix any of these fields but targets on a Backlog follow-up it created with create_ticket; use add_note for progress and decisions instead. Omitted fields are left unchanged. Returns the ticket.',
     access: {
       planner: 'any ticket',
-      worker: `own, ${WORKER_FIELDS.join('/')} only; its Backlog follow-ups, ${FOLLOWUP_FIELDS.join('/')}`,
+      worker: `own and its edit targets, ${WORKER_FIELDS.join('/')} only; its Backlog follow-ups, ${FOLLOWUP_FIELDS.join('/')}`,
       operator: 'any ticket',
     },
     level: 3,
@@ -195,24 +208,30 @@ export const TOOLS: Record<string, Tool<z.ZodRawShape>> = {
       criteria: z.string().optional(),
       tags: z.array(z.string()).optional().describe('Replaces the full tag list; [] clears it.'),
       depends_on: z.array(z.number().int().positive()).optional().describe('Replaces the full dependency list.'),
+      targets: targets.optional().describe('Replaces the full target list; [] clears it. Tickets this ticket\x27s worker and tester may read, and with edit: true its worker may rewrite, separate from depends_on.'),
     },
-    run(c, { ticket_id, depends_on, tags, ...rest }) {
+    run(c, { ticket_id, depends_on, targets, tags, ...rest }) {
       const cols: Record<string, unknown> = { ...rest, tags: tags && normaliseTags(tags) };
-      // A worker's Backlog follow-up is the one foreign id it may name; any other goes through own() and its scope denial.
-      const mine = c.as === 'worker' && ticket_id !== undefined && followUp(c.db, c.grant, ticket_id);
-      const id = (c.ticket = mine ? ticket_id : own(c, ticket_id));
+      // A worker's Backlog follow-up and its ticket's edit targets are the foreign ids it may name; any other goes through own() and its scope denial.
+      const foreign = c.as === 'worker' && ticket_id !== undefined && ticket_id !== c.grant.ticket_id;
+      const mine = foreign && followUp(c.db, c.grant, ticket_id);
+      const target = foreign && !mine && editTarget(c.db, c.grant, ticket_id);
+      const id = (c.ticket = mine || target ? ticket_id : own(c, ticket_id));
       const given = Object.keys(cols).filter((k) => cols[k] !== undefined);
       if (depends_on) given.push('depends_on');
+      if (targets) given.push('targets');
       if (given.length === 0) throw new Error('nothing to update');
-      if (c.as === 'worker' && !mine) {
-        const bad = given.filter((k) => !(WORKER_FIELDS as readonly string[]).includes(k));
-        if (bad.length) throw new Deny(`a worker may only update ${WORKER_FIELDS.join(', ')}; not ${bad.join(', ')}${ask(c.need)}`);
+      if (c.as === 'worker') {
+        const fields: readonly string[] = mine ? FOLLOWUP_FIELDS : WORKER_FIELDS;
+        const bad = given.filter((k) => !fields.includes(k));
+        if (bad.length) throw new Deny(`a worker may only update ${fields.join(', ')}${mine ? ' on a follow-up' : ''}; not ${bad.join(', ')}${ask(c.need)}`);
       }
       readTicket(c.db, id);
       transaction(c.db, () => {
         const set = Object.fromEntries(Object.entries(cols).filter(([, v]) => v !== undefined));
         if (Object.keys(set).length) update(c.db, id, set);
         if (depends_on) setDeps(c.db, id, depends_on);
+        if (targets) setTargets(c.db, id, targets);
       });
       return readTicket(c.db, id);
     },
@@ -327,15 +346,16 @@ export const TOOLS: Record<string, Tool<z.ZodRawShape>> = {
     description:
       'Read one ticket in full: title, body, acceptance criteria, status, flags, dependencies, model settings, the absolute paths of files the operator ' +
       'attached (screenshots and the like: open them with your file reader), and every note on it in order. ' +
-      'A worker or tester may also read the tickets its own ticket depends on, to see what they delivered or decided.',
-    access: { planner: 'yes', worker: 'own + its deps', tester: 'own + its deps', operator: 'yes' },
+      'A worker or tester may also read the tickets its own ticket depends on, to see what they delivered or decided, and the tickets its own ticket lists as targets; ' +
+      'any other ticket is refused unless its ticket has read_all.',
+    access: { planner: 'yes', worker: 'own + its deps + its targets', tester: 'own + its deps + its targets', operator: 'yes' },
     input: { ticket_id: ticketId },
     run(c, a) {
       const { grant } = c;
       const id = unbound(c.as) ? own(c, a.ticket_id) : (a.ticket_id ?? grant.ticket_id!);
       c.ticket = id;
-      const visible = unbound(c.as) || c.readAll || id === grant.ticket_id || depsOf(c.db, grant.ticket_id!).includes(id);
-      if (!visible) throw new Deny(`this grant is scoped to ticket ${grant.ticket_id} and its dependencies${ask(c.need)}`);
+      const visible = unbound(c.as) || c.readAll || readable(c.db, grant.ticket_id!).includes(id);
+      if (!visible) throw new Deny(`this grant is scoped to ticket ${grant.ticket_id}, its dependencies and its targets${ask(c.need)}`);
       const ticket = readTicket(c.db, id);
       const notes = c.db.prepare('SELECT id, role, kind, body, created_at FROM notes WHERE ticket_id = ? ORDER BY id').all(id);
       return { ...ticket, attachments: attachments(c.board.repo, id).map((f) => f.path), notes };
@@ -344,19 +364,19 @@ export const TOOLS: Record<string, Tool<z.ZodRawShape>> = {
 
   list_tickets: tool({
     description:
-      'List tickets with id, title, status, tags, flags and dependencies, optionally filtered by status. A planner or operator sees the whole board; ' +
-      'a worker or tester sees its own ticket and the ones it depends on. Use get_ticket for the body and notes.',
-    access: { planner: 'yes', worker: 'own + its deps', tester: 'own + its deps', operator: 'yes' },
+      'List tickets with id, title, status, tags, flags, dependencies and targets, optionally filtered by status. A planner or operator sees the whole board; ' +
+      'a worker or tester sees its own ticket, the ones it depends on and the ones it lists as targets. Use get_ticket for the body and notes.',
+    access: { planner: 'yes', worker: 'own + its deps + its targets', tester: 'own + its deps + its targets', operator: 'yes' },
     input: { status: z.enum(STATUS).optional() },
     run(c, a) {
       const { grant } = c;
       let ids: number[];
       if (unbound(c.as) || c.readAll) ids = (c.db.prepare('SELECT id FROM tickets ORDER BY id').all() as { id: number }[]).map((r) => r.id);
-      else ids = [grant.ticket_id!, ...depsOf(c.db, grant.ticket_id!)];
+      else ids = readable(c.db, grant.ticket_id!);
       return ids
         .map((id) => readTicket(c.db, id))
         .filter((t) => a.status === undefined || t.status === a.status)
-        .map(({ id, title, status, tags, flags, depends_on }) => ({ id, title, status, tags, flags, depends_on }));
+        .map(({ id, title, status, tags, flags, depends_on, targets }) => ({ id, title, status, tags, flags, depends_on, targets }));
     },
   }),
 

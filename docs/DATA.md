@@ -93,13 +93,16 @@ Living document. Update it in the same change that alters the schema.
 | created_by_grant | INTEGER | nullable, FK `grants(id)` `ON DELETE SET NULL`: the grant whose `create_ticket` made the ticket; null for one the UI made. A worker may edit and delete only Backlog tickets whose `created_by_grant` is its own grant (`docs/SECURITY.md`). Added in `005-ticket-creator.sql` |
 | tags | TEXT | default `''`: free-form grouping tags as distinct lowercase tokens matching `[a-z0-9-]+`, joined by one space. REST takes a string (split on commas and whitespace, lowercased) or an array; MCP takes an array; any other token is refused (400 / tool error) and nothing is written. Normalised by `normaliseTags` in `daemon/src/api.ts`. Added in `006-tags.sql` |
 | agent_level | INTEGER | `0` to `4`, default 0: how far this ticket's worker and tester grants reach beyond their own ticket, each level adding to the one below (`docs/MCP.md` → Levels). Set by the operator in the Ticket window (`PATCH /api/tickets/:id`), never by an agent. Added in `008-agent-level.sql` |
-| read_all | INTEGER | 0/1, default 0: this ticket's worker and tester grants may `get_ticket` and `list_tickets` every ticket, not only their own and its dependencies. Operator-set like `agent_level`. Added in `008-agent-level.sql` |
+| read_all | INTEGER | 0/1, default 0: this ticket's worker and tester grants may `get_ticket` and `list_tickets` every ticket, not only their own, its dependencies and its targets. Operator-set like `agent_level`. Added in `008-agent-level.sql` |
 | created_at, updated_at | TEXT | `updated_at` is bumped by trigger `tickets_touch` |
 
-The REST API presents `read_all` as a boolean, the two flags as `flags: { needs_human, blocked_on_deps }` and the dependencies as `depends_on: number[]`.
+The REST API presents `read_all` as a boolean, the two flags as `flags: { needs_human, blocked_on_deps }` and the dependencies as `depends_on: number[]` and the targets as `targets: { id, edit }[]`.
 
 ### ticket_deps
 `(ticket_id, depends_on_id)`, both FK to `tickets`. Deleting a ticket removes its own dependency rows; deleting a ticket that others depend on is refused (`ON DELETE RESTRICT`). A ticket cannot depend on itself. This is the `depends_on` array of the plan, kept relational so a dangling dependency cannot exist.
+
+### ticket_targets
+`(ticket_id, target_id, edit)`, both ids FK to `tickets` with `ON DELETE CASCADE`, so deleting either ticket drops the row. `edit` is 0/1, default 0. A ticket cannot target itself. A target is a ticket this ticket's worker and tester may `get_ticket` and `list_tickets`; with `edit` its worker may also `update_ticket` the target's body and criteria (`docs/MCP.md` → Levels). It is not a dependency: it never blocks, orders or merges anything. Set by the planner or operator (`create_ticket`/`update_ticket` `targets`, or the Ticket window over `PATCH /api/tickets/:id`), never by the ticket's own worker. Added in `009-ticket-targets.sql`.
 
 ### notes
 | column | type | notes |
