@@ -12,9 +12,18 @@ const tasks = document.getElementById('tasks');
 const wins = new Map(); // id → { el, task, onClose, api, toggleMax, items, tile, slot, packed, free, rebase }
 let z = 10;
 // The UI zoom: CSS `zoom` on body, so menus and dialogs appended to it scale too. Inside it, offsets and inline styles (and so
-// the saved geometry) are CSS px before zoom, while pointer coordinates and getBoundingClientRect are screen px: divide those by it.
+// the saved geometry) are CSS px before zoom, while pointer coordinates and box() are screen px: divide those by it.
 let zoom = 1;
 export const scale = () => zoom;
+const probe = document.createElement('div');
+probe.style.cssText = 'position: absolute; width: 100px; zoom: 2; visibility: hidden';
+document.documentElement.append(probe);
+const zoomedRects = probe.getBoundingClientRect().width > 150;
+probe.remove();
+export const box = (el) => {
+  const r = el.getBoundingClientRect();
+  return zoomedRects ? r : new DOMRect(r.x * zoom, r.y * zoom, r.width * zoom, r.height * zoom);
+};
 // The desktop in screen px, which the zoom does not change: what a saved place and a resize scale by.
 const screen = () => [desktop.clientWidth * zoom, desktop.clientHeight * zoom];
 
@@ -204,7 +213,7 @@ export function open(id, { title, w = 480, h: height = 320, persist = false, til
     onkeydown: (e) => {
       if (e.key !== 'ContextMenu' && !(e.key === 'F10' && e.shiftKey)) return;
       e.preventDefault();
-      const r = task.getBoundingClientRect();
+      const r = box(task);
       taskMenu(id, r.left, r.top);
     } }, h('img', { src: `icons/${icon}.svg`, alt: '', width: 16, height: 16, draggable: 'false' }), h('span', {}, label));
   dragTask(task);
@@ -393,7 +402,7 @@ function dragTask(task) {
     const move = (m) => {
       if (!dragged && Math.abs(m.clientX - x0) < 5) return;
       dragged = true;
-      const over = [...tasks.children].find((b) => { const r = b.getBoundingClientRect(); return m.clientX >= r.left && m.clientX < r.right; });
+      const over = [...tasks.children].find((b) => { const r = box(b); return m.clientX >= r.left && m.clientX < r.right; });
       if (!over || over === task) return;
       if (task.compareDocumentPosition(over) & Node.DOCUMENT_POSITION_FOLLOWING) over.after(task);
       else over.before(task);
@@ -449,7 +458,7 @@ export function dialog(title, body, buttons = ['OK']) {
   });
 }
 
-/** A pop-up menu at screen point (x, y), as clientX/clientY and getBoundingClientRect give it. Items: { label, run } | { label, items } (submenu) | '-' (separator). */
+/** A pop-up menu at screen point (x, y), as clientX/clientY and box() give it, kept inside the desktop. Items: { label, run } | { label, items } (submenu) | '-' (separator). */
 export function menu(x, y, items) {
   document.querySelector('.k95-menu')?.remove();
   const build = (list) => h('ul', { class: 'k95-menu', role: 'menu' }, list.map((it) => it === '-'
@@ -459,8 +468,9 @@ export function menu(x, y, items) {
     it.label, it.items ? build(it.items) : null)));
   const m = build(items);
   document.body.append(m);
-  const r = m.getBoundingClientRect();
-  Object.assign(m.style, { left: `${Math.min(x, innerWidth - r.width) / zoom}px`, top: `${Math.min(y, innerHeight - r.height) / zoom}px` });
+  const r = box(m);
+  const d = box(desktop);
+  Object.assign(m.style, { left: `${Math.max(0, Math.min(x, d.right - r.width)) / zoom}px`, top: `${Math.max(0, Math.min(y, d.bottom - r.height)) / zoom}px` });
   const off = (e) => {
     if (m.contains(e.target)) return;
     m.remove();
