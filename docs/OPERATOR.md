@@ -34,6 +34,16 @@ A board with no tickets shows a small panel, "This board is empty", in the Board
 
 `bootstrap.md` is copied from `templates/` on daemon start and kept in step like the prompt templates; edit the repo copy to change the set. Each `## <title>` starts a ticket, the text under it is the body, and the lines after a `Criteria:` line are its acceptance criteria, one per line. Text before the first title is ignored, and a file with no titles is refused.
 
+### Starting a new board
+
+First pick how the board will publish. A plain folder with no remote: merges land locally and nothing is pushed. A GitHub clone without push: leave the branch's upstream unset, or untick Push after merge in Settings -> Board -> Git. A GitHub clone with push: run `git push -u origin <branch>` once.
+
+Then add the project in Settings -> Projects or Start -> Projects and open its board. Open the Readiness window ([Readiness](#readiness)) and fix every item. Press Set up this board ([Set up a new board](#set-up-a-new-board)) and work the setup tickets. After that, use a brainstorm or the operator terminal for real work.
+
+Agents on a new board start at reach level 0. Unlock more per ticket with Approve in the Inbox or in the Ticket window. An agent asked to create a board adds the project with `PUT /api/projects` (or asks you to), calls `bootstrap_board`, and stops.
+
+Common snags: a repo on exFAT (the board trusts it; run git by hand with `GIT_CONFIG_*` set), a repo with no git identity (set `user.name` and `user.email`), a repo under OneDrive (move it out), and a stale `models.json` (Readiness flags it).
+
 ### When the app will not start
 
 The error box ends with "Details:" and the path of the shell log: `%LOCALAPPDATA%\Kanban95\shell.log` on Windows, `~/Library/Logs/Kanban95/shell.log` on macOS. It holds one timestamped line per failure that stopped a board or an update (Node.js missing, a daemon that did not start or kept stopping, a window that would not open, a failed update) and nothing else. Read the last lines, or send them along with a bug report; they hold no keys or secrets.
