@@ -1179,12 +1179,54 @@ fn follow_page_fullscreen<R: Runtime>(w: &WebviewWindow<R>) {
 #[cfg(not(windows))]
 fn follow_page_fullscreen<R: Runtime>(_: &WebviewWindow<R>) {}
 
+#[cfg(target_os = "macos")]
+fn navigate_keeping_fullscreen<R: Runtime>(w: &WebviewWindow<R>, url: Url) {
+    use objc2_foundation::NSString;
+    use objc2_web_kit::{WKFullscreenState, WKWebView};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let win = w.clone();
+    let _ = w.with_webview(move |wv| {
+        let state = unsafe { (*wv.inner().cast::<WKWebView>()).fullscreenState() };
+        let _ = win.navigate(url);
+        if state != WKFullscreenState::InFullscreen && state != WKFullscreenState::EnteringFullscreen {
+            return;
+        }
+        std::thread::spawn(move || {
+            let done = Arc::new(AtomicBool::new(false));
+            for _ in 0..100 {
+                std::thread::sleep(Duration::from_millis(100));
+                if done.load(Ordering::Relaxed) {
+                    return;
+                }
+                let done = done.clone();
+                let _ = win.with_webview(move |wv| {
+                    if done.load(Ordering::Relaxed) {
+                        return;
+                    }
+                    unsafe {
+                        let wk = &*wv.inner().cast::<WKWebView>();
+                        if wk.fullscreenState() == WKFullscreenState::NotInFullscreen && !wk.isLoading() {
+                            let js = NSString::from_str("document.documentElement.requestFullscreen();0");
+                            wk.evaluateJavaScript_completionHandler(&js, None);
+                            done.store(true, Ordering::Relaxed);
+                        }
+                    }
+                });
+            }
+        });
+    });
+}
+#[cfg(not(target_os = "macos"))]
+fn navigate_keeping_fullscreen<R: Runtime>(w: &WebviewWindow<R>, url: Url) {
+    let _ = w.navigate(url);
+}
+
 fn apply<R: Runtime>(app: &AppHandle<R>, ports: &Ports, fx: Effect) {
     match fx {
         Effect::Show { label, url, title } => {
             if let Some(w) = app.get_webview_window(&label) {
                 let _ = w.set_title(&title);
-                let _ = w.navigate(url);
+                navigate_keeping_fullscreen(&w, url);
             }
         }
         Effect::Open { label, url, title } => match window(app, &label, url, title, ports.clone()) {
