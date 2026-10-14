@@ -181,6 +181,7 @@ const SPLASH_AFTER: Duration = Duration::from_millis(400);
 const SHOW_WAIT: Duration = Duration::from_secs(10);
 
 const CHECK_EVERY: Duration = Duration::from_secs(60 * 60);
+const RELOAD_QUIET: Duration = Duration::from_secs(30);
 
 /// A command a daemon prints on stdout after its port line (docs/ARCHITECTURE.md -> Hosted boards).
 #[derive(Debug, PartialEq, Clone, Copy)]
@@ -267,6 +268,7 @@ struct Board {
     pending: Option<Child>,
     stopping: Option<Instant>,
     waiting: Option<Instant>,
+    reloaded: Option<Instant>,
 }
 
 #[derive(Default)]
@@ -368,7 +370,7 @@ impl Host {
                 }
             }
         });
-        Board { child: s.child, port: s.port, secret: s.secret, place, crashed, restarting: None, pending: None, stopping: None, waiting: None }
+        Board { child: s.child, port: s.port, secret: s.secret, place, crashed, restarting: None, pending: None, stopping: None, waiting: None, reloaded: None }
     }
 
     fn restart(self: &Arc<Self>, repo: String, gen: u64, requested: bool) {
@@ -639,6 +641,24 @@ impl Host {
                 t.closing.push((c, Instant::now()));
             }
         }
+    }
+
+    fn process_failed(&self, window: &str, kind: &str) {
+        let mut fx = vec![];
+        let mut t = lock(&self.table);
+        if t.done {
+            return;
+        }
+        let Some((repo, b)) = t.boards.iter_mut().find(|(r, _)| label(r) == window) else { return };
+        if b.reloaded.is_some_and(|at| at.elapsed() < RELOAD_QUIET) {
+            self.log(&format!("[shell] board {repo}: webview {kind} again within 30s, left alone"));
+            return;
+        }
+        b.reloaded = Some(Instant::now());
+        self.log(&format!("[shell] board {repo}: webview {kind}, reloading"));
+        fx.push(Effect::Navigate { label: label(repo), url: url(b.port, &b.secret, b.place), title: title(Some(repo.clone())) });
+        drop(t);
+        self.emit(fx);
     }
 
     fn window_closed(&self, window: &str) {
@@ -1179,7 +1199,11 @@ fn window<R: Runtime, M: Manager<R>>(app: &M, label: &str, url: Url, title: Stri
 #[cfg(windows)]
 fn follow_page_fullscreen<R: Runtime>(w: &WebviewWindow<R>) {
     use std::{cell::Cell, rc::Rc};
-    use webview2_com::{ContainsFullScreenElementChangedEventHandler, NavigationCompletedEventHandler, NavigationStartingEventHandler};
+    use webview2_com::Microsoft::Web::WebView2::Win32::{
+        COREWEBVIEW2_PROCESS_FAILED_KIND, COREWEBVIEW2_PROCESS_FAILED_KIND_BROWSER_PROCESS_EXITED, COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_EXITED,
+        COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_UNRESPONSIVE,
+    };
+    use webview2_com::{ContainsFullScreenElementChangedEventHandler, NavigationCompletedEventHandler, NavigationStartingEventHandler, ProcessFailedEventHandler};
     let win = w.clone();
     let _ = w.with_webview(move |wv| {
         // SAFETY: COM calls on the live controller, on the main thread where with_webview runs this.
@@ -1188,6 +1212,7 @@ fn follow_page_fullscreen<R: Runtime>(w: &WebviewWindow<R>) {
             let navigating = Rc::new(Cell::new(false));
             let (starting, changed) = (navigating.clone(), navigating.clone());
             let full_win = win.clone();
+            let failed_win = win.clone();
             let handler = ContainsFullScreenElementChangedEventHandler::create(Box::new(move |core, _| {
                 let mut full = windows_core::BOOL::default();
                 if let Some(core) = core {
@@ -1218,6 +1243,23 @@ fn follow_page_fullscreen<R: Runtime>(w: &WebviewWindow<R>) {
                 Ok(())
             }));
             let _ = core.add_NavigationCompleted(&handler, &mut token);
+            let handler = ProcessFailedEventHandler::create(Box::new(move |_, args| {
+                let mut kind = COREWEBVIEW2_PROCESS_FAILED_KIND::default();
+                if let Some(args) = args {
+                    args.ProcessFailedKind(&mut kind)?;
+                }
+                let kind = match kind {
+                    COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_EXITED => "render process exited",
+                    COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_UNRESPONSIVE => "render process unresponsive",
+                    COREWEBVIEW2_PROCESS_FAILED_KIND_BROWSER_PROCESS_EXITED => "browser process exited",
+                    _ => return Ok(()),
+                };
+                if let Some(host) = failed_win.try_state::<Arc<Host>>() {
+                    host.process_failed(failed_win.label(), kind);
+                }
+                Ok(())
+            }));
+            let _ = core.add_ProcessFailed(&handler, &mut token);
         }
     });
 }
@@ -1776,6 +1818,32 @@ mod tests {
         assert!(body["error"].as_str().unwrap().contains("did not say its port within 20s"), "{body}");
         assert!(lock(&seen).iter().any(|f| matches!(f, Effect::Error(e) if e.contains("within 20s"))));
         assert_eq!(hosted(&host), [("k95-a".into(), Place::Docked)]);
+        host.shutdown();
+    }
+
+    #[test]
+    fn a_failed_webview_process_reloads_its_board_once_per_30s() {
+        let (host, seen) = host(|repo, _| up(if repo == "k95-a" { 41001 } else { 41002 }, ""));
+        host.first("k95-a", host.start("k95-a").unwrap());
+        open_loaded(&host, "k95-b");
+        host.command(Verb::Popout, "k95-b", None);
+        assert!(hosted(&host).contains(&("k95-b".into(), Place::Own)));
+        take(&seen);
+
+        host.process_failed(&label("k95-b"), "render process exited");
+        let fx = take(&seen);
+        assert!(matches!(&fx[..], [Effect::Navigate { label: b, url, .. }] if *b == label("k95-b") && url.port() == Some(41002) && url.fragment() == Some("own")), "{fx:?}");
+        let secret = lock(&host.table).boards["k95-b"].secret.clone();
+        assert!(matches!(&fx[0], Effect::Navigate { url, .. } if url.query() == Some(&*format!("k95={secret}"))));
+
+        host.process_failed(&label("k95-b"), "browser process exited");
+        assert_eq!(take(&seen), [], "a second failure within 30s is left alone");
+        host.process_failed("board-unknown", "render process exited");
+        assert_eq!(take(&seen), []);
+
+        lock(&host.table).boards.get_mut("k95-b").unwrap().reloaded = Instant::now().checked_sub(RELOAD_QUIET);
+        host.process_failed(&label("k95-b"), "render process unresponsive");
+        assert_eq!(navigated(&seen), [(label("k95-b"), 41002)]);
         host.shutdown();
     }
 
