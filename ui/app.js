@@ -644,7 +644,9 @@ function loadView(saved) {
 function openBoard() {
   const w = open('board', { title: 'Board', w: 1000, h: 560, persist: true, icon: 'board', onClose: () => { views.delete('board'); say = console.log; } });
   if (w.body.firstChild) return;
-  const status = h('p', { class: 'status-bar-field k95-status', role: 'status' }, 'Ready');
+  const status = h('p', { class: 'status-bar-field k95-status', role: 'status', onclick: () => {
+    if (status.textContent.startsWith('Not ready:')) openReadiness();
+  } }, 'Ready');
   const run = h('button', { onclick: toggleRunner, title: 'Ctrl+L' });
   const runField = h('p', { class: 'status-bar-field k95-runner' });
   const filter = h('input', { type: 'text', class: 'k95-filter', 'data-mic': 'off', placeholder: 'Filter', value: view.filter,
@@ -1639,6 +1641,33 @@ function openLimits() {
   limitsPanel(w.body.firstChild);
 }
 
+// ---- readiness ----
+
+async function checkReady() {
+  const shown = () => document.querySelector('.k95-board .k95-status')?.textContent;
+  const before = shown();
+  const r = await api('GET', '/ready').catch(() => null);
+  if (!r || r.ready || shown() !== before || ![...tickets.values()].some((t) => t.status === 'backlog')) return false;
+  say(`Not ready: ${r.items.find((i) => !i.ok).fix}`);
+  return true;
+}
+
+function openReadiness() {
+  const w = open('readiness', { title: 'Readiness', w: 560, h: 320 });
+  const list = h('div', { class: 'k95-readiness' }, 'Checking...');
+  const load = async () => {
+    try {
+      const r = await api('GET', '/ready');
+      list.replaceChildren(table(['Check', 'State', 'Fix'], r.items.map((i) => h('tr', { 'data-id': i.id },
+        h('td', {}, i.id), h('td', {}, i.ok ? 'OK' : 'Not ready'), h('td', {}, i.fix)))));
+    } catch (e) {
+      list.textContent = e.message;
+    }
+  };
+  w.body.replaceChildren(list, h('div', { class: 'field-row' }, h('button', { onclick: load }, 'Check again')));
+  load();
+}
+
 // ---- notepad ----
 
 let notepadSave = null;
@@ -1889,7 +1918,7 @@ async function boot() {
   await refreshShared();
   redraw();
   if (update.offer) offerUpdate(update.offer);
-  if (!models) say('No model catalog yet: Start → Settings → Agents, then Save, before launching.');
+  if (!(await checkReady()) && !models) say('No model catalog yet: Start → Settings → Agents, then Save, before launching.');
 }
 
 boot();

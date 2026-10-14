@@ -24,14 +24,28 @@ export function preTrustClaude(db: DatabaseSync, ticketId: number | null, dir: s
   const file = claudeState();
   const j = existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : {};
   const root = claudeKey(dir);
-  for (let p = root; ; p = dirname(p)) {
-    if (j.projects?.[p]?.hasTrustDialogAccepted === true) return;
-    if (dirname(p) === p) break;
-  }
+  if (trustedIn(j, root)) return;
   j.projects ??= {};
   j.projects[root] = { ...j.projects[root], hasTrustDialogAccepted: true };
   save(file, j);
   audit(db, { grant_id: null, ticket_id: ticketId, tool: 'trust.write', args: { file, key: `projects["${root}"].hasTrustDialogAccepted` }, outcome: 'ok' });
+}
+
+function trustedIn(j: { projects?: Record<string, { hasTrustDialogAccepted?: unknown }> }, root: string) {
+  for (let p = root; ; p = dirname(p)) {
+    if (j.projects?.[p]?.hasTrustDialogAccepted === true) return true;
+    if (dirname(p) === p) return false;
+  }
+}
+
+/** For readiness: whether Claude Code trusts the repo's worktrees root or a folder above it. An unreadable state file is untrusted. */
+export function claudeTrusts(repo: string): boolean {
+  try {
+    const file = claudeState();
+    return existsSync(file) && trustedIn(JSON.parse(readFileSync(file, 'utf8')), claudeKey(worktreesRoot(repo)));
+  } catch {
+    return false;
+  }
 }
 
 /** The first write backs the file up; every write is an owner-only temp file renamed over the original. */

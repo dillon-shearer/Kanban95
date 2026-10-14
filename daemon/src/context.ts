@@ -98,7 +98,7 @@ export function buildContext(db: DatabaseSync, repo: string, ticketId: number | 
     .join('\n');
   const preferences = orNone(readPreferences(repo));
   const worktrees = worktreesRoot(repo);
-  if (ticketId === null) return { ticket: '(none)', criteria: '(none)', brain: '(none)', notes: '(none)', retry: '0', diff: '', tools, base: '(none)', preferences, mission: '(none)', worktrees };
+  if (ticketId === null) return { ticket: '(none)', criteria: '(none)', brain: '(none)', notes: '(none)', retry: '0', diff: '', tools, base: '(none)', preferences, mission: '(none)', worktrees, ready: '(none)' };
 
   const t = readTicket(db, ticketId);
   let diff = '';
@@ -118,6 +118,7 @@ export function buildContext(db: DatabaseSync, repo: string, ticketId: number | 
     preferences,
     mission: '(none)',
     worktrees,
+    ready: '(none)',
   };
 }
 

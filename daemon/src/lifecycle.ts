@@ -707,17 +707,17 @@ function rootSession(b: Board, o: Parameters<typeof launchRoot>[1]): Session {
 }
 
 /** A brainstorm session: a planner with plan-phase settings, optionally seeded with the operator's text (Notepad). */
-export const brainstorm = (b: Board, mission?: string) => rootSession(b, { ...runSettings(null, 'plan', b.repo), template: 'brainstorm', mission });
+export const brainstorm = (b: Board, mission?: string, ready?: string) => rootSession(b, { ...runSettings(null, 'plan', b.repo), template: 'brainstorm', mission, ready });
 
 /** An operator terminal: the operator phase (Settings → Agents; the CLI's default model when unset) unless `.kanban95/config.json` has `operator: { model, effort }` (either or both). */
-export function operator(b: Board, mission: string): Session {
+export function operator(b: Board, mission: string, ready?: string): Session {
   const o = repoConfig(b.repo).operator ?? {};
   const where = `${repoConfigPath(b.repo)} operator`;
   if (typeof o !== 'object' || Array.isArray(o)) throw new BadConfig(`${where} must be an object`);
   if (o.model !== undefined && (typeof o.model !== 'string' || !o.model)) throw new BadConfig(`${where}.model must be a non-empty string`);
   if (o.effort !== undefined && !EFFORT.includes(o.effort)) throw new BadConfig(`${where}.effort must be one of ${EFFORT.join(', ')}`);
   const plan = runSettings(null, 'operator', b.repo);
-  return rootSession(b, { ...plan, model: o.model ?? plan.model, effort: (o.effort as Effort) ?? plan.effort, template: 'operator', mission });
+  return rootSession(b, { ...plan, model: o.model ?? plan.model, effort: (o.effort as Effort) ?? plan.effort, template: 'operator', mission, ready });
 }
 
 // ---- the runner (docs/LIFECYCLE.md → The runner) ----

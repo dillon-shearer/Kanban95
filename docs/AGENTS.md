@@ -19,6 +19,7 @@ Each session starts from one rendered template. The board pushes only this; ever
 | `{{preferences}}` | the operator's standing instructions, `~/.kanban95/preferences.md` as written (Settings → Prompts), under every template's "## Operator preferences" heading |
 | `{{worktrees}}` | the repo's worktrees root, `<board home>/worktrees/<repo key>` (`worktreesRoot` in `daemon/src/git.ts`), outside the repo; every ticket's worktree is a `t-<id>` folder in it. Set in every template |
 | `{{mission}}` | an operator terminal's typed mission, or a brainstorm's starting notes (Notepad → New brainstorm from selection), verbatim. `(none)` everywhere else. A launch with text whose template lacks `{{mission}}` (a repo copy older than the slot) is refused, not run without it |
+| `{{ready}}` | brainstorm and operator terminal: one line per failing readiness item, `- <id>: <fix>`, or `ready` (`readiness` in `daemon/src/ready.ts`, `docs/OPERATOR.md` → Readiness). `(none)` in ticket templates |
 
 Empty values render as `(none)`, except `{{diff}}` outside a test session (empty) and the attachments block (left out when there are none). Values are inserted literally: a brain note containing `{{ticket}}` stays that text. A template naming a variable that has no value is refused, never rendered.
 
