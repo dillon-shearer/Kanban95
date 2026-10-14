@@ -9,7 +9,7 @@ import * as ui from './state.js';
 
 const desktop = document.getElementById('desktop');
 const tasks = document.getElementById('tasks');
-const wins = new Map(); // id → { el, task, onClose, api, toggleMax, items, tile, slot, packed, free, rebase }
+const wins = new Map(); // id → { el, task, onClose, api, toggleMax, items, tile, slot, packed, free, before, rebase }
 let z = 10;
 // The UI zoom: CSS `zoom` on body, so menus and dialogs appended to it scale too. Inside it, offsets and inline styles (and so
 // the saved geometry) are CSS px before zoom, while pointer coordinates and box() are screen px: divide those by it.
@@ -80,7 +80,7 @@ function retile() {
   for (const w of wins.values()) w.packed = false;
   const members = list.slice(0, SLOTS.at(-1)[0]);
   for (const w of list.slice(members.length)) w.slot = null; // stays where it opened until one leaves
-  members.forEach((w, i) => Object.assign(w, { slot: i, packed: true }));
+  members.forEach((w, i) => Object.assign(w, { slot: i, packed: true, before: undefined }));
   if (!members.length) return;
   const [, cols, rows] = SLOTS.find(([n]) => n >= members.length);
   for (const { el, slot } of members) {
@@ -247,12 +247,18 @@ export function open(id, { title, w = 480, h: height = 320, persist = false, til
     win.free = false;
     retile();
   });
-  let before; // the geometry at pointerdown: a pointerup that changed it ends a drag or a resize
-  el.addEventListener('pointerdown', () => { before = JSON.stringify(rect(el)); focus(id); }, true);
+  // The geometry at a press on the title bar or the resize edge: a pointerup that changed it ends a drag or a resize.
+  el.addEventListener('pointerdown', (e) => {
+    const grip = e.target === el || (e.target.closest('.title-bar') && !e.target.closest('button'));
+    win.before = grip ? JSON.stringify(rect(el)) : undefined;
+    focus(id);
+  }, true);
   // The window is CSS-resizable (resize: both); its size is saved when the operator lets go.
   // Moving or resizing the action column moves the region; a terminal dragged or resized leaves its slot and stays put.
   el.addEventListener('pointerup', () => {
-    if (tile && !el.classList.contains('max') && JSON.stringify(rect(el)) !== before) Object.assign(win, { slot: null, free: true });
+    const { before } = win;
+    win.before = undefined;
+    if (tile && before && !el.classList.contains('max') && JSON.stringify(rect(el)) !== before) Object.assign(win, { slot: null, free: true });
     save();
     if (shapes(id)) retileSoon();
   });
