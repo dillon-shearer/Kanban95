@@ -37,7 +37,9 @@ export type Event =
   | 'merge' // the operator retries a merge that failed
   | 'resume' // the operator restarts the agent of a flagged running ticket whose agent is gone
   | 'restart' // the operator replaces a running ticket's agent, live or not, with a fresh one in the same phase
-  | 'reject'; // the operator sends a done ticket, merged or not, back to a worker with a reason
+  | 'reject' // the operator sends a done ticket, merged or not, back to a worker with a reason
+  | 'reset' // an agent grant at level 1 or more moves a ticket to backlog
+  | 'close'; // an agent grant at level 2 or more moves a running ticket to done without a tester pass
 type Effect =
   | 'spawn_execute' | 'spawn_test' | 'end_session' | 'enqueue_merge' | 'note' | 'answer_pty'
   | 'chord' | 'ding' | 'done' | 'remove_worktree' | 'release_dependents' | 'housekeeping';
@@ -122,6 +124,8 @@ export const TABLE: Row[] = [
   // is gone and the worker's launch forks a fresh one from the base, which holds the merged work. merged_at is kept until a pass.
   { from: ['done'], event: 'reject', when: (f) => !f.live, why: busy, to: 'in_progress', set: { needs_human: 0, retry: 0 }, effects: ['note', 'spawn_execute'] },
   { from: ['done'], event: 'merge', when: (f) => !f.merged, why: 'already merged', effects: ['enqueue_merge'] },
+  { from: [...RUNNING, 'done'], event: 'reset', to: 'backlog', set: { needs_human: 0, blocked_on_deps: 0, retry: 0 }, effects: ['end_session'] },
+  { from: RUNNING, event: 'close', to: 'done', set: { needs_human: 0 }, effects: ['end_session'] },
 ];
 
 /** A transition the table does not have. Refused, never forced. */

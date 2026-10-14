@@ -1,7 +1,7 @@
 // The operator's own settings in ~/.kanban95/, edited in the Settings window. No secrets live here.
 // models.json: which CLI, and the model and effort per phase (docs/LIFECYCLE.md → Run settings). settings.json: CLI paths,
 // sounds, voice, housekeeping, auto-opened terminals, idle minutes, UI zoom, push after merge, sleep minutes,
-// runner concurrency, the automatic update check. projects.json: every repo with a board and its wallpaper colour. All are read on every use, so an edit applies to the next run without a restart.
+// runner concurrency, the automatic update check, what workers read. projects.json: every repo with a board and its wallpaper colour. All are read on every use, so an edit applies to the next run without a restart.
 // models.json, settings.json and preferences.md may have a per-project copy in projects/<repo key>/, used whole instead of the global file.
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
@@ -49,6 +49,7 @@ const FILES = {
     sleepAfterMinutes: z.number().min(0).default(30),
     updateCheck: z.boolean().default(true),
     release: z.boolean().default(false),
+    workers_read: z.enum(['deps', 'all']).default('deps'),
   }).strict(),
 };
 type ConfigName = keyof typeof FILES;

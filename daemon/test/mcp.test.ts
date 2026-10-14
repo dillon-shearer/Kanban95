@@ -82,26 +82,26 @@ describe('bearer', () => {
 });
 
 describe('role matrix: every "no" cell is refused and audited as denied', () => {
-  const cells: [string, () => Client, string, Record<string, unknown>][] = [
+  const cells: [string, () => Client, string, Record<string, unknown>, number?][] = [
     ['planner', () => planner, 'move_ticket', { ticket_id: 1, status: 'testing' }],
     ['planner', () => planner, 'report_test', { ticket_id: 1, passed: true, summary: 'x' }],
     ['planner', () => planner, 'report_cleanup', { ticket_id: 1, items: [{ path: 'a', action: 'deleted', reason: 'r' }] }],
     ['planner', () => planner, 'ask_operator', { ticket_id: 1, question: 'x' }],
-    ['tester', () => tester3, 'delete_ticket', { ticket_id: 1 }],
+    ['tester', () => tester3, 'delete_ticket', { ticket_id: 1 }, 3],
     ['worker', () => worker3, 'report_test', { passed: true, summary: 'x' }],
-    ['worker', () => worker3, 'set_model', { effort: 'high' }],
-    ['tester', () => tester3, 'set_model', { effort: 'high' }],
-    ['tester', () => tester3, 'create_ticket', { title: 'x' }],
-    ['tester', () => tester3, 'update_ticket', { body: 'x' }],
-    ['tester', () => tester3, 'report_cleanup', { items: [{ path: 'a', action: 'deleted', reason: 'r' }] }],
-    ['worker', () => worker3, 'brain_delete', { id: 1 }],
-    ['tester', () => tester3, 'brain_delete', { id: 1 }],
+    ['worker', () => worker3, 'set_model', { effort: 'high' }, 3],
+    ['tester', () => tester3, 'set_model', { effort: 'high' }, 3],
+    ['tester', () => tester3, 'create_ticket', { title: 'x' }, 4],
+    ['tester', () => tester3, 'update_ticket', { body: 'x' }, 3],
+    ['tester', () => tester3, 'report_cleanup', { items: [{ path: 'a', action: 'deleted', reason: 'r' }] }, 4],
+    ['worker', () => worker3, 'brain_delete', { id: 1 }, 4],
+    ['tester', () => tester3, 'brain_delete', { id: 1 }, 4],
   ];
-  for (const [role, client, tool, args] of cells) {
+  for (const [role, client, tool, args, level] of cells) {
     it(`${role} cannot call ${tool}`, async () => {
       const r = await call(client(), tool, args);
       expect(r.denied).toBe(true);
-      expect(r.text).toBe(`a ${role} may not call ${tool}`);
+      expect(r.text).toBe(`a ${role} may not call ${tool}${level ? `; ask for level ${level} with request_permission` : ''}`);
       expect(lastAudit()).toMatchObject({ grant_id: grantIds[role === 'planner' ? 'planner' : role + '3'], tool, outcome: 'denied' });
     });
   }
@@ -129,7 +129,7 @@ describe('ticket scope', () => {
       expect((await call(c(), 'get_ticket')).json).toMatchObject({ id: 3, depends_on: [2], notes: [] });
       expect((await call(c(), 'get_ticket', { ticket_id: 2 })).json).toMatchObject({ id: 2 });
       const denied = await call(c(), 'get_ticket', { ticket_id: 1 });
-      expect(denied).toMatchObject({ denied: true, text: 'this grant is scoped to ticket 3 and its dependencies' });
+      expect(denied).toMatchObject({ denied: true, text: 'this grant is scoped to ticket 3 and its dependencies; ask for level 4 with request_permission' });
       expect(lastAudit()).toMatchObject({ grant_id: grantIds[`${role}3`], ticket_id: 1, tool: 'get_ticket', outcome: 'denied' });
       expect((await call(c(), 'get_ticket', { ticket_id: 4 })).denied).toBe(true);
       expect((await call(c(), 'list_tickets')).json.map((t: { id: number }) => t.id)).toEqual([3, 2]);
@@ -170,10 +170,10 @@ describe('move_ticket', () => {
   it('refuses a transition the role may not make, naming the allowed targets', async () => {
     const w = await call(worker3, 'move_ticket', { status: 'done' });
     expect(w.denied).toBe(true);
-    expect(w.text).toBe('a worker may only move its ticket to: testing');
+    expect(w.text).toBe('a worker may only move its ticket to: testing; ask for level 2 with request_permission');
     const t = await call(tester3, 'move_ticket', { status: 'backlog' });
     expect(t.denied).toBe(true);
-    expect(t.text).toBe('a tester may only move its ticket to: done, in_progress');
+    expect(t.text).toBe('a tester may only move its ticket to: done, in_progress; ask for level 1 with request_permission');
     expect(lastAudit()).toMatchObject({ grant_id: grantIds.tester3, ticket_id: 3, tool: 'move_ticket', outcome: 'denied' });
     expect((await call(planner, 'get_ticket', { ticket_id: 3 })).json.status).toBe('backlog');
   });

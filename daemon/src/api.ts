@@ -42,7 +42,7 @@ async function other(run: () => Promise<unknown>, status: number): Promise<Reply
 // Column whitelist for ticket writes. Values are checked by the schema's CHECK constraints; types here.
 const TICKET_FIELDS: Record<string, 'string' | 'int' | 'bool'> = {
   title: 'string', body: 'string', criteria: 'string', status: 'string', cli: 'string', model: 'string',
-  effort: 'string', retry: 'int', needs_human: 'bool', blocked_on_deps: 'bool',
+  effort: 'string', retry: 'int', needs_human: 'bool', blocked_on_deps: 'bool', agent_level: 'int', read_all: 'bool',
 };
 const NULLABLE = new Set(['cli', 'model', 'effort']);
 const TAG = /^[a-z0-9-]+$/;
@@ -87,17 +87,18 @@ function ticketColumns(body: Json): { cols: string[]; vals: unknown[]; deps?: nu
 
 export interface Ticket {
   id: number; title: string; body: string; criteria: string; status: string; cli: string | null; model: string | null;
-  effort: string | null; tags: string; created_by_grant: number | null; retry: number; template: string; merged_at: string | null; created_at: string; updated_at: string;
+  effort: string | null; tags: string; created_by_grant: number | null; retry: number; agent_level: number; read_all: boolean; template: string; merged_at: string | null; created_at: string; updated_at: string;
   flags: { needs_human: boolean; blocked_on_deps: boolean }; depends_on: number[];
 }
 
 export function readTicket(db: DatabaseSync, id: number): Ticket {
   const row = db.prepare('SELECT * FROM tickets WHERE id = ?').get(id) as Json | undefined;
   if (!row) throw new HttpError(404, 'no such ticket');
-  const { needs_human, blocked_on_deps, ...rest } = row;
+  const { needs_human, blocked_on_deps, read_all, ...rest } = row;
   const deps = db.prepare('SELECT depends_on_id FROM ticket_deps WHERE ticket_id = ? ORDER BY depends_on_id').all(id);
   return {
     ...rest,
+    read_all: read_all === 1,
     flags: { needs_human: needs_human === 1, blocked_on_deps: blocked_on_deps === 1 },
     depends_on: deps.map((d) => d.depends_on_id as number),
   } as Ticket;

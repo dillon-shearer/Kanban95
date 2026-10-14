@@ -43,6 +43,10 @@ describe('transition table', () => {
     ['operator rejects a merged ticket', { status: 'done', merged: true, retry: 2, live: false }, 'reject', { to: 'in_progress', set: { needs_human: 0, retry: 0 }, effects: ['note', 'spawn_execute'] }],
     ['operator rejects a flagged unmerged ticket', { status: 'done', needs_human: true, live: false }, 'reject', { to: 'in_progress', set: { needs_human: 0, retry: 0 }, effects: ['note', 'spawn_execute'] }],
     ['operator retries a failed merge', { status: 'done', needs_human: true }, 'merge', { to: 'done', set: {}, effects: ['enqueue_merge'] }],
+    ['a level 1 grant resets a flagged ticket in testing', { status: 'testing', needs_human: true, retry: 2 }, 'reset', { to: 'backlog', set: { needs_human: 0, blocked_on_deps: 0, retry: 0 }, effects: ['end_session'] }],
+    ['a level 1 grant resets a done ticket', { status: 'done', merged: true, live: false }, 'reset', { to: 'backlog', set: { needs_human: 0, blocked_on_deps: 0, retry: 0 }, effects: ['end_session'] }],
+    ['a level 2 grant closes a live ticket in progress', { status: 'in_progress', needs_human: true }, 'close', { to: 'done', set: { needs_human: 0 }, effects: ['end_session'] }],
+    ['a level 2 grant closes a ticket in testing with no pass', { status: 'testing' }, 'close', { to: 'done', set: { needs_human: 0 }, effects: ['end_session'] }],
   ];
   it.each(rows)('%s', (_, facts, event, want) => {
     expect(transition(f(facts), event)).toEqual(want);
@@ -50,11 +54,11 @@ describe('transition table', () => {
 
   const allowed: Record<Status, Event[]> = {
     backlog: ['launch'],
-    in_progress: ['launch', 'resume', 'restart', 'submit', 'ask', 'answer', 'exit', 'silent', 'woke', 'conflict'],
-    testing: ['launch', 'resume', 'restart', 'pass', 'fail', 'ask', 'answer', 'exit', 'silent', 'woke'],
-    done: ['merged', 'conflict', 'merge', 'dirty', 'unmerged', 'unpushed', 'reject'],
+    in_progress: ['launch', 'resume', 'restart', 'submit', 'ask', 'answer', 'exit', 'silent', 'woke', 'conflict', 'reset', 'close'],
+    testing: ['launch', 'resume', 'restart', 'pass', 'fail', 'ask', 'answer', 'exit', 'silent', 'woke', 'reset', 'close'],
+    done: ['merged', 'conflict', 'merge', 'dirty', 'unmerged', 'unpushed', 'reject', 'reset'],
   };
-  const EVENTS: Event[] = ['launch', 'submit', 'pass', 'fail', 'ask', 'answer', 'exit', 'silent', 'woke', 'merged', 'conflict', 'merge', 'dirty', 'unmerged', 'unpushed', 'resume', 'restart', 'reject'];
+  const EVENTS: Event[] = ['launch', 'submit', 'pass', 'fail', 'ask', 'answer', 'exit', 'silent', 'woke', 'merged', 'conflict', 'merge', 'dirty', 'unmerged', 'unpushed', 'resume', 'restart', 'reject', 'reset', 'close'];
   it('refuses every other event in every status', () => {
     let n = 0;
     for (const status of Object.keys(allowed) as Status[]) {
@@ -63,7 +67,7 @@ describe('transition table', () => {
         n++;
       }
     }
-    expect(n).toBe(4 * EVENTS.length - 28);
+    expect(n).toBe(4 * EVENTS.length - 33);
   });
 
   it('refuses a guarded row whose guard fails, saying why', () => {
