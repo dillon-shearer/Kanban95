@@ -10,7 +10,7 @@ import { BRAIN_BODY_MAX, BRAIN_RANK, isConstraintError, SCOPES, type Brains, typ
 import { hasBranch, ticketDiff } from './git.js';
 import { audit, revoke } from './grants.js';
 import { cancelSetup, killGrantSession, killSession, sessions, sessionsOf, type Session } from './launcher.js';
-import { apply, brainstorm, BUMPS, changed, events, housekeeping, isKanban95, operator, pushBase, Refused, release, releaseInfo, releaseOn, releasePending, relaunch, restartBoard, runnerState, setRunner, tick, type Board, type Bump } from './lifecycle.js';
+import { apply, brainstorm, BUMPS, changed, events, housekeeping, isKanban95, operator, pushBase, Refused, release, releaseInfo, releaseOn, releasePending, relaunch, restartBoard, runnerState, setRunner, tick, ticketBase, type Board, type Bump } from './lifecycle.js';
 import { addOverride, BadConfig, boardHome, dropOverride, gone, globalPath, isOverridable, knownModels, project, projectPath, projectsPath, readProjects, setBoardHome, uncatalogued, writeConfig, writeLastBoard, writePreferences, writeProjects, type OverridableName } from './settings.js';
 import { isStale, resetTemplate, templatePath, TEMPLATES, unknownVar, VARS, writeTemplate, type TemplateName } from './templates.js';
 import { bootstrap } from './bootstrap.js';
@@ -452,8 +452,8 @@ const routes: [method: string, path: RegExp, mutation: string | null, handler: (
     status: 201, body: housekeeping(board, 'Started by the operator from the Housekeeping button. Follow the housekeeping brief.'),
   })],
   ['GET', /^\/api\/tickets\/(\d+)\/diff$/, null, ({ board, params }) => {
-    readTicket(board.db, Number(params[0]));
-    return { status: 200, body: { diff: ticketDiff(board.repo, Number(params[0])) } };
+    const t = readTicket(board.db, Number(params[0]));
+    return { status: 200, body: { diff: ticketDiff(board.repo, t.id, ticketBase(board.repo, t.tags)) } };
   }],
   // What a flagged ticket waits on: questions an agent asked with ask_operator that have no answer yet, and, when no newer
   // question is open, the failure that flagged it. `merged_at` tells the Inbox whether Retry merge applies.

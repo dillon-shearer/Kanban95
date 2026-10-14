@@ -229,7 +229,7 @@ export function apply(b: Board, id: number, event: Event, x: { note?: Note; answ
   if (hold) held.add(id);
   if (event === 'submit') {
     // The tester tests the branch with the base merged in, so stale code never spends a tester round.
-    const s = syncWorktree(b.repo, id);
+    const s = syncWorktree(b.repo, id, ticketBase(b.repo, t.tags));
     if (!s.ok) return apply(b, id, 'conflict', { note: { role: 'worker', kind: 'failure', body: s.reason }, auto: true });
   }
   const { to = t.status as Status, set = {}, effects } = row;
@@ -287,7 +287,7 @@ export function apply(b: Board, id: number, event: Event, x: { note?: Note; answ
         }
         break;
       case 'chord': case 'ding': case 'done': events.emit('event', { sound: e, ticket: id }); break;
-      case 'remove_worktree': pending.push(cleanTicket(b, id)); break;
+      case 'remove_worktree': pending.push(cleanTicket(b, id, ticketBase(b.repo, t.tags))); break;
       case 'release_dependents': releaseDependents(b, id); break;
       case 'housekeeping': maybeHousekeeping(b, t); break;
     }
@@ -322,11 +322,13 @@ function spawn(b: Board, id: number, template: 'execute' | 'housekeeping' | 'tes
   try {
     if (b.closing) throw new Error('the daemon is shutting down');
     if (b.gitError) throw new Error(b.gitError);
-    const settings = runSettings(readTicket(b.db, id), template === 'test' ? 'test' : 'execute', b.repo);
-    const go = () => void launch({ ...b, onExit: (s) => exited(b, s) }, { ticketId: id, template, resume, ...settings });
+    const t = readTicket(b.db, id);
+    const settings = runSettings(t, template === 'test' ? 'test' : 'execute', b.repo);
+    const base = ticketBase(b.repo, t.tags);
+    const go = () => void launch({ ...b, onExit: (s) => exited(b, s) }, { ticketId: id, template, resume, base, ...settings });
     const me = ++spawnCount;
     spawns.set(id, me);
-    const setup = prepareWorktree(b.repo, id, worktreeSetup(b.repo));
+    const setup = prepareWorktree(b.repo, id, worktreeSetup(b.repo), undefined, base);
     if (!setup) return go();
     const after = async () => {
       await setup;
@@ -590,22 +592,31 @@ async function mergeJob(b: Board, id: number, since: number) {
   // ponytail: lands even when the sync brought in new commits (the worker merged and the tester tested at submit); upgrade is
   // to send it back to testing when the sync touched files the ticket also touched.
   // Retry merge after a failed push: the branch is already in the base, so only the push is left.
-  const inBase = isAncestor(b.repo, branchName(id), 'HEAD');
-  const head = git(b.repo, 'rev-parse', 'HEAD');
-  const s = inBase ? { ok: true as const } : syncWorktree(b.repo, id);
+  let base: string | undefined;
+  let head: string;
+  try {
+    base = ticketBase(b.repo, t.tags);
+    head = git(b.repo, 'rev-parse', '--verify', base ?? 'HEAD');
+  } catch (e) {
+    if (gitNotRun(e)) throw e;
+    const body = `merge did not run: ${(e as Error).message.trim()}`;
+    return void (await Promise.all(apply(b, id, 'unmerged', { note: { role: 'tester', kind: 'failure', body } }).pending));
+  }
+  const inBase = isAncestor(b.repo, branchName(id), base ?? 'HEAD');
+  const s = inBase ? { ok: true as const } : syncWorktree(b.repo, id, base);
   if (!s.ok) return void (await Promise.all(apply(b, id, 'conflict', { note: { role: 'tester', kind: 'failure', body: s.reason }, auto: true }).pending));
   mark('merge-start', `t${id}`);
-  const moved = () => git(b.repo, 'rev-parse', 'HEAD') !== head;
+  const moved = () => git(b.repo, 'rev-parse', base ?? 'HEAD') !== head;
   const wanted = () => {
     const n = readTicket(b.db, id);
     return n.status === 'done' && !n.flags.blocked && !moved();
   };
-  const r = inBase ? { ok: true as const } : await merge(b.repo, id, t.title, wanted);
+  const r = inBase ? { ok: true as const } : await merge(b.repo, id, t.title, wanted, base);
   mark('merge-end', `t${id}`, !r ? 'skipped' : r.ok ? 'ok' : r.dirty ? 'dirty' : 'conflict');
   if (!r) return void (readTicket(b.db, id).status === 'done' && moved() && queueMerge(b, id, since));
   if (r.ok && !inBase) {
     try {
-      recordDeliverables(b.db, b.repo, head, 'HEAD', id, t.title);
+      if (base === undefined) recordDeliverables(b.db, b.repo, head, 'HEAD', id, t.title);
     } catch (e) {
       console.error('[deliverables]', (e as Error).message);
     }
@@ -619,13 +630,13 @@ async function mergeJob(b: Board, id: number, since: number) {
       releasePending(b);
     }
     // Published before it counts as merged: a failed push flags the ticket and leaves the merge in the base.
-    const p = readConfig('settings', b.repo).push_after_merge ? await push(b.repo) : { ok: true as const, pushed: false };
+    const p = readConfig('settings', b.repo).push_after_merge ? await push(b.repo, base) : { ok: true as const, pushed: false };
     if (!p.ok) {
       const body = `merged into ${p.base}, but git push to ${p.remote} failed, so the ticket is not closed:
 ${p.reason}`;
       return void apply(b, id, 'unpushed', { note: { role: 'tester', kind: 'failure', body } });
     }
-    if (p.pushed) b.unpushed = 0;
+    if (p.pushed && base === undefined) b.unpushed = 0;
     out = apply(b, id, 'merged');
   }
   else if (r.dirty && Date.now() - since < DIRTY_WAIT.max) {
@@ -695,6 +706,18 @@ function worktreeSetup(repo: string): string | undefined {
   const c = repoConfig(repo).worktree_setup;
   if (c !== undefined && (typeof c !== 'string' || !c.trim())) throw new BadConfig(`${repoConfigPath(repo)} worktree_setup must be a non-empty string`);
   return c;
+}
+
+/** config.json `bases`: tag to branch. A ticket with a mapped tag forks from, syncs with and lands on that branch (docs/LIFECYCLE.md → Ticket base). */
+export function ticketBase(repo: string, tags: string): string | undefined {
+  const bases = repoConfig(repo).bases;
+  if (bases === undefined) return undefined;
+  const where = `${repoConfigPath(repo)} bases`;
+  if (typeof bases !== 'object' || bases === null || Array.isArray(bases)) throw new BadConfig(`${where} must be an object of tag to branch`);
+  const found = [...new Set(tags.split(/\s+/).filter((tag) => Object.hasOwn(bases, tag)).map((tag) => bases[tag]))];
+  if (found.some((v) => typeof v !== 'string' || !v.trim())) throw new BadConfig(`${where} must map each tag to a branch name`);
+  if (found.length > 1) throw new BadConfig(`the ticket's tags map to more than one base in ${where}: ${found.join(', ')}`);
+  return found[0];
 }
 
 /** settings.json `housekeeping: { auto, every }` (on, 10). Merged execute tickets are counted; housekeeping ones are not. The ticket waits in Backlog for the runner. */
@@ -801,7 +824,7 @@ export function candidates(b: Board): number[] {
  * ponytail: names in prose are a guess; upgrade to a files list the planner writes on each ticket.
  */
 function files(b: Board, id: number): string[] {
-  const t = b.db.prepare('SELECT body, criteria FROM tickets WHERE id = ?').get(id) as { body: string; criteria: string };
+  const t = b.db.prepare('SELECT body, criteria, tags FROM tickets WHERE id = ?').get(id) as { body: string; criteria: string; tags: string };
   const head = branchHead(b.repo, id);
   const key = head === undefined ? undefined : JSON.stringify([head, t.body, t.criteria]);
   const hit = b.files?.get(id);
@@ -809,7 +832,7 @@ function files(b: Board, id: number): string[] {
   const named = `${t.body}\n${t.criteria}`.match(/[\w./-]+\.\w+/g) ?? [];
   let diff: string[] = [];
   try {
-    diff = git(b.repo, 'diff', '--name-only', `${git(b.repo, 'rev-parse', '--abbrev-ref', 'HEAD')}...${branchName(id)}`).split('\n');
+    diff = git(b.repo, 'diff', '--name-only', `${ticketBase(b.repo, t.tags) ?? git(b.repo, 'rev-parse', '--abbrev-ref', 'HEAD')}...${branchName(id)}`).split('\n');
   } catch { /* no branch yet */ }
   const inRepo = (f: string) => !f.split('/').includes('..') && existsSync(join(b.repo, f));
   const all = [...named.map((f) => f.replace(/^\.\//, '')).filter(inRepo), ...diff];

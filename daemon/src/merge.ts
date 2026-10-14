@@ -26,27 +26,57 @@ type MergeResult = { ok: true } | { ok: false; dirty: boolean; base: string; rea
  * A base with uncommitted changes is never merged into, so `merge --abort` never runs over the operator's edits.
  * `wanted` is asked last, with no await between it and the merge starting; `null` when it says no (the ticket was rejected
  * or moved while the checks above ran).
+ * `override`, the ticket's own base, lands in the working tree that has it checked out; when none has, the merge commit is
+ * written with commit-tree and the branch moved with update-ref, which refuses if the branch moved meanwhile. That needs the
+ * base already merged into the ticket branch, which the queue's sync has just done.
  */
-export async function merge(repo: string, ticketId: number, title: string, wanted = () => true): Promise<MergeResult | null> {
-  const base = (await git(repo, 'rev-parse', '--abbrev-ref', 'HEAD')).stdout.trim();
-  const { stdout: dirty } = await git(repo, 'status', '--porcelain', '--untracked-files=no');
+export async function merge(repo: string, ticketId: number, title: string, wanted = () => true, override?: string): Promise<MergeResult | null> {
+  const base = override ?? (await git(repo, 'rev-parse', '--abbrev-ref', 'HEAD')).stdout.trim();
+  const message = title.split(/\r?\n/)[0].trim();
+  const where = override === undefined ? repo : await checkoutOf(repo, override);
+  if (where === undefined) return mergeRef(repo, ticketId, base, message, wanted);
+  const { stdout: dirty } = await git(where, 'status', '--porcelain', '--untracked-files=no');
   if (dirty.trim()) return { ok: false, dirty: true, base, reason: dirty.trimEnd() };
   if (!wanted()) return null;
   try {
-    await git(repo, 'merge', '--no-ff', '--no-edit', '-m', title.split(/\r?\n/)[0].trim(), branchName(ticketId));
+    await git(where, 'merge', '--no-ff', '--no-edit', '-m', message, branchName(ticketId));
     return { ok: true };
   } catch (e) {
-    await git(repo, 'merge', '--abort').catch(() => {}); // nothing to abort when the merge never started
+    await git(where, 'merge', '--abort').catch(() => {}); // nothing to abort when the merge never started
     if (gitNotRun(e)) throw e; // no conflict: the merge queue runs the job again
     const { stdout, stderr } = e as { stdout?: string; stderr?: string };
     return { ok: false, dirty: false, base, reason: `${stdout ?? ''}${stderr ?? ''}`.trim() || (e as Error).message };
   }
 }
 
-/** The main checkout's branch, its upstream remote and the branch there; `null` when the branch tracks nothing. */
-export async function upstream(repo: string): Promise<{ base: string; remote: string; ref: string } | null> {
+async function checkoutOf(repo: string, branch: string): Promise<string | undefined> {
+  const { stdout } = await git(repo, 'worktree', 'list', '--porcelain');
+  const entry = stdout.split(/\r?\n\r?\n/).map((e) => e.split(/\r?\n/)).find((lines) => lines.includes(`branch refs/heads/${branch}`));
+  return entry?.[0].replace(/^worktree /, '');
+}
+
+async function mergeRef(repo: string, ticketId: number, base: string, message: string, wanted: () => boolean): Promise<MergeResult | null> {
+  const rev = async (ref: string) => (await git(repo, 'rev-parse', '--verify', ref)).stdout.trim();
   try {
-    const base = (await git(repo, 'rev-parse', '--abbrev-ref', 'HEAD')).stdout.trim();
+    const old = await rev(`refs/heads/${base}`);
+    const tip = await rev(`refs/heads/${branchName(ticketId)}`);
+    const synced = await git(repo, 'merge-base', '--is-ancestor', old, tip).then(() => true, () => false);
+    if (!synced) return { ok: false, dirty: false, base, reason: `${base} is not merged into ${branchName(ticketId)}` };
+    const commit = (await git(repo, 'commit-tree', `${tip}^{tree}`, '-p', old, '-p', tip, '-m', message)).stdout.trim();
+    if (!wanted()) return null;
+    await git(repo, 'update-ref', '-m', `merge ${branchName(ticketId)}`, `refs/heads/${base}`, commit, old);
+    return { ok: true };
+  } catch (e) {
+    if (gitNotRun(e)) throw e;
+    const { stdout, stderr } = e as { stdout?: string; stderr?: string };
+    return { ok: false, dirty: false, base, reason: `${stdout ?? ''}${stderr ?? ''}`.trim() || (e as Error).message };
+  }
+}
+
+/** The main checkout's branch, its upstream remote and the branch there; `null` when the branch tracks nothing. */
+export async function upstream(repo: string, branch?: string): Promise<{ base: string; remote: string; ref: string } | null> {
+  try {
+    const base = branch ?? (await git(repo, 'rev-parse', '--abbrev-ref', 'HEAD')).stdout.trim();
     const remote = (await git(repo, 'config', `branch.${base}.remote`)).stdout.trim();
     const ref = (await git(repo, 'config', `branch.${base}.merge`)).stdout.trim();
     return remote && ref ? { base, remote, ref } : null;
@@ -73,12 +103,12 @@ type PushResult = { ok: true; pushed: boolean } | { ok: false; base: string; rem
  * missing credential fails instead of hanging the queue. `pushed: false`: the base has no upstream, nothing was run.
  * ponytail: a 2-minute timeout holds the merge queue that long on a stalled network; upgrade is a push queue of its own.
  */
-export const push = (repo: string) => pushRefs(repo, []);
+export const push = (repo: string, branch?: string) => pushRefs(repo, [], branch);
 
-export const pushRelease = (repo: string, tag: string) => pushRefs(repo, ['--atomic'], `refs/tags/${tag}`);
+export const pushRelease = (repo: string, tag: string) => pushRefs(repo, ['--atomic'], undefined, `refs/tags/${tag}`);
 
-async function pushRefs(repo: string, flags: string[], ...refs: string[]): Promise<PushResult> {
-  const u = await upstream(repo);
+async function pushRefs(repo: string, flags: string[], branch?: string, ...refs: string[]): Promise<PushResult> {
+  const u = await upstream(repo, branch);
   if (!u) return { ok: true, pushed: false };
   try {
     await run('git', ['push', ...flags, u.remote, `${u.base}:${u.ref}`, ...refs], {
