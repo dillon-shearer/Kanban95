@@ -1,7 +1,7 @@
 // Drives a headless Edge or Chrome over the DevTools protocol for the UI tests, with Node's own WebSocket: no dependency.
 // One browser serves a whole vitest run (browser-setup.ts starts it and puts its port in K95_CDP_PORT); each test file's
 // `browser()` is a tab in its own browser context, so files share no cookies or storage.
-import { spawn } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -51,9 +51,18 @@ export async function launch() {
     proc.once('exit', (code, signal) => { exited = `exit ${code ?? signal}`; r(); });
   });
   const close = async () => {
+    if (!exited && process.platform === 'win32' && proc.pid) {
+      await new Promise((r) => execFile('taskkill', ['/T', '/F', '/PID', String(proc.pid)], { windowsHide: true, timeout: 10_000 }, r));
+    }
     if (!exited) proc.kill();
     await gone;
-    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+    try {
+      rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+    } catch (e) {
+      const code = (e as NodeJS.ErrnoException).code;
+      if (code !== 'EPERM' && code !== 'EBUSY' && code !== 'ENOTEMPTY') throw e;
+      console.warn(`left ${dir}: ${code}`);
+    }
   };
   const portFile = join(profile, 'DevToolsActivePort');
   try {
