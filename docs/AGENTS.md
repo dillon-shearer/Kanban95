@@ -73,6 +73,19 @@ Claude Code workers and testers run without the operator's user settings, plugin
 
 **Housekeeper (housekeeping).** Created by the board after every 10th merged ticket (Settings → Agents → Housekeeping), and run through the same test and merge path as any ticket. Finds stale docs, ephemeral docs that are superseded, modules with no importers, templates nothing renders, orphan worktrees, temp dirs, stray screenshots, and untracked or unreferenced `.md`, `.txt`, `.log`, `.png` files at the repo root or under `docs/`. Reviews every brain row (keep, rewrite, move, merge, delete): applies rewrites and merges with `brain_update`, reports each as `brain#<id>` in `report_cleanup`, and names for the operator the rows to move (current scope, id, target scope, reason) and to delete. Its worker grant cannot `move_to`. Moves anything durable into the matching living doc, then deletes. Confirms "unused" by search. Changes no behaviour; tests and build must pass as before. Calls `report_cleanup` with every path and reason, then `move_ticket(testing)`. Its tester checks the build still passes and no living doc was removed.
 
+## Permission levels
+
+A worker or tester refused for reach ("may not call", "scoped to ticket", "ask for level N") calls `request_permission` once with the lowest level that covers the need and a one-line reason, then waits for the answer in its terminal. It never retries the refused call before the answer. A denial is final for that ticket: the agent notes it and finishes within the reach it has. The levels (docs/MCP.md -> Levels), each holding the ones below:
+
+- 0: the role's own tools.
+- 1: `move_ticket` any ticket to backlog or in_progress.
+- 2: also `move_ticket` any running ticket to done without a tester pass.
+- 3: also the operator's reach for `update_ticket`, `delete_ticket`, `set_model` and `add_note`.
+- 4: the operator's reach for every tool, `move_ticket` to testing included.
+- read_all: `get_ticket` and `list_tickets` on every ticket.
+
+When the limit an agent hits is a Kanban95 bug or gap (a missing tool, a wrong refusal, a crash), it files it with `file_on_board` on the Kanban95 board by folder name, with the exact refusal text and its ticket id, notes the filed id on its own ticket, and continues. When that board is not running, it adds a note on its own ticket instead. `execute.md`, `test.md`, `operator.md`, `brainstorm.md` and the `kanban95-ticket-start` skill all carry this guidance.
+
 ## Verification
 
 The full suite (`npm test`: `tsc`, then unit tests plus a small set of critical-path tests with real git, ptys and headless Edge, at most 5 minutes; docs/ARCHITECTURE.md → Working on the board) is run by the operator by hand only; the board never runs it. Both the worker and the tester run `npm run build` and `npm run test:changed -- <base>` (`daemon/test/changed.ts`; `<base>` defaults to `main`), which runs only the test files the worktree's changes against the base can affect, committed, staged or not. A broken test outside the diff is caught when a later ticket touches that area or the operator runs `npm test`:
