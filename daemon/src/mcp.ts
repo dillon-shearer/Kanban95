@@ -7,6 +7,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import * as z from 'zod';
 import { brainAdd, brainDelete, brainGet, brains, brainSearch, brainUpdate, deleteTicket, normaliseTags, readTicket, setDeps, transaction } from './api.js';
+import { bootstrap } from './bootstrap.js';
 import { BRAIN_BODY_MAX, SCOPES } from './db.js';
 import { attachments } from './attachments.js';
 import { fileOn, runningBoard } from './boards.js';
@@ -110,6 +111,19 @@ export const TOOLS: Record<string, Tool<z.ZodRawShape>> = {
       });
       c.ticket = id;
       return readTicket(c.db, id);
+    },
+  }),
+
+  bootstrap_board: tool({
+    description:
+      'Create the starter ticket set for a new board from .kanban95/templates/bootstrap.md: one Backlog ticket per section, in order, each depending on the one before, tagged setup. ' +
+      'Call it when you create a board or are told to set one up. Refused once the board has a ticket tagged setup, so it runs once. Returns the tickets.',
+    access: { planner: 'once per board', operator: 'once per board' },
+    input: {},
+    run(c) {
+      const list = bootstrap(c.board, c.grant.id);
+      c.ticket = list.at(-1)!.id;
+      return list;
     },
   }),
 

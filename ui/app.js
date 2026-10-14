@@ -678,6 +678,13 @@ function openBoard() {
   const cols = h('div', { class: 'k95-columns', onclick: (e) => { // a click on empty column space clears the selection
     if (!e.target.closest('.card')) selection.clear(), drawBoard();
   } });
+  const empty = h('div', { class: 'k95-empty', hidden: true },
+    h('div', { class: 'window' },
+      h('div', { class: 'title-bar' }, h('div', { class: 'title-bar-text' }, 'This board is empty')),
+      h('div', { class: 'window-body' },
+        h('p', {}, 'Set up this board adds the starter tickets from .kanban95/templates/bootstrap.md to Backlog.'),
+        h('p', {}, 'To plan your own work, New brainstorm is in the Start menu.'),
+        h('button', { onclick: setupBoard }, 'Set up this board'))));
   w.body.classList.add('k95-board');
   w.body.append(
     h('div', { class: 'k95-toolbar' },
@@ -686,11 +693,14 @@ function openBoard() {
       h('button', { onclick: newBrainstorm, title: 'Ctrl+N' }, 'New brainstorm'),
       h('button', { onclick: housekeeping }, 'Housekeeping'),
       filter),
+    empty,
     cols,
     h('div', { class: 'status-bar' }, status, runField, releaseField, unpushedField, heldField));
   say = (msg) => { status.textContent = msg; status.title = msg; };
   views.set('board', () => {
     const all = [...tickets.values()];
+    empty.hidden = all.length > 0;
+    cols.hidden = !empty.hidden;
     // A rebuild resets each column's scroll and drops focus; carry both across by status and card id.
     const scroll = Object.fromEntries([...cols.querySelectorAll('.col')].map((c) => [c.dataset.status, c.querySelector('.cards').scrollTop]));
     const focused = document.activeElement?.closest?.('.card');
@@ -727,6 +737,10 @@ function openBoard() {
   drawBoard();
 }
 const drawBoard = () => views.get('board')?.(null);
+const setupBoard = () => act(async () => {
+  for (const t of await api('POST', '/tickets/bootstrap')) tickets.set(t.id, t);
+  drawBoard();
+}, 'Setup tickets added to Backlog.');
 
 // ---- ticket ----
 

@@ -22,6 +22,7 @@ export function mapped(paths: string[], testDir: string): string[] {
   for (const p of paths) {
     if (p.startsWith('templates/') || p.startsWith('skills/')) out.add('templates.test.ts');
     if (p === 'templates/operator.md' || p === 'templates/housekeeping.md') out.add('operator.test.ts');
+    if (p === 'templates/bootstrap.md') out.add('bootstrap.test.ts');
     // SQL is read from disk at start, so no test imports it.
     if (p.startsWith('daemon/migrations/global/')) out.add('brain-global.test.ts');
     else if (p.startsWith('daemon/migrations/')) out.add('db.test.ts');

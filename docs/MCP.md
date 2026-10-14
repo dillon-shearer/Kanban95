@@ -17,6 +17,7 @@ A refused call returns a tool error whose text says why and, for `move_ticket`, 
 | tool | planner | worker | tester | operator |
 |------|---|---|---|---|
 | create_ticket | yes | yes, Backlog follow-up, no model/effort | no | yes |
+| bootstrap_board | once per board | no | no | once per board |
 | file_on_board | yes | yes; own board as create_ticket | other boards only | yes |
 | update_ticket | any ticket | own, body/criteria only; its Backlog follow-ups, title/body/criteria/tags/depends_on | no | any ticket |
 | delete_ticket | Backlog, no notes or runs | its Backlog follow-ups | no | Backlog, no notes or runs |
@@ -51,6 +52,12 @@ Create a ticket in the backlog. Give it a title, a body that says what to build 
 | tags | string[] | no | Grouping tags, each lowercase a-z, 0-9 and - only, e.g. ["ui", "daemon"]. |
 | model | string | no | Model override; omit for the phase default. |
 | effort | low \| medium \| high \| max | no | Effort override; omit for the phase default. |
+
+### bootstrap_board
+
+Create the starter ticket set for a new board from .kanban95/templates/bootstrap.md: one Backlog ticket per section, in order, each depending on the one before, tagged setup. Call it when you create a board or are told to set one up. Refused once the board has a ticket tagged setup, so it runs once. Returns the tickets.
+
+No arguments.
 
 ### file_on_board
 
