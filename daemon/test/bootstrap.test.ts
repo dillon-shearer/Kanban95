@@ -102,7 +102,7 @@ describe('bootstrap on a board', () => {
   it('bootstrap_board: a worker grant is refused, a planner grant creates the set once', async () => {
     const worker = await connect('worker');
     const w = await call(worker.c);
-    expect(w).toEqual({ denied: true, text: 'a worker may not call bootstrap_board' });
+    expect(w).toEqual({ denied: true, text: 'a worker may not call bootstrap_board; ask for level 4 with request_permission' });
     expect(audit()).toEqual({ grant_id: worker.id, tool: 'bootstrap_board', outcome: 'denied' });
 
     const planner = await connect('planner');
