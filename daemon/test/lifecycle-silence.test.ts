@@ -6,7 +6,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import { worktreePath } from '../src/git.ts';
 import { sessionsOf } from '../src/launcher.ts';
 import { SILENCE } from '../src/lifecycle.ts';
-import { git, models, notes, post, repo, runs, sounds, t, ticket, until } from './board.ts';
+import { git, models, notes, post, repo, runs, send, sounds, t, ticket, until } from './board.ts';
 
 describe('silent agents', { timeout: 60_000 }, () => {
   // One minute of idle_minutes lasts 400 ms here; the watch looks every 50 ms. Set before the outer beforeEach starts the daemon.
@@ -65,7 +65,11 @@ while (!existsSync('go')) await new Promise((r) => setTimeout(r, 25));
     expect(readFileSync(wt(id, 'setup.log'), 'utf8')).toBe(`${dirname(process.execPath)}\n`);
     expect(runs(id)).toEqual([]); // no agent while setup runs, and a second launch is refused
     expect((await post(`/api/tickets/${id}/launch`)).status).toBe(409);
+    const setupIds = async () => (await (await send('GET')('/api/runner')).json()).setup;
+    expect(await setupIds()).toEqual([id]);
     writeFileSync(wt(id, 'go'), '');
+    await until(() => runs(id).length === 1, 'the agent after setup');
+    expect(await setupIds()).toEqual([]);
     await until(() => t(id).flags.needs_human, 'the silent agent to exit');
     expect(runs(id)).toHaveLength(1);
 
