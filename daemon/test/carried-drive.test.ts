@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createWorktree, guardFileMode, worktreePath } from '../src/git.ts';
+import { childEnv } from '../src/pty.ts';
 
 const platform = Object.getOwnPropertyDescriptor(process, 'platform')!;
 let repo: string;
@@ -81,5 +82,18 @@ describe('core.fileMode on a carried drive', () => {
       expect(fsType).not.toHaveBeenCalled();
     }
     expect(fileMode()).toBe('');
+  });
+});
+
+describe('git trust on a volume that records no owner', () => {
+  afterEach(() => {
+    for (const k of ['GIT_CONFIG_COUNT', 'GIT_CONFIG_KEY_0', 'GIT_CONFIG_VALUE_0', 'GIT_DIR']) delete process.env[k];
+  });
+
+  it('reaches an agent terminal, while other git variables do not', () => {
+    Object.assign(process.env, { GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'safe.directory', GIT_CONFIG_VALUE_0: '*', GIT_DIR: repo });
+    const env = childEnv();
+    expect([env.GIT_CONFIG_COUNT, env.GIT_CONFIG_KEY_0, env.GIT_CONFIG_VALUE_0]).toEqual(['1', 'safe.directory', '*']);
+    expect(env.GIT_DIR).toBeUndefined();
   });
 });

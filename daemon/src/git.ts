@@ -68,6 +68,7 @@ export function initRepo(repo: string): void {
       git(repo, 'init', '-q');
       console.error(`[git] ${repo} is not a git repo: ran git init`);
     }
+    trustUnownedVolume(repo);
     try {
       git(repo, 'rev-parse', '--verify', '-q', 'HEAD');
       return;
@@ -97,6 +98,19 @@ export function initRepo(repo: string): void {
         ? 'git has no user.name or user.email; set both with git config --global'
         : (stderr ?? '').trim().split(/\r?\n/).pop() || (e as Error).message;
     throw new Error(`no git repo with a commit, so no ticket can launch: ${reason}, then restart the board`);
+  }
+}
+
+function trustUnownedVolume(repo: string): void {
+  try {
+    git(repo, 'rev-parse', '--git-dir');
+  } catch (e) {
+    if (!/does ?not record ownership/i.test((e as { stderr?: string }).stderr ?? '')) return;
+    const n = Number(process.env.GIT_CONFIG_COUNT) || 0;
+    process.env[`GIT_CONFIG_KEY_${n}`] = 'safe.directory';
+    process.env[`GIT_CONFIG_VALUE_${n}`] = '*';
+    process.env.GIT_CONFIG_COUNT = String(n + 1);
+    console.error(`[git] ${repo} is on a volume that records no file owner (exFAT or FAT): trusted it for the board's git`);
   }
 }
 

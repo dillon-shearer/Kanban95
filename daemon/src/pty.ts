@@ -16,11 +16,13 @@ const ENV_ALLOW = [
   'TEMP', 'TMP', 'TMPDIR', 'LANG',
   'CLAUDE_CONFIG_DIR', 'CODEX_HOME',
 ];
+const GIT_CONFIG = /^GIT_CONFIG_(COUNT|KEY_\d+|VALUE_\d+)$/;
 
 export function childEnv(extra: Record<string, string> = {}): Record<string, string> {
   // NoDefaultCurrentDirectoryInExePath: cmd.exe would otherwise run a `claude.cmd` sitting in the worktree before the real one.
   const env: Record<string, string> = { TERM: 'xterm-256color', NoDefaultCurrentDirectoryInExePath: '1' };
   for (const k of ENV_ALLOW) if (process.env[k] !== undefined) env[k] = process.env[k]; // process.env is case-insensitive on Windows
+  for (const [k, v] of Object.entries(process.env)) if (GIT_CONFIG.test(k) && v !== undefined) env[k] = v;
   // The daemon's own Node (24) first: the operator's PATH `node` may be older, and the tests need 24 (node:sqlite with fts5).
   env.PATH = [dirname(process.execPath), env.PATH].filter(Boolean).join(delimiter);
   return { ...env, ...extra };
