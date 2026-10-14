@@ -4,7 +4,7 @@ Living document. How a ticket moves itself from Launch to merged, and what the b
 
 ## Columns and flags
 
-Status is one of **backlog → in_progress → testing → done**. Two flags sit beside it: `needs_human` (the operator is needed: a question, a silent exit, an agent silent for `idle_minutes`, the retry cap, a merge conflict (on submit or in the merge queue) at the retry cap, a main checkout still dirty after the merge queue's wait, a merge whose git never ran, a merge that landed but could not be pushed) and `blocked_on_deps` (launched, but waiting for a dependency to merge). A ticket also records `retry` (failed tests and merge conflicts so far) and `merged_at` (when its branch landed and, with `push_after_merge` on, was pushed).
+Status is one of **backlog → in_progress → testing → done**. Two flags sit beside it: `needs_human` (the operator is needed: a question, a silent exit, an agent silent for `idle_minutes`, the retry cap, a merge conflict (on submit or in the merge queue) at the retry cap, a main checkout still dirty after the merge queue's wait, a merge whose git never ran, a merge that landed but could not be pushed) and `blocked_on_deps` (launched, but waiting for a dependency to merge). A third, `blocked`, is the operator's own (Blocked, below). A ticket also records `retry` (failed tests and merge conflicts so far) and `merged_at` (when its branch landed and, with `push_after_merge` on, was pushed).
 
 ## Events
 
@@ -219,9 +219,21 @@ Agents already running carry on, and the operator's own Launch, Resume, Restart 
 
 `PATCH /api/tickets/:id {"blocked_on_deps": false}` clears a hold and nothing else: status, `retry` and notes stay, and a later merge of the dependency launches nothing; the ticket starts when the operator launches it or the runner picks it up as a candidate. The card menu's **Cancel wait** sends it for the selected held cards; **Stop** clears every held Backlog ticket at once (The runner, above). Reset to Backlog also clears the hold, but resets `retry` and `needs_human` too. No event is needed: no status changes and no effect runs. The Board's status bar shows "n waiting to launch by themselves" while any Backlog ticket has `blocked_on_deps` on.
 
+### Blocked
+
+`PATCH /api/tickets/:id {"blocked": true}` parks a ticket by hand; `{"blocked": false}` clears it. Only the operator sets it: no MCP tool takes it, and `update_ticket` drops a `blocked` field like any field it does not know. While it is set, whatever the status:
+
+- Launch, Resume, Restart, Reject and Retry merge are refused (409, "cannot launch a Blocked ticket: Unblock it first"); the same events sent by the board itself (a released dependent, a conflict sent back) are skipped.
+- The runner never picks it (`candidates`) and does not count it as running, so it holds no slot and no restart after a merge waits for it.
+- A live agent is not stopped. Its report still moves the ticket (a submit goes to Testing, a pass to Done), but no tester or worker is started and nothing is queued for merge. A merge already queued is skipped when its turn comes. A move into Done by hand queues no merge.
+- A daemon restart resumes no agent on it and queues no merge for it.
+- Its dependents wait on it with `blocked_on_deps`, as on any unmerged dependency.
+
+The flag is a column (`010-ticket-blocked.sql`), so it survives status moves (by hand or by an agent), Reset to Backlog and restarts. Clearing it starts nothing: a Backlog ticket is a candidate again, and a running or Done ticket waits for Launch or Retry merge. The card menu's **Block** and **Unblock** act on the whole selection; the Ticket window has the same button; the card shows a dark `blocked` badge; the filter word `is:blocked` shows only Blocked cards (`daemon/test/blocked.test.ts`, `daemon/test/ui-blocked.test.ts`).
+
 ### Worktree setup
 
-A new worktree has no build dependencies. `.kanban95/config.json` `worktree_setup` (`docs/DATA.md`; `npm ci` for this repo) is a shell command the daemon runs in the worktree after creating it and before the first agent starts there (`prepareWorktree` in `daemon/src/launcher.ts`). It runs with the agent's pty environment (the allowlist, the daemon's Node first on `PATH`, `KANBAN95_AGENT`, no token) and asynchronously, so the daemon keeps serving meanwhile. While it runs the ticket counts as live (a second Launch is refused) but has no session or run yet. On success a marker in the worktree's git dir (`git rev-parse --git-path kanban95-setup-done`) records it, so a resumed, restarted or retried run in the same worktree does not run it again; the marker goes with the worktree, and a fresh worktree (a rejected merged ticket) runs it again.
+A new worktree has no build dependencies. `.kanban95/config.json` `worktree_setup` (`docs/DATA.md`; `npm ci` for this repo) is a shell command the daemon runs in the worktree after creating it and before the first agent starts there (`prepareWorktree` in `daemon/src/launcher.ts`). It runs with the agent's pty environment (the allowlist, the daemon's Node first on `PATH`, `KANBAN95_AGENT`, no token) and asynchronously, so the daemon keeps serving meanwhile. While it runs the ticket counts as live (a second Launch is refused) but has no session or run yet: its card shows a `setting up` badge (`setup` in `GET /api/runner`), and its terminal opens only when the agent starts, which with `npm ci` on a loaded machine can take minutes. On success a marker in the worktree's git dir (`git rev-parse --git-path kanban95-setup-done`) records it, so a resumed, restarted or retried run in the same worktree does not run it again; the marker goes with the worktree, and a fresh worktree (a rejected merged ticket) runs it again.
 
 A non-zero exit, a command that will not start or one still running after 15 minutes is a launch failure: the `exit` row flags the ticket with `launch failed: worktree_setup "<command>" failed (<exit code>) in <worktree>; last output:` and the last 20 non-blank lines. No marker is written, so Resume runs it again.
 
@@ -334,4 +346,4 @@ The count is derived from the database (`template = 'execute' AND merged_at IS N
 
 Each returns the ticket (`200`), `409` with the refusal when the table has no row, and is audited like every REST mutation (`tickets.launch`, `tickets.answer`, `tickets.merge`, `tickets.resume`, `tickets.restart`, `tickets.reject`).
 
-`GET /api/runner` returns `{on, why?, running: [ids], left, backlog, lowMemory?}`: the flag, why it last stopped itself, the tickets it waits on, the candidates left, the number of backlog tickets and, while a tester waits for memory, free memory and the floor in bytes and the waiting ticket ids (Tester memory queue). `PUT /api/runner` with `{"on": true | false}` turns it on (and launches at once) or off and returns the same, plus `cleared` (holds cleared) on off; audited as `runner.set`.
+`GET /api/runner` returns `{on, why?, running: [ids], setup: [ids], left, backlog, lowMemory?}`: the flag, why it last stopped itself, the tickets it waits on, those of them still in their worktree setup, the candidates left, the number of backlog tickets and, while a tester waits for memory, free memory and the floor in bytes and the waiting ticket ids (Tester memory queue). `PUT /api/runner` with `{"on": true | false}` turns it on (and launches at once) or off and returns the same, plus `cleared` (holds cleared) on off; audited as `runner.set`.

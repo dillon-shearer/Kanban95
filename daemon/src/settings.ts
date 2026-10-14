@@ -1,7 +1,7 @@
 // The operator's own settings in ~/.kanban95/, edited in the Settings window. No secrets live here.
 // models.json: which CLI, and the model and effort per phase (docs/LIFECYCLE.md → Run settings). settings.json: CLI paths,
 // sounds, voice, housekeeping, auto-opened terminals, idle minutes, UI zoom, push after merge, sleep minutes,
-// runner concurrency, the automatic update check, what workers read. projects.json: every repo with a board and its wallpaper colour. All are read on every use, so an edit applies to the next run without a restart.
+// runner concurrency, the automatic update check, what workers read, the startup board. projects.json: every repo with a board and its wallpaper colour. All are read on every use, so an edit applies to the next run without a restart.
 // models.json, settings.json and preferences.md may have a per-project copy in projects/<repo key>/, used whole instead of the global file.
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
@@ -50,6 +50,7 @@ const FILES = {
     updateCheck: z.boolean().default(true),
     release: z.boolean().default(false),
     workers_read: z.enum(['deps', 'all']).default('deps'),
+    startup: z.string().refine((p) => p === 'last' || isAbsolute(p), 'must be "last" or an absolute path').default('last'),
   }).strict(),
 };
 type ConfigName = keyof typeof FILES;
@@ -435,6 +436,21 @@ export const normal = (p: string) => {
 };
 export const gone = (path: string) => !local(path) || !statSync(path, { throwIfNoEntry: false })?.isDirectory();
 export const same = (a: string, b: string) => (process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b);
+
+export const lastBoardPath = () => join(boardHome(), 'last-board');
+
+export function writeLastBoard(repo: string) {
+  replace(join(dataHome(), 'last-board'), normal(repo) + '\n');
+}
+
+export function readLastBoard(): string | undefined {
+  try {
+    const path = readFileSync(lastBoardPath(), 'utf8').trim();
+    return isAbsolute(path) ? path : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 /** A missing file is an empty list. Only the shape is checked on read: a repo deleted since does not break every board. */
 export function readProjects(): Project[] {

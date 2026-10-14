@@ -10,7 +10,7 @@ import { hasBranch, ticketDiff } from './git.js';
 import { audit, revoke } from './grants.js';
 import { cancelSetup, killGrantSession, killSession, sessions, sessionsOf, type Session } from './launcher.js';
 import { apply, brainstorm, BUMPS, changed, events, housekeeping, isKanban95, operator, pushBase, Refused, release, releaseInfo, releaseOn, releasePending, relaunch, restartBoard, runnerState, setRunner, tick, type Board, type Bump } from './lifecycle.js';
-import { addOverride, BadConfig, boardHome, dropOverride, gone, globalPath, isOverridable, knownModels, project, projectPath, projectsPath, readProjects, setBoardHome, uncatalogued, writeConfig, writePreferences, writeProjects, type OverridableName } from './settings.js';
+import { addOverride, BadConfig, boardHome, dropOverride, gone, globalPath, isOverridable, knownModels, project, projectPath, projectsPath, readProjects, setBoardHome, uncatalogued, writeConfig, writeLastBoard, writePreferences, writeProjects, type OverridableName } from './settings.js';
 import { isStale, resetTemplate, templatePath, TEMPLATES, unknownVar, VARS, writeTemplate, type TemplateName } from './templates.js';
 import { bootstrap } from './bootstrap.js';
 import { trustStatus, untrustClaude } from './trust.js';
@@ -43,7 +43,7 @@ async function other(run: () => Promise<unknown>, status: number): Promise<Reply
 // Column whitelist for ticket writes. Values are checked by the schema's CHECK constraints; types here.
 const TICKET_FIELDS: Record<string, 'string' | 'int' | 'bool'> = {
   title: 'string', body: 'string', criteria: 'string', status: 'string', cli: 'string', model: 'string',
-  effort: 'string', retry: 'int', needs_human: 'bool', blocked_on_deps: 'bool', agent_level: 'int', read_all: 'bool',
+  effort: 'string', retry: 'int', needs_human: 'bool', blocked_on_deps: 'bool', blocked: 'bool', agent_level: 'int', read_all: 'bool',
 };
 const NULLABLE = new Set(['cli', 'model', 'effort']);
 const TAG = /^[a-z0-9-]+$/;
@@ -103,7 +103,7 @@ function ticketColumns(body: Json): { cols: string[]; vals: unknown[]; deps?: nu
 export interface Ticket {
   id: number; title: string; body: string; criteria: string; status: string; cli: string | null; model: string | null;
   effort: string | null; tags: string; created_by_grant: number | null; retry: number; agent_level: number; read_all: boolean; template: string; merged_at: string | null; created_at: string; updated_at: string;
-  flags: { needs_human: boolean; blocked_on_deps: boolean }; depends_on: number[]; targets: Target[];
+  flags: { needs_human: boolean; blocked_on_deps: boolean; blocked: boolean }; depends_on: number[]; targets: Target[];
 }
 /** A ticket this one's worker and tester may read; with edit, its worker may also update its body and criteria. Not a dependency. */
 export interface Target { id: number; edit: boolean }
@@ -111,12 +111,12 @@ export interface Target { id: number; edit: boolean }
 export function readTicket(db: DatabaseSync, id: number): Ticket {
   const row = db.prepare('SELECT * FROM tickets WHERE id = ?').get(id) as Json | undefined;
   if (!row) throw new HttpError(404, 'no such ticket');
-  const { needs_human, blocked_on_deps, read_all, ...rest } = row;
+  const { needs_human, blocked_on_deps, blocked, read_all, ...rest } = row;
   const deps = db.prepare('SELECT depends_on_id FROM ticket_deps WHERE ticket_id = ? ORDER BY depends_on_id').all(id);
   return {
     ...rest,
     read_all: read_all === 1,
-    flags: { needs_human: needs_human === 1, blocked_on_deps: blocked_on_deps === 1 },
+    flags: { needs_human: needs_human === 1, blocked_on_deps: blocked_on_deps === 1, blocked: blocked === 1 },
     depends_on: deps.map((d) => d.depends_on_id as number),
     targets: targetsOf(db, id),
   } as Ticket;
@@ -324,8 +324,8 @@ const routes: [method: string, path: RegExp, mutation: string | null, handler: (
     if (moved) endSessions(db, id, body.status === 'backlog' ? 'reset' : 'moved');
     // Into Done unmerged: a branch goes to the merge queue, as a pass would; no branch means nothing to land, so it is closed.
     if (moved && body.status === 'done' && !was.merged_at) {
-      if (hasBranch(board.repo, id)) apply(board, id, 'merge');
-      else db.prepare("UPDATE tickets SET merged_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?").run(id);
+      if (!hasBranch(board.repo, id)) db.prepare("UPDATE tickets SET merged_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?").run(id);
+      else if (!readTicket(db, id).flags.blocked) apply(board, id, 'merge');
     }
     return { status: 200, body: readTicket(db, id) };
   }],
@@ -622,6 +622,10 @@ const routes: [method: string, path: RegExp, mutation: string | null, handler: (
     if (!dropOverride(name, board.repo)) throw new HttpError(404, `${name} has no project copy`);
     if (name === 'settings') settingsChanged(board);
     return { status: 200, body: configView(board, name, url, 'project') };
+  }],
+  ['POST', /^\/api\/last-board$/, null, ({ board, body }) => {
+    if (body.window !== 'own') writeLastBoard(board.repo);
+    return { status: 204 };
   }],
   // ~/.kanban95/projects.json (Settings → Projects): the whole list in `value` both ways. /api/project is this board's entry,
   // with its folder name, for the wallpaper and the window title. A PUT that drops this board's own project is refused.

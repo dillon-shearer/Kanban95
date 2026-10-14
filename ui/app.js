@@ -34,7 +34,7 @@ let runner = { on: false, concurrency: 3, running: [], left: 0, backlog: 0, wait
 let models = null; // models.json this board runs on (this repo's copy, else the global file), for the cards' default model and effort
 // Sounds stay off until /config/settings loads: listen() starts first, and a ding in that gap ignored the operator's choice.
 // `terminals` is absent until then too, so no session is opened or passed over before the operator's phases are known.
-const SETTINGS = { paths: {}, sounds: { merge: false, attention: false, done: false }, voice: { backend: 'local', mode: 'push' }, housekeeping: { auto: true, every: 10 }, idle_minutes: 20, zoom: 1, push_after_merge: true, sleepAfterMinutes: 30, concurrency: 3, updateCheck: true, release: false, workers_read: 'deps' };
+const SETTINGS = { paths: {}, sounds: { merge: false, attention: false, done: false }, voice: { backend: 'local', mode: 'push' }, housekeeping: { auto: true, every: 10 }, idle_minutes: 20, zoom: 1, push_after_merge: true, sleepAfterMinutes: 30, concurrency: 3, updateCheck: true, release: false, workers_read: 'deps', startup: 'last' };
 let settings = { ...SETTINGS };
 let limits = null; // GET /api/limits: { rows, errors, fetched_at }, null until the first answer
 const views = new Map(); // open window id → redraw(Set of changed ticket ids | undefined)
@@ -189,7 +189,9 @@ function card(t) {
     ...(t.tags ? t.tags.split(' ').map((g) => badge(g, 'tag')) : []),
     t.template === 'housekeeping' && badge('housekeeping'),
     live(t.id).length > 0 && badge(runText(live(t.id)[0]), 'run'),
+    !live(t.id).length && runner.setup?.includes(t.id) && badge('setting up', 'run'),
     t.flags.needs_human && badge('needs human', 'flag'),
+    t.flags.blocked && badge('blocked', 'blocked'),
     t.flags.blocked_on_deps && badge(`waits on #${t.depends_on.join(', #')}`, 'hold'),
     t.retry > 0 && badge(`retry ${t.retry}`),
     t.agent_level > 0 && badge(`L${t.agent_level}`, 'level'),
@@ -271,6 +273,8 @@ async function reset(ts) {
 
 /** Clears blocked_on_deps only: retry, notes and status stay (docs/LIFECYCLE.md → Cancel wait). */
 const cancelWait = (ts) => each(ts, (t) => api('PATCH', `/tickets/${t.id}`, { blocked_on_deps: false }), (n) => `${n} no longer waiting.`);
+const setBlocked = (ts, on) => each(ts.filter((t) => t.flags.blocked !== on), (t) => api('PATCH', `/tickets/${t.id}`, { blocked: on }),
+  (n) => (on ? `${n} blocked; nothing runs on it until you unblock it.` : `${n} unblocked; it runs again when launched or picked by the runner.`));
 const heldTickets = () => [...tickets.values()].filter((t) => t.status === 'backlog' && t.flags.blocked_on_deps);
 const count = (ts) => (ts.length === 1 ? `#${ts[0].id}` : `${ts.length} tickets`);
 /** Runs fn on each ticket in turn; one that refuses is named and the rest still go. Says the outcome once. */
@@ -310,8 +314,8 @@ async function sayLaunched(ids, more = []) {
   say([head, ...more].filter(Boolean).join(' '));
 }
 // A running ticket whose agent is gone: the agent for its phase starts again in the same worktree (Launch does the same).
-const resumable = (t) => (t.status === 'in_progress' || t.status === 'testing') && t.flags.needs_human && !live(t.id).length;
-const launchable = (t) => t.status === 'backlog' || resumable(t);
+const resumable = (t) => (t.status === 'in_progress' || t.status === 'testing') && t.flags.needs_human && !t.flags.blocked && !live(t.id).length;
+const launchable = (t) => (t.status === 'backlog' && !t.flags.blocked) || resumable(t);
 /** Launches (or resumes) each ticket that can start; the rest are skipped and counted, and a refusal is named. */
 async function launch(ts, verb = 'launch') {
   const go = ts.filter(verb === 'launch' ? launchable : resumable);
@@ -319,7 +323,7 @@ async function launch(ts, verb = 'launch') {
   const ok = [];
   const more = [];
   for (const t of go) await api('POST', `/tickets/${t.id}/${verb}`).then(() => ok.push(t.id), (e) => more.push(`#${t.id} refused: ${e.message}`));
-  if (go.length < ts.length) more.push(`Skipped ${ts.length - go.length} ${verb === 'launch' ? 'not in Backlog' : 'with nothing to resume'}.`);
+  if (go.length < ts.length) more.push(`Skipped ${ts.length - go.length} ${verb === 'launch' ? 'not in Backlog or Blocked' : 'with nothing to resume'}.`);
   await act(() => sayLaunched(ok, more));
 }
 /** Stop also clears every Backlog hold (docs/LIFECYCLE.md → Stop); running agents finish their phase. */
@@ -594,6 +598,8 @@ function cardMenu(ts, x, y) {
     '-',
     { label: 'Retry merge', disabled: !unmerged.length, run: () => each(unmerged, (t) => api('POST', `/tickets/${t.id}/merge`), (n) => `Merge of ${n} queued.`) },
     { label: 'Cancel wait', disabled: !waiting.length, run: () => cancelWait(waiting) },
+    { label: 'Block', disabled: ts.every((t) => t.flags.blocked), run: () => setBlocked(ts, true) },
+    { label: 'Unblock', disabled: !ts.some((t) => t.flags.blocked), run: () => setBlocked(ts, false) },
     { label: 'Reset to Backlog', disabled: !resettable.length, run: () => reset(resettable) },
     { label: 'Delete', run: async () => {
       const ask = ts.length === 1 ? `Delete #${ts[0].id} ${ts[0].title}? Its notes and runs go with it.`
@@ -620,13 +626,14 @@ const fields = (t) => {
   const d = defaults(t);
   return { id: `#${t.id}`, title: t.title, tag: t.tags ? t.tags.split(' ') : [], model: t.model ?? d.model ?? '', cli: t.cli ?? models?.cli ?? '', effort: t.effort ?? d.effort ?? 'medium' };
 };
-/** Every word must match some field; `tag:x` needs a tag equal to x, `model:`/`cli:`/`effort:` a substring of that field. */
+/** Every word must match some field; `tag:x` needs a tag equal to x, `model:`/`cli:`/`effort:` a substring of that field, `is:blocked` the Blocked flag. */
 function shown(t) {
   const words = view.filter.toLowerCase().split(/\s+/).filter(Boolean);
   if (!words.length) return true;
   const f = fields(t);
   const all = [f.id, f.title, ...f.tag, f.model, f.cli, f.effort].map((x) => x.toLowerCase());
   return words.every((w) => {
+    if (w === 'is:blocked') return t.flags.blocked;
     const [, k, v] = /^(tag|model|effort|cli):(.*)$/.exec(w) ?? [];
     if (!k) return all.some((x) => x.includes(w));
     return k === 'tag' ? f.tag.some((g) => g.toLowerCase() === v) : f[k].toLowerCase().includes(v);
@@ -658,7 +665,7 @@ function openBoard() {
   const run = h('button', { onclick: toggleRunner, title: 'Ctrl+L' });
   const runField = h('p', { class: 'status-bar-field k95-runner' });
   const filter = h('input', { type: 'text', class: 'k95-filter', 'data-mic': 'off', placeholder: 'Filter', value: view.filter,
-    title: 'Ctrl+F. Every word must match the id, title, a tag, the model, CLI or effort; tag: model: cli: effort: narrow a word to that field.',
+    title: 'Ctrl+F. Every word must match the id, title, a tag, the model, CLI or effort; tag: model: cli: effort: narrow a word to that field; is:blocked shows only Blocked tickets.',
     oninput: () => {
       view.filter = filter.value;
       saveView();
@@ -802,6 +809,7 @@ function openTicket(id) {
       if (!forms.has(wid)) forms.set(wid, ticketForm(w, t));
       if (!p.contains(forms.get(wid))) p.replaceChildren(forms.get(wid), h('fieldset', { class: 'k95-attachments' }));
       p.querySelector('.k95-facts')?.replaceWith(facts(t));
+      p.querySelector('.k95-block')?.replaceWith(blockButton(t));
       const list = await attachmentList(id);
       p.querySelector('.k95-attachments')?.replaceWith(list);
     } else if (tab === 'Notes') {
@@ -876,8 +884,10 @@ function openImage(id, name) {
 
 function facts(t) {
   return h('p', { class: 'k95-facts' }, LABEL[t.status], t.flags.needs_human && ' · needs human (the Inbox says why)', t.flags.blocked_on_deps && ' · waiting on dependencies',
-    ` · retry ${t.retry}`, t.template === 'housekeeping' && ' · housekeeping', t.merged_at && ` · merged ${fmt(t.merged_at)}`);
+    t.flags.blocked && ' · Blocked: nothing runs on it until you unblock it', ` · retry ${t.retry}`, t.template === 'housekeeping' && ' · housekeeping', t.merged_at && ` · merged ${fmt(t.merged_at)}`);
 }
+
+const blockButton = (t) => h('button', { class: 'k95-block', onclick: () => setBlocked([t], !t.flags.blocked) }, t.flags.blocked ? 'Unblock' : 'Block');
 
 const LEVELS = ['own ticket', 'launch and reset any', 'also close any', 'also edit any', 'operator reach'];
 
@@ -928,7 +938,8 @@ function ticketForm(w, t) {
     h('div', { class: 'field-row' }, h('button', { onclick: save }, t ? 'Save' : 'Create'),
       t && h('button', { disabled: t.status !== 'backlog', onclick: () => launch([t]) }, 'Launch'),
       t && h('button', { onclick: () => restart(t.id) }, 'Restart'),
-      t?.status === 'done' && h('button', { onclick: () => reject(t.id) }, 'Reject')));
+      t?.status === 'done' && h('button', { onclick: () => reject(t.id) }, 'Reject'),
+      t && blockButton(t)));
   form.changed = () => snap() !== saved;
   return form;
 }
@@ -1258,8 +1269,9 @@ function browse(input, kind) {
 
 /** Settings → Projects: every repo with a board. Each change saves the whole list at once. */
 async function projectsPanel(p) {
-  const [own, { path, value, missing }] = await Promise.all([api('GET', '/project'), api('GET', '/projects')]);
+  const [own, { path, value, missing }, global] = await Promise.all([api('GET', '/project'), api('GET', '/projects'), api('GET', '/config/settings')]);
   let list = value;
+  let startup = settingsFrom(global.value).startup;
   const save = (next, ok) => act(async () => {
     list = (await api('PUT', '/projects', { value: next })).value;
     await paintProject();
@@ -1267,6 +1279,10 @@ async function projectsPanel(p) {
   }, ok);
   const add = h('input', { type: 'text', id: 'project-add', placeholder: 'C:\\path\\to\\folder', style: 'flex: 1' });
   const draw = () => p.replaceChildren(h('p', {}, `${path}. A board's own project cannot be removed.`),
+    h('div', { class: 'field-row' }, h('label', { for: 'startup' }, 'Start here'),
+      h('select', { id: 'startup', onchange: (e) => act(async () => { startup = (await putSettings('global', { startup: e.target.value })).startup; }, 'Start here saved.') },
+        h('option', { value: 'last', selected: startup === 'last' }, 'Last opened'),
+        list.map((x) => h('option', { value: x.path, selected: x.path === startup }, folder(x.path))))),
     table(['Project', 'Path', 'Colour', ''], list.map((x, i) => {
       const self = x.path === own.path; // both spelled by the daemon
       return h('tr', { 'data-project': x.path }, h('td', {}, x.path.split(/[\\/]/).pop() + (self ? ' (this board)' : missing[x.path] ? ' (missing)' : '')), h('td', {}, x.path),
@@ -1303,18 +1319,23 @@ async function loadProjectItems() {
 }
 const hostedProjects = () => projects.value.filter((p) => projects.hosted[p.path]);
 
+function projectMenu(p) {
+  const name = folder(p.path);
+  const self = p.path === projects.own;
+  const here = projects.hosted[p.path], live = projects.running[p.path], gone = projects.missing[p.path] && !live;
+  return [
+    { label: 'Open here', disabled: self || gone, run: () => (here ? askShell('switch', p.path) : askShell('open', p.path, { where: 'here' })) },
+    { label: 'Open in new window', disabled: (self && !here) || gone, run: () => (here ? askShell('popout', p.path) : switchProject(p.path, name, live)) },
+    ...(self && here && location.hash === '#own' ? [{ label: 'Dock', run: () => askShell('dock', p.path) }] : []),
+    ...(here ? [{ label: 'Close board', run: () => closeBoard(p.path) }] : []),
+  ];
+}
 function projectItems() {
   if (projects.error) return [{ label: `Projects: ${projects.error}`, disabled: true }];
   return projects.value.map((p) => {
-    const name = folder(p.path);
     const self = p.path === projects.own;
-    const here = projects.hosted[p.path], live = projects.running[p.path], gone = projects.missing[p.path] && !live;
-    return { label: name + (self ? ' (this board)' : live ? ' (running)' : gone ? ' (missing)' : ''), items: [
-      { label: 'Open here', disabled: self || gone, run: () => (here ? askShell('switch', p.path) : askShell('open', p.path, { where: 'here' })) },
-      { label: 'Open in new window', disabled: (self && !here) || gone, run: () => (here ? askShell('popout', p.path) : switchProject(p.path, name, live)) },
-      ...(self && here && location.hash === '#own' ? [{ label: 'Dock', run: () => askShell('dock', p.path) }] : []),
-      ...(here ? [{ label: 'Close board', run: () => closeBoard(p.path) }] : []),
-    ] };
+    const live = projects.running[p.path], gone = projects.missing[p.path] && !live;
+    return { label: folder(p.path) + (self ? ' (this board)' : live ? ' (running)' : gone ? ' (missing)' : ''), items: projectMenu(p) };
   });
 }
 async function switchProject(path, name, live) {
@@ -1350,7 +1371,7 @@ function closeSwitch() {
   return true;
 }
 function switchOff(e) {
-  if (!e.target.closest('.k95-switch, #switch')) closeSwitch();
+  if (!e.target.closest('.k95-switch, #switch, .k95-menu')) closeSwitch();
 }
 async function openSwitch() {
   if (closeSwitch()) return;
@@ -1366,8 +1387,10 @@ async function openSwitch() {
     else switchProject(p.path, folder(p.path), true);
   };
   const list = projects.value.filter((p) => p.path !== projects.own);
+  const rowMenu = (p, x, y) => menu(x, y, projectMenu(p).map((it) => ({ ...it, run: () => { closeSwitch(); it.run(); } })));
   const rows = list.map((p) => h('div', { class: 'k95-switch-row', role: 'menuitem', tabindex: -1, 'data-project': p.path, style: `background: ${cssColour(p.colour)}`,
-    onclick: () => go(p) },
+    onclick: () => go(p),
+    oncontextmenu: (e) => { e.preventDefault(); rowMenu(p, e.clientX, e.clientY); } },
   h('span', { class: 'name' }, folder(p.path)),
   projects.missing[p.path] && !projects.running[p.path] ? h('span', { class: 'gone', title: 'Folder deleted or moved' }, 'missing') : null,
   projects.running[p.path] ? h('span', { class: 'run', title: 'Running' }) : null,
@@ -1386,6 +1409,10 @@ async function openSwitch() {
       } else if (e.key === 'Enter' && i >= 0) {
         e.preventDefault();
         go(list[i]);
+      } else if ((e.key === 'ContextMenu' || (e.shiftKey && e.key === 'F10')) && i >= 0) {
+        e.preventDefault();
+        const b = box(rows[i]);
+        rowMenu(list[i], b.left, b.bottom);
       }
     } }, h('div', { class: 'window-body' }, ...body));
   document.body.append(m);
@@ -1836,7 +1863,7 @@ const START = [
   { label: 'Restart board', run: restartBoard },
   { label: 'Release board…', run: releaseBoard },
   '-',
-  { get label() { return `Kanban95 v${appVersion}`; }, disabled: true },
+  { get label() { return appVersion ? `Kanban95 v${appVersion}` : 'Kanban95'; }, disabled: true },
 ];
 
 /** Desktop icons for the Start menu's first entries, under every window: click selects, double-click or Enter opens. The same
@@ -1892,9 +1919,9 @@ addEventListener('keydown', (e) => {
   if (e.target.closest?.('.xterm')) return;
   const plainCtrl = e.ctrlKey && !e.shiftKey && !e.altKey;
   if (e.key === 'Escape') {
-    if (closeSwitch()) return;
     const m = document.querySelector('.k95-menu');
     if (m) return m.remove();
+    if (closeSwitch()) return;
     const w = focused();
     if (w) dismiss(w.el.dataset.win);
   } else if (plainCtrl && e.key.toLowerCase() === 'l') {
@@ -1954,11 +1981,11 @@ async function boot() {
   refreshLimits(); // a CLI start each, ~10 s: not awaited
   setInterval(refreshLimits, 5 * 60_000); // the daemon's cache lives as long, so this reads fresh numbers
   listen();
+  api('POST', '/last-board', location.hash === '#own' ? { window: 'own' } : {}).catch(() => {});
   paintProject().catch((e) => say(e.message));
-  const [list, update] = await Promise.all([api('GET', '/tickets'), api('GET', '/update'), loadSettings(), loadModels().catch(() => { models = null; }), ui.load()]);
-  appVersion = update.version;
-  canRelease = update.release;
-  kanban95 = update.kanban95;
+  const update = api('GET', '/update');
+  const modelsIn = loadModels().catch(() => { models = null; });
+  const [list] = await Promise.all([api('GET', '/tickets'), loadSettings(), ui.load()]);
   for (const s of ui.get('k95.collapsed') ?? ['done']) collapsed.add(s); // nothing saved: Done starts folded
   loadView(ui.get('k95.view'));
   for (const t of list) tickets.set(t.id, t);
@@ -1969,9 +1996,15 @@ async function boot() {
     seed(id, r);
     LAYOUT[id]();
   }
-  await refreshShared();
+  console.log(`First paint: ${Math.round(performance.now())} ms`);
+  update.then((u) => {
+    appVersion = u.version;
+    canRelease = u.release;
+    kanban95 = u.kanban95;
+    if (u.offer) offerUpdate(u.offer);
+  }, (e) => say(e.message));
+  await Promise.all([modelsIn, refreshShared()]);
   redraw();
-  if (update.offer) offerUpdate(update.offer);
   if (!(await checkReady()) && !models) say('No model catalog yet: Start → Settings → Agents, then Save, before launching.');
 }
 

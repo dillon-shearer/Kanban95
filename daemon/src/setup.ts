@@ -3,10 +3,24 @@ import { statSync } from 'node:fs';
 import { isAbsolute } from 'node:path';
 import { finishPick, readPick, startPick } from './pick.js';
 import { requirements } from './requirements.js';
-import { addProject, BadConfig, boardHome, gone, missingHome, normal, readProjects, setBoardHome } from './settings.js';
+import { addProject, BadConfig, boardHome, gone, missingHome, normal, readConfig, readLastBoard, readProjects, same, setBoardHome } from './settings.js';
 
 export function firstProject(): string | undefined {
   return readProjects().find((p) => !gone(p.path))?.path;
+}
+
+export function startupProject(): string | undefined {
+  const startup = (() => {
+    try {
+      return readConfig('settings').startup;
+    } catch {
+      return 'last';
+    }
+  })();
+  if (startup !== 'last' && !gone(startup)) return startup;
+  const last = readLastBoard();
+  if (last && !gone(last) && readProjects().some((p) => same(p.path, last))) return last;
+  return firstProject();
 }
 
 export const notFound = (dir: string) => `Data folder ${dir} was not found. Connect it or choose another folder.`;
