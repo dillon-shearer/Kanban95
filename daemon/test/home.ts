@@ -1,6 +1,6 @@
 // Loaded before every test file (vitest.config.ts). Each file gets a throwaway home directory, so no test can write the
 // operator's ~/.claude.json or read their ~/.kanban95/models.json. os.homedir() reads these variables on every call.
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll } from 'vitest';
@@ -21,6 +21,7 @@ export function removeTemp(dir: string) {
 }
 
 const home = mkdtempSync(join(tmpdir(), 'k95-home-'));
+mkdirSync(join(home, 'AppData', 'Local'), { recursive: true });
 process.env.USERPROFILE = home;
 process.env.HOME = home;
 process.env.KANBAN95_HOME = join(home, '.kanban95');
