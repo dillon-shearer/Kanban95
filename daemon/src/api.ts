@@ -16,6 +16,7 @@ import { trustStatus, untrustClaude } from './trust.js';
 import { download, status as voiceStatus } from './voice.js';
 import { limits } from './limits.js';
 import { requirements } from './requirements.js';
+import { readiness, readyText } from './ready.js';
 import { busy, checkNow, installNow, relay, REPORT, VERSION } from './update.js';
 import { finishPick, startPick } from './pick.js';
 
@@ -452,15 +453,15 @@ const routes: [method: string, path: RegExp, mutation: string | null, handler: (
     return { status: 204 };
   }],
   // Optional `mission`: the operator's draft (Notepad's selection), put in the planner's brief verbatim.
-  ['POST', /^\/api\/brainstorm$/, 'brainstorm.launch', ({ board, body }) => {
+  ['POST', /^\/api\/brainstorm$/, 'brainstorm.launch', async ({ board, body }) => {
     const { mission = '' } = body;
     if (typeof mission !== 'string') throw new HttpError(400, 'mission must be a string');
-    return { status: 201, body: sessionView(brainstorm(board, mission.trim() || undefined)) };
+    return { status: 201, body: sessionView(brainstorm(board, mission.trim() || undefined, readyText(await readiness(board)))) };
   }],
   // An operator terminal: the typed mission goes into its brief verbatim (docs/SECURITY.md → Operator terminal).
-  ['POST', /^\/api\/operator$/, 'operator.launch', ({ board, body }) => {
+  ['POST', /^\/api\/operator$/, 'operator.launch', async ({ board, body }) => {
     if (typeof body.mission !== 'string' || !body.mission.trim()) throw new HttpError(400, 'mission must be a non-empty string');
-    return { status: 201, body: sessionView(operator(board, body.mission)) };
+    return { status: 201, body: sessionView(operator(board, body.mission, readyText(await readiness(board)))) };
   }],
   // Start → Restart board: rebuild, then close and exit 75 (restartBoard in lifecycle.ts, which the board's own restart after a
   // merge uses too). 409 with the compiler output when the build fails.
@@ -620,6 +621,7 @@ const routes: [method: string, path: RegExp, mutation: string | null, handler: (
   // The CLIs' account limits, cached 5 min; ?refresh=1 asks again (docs/OPERATOR.md → Limits). Per-CLI failures are in `errors`.
   ['GET', /^\/api\/limits$/, null, async ({ url }) => ({ status: 200, body: await limits(url.searchParams.has('refresh')) })],
   ['GET', /^\/api\/requirements$/, null, async ({ board }) => ({ status: 200, body: await requirements(board.repo) })],
+  ['GET', /^\/api\/ready$/, null, async ({ board }) => ({ status: 200, body: await readiness(board) })],
   ['GET', /^\/api\/voice$/, null, async () => ({ status: 200, body: await voiceStatus() })],
   // The board's only network call, started by the operator's OK in the download dialog (docs/SECURITY.md → Voice model).
   ['POST', /^\/api\/voice\/download$/, 'voice.download', async () => {
