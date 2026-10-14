@@ -346,7 +346,7 @@ function clickTask(id, e) {
     return paint();
   }
   anchor = id;
-  if (e.ctrlKey) {
+  if (e.ctrlKey || e.metaKey) {
     if (!sel.delete(id)) sel.add(id);
     return paint();
   }
