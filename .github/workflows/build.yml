@@ -32,6 +32,24 @@ jobs:
       - run: npm run build
       - run: npm run test:shell
       - run: npm run installer ${{ inputs.release && '-- --config shell/tauri.updater.json' || '' }}
+      - shell: pwsh
+        run: |
+          $tmp = Join-Path $env:RUNNER_TEMP smoke
+          New-Item -ItemType Directory -Force "$tmp/home", "$tmp/webview" | Out-Null
+          $env:KANBAN95_HOME = "$tmp/home"
+          $env:WEBVIEW2_USER_DATA_FOLDER = "$tmp/webview"
+          $env:KANBAN95_SHELL_LOG = "$tmp/shell.log"
+          $p = Start-Process -FilePath shell/target/release/kanban95-shell.exe -PassThru
+          Start-Sleep -Seconds 20
+          $live = Get-Process -Id $p.Id -ErrorAction SilentlyContinue
+          $ok = $live -and $live.Responding
+          Write-Host "shell pid $($p.Id) running=$([bool]$live) responding=$($live.Responding)"
+          taskkill /T /F /PID $p.Id 2>&1 | Out-Host
+          if (-not $ok) {
+            if (Test-Path "$tmp/shell.log") { Get-Content "$tmp/shell.log" } else { Write-Host "no shell log at $tmp/shell.log" }
+            exit 1
+          }
+          exit 0
       - shell: bash
         run: 7z l shell/target/release/bundle/nsis/*-setup.exe | grep -iE '(^| |\\|/)node\.exe$'
       - uses: actions/upload-artifact@v5
