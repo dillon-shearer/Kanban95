@@ -64,12 +64,14 @@ export function unknownVar(text: string): string | null {
  * sha256 still equals the one recorded in `.shipped.json` is unedited, so a changed default replaces it. A copy with no
  * record was written by a daemon from before the record (Settings → Prompts → Save leaves the record alone, so an edit
  * made there keeps it), so it is replaced too: its old text goes to `<name>.replaced.md` until the next start and a log
- * line names it. A recorded copy whose hash differs from its record is edited and never overwritten.
+ * line names it. A recorded copy whose hash differs from its record is edited and never overwritten. Returns the repo-relative
+ * paths it wrote, for the start to commit (git.ts `commitPaths`).
  */
-export function initTemplates(repo: string) {
+export function initTemplates(repo: string): string[] {
   mkdirSync(templatesDir(repo), { recursive: true });
   const rec = readShipped(repo);
   const before = JSON.stringify(rec);
+  const written: string[] = [];
   for (const name of [...Object.keys(TEMPLATES), 'bootstrap']) {
     rmSync(replacedPath(repo, name), { force: true }); // shown once: the start after a replacement removes it
     const text = shipped(name);
@@ -77,6 +79,7 @@ export function initTemplates(repo: string) {
     const file = join(templatesDir(repo), `${name}.md`);
     if (!existsSync(file)) {
       writeAtomic(file, text);
+      written.push(`.kanban95/templates/${name}.md`);
       rec[name] = hash;
       continue;
     }
@@ -85,15 +88,19 @@ export function initTemplates(repo: string) {
     if (copy === hash) rec[name] = hash;
     else if (rec[name] === copy) {
       writeAtomic(file, text);
+      written.push(`.kanban95/templates/${name}.md`);
       rec[name] = hash;
     } else if (rec[name] === undefined) {
       writeAtomic(replacedPath(repo, name), old);
       writeAtomic(file, text);
+      written.push(`.kanban95/templates/${name}.md`);
       rec[name] = hash;
       console.error(`[templates] ${name}.md had no .shipped.json record and differed from the default: replaced it; its old text is in ${name}.replaced.md until the next start`);
     }
   }
-  if (JSON.stringify(rec) !== before) recordShipped(repo, rec);
+  if (JSON.stringify(rec) === before) return written;
+  recordShipped(repo, rec);
+  return [...written, '.kanban95/templates/.shipped.json'];
 }
 
 /** Reads the template and refuses it if it names a variable outside VARS. No ctx is involved, so a bad template fails the same way every time. */
