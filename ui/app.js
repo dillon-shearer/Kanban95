@@ -1846,7 +1846,7 @@ const START = [
   { label: 'Restart board', run: restartBoard },
   { label: 'Release board…', run: releaseBoard },
   '-',
-  { get label() { return `Kanban95 v${appVersion}`; }, disabled: true },
+  { get label() { return appVersion ? `Kanban95 v${appVersion}` : 'Kanban95'; }, disabled: true },
 ];
 
 /** Desktop icons for the Start menu's first entries, under every window: click selects, double-click or Enter opens. The same
@@ -1965,10 +1965,9 @@ async function boot() {
   setInterval(refreshLimits, 5 * 60_000); // the daemon's cache lives as long, so this reads fresh numbers
   listen();
   paintProject().catch((e) => say(e.message));
-  const [list, update] = await Promise.all([api('GET', '/tickets'), api('GET', '/update'), loadSettings(), loadModels().catch(() => { models = null; }), ui.load()]);
-  appVersion = update.version;
-  canRelease = update.release;
-  kanban95 = update.kanban95;
+  const update = api('GET', '/update');
+  const modelsIn = loadModels().catch(() => { models = null; });
+  const [list] = await Promise.all([api('GET', '/tickets'), loadSettings(), ui.load()]);
   for (const s of ui.get('k95.collapsed') ?? ['done']) collapsed.add(s); // nothing saved: Done starts folded
   loadView(ui.get('k95.view'));
   for (const t of list) tickets.set(t.id, t);
@@ -1979,9 +1978,15 @@ async function boot() {
     seed(id, r);
     LAYOUT[id]();
   }
-  await refreshShared();
+  console.log(`First paint: ${Math.round(performance.now())} ms`);
+  update.then((u) => {
+    appVersion = u.version;
+    canRelease = u.release;
+    kanban95 = u.kanban95;
+    if (u.offer) offerUpdate(u.offer);
+  }, (e) => say(e.message));
+  await Promise.all([modelsIn, refreshShared()]);
   redraw();
-  if (update.offer) offerUpdate(update.offer);
   if (!(await checkReady()) && !models) say('No model catalog yet: Start → Settings → Agents, then Save, before launching.');
 }
 

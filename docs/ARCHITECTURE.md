@@ -365,6 +365,10 @@ Any failure after the run row is written revokes the grant and removes the sessi
 
 `ui/`, plain ES modules, no build step. How to use it: `docs/OPERATOR.md`.
 
+Boot (`boot` in `app.js`) runs in two stages, on every launch and every board switch (a switch reloads the page):
+- First paint waits only on `GET /api/tickets`, `ui.json` (window places, startup layout) and settings (zoom, tiling). It then opens the startup layout windows, so the Board shows its cards, and logs `First paint: <n> ms` to the console.
+- Everything else trickles in after and updates in place: `GET /api/update` (version in the Start menu, Release board, the update offer dialog), models (cards show `no model` and `cli?` until they land, then redraw), `refreshShared` (sessions, inbox, runner), then the Ready check. The project list (Ctrl+Tab, Start → Projects) and limits were never awaited.
+
 - `icons/`: the desktop and taskbar icons, self-drawn 32x32 SVGs (the taskbar shows them at 16px) served from the daemon's origin (`img-src 'self'`). The wallpaper is CSS gradients in `app.css`, no image, over a base colour in `--k95-wall` on `body` (default teal): `app.js` sets it from `GET /api/project` at boot and after Settings → Projects saves, and sets `document.title` to `<folder name> — Kanban95`. Tauri 2 does not copy `document.title` to the OS window, so the shell titles its window the same from its repo argument (`title()` in `shell/src/main.rs`).
 - `wm.js`: the window manager.
   - Windows are 98.css `.window`s positioned on `#desktop`, dragged by the title bar (pointer events), resized by CSS (`resize: both`), minimized to a taskbar button, maximized to fill `#desktop` (the `max` class overrides the inline geometry, which stays as the restore geometry; drag and resize are off), clamped so a title bar is always reachable.
