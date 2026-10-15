@@ -1165,7 +1165,7 @@ function openInbox() {
         h('div', { class: 'field-row' }, answer),
         h('button', { onclick: () => act(() => api('POST', `/tickets/${q.ticket_id}/answer`, { answer: answer.value }), `Answer sent to #${q.ticket_id}.`) }, 'Answer'));
     }), ...deliverables.map((d) => h('fieldset', { class: 'k95-deliverable', 'data-folder': d.folder }, h('legend', {}, d.folder),
-      h('div', { class: 'note-head' }, `#${d.ticket_id} ${d.title} · merged ${fmt(d.merged_at)}`),
+      h('div', { class: 'note-head' }, `#${d.ticket_id} ${d.title} · posted ${fmt(d.merged_at)}`),
       h('div', { class: 'field-row' },
         h('button', { onclick: () => act(() => api('POST', '/deliverables/open', { folder: d.folder })) }, 'Open folder'),
         h('button', { onclick: () => act(() => api('DELETE', '/deliverables', { folder: d.folder })) }, 'Dismiss'))))] : [h('p', {}, 'Nothing needs you.')]));

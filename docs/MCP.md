@@ -229,13 +229,13 @@ Record the structured result of testing a ticket against its acceptance criteria
 
 ### post_deliverable
 
-Put a link to a finished output folder in the operator's Inbox, under a ticket, with a title. folder is an absolute path to an existing folder: in the main checkout, or outside the repo (a data root, an export folder). Not your worktree: it is removed after the merge. The operator opens it with Open folder. A second post of the same folder replaces its entry. A path that is not absolute, does not exist or is not a folder is refused. Returns the entry.
+Put a link to a finished output folder or file in the operator's Inbox, under a ticket, with a title. Call it only when the operator asks for an Inbox entry; merges and file changes post nothing by themselves. folder is an absolute path to an existing folder or file: in the main checkout, or outside the repo (a data root, an export folder). Not your worktree: it is removed after the merge. The operator opens it with Open folder (a file opens its folder). A second post of the same path replaces its entry. A path that is not absolute or does not exist is refused. Returns the entry.
 
 | argument | type | required | description |
 |---|---|---|---|
 | ticket_id | integer | no | Ticket id. Worker and tester grants are bound to one ticket and may omit it; a planner or operator must give it. |
-| title | string | yes | What the folder holds, one line. |
-| folder | string | yes | Absolute path to an existing folder. |
+| title | string | yes | What the folder or file holds, one line. |
+| folder | string | yes | Absolute path to an existing folder or file. |
 
 ### report_cleanup
 

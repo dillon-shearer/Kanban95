@@ -67,11 +67,20 @@ describe('post_deliverable', () => {
     expect(await list()).toEqual([]);
   });
 
-  it('refuses a missing path, a file and a relative path, and stores nothing', async () => {
-    writeFileSync(join(data, 'a.txt'), 'x');
+  it('a worker posts a file; Open opens the folder that holds it', async () => {
+    const file = join(data, 'report.csv');
+    writeFileSync(file, 'x');
+    const r = await post(worker, { title: 'Report', folder: file });
+    expect(r.failed).toBe(false);
+    expect(await list()).toMatchObject([{ folder: file, ticket_id: 1, title: 'Report' }]);
+    expect((await api('POST', '/deliverables/open', { folder: file })).status).toBe(204);
+    expect(vi.mocked(spawn)).toHaveBeenLastCalledWith(cmd, [data], expect.anything());
+    expect((await api('DELETE', '/deliverables', { folder: file })).status).toBe(204);
+  });
+
+  it('refuses a missing path and a relative path, and stores nothing', async () => {
     for (const [folder, msg] of [
       [join(data, 'missing'), 'does not exist'],
-      [join(data, 'a.txt'), 'is not a folder'],
       ['als-tdi/index', 'is not an absolute path'],
     ]) {
       const r = await post(worker, { title: 't', folder });

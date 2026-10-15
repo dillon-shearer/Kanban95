@@ -23,7 +23,7 @@ Living document. Update it in the same change that alters the shape described he
   - `boards.ts` is the other boards on this machine: the running registry (`~/.kanban95/running/`), and opening or focusing another project's board for Start → Projects (see Daemon lifetime).
   - `context.ts` builds the variables for a ticket and records the rendered prompt on a `runs` row (`startRun`) before anything is spawned (see Prompts below).
   - `db.ts` opens and migrates the per-repo SQLite file (schema in `docs/DATA.md`).
-  - `deliverables.ts` records, after a merge lands, one Inbox entry per deliverable folder it touched, adds one for an absolute folder an agent posts with `post_deliverable`, and opens one in the OS file manager (`docs/OPERATOR.md` → Deliverables).
+  - `deliverables.ts` adds an Inbox entry for an absolute folder or file an agent posts with `post_deliverable`, and opens it (a file: its folder) in the OS file manager (`docs/OPERATOR.md` → Deliverables).
   - `git.ts` creates and removes the per-ticket worktree and merges the base into it (`syncWorktree`, on submit and in the merge queue).
   - `grants.ts` mints, verifies, revokes bearer grants and writes audit rows (`docs/SECURITY.md`).
   - `janitor.ts` removes worktrees, branches, session dirs, grants and old scrollback nobody needs any more.
@@ -271,9 +271,9 @@ Every `/api/*` request needs the `k95` cookie holding the shell secret, or gets 
 | POST | `/api/tickets/housekeeping` | creates a housekeeping ticket and launches it (the Housekeeping button) |
 | GET | `/api/tickets/:id/diff` | `{diff}`: the worktree against its fork point, uncommitted tracked changes included; `null` without a worktree |
 | GET | `/api/inbox` | what flagged tickets wait on: unanswered `question` notes, and the newest `failure` note when no newer question is open (`kind`, `body`, `role`, `created_at`, and the ticket's `title`, `status`, `merged_at`); `permission` is `{level, read_all}` for a `request_permission` question, else null |
-| GET | `/api/deliverables` | the deliverable folder entries, newest merge first: `folder`, `ticket_id`, `title`, `merged_at` |
+| GET | `/api/deliverables` | the posted folder and file entries, newest first: `folder`, `ticket_id`, `title`, `merged_at` |
 | DELETE | `/api/deliverables` | `{folder}`: dismiss that entry; `404` when there is none; audited `deliverables.dismiss` |
-| POST | `/api/deliverables/open` | `{folder}`: open a listed folder in Explorer, Finder or `xdg-open`; `404` when the folder is not listed or no longer exists; audited `deliverables.open` |
+| POST | `/api/deliverables/open` | `{folder}`: open a listed folder (a file: the folder holding it) in Explorer, Finder or `xdg-open`; `404` when the folder is not listed or no longer exists; audited `deliverables.open` |
 | POST | `/api/brain` | add a note: `title`, `body` (at most 1500 characters), optional `tags` |
 | PATCH | `/api/brain/<id>` | edit a note in place: any of `title`, `body`, `tags`; 404 for an unknown id |
 | DELETE | `/api/brain/<id>` | delete a note; 404 for an unknown id |
