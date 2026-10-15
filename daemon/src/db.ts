@@ -18,8 +18,9 @@ export const MIGRATIONS_DIR = resolve(import.meta.dirname, '../migrations');
 const GLOBAL_MIGRATIONS_DIR = join(MIGRATIONS_DIR, 'global');
 /** How long a write waits for another daemon's lock on the shared global brain before failing with SQLITE_BUSY. */
 const BUSY_MS = 5000;
+const WAL_LIMIT = 16 << 20;
 /** `.kanban95/.gitignore`: the board's own state, never committed. A plain folder's first `.gitignore` repeats it (git.ts `initRepo`). */
-export const INNER_GITIGNORE = 'board.db\nboard.db-*\nsessions/\nattachments/\nmemory.log\nnotepad.md\nrunner.json\nui.json\ntemplates/*.replaced.md\n';
+export const INNER_GITIGNORE = 'board.db\nboard.db-*\nsessions/\nattachments/\noutput/\nmemory.log\nnotepad.md\nrunner.json\nui.json\ntemplates/*.replaced.md\n';
 
 export function openDb(repo: string, opts: { migrationsDir?: string } = {}): DatabaseSync {
   return onReadOnly('Project folder', repo, () => openBoard(repo, opts));
@@ -38,7 +39,7 @@ function openBoard(repo: string, opts: { migrationsDir?: string }): DatabaseSync
   }
 
   const db = new DatabaseSync(join(dir, 'board.db'));
-  db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;');
+  db.exec(`PRAGMA journal_mode = WAL; PRAGMA journal_size_limit = ${WAL_LIMIT}; PRAGMA foreign_keys = ON;`);
   try {
     migrate(db, opts.migrationsDir ?? MIGRATIONS_DIR);
   } catch (e) {

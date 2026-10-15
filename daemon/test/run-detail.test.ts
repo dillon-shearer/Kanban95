@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { saveOutput } from '../src/output.ts';
 import { start } from '../src/server.ts';
 
 let repo: string;
@@ -21,9 +22,12 @@ afterAll(async () => {
 const get = (path: string) => fetch(base + path, { headers: { cookie: `k95=${srv.secret}` } });
 const ticket = async (title: string) =>
   (await (await fetch(base + '/api/tickets', { method: 'POST', headers: { 'content-type': 'application/json', cookie: `k95=${srv.secret}` }, body: JSON.stringify({ title }) })).json()) as { id: number };
-const run = (ticketId: number, prompt: string, scrollback: string | null) =>
-  Number(srv.db.prepare("INSERT INTO runs (ticket_id, phase, cli, model, effort, prompt_rendered, scrollback) VALUES (?, 'execute', 'claude', 'm', 'medium', ?, ?)")
-    .run(ticketId, prompt, scrollback).lastInsertRowid);
+const run = (ticketId: number, prompt: string, scrollback: string | null) => {
+  const id = Number(srv.db.prepare("INSERT INTO runs (ticket_id, phase, cli, model, effort, prompt_rendered) VALUES (?, 'execute', 'claude', 'm', 'medium', ?)")
+    .run(ticketId, prompt).lastInsertRowid);
+  if (scrollback !== null) saveOutput(repo, id, scrollback);
+  return id;
+};
 
 describe('run list and run detail', () => {
   it('lists runs without the prompt or output, and serves one full run only on its own ticket', async () => {
