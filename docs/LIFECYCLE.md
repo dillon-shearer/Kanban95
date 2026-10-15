@@ -256,7 +256,6 @@ The base is the branch the main checkout has, unless a ticket's tag is mapped to
 
 - **Landing**: when the branch is checked out in some working tree (the main checkout or one the operator added), step 4 of the queue runs there, dirty check included. When none has it, the merge commit is written with `git commit-tree` (the ticket branch's tree, the base and the ticket branch as parents, the title as message) and the branch moved with `git update-ref`, which refuses if it moved meanwhile. This needs the base already merged into the ticket branch, which step 3 has just done.
 - **Push**: the ticket's base is pushed to its own upstream; the status bar's unpushed count stays the checked-out branch's.
-- **Deliverables** are not recorded for such a merge: the files are not in the main checkout.
 - **Cleanup** deletes the ticket branch when it is in the ticket's base (`git branch -d` alone checks only the checked-out branch).
 - **Config errors**: a `bases` that is not an object of tag to branch name, or a ticket whose tags map to two branches, fails the launch, the submit, or flags the merge `unmerged` with the reason. So does a base branch that does not exist.
 - No post-land hook: carrying the landed work on to a superset branch (`git checkout dev && git merge main`) is the operator's.

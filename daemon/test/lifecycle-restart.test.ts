@@ -20,7 +20,7 @@ describe('stale daemon after a merge', { timeout: 60_000 }, () => {
     expect((await post(`/api/tickets/${id}/launch`)).status).toBe(200);
     await landed(id);
     expect(git('show', '--stat', '--format=', 'HEAD')).toContain(`${dir}/`);
-    expect(db.prepare('SELECT folder, ticket_id FROM deliverables WHERE folder = ?').all(dir)).toEqual([{ folder: dir, ticket_id: id }]);
+    expect(db.prepare('SELECT folder FROM deliverables').all()).toEqual([]);
     expect(await stale()).toBe(want);
   };
   it.each([['shell', 'shell'], ['ui', false]] as const)('a merge touching %s/ reports stale: %s', merged);
