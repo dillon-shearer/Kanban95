@@ -25,6 +25,7 @@ describe('openDb', () => {
     expect(ignore).toMatch(/^board\.db$/m);
     expect(ignore).toMatch(/^sessions\/$/m);
     expect(ignore).toMatch(/^attachments\/$/m);
+    expect(ignore).toMatch(/^output\/$/m);
     expect(ignore).toMatch(/^notepad\.md$/m);
     expect(ignore).toMatch(/^runner\.json$/m);
     expect(ignore).toMatch(/^ui\.json$/m);

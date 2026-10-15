@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { createWorktree, worktreePath, worktreesRoot } from '../src/git.ts';
 import { mint } from '../src/grants.ts';
 import { RESUME_MESSAGE, sessionsOf } from '../src/launcher.ts';
+import { readOutput } from '../src/output.ts';
 import { DIRTY_WAIT, RESTART_NOTE, RESTARTED, TO_RESOLVE, type Status } from '../src/lifecycle.ts';
 import { boot, db, git, landed, models, notes, post, repo, runs, sounds, srv, t, ticket, until } from './board.ts';
 
@@ -68,7 +69,9 @@ describe('janitor on daemon start', () => {
     expect((db.prepare('SELECT revoked_at FROM grants WHERE id = ?').get(grant.id) as { revoked_at: string | null }).revoked_at).not.toBeNull();
     const run = (id: number) => db.prepare('SELECT scrollback, outcome, ended_at FROM runs WHERE id = ?').get(id) as Record<string, unknown>;
     expect(run(oldRun)).toMatchObject({ scrollback: null, outcome: 'submit' });
-    expect(run(newRun)).toMatchObject({ scrollback: 'new screen' });
+    expect(readOutput(repo, oldRun)).toBeNull();
+    expect(run(newRun)).toMatchObject({ scrollback: null });
+    expect(readOutput(repo, newRun)).toBe('new screen');
     expect(run(openRun)).toMatchObject({ outcome: 'lost', ended_at: expect.any(String) });
     expect(t(kept).flags.needs_human).toBe(false); // resumed, see 'resume' below
     expect(notes(kept, 'failure')).toEqual([RESTARTED]);

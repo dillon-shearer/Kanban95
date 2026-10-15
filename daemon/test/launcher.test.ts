@@ -8,6 +8,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import WebSocket from 'ws';
 import { createWorktree, removeWorktree, worktreePath, worktreesRoot } from '../src/git.ts';
 import { killTree, sessions, type Cli, type Session } from '../src/launcher.ts';
+import { readOutput } from '../src/output.ts';
 import { start } from '../src/server.ts';
 import { fakeCli } from './fake-cli.ts';
 
@@ -46,7 +47,7 @@ const waitFor = async (f: () => boolean, ms = 20_000) => { // a fake's first out
   }
 };
 const grantRow = (id: number) => db.prepare('SELECT * FROM grants WHERE id = ?').get(id) as { revoked_at: string | null; role: string; ticket_id: number };
-const runRow = (id: number) => db.prepare('SELECT * FROM runs WHERE id = ?').get(id) as { ended_at: string | null; scrollback: string | null; prompt_rendered: string; session_id: string | null };
+const runRow = (id: number) => db.prepare('SELECT * FROM runs WHERE id = ?').get(id) as { ended_at: string | null; prompt_rendered: string; session_id: string | null };
 
 beforeAll(() => {
   writeFileSync(join(bin, 'fake.mjs'), FAKE);
@@ -172,7 +173,7 @@ describe('launch', () => {
     expect(sessions.has(s.runId)).toBe(false);
     expect(grantRow(s.grantId).revoked_at).not.toBeNull();
     expect(runRow(s.runId).ended_at).not.toBeNull();
-    expect(runRow(s.runId).scrollback).toContain('FAKE UP');
+    expect(readOutput(repo, s.runId)).toContain('FAKE UP');
     await waitFor(() => !alive(fakeOut(s).pid), 5000 - (Date.now() - t0)); // the CLI itself, not just cmd.exe
     expect(existsSync(worktreePath(repo, 7))).toBe(true); // the operator decides about the worktree
   });
@@ -197,7 +198,7 @@ describe('launch', () => {
     await s.done;
     expect(existsSync(s.dir)).toBe(false);
     expect(grantRow(s.grantId).revoked_at).not.toBeNull();
-    expect(runRow(s.runId).scrollback).toContain('FAKE UP');
+    expect(readOutput(repo, s.runId)).toContain('FAKE UP');
   });
 
   it('killing the pty directly tears down the same way', async () => {

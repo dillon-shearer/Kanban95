@@ -26,7 +26,7 @@ Living document. Update it in the same change that alters the shape described he
   - `deliverables.ts` records, after a merge lands, one Inbox entry per deliverable folder it touched, adds one for an absolute folder an agent posts with `post_deliverable`, and opens one in the OS file manager (`docs/OPERATOR.md` → Deliverables).
   - `git.ts` creates and removes the per-ticket worktree and merges the base into it (`syncWorktree`, on submit and in the merge queue).
   - `grants.ts` mints, verifies, revokes bearer grants and writes audit rows (`docs/SECURITY.md`).
-  - `janitor.ts` removes worktrees, branches, session dirs, grants and old scrollback nobody needs any more.
+  - `janitor.ts` removes worktrees, branches, session dirs, grants and old run output nobody needs any more, and keeps `board.db` and its WAL small.
   - `launcher.ts` launches an agent (worktree, run row, grant, session dir, argv, pty) and tears it down (see Launch below).
   - `lifecycle.ts` is the ticket state machine: one table of transitions, `apply(board, ticket, event)`, the runner's `tick` and the silence watch that flags an agent whose transcript stopped growing (`docs/LIFECYCLE.md`).
   - `limits.ts` asks each CLI for its account's usage limits and caches them 5 minutes (`docs/OPERATOR.md` → Limits).
@@ -34,6 +34,7 @@ Living document. Update it in the same change that alters the shape described he
   - `mcp-doc.ts` renders `docs/MCP.md` from the `mcp.ts` tool table.
   - `memlog.ts` appends free memory and each live session's process-tree working set to `.kanban95/memory.log` every 30 s, plus a line per launch, kill and merge (`docs/DATA.md`).
   - `merge.ts` is the one serialized merge queue.
+  - `output.ts` writes and reads each ended run's terminal output, gzipped, in `.kanban95/output/`.
   - `pick.ts` is the native file or folder dialog the shell opens for the page: one open request per daemon, its token, its result and its 5-minute timeout (Hosted boards, `pick=`).
   - `pty.ts` spawns the CLI in a pseudo-terminal with an env allowlist and keeps a scrollback capped at 2000 lines and 2 MiB.
   - `ready.ts` is the readiness check behind `GET /api/ready`, the status bar's "Not ready:" line and the brainstorm and operator briefs' `{{ready}}` (`docs/OPERATOR.md` → Readiness).
@@ -247,8 +248,8 @@ Every `/api/*` request needs the `k95` cookie holding the shell secret, or gets 
 | GET, POST | `/api/tickets` | list / create. Body fields: `title` (required), `body`, `criteria`, `status`, `cli`, `model`, `effort`, `retry`, `needs_human`, `blocked_on_deps`, `blocked`, `depends_on: number[]` |
 | GET, PATCH, DELETE | `/api/tickets/:id` | same fields on PATCH; `null` clears `cli`/`model`/`effort`; a PATCH that moves the ticket to `backlog` first ends its live sessions (`runs.outcome` = `reset`, grants revoked, ptys killed); DELETE ends them too and also removes `.kanban95/attachments/<id>/` |
 | GET | `/api/tickets/:id/notes` `/audit` | rows for that ticket, oldest first |
-| GET | `/api/tickets/:id/runs` | that ticket's runs, oldest first, without `prompt_rendered` and `scrollback`; `has_scrollback` (boolean) says whether output was kept |
-| GET | `/api/tickets/:id/runs/:run` | one full run row, `prompt_rendered` and `scrollback` included, for Ticket → Runs and a terminal's end; 404 when the run is not on that ticket |
+| GET | `/api/tickets/:id/runs` | that ticket's runs, oldest first, without `prompt_rendered` and `scrollback`; `has_scrollback` (boolean) says whether an output file was kept |
+| GET | `/api/tickets/:id/runs/:run` | one full run row with `prompt_rendered`, and `scrollback` read from its output file (null when none), for Ticket → Runs and a terminal's end; 404 when the run is not on that ticket |
 | GET, POST | `/api/tickets/:id/attachments` | list `[{name, path, size}]` (`path` absolute) / upload: the raw file bytes as the body, its name in `?name=`. The name is cleaned to a safe basename (anything outside letters, digits and ` ._()+-` becomes `_`); one with `/`, `\` or `..` is refused `400`, a body over 10 MB `413`. A clash is stored as `<stem>-1<ext>`, never overwritten. `201` with the stored entry |
 | GET, DELETE | `/api/tickets/:id/attachments/:name` | serve / remove one. PNG, JPEG, GIF, WebP and BMP are served inline with their image type; anything else as an `application/octet-stream` download, so an uploaded page never runs on the board's origin |
 | GET | `/api/brain?q=&limit=` | FTS5 ranked search (title and tags weigh more than body), limit at most 100; no `q` lists newest. Each row carries `ticket_status`, its source ticket's status (null when none or deleted) |
@@ -386,7 +387,7 @@ docs/             this file, LEARNING.md (guided tour for newcomers), OPERATOR.m
 3. `mint` a grant with the template's role (`TEMPLATES[template].role`).
 4. Session dir `.kanban95/sessions/<run-id>/`, owner-only, with `prompt.md` and (Claude Code) `mcp.json`, plus `settings.json` for a Claude worker or tester (`docs/CLIS.md`).
 5. `buildArgv` with the role (flags and reach per role in `docs/CLIS.md`); for Claude Code, `preTrustClaude` makes sure the repo's worktrees root is trusted; then `spawnPty` with `cwd` = worktree and the env allowlist.
-6. The session is kept in `sessions` (by run id) until its pty exits. On exit, for any reason: `runs.ended_at` and `runs.scrollback` are written, the grant is revoked, the session dir is removed, the lifecycle's exit hook runs (`runs.outcome`, and the `exit` event if the agent never reported), `session.done` resolves.
+6. The session is kept in `sessions` (by run id) until its pty exits. On exit, for any reason: `runs.ended_at` is written, the grant is revoked, the scrollback is saved to `.kanban95/output/<run-id>.txt.gz`, the session dir is removed, the lifecycle's exit hook runs (`runs.outcome`, and the `exit` event if the agent never reported), `session.done` resolves.
 
 The lifecycle owns Launch: `POST /api/tickets/:id/launch` and the transitions after it call `launch` with the run settings from `~/.kanban95/models.json` (and the CLI path from `settings.json`, when set).
 

@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { git, removeWorktree, unlinkLinks, worktreePath, worktreesRoot } from './git.js';
 import { audit, revoke } from './grants.js';
+import { outputDir, outputPath, saveOutput } from './output.js';
 import { killTree, sessions } from './launcher.js';
 
 const SCROLLBACK_DAYS = 30;
@@ -121,9 +122,29 @@ export function sweep(b: Board): Promise<void> {
   }
 
   const cutoff = new Date(Date.now() - SCROLLBACK_DAYS * 24 * 60 * 60 * 1000).toISOString();
-  const { changes } = db.prepare('UPDATE runs SET scrollback = NULL WHERE scrollback IS NOT NULL AND ended_at < ?').run(cutoff);
-  if (changes) log(db, null, 'janitor.scrollback', { runs: Number(changes), before: cutoff });
-  db.exec('VACUUM');
+  const inDb = db.prepare('SELECT id, coalesce(ended_at >= ?, 1) AS keep FROM runs WHERE scrollback IS NOT NULL').all(cutoff) as { id: number; keep: number }[];
+  if (inDb.length) {
+    const read = db.prepare('SELECT scrollback FROM runs WHERE id = ?');
+    for (const r of inDb) if (r.keep) saveOutput(repo, r.id, (read.get(r.id) as { scrollback: string }).scrollback);
+    db.exec('UPDATE runs SET scrollback = NULL WHERE scrollback IS NOT NULL');
+    log(db, null, 'janitor.scrollback', { moved: inDb.filter((r) => r.keep).length, dropped: inDb.filter((r) => !r.keep).length, before: cutoff });
+  }
+  if (existsSync(outputDir(repo))) {
+    const ended = db.prepare('SELECT ended_at FROM runs WHERE id = ?');
+    let removed = 0;
+    for (const name of readdirSync(outputDir(repo))) {
+      const id = Number(/^(\d+)\.txt\.gz$/.exec(name)?.[1]);
+      if (!id) continue;
+      const run = ended.get(id) as { ended_at: string | null } | undefined;
+      if (run && (run.ended_at === null || run.ended_at >= cutoff)) continue;
+      rmSync(outputPath(repo, id), { force: true });
+      removed++;
+    }
+    if (removed) log(db, null, 'janitor.scrollback', { files: removed, before: cutoff });
+  }
+  const { page_count: pages, freelist_count: free } = db.prepare('SELECT * FROM pragma_page_count(), pragma_freelist_count()').get() as { page_count: number; freelist_count: number };
+  if (free * 4 > pages) db.exec('VACUUM');
+  db.exec('PRAGMA wal_checkpoint(TRUNCATE)');
   return processes;
 }
 

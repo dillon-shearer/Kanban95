@@ -10,6 +10,7 @@ import { buildContext, startRun } from './context.js';
 import { createWorktree, git, worktreesRoot } from './git.js';
 import { mint, revoke, type Role } from './grants.js';
 import { mark, who } from './memlog.js';
+import { saveOutput } from './output.js';
 import { childEnv, cmdSafe, lastLines, spawnPty } from './pty.js';
 import { fill, loadTemplate, TEMPLATES, type TicketTemplate } from './templates.js';
 import { BadConfig, type Cli, type Effort } from './settings.js';
@@ -329,8 +330,9 @@ function spawnSession(d: Daemon, o: RunSettings & { sessionId?: string; resume?:
   const dir = sessionDir(repo, key);
   const teardown = (scrollback: string | null) => {
     try {
-      if (r.runId !== null) db.prepare("UPDATE runs SET ended_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), scrollback = ? WHERE id = ?").run(scrollback, r.runId);
+      if (r.runId !== null) db.prepare("UPDATE runs SET ended_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?").run(r.runId);
       revoke(db, grant.id);
+      if (r.runId !== null && scrollback !== null) saveOutput(repo, r.runId, scrollback);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

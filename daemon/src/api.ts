@@ -5,6 +5,7 @@ import { basename, dirname, extname, isAbsolute, join, resolve } from 'node:path
 import type { DatabaseSync } from 'node:sqlite';
 import { agentsMap, askShell, attentionMap, focusProject, hostedMap, keyOk, missingMap, NotListed, openProject, othersHosted, runningMap, tellShell } from './boards.js';
 import { attachmentDir, attachments, MAX_ATTACHMENT, safeName, saveAttachment } from './attachments.js';
+import { hasOutput, readOutput } from './output.js';
 import { dismissDeliverable, listDeliverables, openDeliverable } from './deliverables.js';
 import { BRAIN_BODY_MAX, BRAIN_RANK, isConstraintError, SCOPES, type Brains, type Scope } from './db.js';
 import { hasBranch, ticketDiff } from './git.js';
@@ -338,17 +339,18 @@ const routes: [method: string, path: RegExp, mutation: string | null, handler: (
     readTicket(db, Number(params[0]));
     return { status: 200, body: db.prepare(`SELECT * FROM ${params[1]} WHERE ticket_id = ? ORDER BY id`).all(Number(params[0])) };
   }],
-  ['GET', /^\/api\/tickets\/(\d+)\/runs$/, null, ({ db, params }) => {
+  ['GET', /^\/api\/tickets\/(\d+)\/runs$/, null, ({ board, db, params }) => {
     readTicket(db, Number(params[0]));
-    const rows = db.prepare(`SELECT id, ticket_id, phase, cli, model, effort, started_at, ended_at, outcome, session_id,
-      scrollback IS NOT NULL AS has_scrollback FROM runs WHERE ticket_id = ? ORDER BY id`).all(Number(params[0])) as { has_scrollback: number }[];
-    return { status: 200, body: rows.map((r) => ({ ...r, has_scrollback: !!r.has_scrollback })) };
+    const rows = db.prepare(`SELECT id, ticket_id, phase, cli, model, effort, started_at, ended_at, outcome, session_id
+      FROM runs WHERE ticket_id = ? ORDER BY id`).all(Number(params[0])) as { id: number }[];
+    return { status: 200, body: rows.map((r) => ({ ...r, has_scrollback: hasOutput(board.repo, r.id) })) };
   }],
-  ['GET', /^\/api\/tickets\/(\d+)\/runs\/(\d+)$/, null, ({ db, params }) => {
+  ['GET', /^\/api\/tickets\/(\d+)\/runs\/(\d+)$/, null, ({ board, db, params }) => {
     readTicket(db, Number(params[0]));
-    const run = db.prepare('SELECT * FROM runs WHERE id = ? AND ticket_id = ?').get(Number(params[1]), Number(params[0]));
+    const run = db.prepare(`SELECT id, ticket_id, phase, cli, model, effort, prompt_rendered, started_at, ended_at, outcome, session_id
+      FROM runs WHERE id = ? AND ticket_id = ?`).get(Number(params[1]), Number(params[0])) as { id: number } | undefined;
     if (!run) throw new HttpError(404, 'no such run on this ticket');
-    return { status: 200, body: run };
+    return { status: 200, body: { ...run, scrollback: readOutput(board.repo, run.id) } };
   }],
   // Attachments. The upload is the file's raw bytes with its name in `?name=`; the audit row names the file as stored.
   ['GET', UPLOAD, null, ({ board, params }) => {
