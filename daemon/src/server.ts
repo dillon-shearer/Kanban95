@@ -9,7 +9,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import { WebSocketServer } from 'ws';
 import { handleApi, receiveFiling } from './api.js';
 import { countBoard, entryPath, register, tellShell } from './boards.js';
-import { openDb, openGlobalBrain } from './db.js';
+import { innerGitignore, openDb, openGlobalBrain } from './db.js';
 import { commitPaths, git, gitWithin, guardFileMode, initRepo, type GitCap } from './git.js';
 import { sweep, SWEEP_MS } from './janitor.js';
 import { killAll, launch, sessions } from './launcher.js';
@@ -17,7 +17,7 @@ import { countUnpushed, events, recover, releasePending, tick, watchSilence, typ
 import { handleMcp } from './mcp.js';
 import { startMemoryLog } from './memlog.js';
 import { idle } from './merge.js';
-import { addProject, dataHome, gone, missingHome, readConfig } from './settings.js';
+import { addProject, dataHome, gone, missingHome, onReadOnly, readConfig } from './settings.js';
 import { handleSetup, setupPage, startupProject } from './setup.js';
 import { initTemplates } from './templates.js';
 import { askForCheck } from './update.js';
@@ -167,6 +167,7 @@ export function start(config: Config = {}): Promise<{
   };
   step('data home', () => dataHome());
   if (gone(repo)) throw new Error(`project folder ${repo} does not exist: it was deleted or moved`);
+  const ignoreGrew = step('gitignore', () => onReadOnly('Project folder', repo, () => innerGitignore(repo)));
   const db = step('db', () => openDb(repo));
   let brain: DatabaseSync;
   try {
@@ -298,6 +299,14 @@ export function start(config: Config = {}): Promise<{
           commitPaths(repo, templates, 'Update the board prompt templates to the shipped defaults');
         } catch (e) {
           console.error(`[git] template defaults not committed: ${(e as Error).message}`);
+        }
+      });
+      step('gitignore commit', () => {
+        if (board.gitError || !ignoreGrew) return;
+        try {
+          commitPaths(repo, ['.kanban95/.gitignore'], 'Ignore the board state files added to .kanban95/.gitignore');
+        } catch (e) {
+          console.error(`[git] .kanban95/.gitignore not committed: ${(e as Error).message}`);
         }
       });
       step('rev-parse', () => {

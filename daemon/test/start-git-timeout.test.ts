@@ -15,7 +15,7 @@ afterAll(async () => {
   removeTemp(repo);
 });
 
-const STEPS = ['data home', 'db', 'brain', 'templates', 'projects', 'git init', 'listen', 'register', 'file mode', 'template commit', 'rev-parse', 'janitor', 'release', 'recover', 'tick'];
+const STEPS = ['data home', 'gitignore', 'db', 'brain', 'templates', 'projects', 'git init', 'listen', 'register', 'file mode', 'template commit', 'gitignore commit', 'rev-parse', 'janitor', 'release', 'recover', 'tick'];
 
 it('a git that never answers holds the start for one capped wait: the port line comes within 10 s, after a timing line per step', async () => {
   const g = (...a: string[]) => execFileSync('git', a, { cwd: repo, stdio: 'pipe' });

@@ -80,4 +80,21 @@ describe('template copies on daemon start', { timeout: 20_000 }, () => {
     expect(git('show', '--name-only', '--format=', 'HEAD').split(/\r?\n/).sort()).toEqual(['.kanban95/templates/.shipped.json', '.kanban95/templates/test.md']);
     expect(git('status', '--porcelain', '--untracked-files=no')).toBe('M  staged.txt');
   });
+
+  it('commits the lines a start appends to an older board\'s .kanban95/.gitignore, so tickets can launch', async () => {
+    const git = (...a: string[]) => execFileSync('git', a, { cwd: repo, encoding: 'utf8' }).trim();
+    git('init', '-q');
+    git('config', 'user.name', 'Op');
+    git('config', 'user.email', 'op@example.com');
+    initTemplates(repo);
+    writeFileSync(join(repo, '.kanban95', '.gitignore'), 'board.db\nboard.db-*\nsessions/\n');
+    git('add', '-A');
+    git('commit', '-qm', 'Seed');
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const srv = await start({ repo });
+    await srv.close();
+    expect(git('show', 'HEAD:.kanban95/.gitignore')).toContain('output/');
+    expect(git('log', '-1', '--format=%an %s')).toBe('Op Ignore the board state files added to .kanban95/.gitignore');
+    expect(git('status', '--porcelain', '--untracked-files=no')).toBe('');
+  });
 });

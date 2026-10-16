@@ -65,6 +65,7 @@ Living document. Update it in the same change that alters the shape described he
 - **First start on a plain folder**: before recording `startCommit`, `start()` runs `initRepo` (`git.ts`). No `<repo>/.git`: `git init`, unless the folder has `.gitattributes` or `.github` (`GIT_COPY_MARKS`): that is a repo copied without its `.git`, and a fresh init would cut it from its history and remote, so it fails with `gitError` saying to clone instead. No commit yet (also a repo that exists but is empty): a `.gitignore` unless one exists (`node_modules/`, `dist/`, `build/`, `.env`, `.env.*` except `.env.example`/`.env.sample`/`.env.template`, and `.kanban95/` plus each line of `.kanban95/.gitignore`), then `git add -A`, `git rm --cached` of every env file by that same name rule (`isSecretPath`, so an existing `.gitignore` that does not cover them changes nothing; contents are never read), then `git rm --cached` of every file over 10 MB (`FIRST_COMMIT_MAX_BYTES`), each appended to `.gitignore` as an anchored `/<path>` line (an existing `.gitignore` too) so it stays out of the commit and every worktree, with one stderr line naming them and saying to remove the line and `git add` the file to commit it (leaving them out was chosen over stopping the start: the board still starts and the operator loses nothing), and one commit "Start the Kanban95 board" with `-c user.useConfigOnly=true`, so it is the operator's configured identity or nothing (no trailer). A repo with commits is untouched; a second start adds nothing. Each step is logged to stderr. An env file already in the index before the board ran (the operator staged it) is not unstaged for them: no commit is made and the error says `git rm --cached -- <path>` or commit by hand. On failure (git missing, no `user.name`/`user.email`, a staged env file) the daemon still starts: `board.gitError` holds the message, `GET /api/runner` returns it as `gitError`, the Board's status bar shows it, and every ticket launch fails with it (`launch failed: …`). It is read once, so fixing git needs a board restart. With no remote, nothing is pushed (`docs/LIFECYCLE.md` → Push).
 - **Start order**: the shell opens or switches the window only once the port line arrives, so `start()` in `server.ts` prints it (through its `listening` callback) as soon as the board can serve, and runs the steps the first page does not need after it. Before the port line:
   - `data home`
+  - `gitignore` (`innerGitignore`: writes `.kanban95/.gitignore` or appends the lines it lacks)
   - `db`
   - `brain`
   - `templates` (copies only, no git)
@@ -76,7 +77,8 @@ Living document. Update it in the same change that alters the shape described he
   After the port line, in this order, each after a yield to the event loop so a waiting request is answered between them:
   - `file mode` (`guardFileMode`)
   - `template commit` (`commitPaths`)
-  - `rev-parse` (`board.startCommit`, read after the template commit so that commit does not count as a change since start)
+  - `gitignore commit` (`commitPaths`, only when `gitignore` appended: a tracked `.kanban95/.gitignore` left modified refuses every launch)
+  - `rev-parse` (`board.startCommit`, read after the template and gitignore commits so they do not count as a change since start)
   - `janitor` and the unpushed count
   - `release` (`releasePending`)
   - `recover`

@@ -26,17 +26,28 @@ export function openDb(repo: string, opts: { migrationsDir?: string } = {}): Dat
   return onReadOnly('Project folder', repo, () => openBoard(repo, opts));
 }
 
-function openBoard(repo: string, opts: { migrationsDir?: string }): DatabaseSync {
+/**
+ * Writes `.kanban95/.gitignore`, or appends to an older board's the lines INNER_GITIGNORE gained since (operator screenshots
+ * and notes must never be committed). True when it appended: a tracked file is then modified, and a dirty base refuses every
+ * launch, so the daemon start commits it (server.ts).
+ */
+export function innerGitignore(repo: string): boolean {
   const dir = join(repo, '.kanban95');
   mkdirSync(dir, { recursive: true });
   const ignore = join(dir, '.gitignore');
-  if (!existsSync(ignore)) writeFileSync(ignore, INNER_GITIGNORE);
-  else {
-    // An older board gets the lines added since: operator screenshots and notes must never be committed.
-    const have = readFileSync(ignore, 'utf8').split(/\r?\n/);
-    const missing = INNER_GITIGNORE.split('\n').filter((l) => l && !have.includes(l));
-    if (missing.length) appendFileSync(ignore, `\n${missing.join('\n')}\n`);
+  if (!existsSync(ignore)) {
+    writeFileSync(ignore, INNER_GITIGNORE);
+    return false;
   }
+  const have = readFileSync(ignore, 'utf8').split(/\r?\n/);
+  const missing = INNER_GITIGNORE.split('\n').filter((l) => l && !have.includes(l));
+  if (missing.length) appendFileSync(ignore, `\n${missing.join('\n')}\n`);
+  return missing.length > 0;
+}
+
+function openBoard(repo: string, opts: { migrationsDir?: string }): DatabaseSync {
+  const dir = join(repo, '.kanban95');
+  innerGitignore(repo);
 
   const db = new DatabaseSync(join(dir, 'board.db'));
   db.exec(`PRAGMA journal_mode = WAL; PRAGMA journal_size_limit = ${WAL_LIMIT}; PRAGMA foreign_keys = ON;`);
