@@ -13,7 +13,7 @@ import { innerGitignore, openDb, openGlobalBrain } from './db.js';
 import { commitPaths, git, gitWithin, guardFileMode, initRepo, type GitCap } from './git.js';
 import { sweep, SWEEP_MS } from './janitor.js';
 import { killAll, launch, sessions } from './launcher.js';
-import { countUnpushed, events, recover, releasePending, tick, watchSilence, type Board } from './lifecycle.js';
+import { countUnpushed, events, recover, releasePending, tick, typed, watchSilence, type Board } from './lifecycle.js';
 import { handleMcp } from './mcp.js';
 import { startMemoryLog } from './memlog.js';
 import { idle } from './merge.js';
@@ -254,8 +254,10 @@ export function start(config: Config = {}): Promise<{
       ws.on('message', (m) => {
         try {
           const msg = JSON.parse(String(m));
-          if (typeof msg.data === 'string') s.pty.write(msg.data);
-          else if (Array.isArray(msg.resize) && msg.resize.every((n: unknown) => Number.isInteger(n) && (n as number) > 0 && (n as number) < 1000)) {
+          if (typeof msg.data === 'string') {
+            s.pty.write(msg.data);
+            if (msg.data.includes('\r')) typed(board, s);
+          } else if (Array.isArray(msg.resize) && msg.resize.every((n: unknown) => Number.isInteger(n) && (n as number) > 0 && (n as number) < 1000)) {
             s.pty.resize(msg.resize[0], msg.resize[1]);
           }
         } catch {

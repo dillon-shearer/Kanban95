@@ -199,7 +199,7 @@ Full-text search the project brain and the global brain together, best match fir
 
 ### ask_operator
 
-Ask the human operator a question you cannot resolve from the ticket, the brain or the code. The ticket is flagged needs_human and the operator is alerted; the answer is typed into your session as one line and kept as a note on the ticket. Ask once with full context and the options you see, rather than many small questions. Returns the question id.
+Ask the human operator a question you cannot resolve from the ticket, the brain or the code. The ticket is flagged needs_human and the operator is alerted; the answer is typed into your session as one line and kept as a note on the ticket. Until it is answered, move_ticket to testing is refused: wait for it. Ask once with full context and the options you see, rather than many small questions. Returns the question id.
 
 | argument | type | required | description |
 |---|---|---|---|
