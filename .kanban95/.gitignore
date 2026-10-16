@@ -7,3 +7,5 @@ notepad.md
 runner.json
 ui.json
 templates/*.replaced.md
+
+output/
