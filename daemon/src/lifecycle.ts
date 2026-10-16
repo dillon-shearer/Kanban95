@@ -26,6 +26,7 @@ export type Event =
   | 'fail' // tester move_ticket(in_progress)
   | 'ask' // ask_operator
   | 'answer' // the operator answers over REST
+  | 'typed'
   | 'exit' // the agent's pty exited without a move_ticket, or its launch failed
   | 'silent' // the agent's transcript gained no line for idle_minutes (the silence watch)
   | 'woke' // a silent agent's transcript grew again
@@ -53,6 +54,8 @@ export interface Facts {
   depsMerged: boolean;
   passReported: boolean;
   live: boolean;
+  question: boolean;
+  asked: boolean;
 }
 interface Row {
   from: Status[];
@@ -91,15 +94,20 @@ export const TABLE: Row[] = [
   // end_session sets the outcome before the kill, so exited() does not flag the killed session.
   { from: ['in_progress'], event: 'restart', set: { needs_human: 0 }, effects: ['end_session', 'note', 'spawn_execute'] },
   { from: ['testing'], event: 'restart', set: { needs_human: 0 }, effects: ['end_session', 'note', 'spawn_test'] },
-  { from: ['in_progress'], event: 'submit', to: 'testing', effects: ['end_session', 'spawn_test'] },
+  { from: ['in_progress'], event: 'submit', when: (f) => !f.asked, why: 'your question to the operator is not answered yet; wait for the answer in this terminal, then move the ticket',
+    to: 'testing', set: { needs_human: 0 }, effects: ['end_session', 'spawn_test'] },
   // merged: false clears the merged_at an earlier cycle left (a rejected ticket), so the queue merges this pass again.
-  { from: ['testing'], event: 'pass', when: (f) => f.passReported, why: 'call report_test with passed: true first', to: 'done', set: { merged: false }, effects: ['end_session', 'done', 'enqueue_merge'] },
-  { from: ['testing'], event: 'fail', when: (f) => f.retry < MAX_RETRY, to: 'in_progress', set: { retry: '+1' }, effects: ['end_session', 'spawn_execute'] },
+  { from: ['testing'], event: 'pass', when: (f) => f.passReported, why: 'call report_test with passed: true first', to: 'done', set: { merged: false, needs_human: 0 }, effects: ['end_session', 'done', 'enqueue_merge'] },
+  { from: ['testing'], event: 'fail', when: (f) => f.retry < MAX_RETRY, to: 'in_progress', set: { retry: '+1', needs_human: 0 }, effects: ['end_session', 'spawn_execute'] },
   { from: ['testing'], event: 'fail', when: (f) => f.retry >= MAX_RETRY, to: 'in_progress', set: { retry: '+1', needs_human: 1 }, effects: ['end_session', 'note', 'chord'],
     says: `stopped after ${MAX_RETRY + 1} failed tests`,
     resolve: () => "read the tester's failure notes on the ticket. Fix its body or criteria if they ask for the wrong thing, then Reset to Backlog and Launch; the agent starts again in the same worktree." },
   { from: RUNNING, event: 'ask', set: { needs_human: 1 }, effects: ['note', 'chord'] },
-  { from: RUNNING, event: 'answer', when: (f) => f.needs_human && f.live, why: 'no flagged question with a live agent session', set: { needs_human: 0 }, effects: ['note', 'answer_pty'] },
+  { from: RUNNING, event: 'answer', when: (f) => f.needs_human && f.live, set: { needs_human: 0 }, effects: ['note', 'answer_pty'],
+    why: (f) => f.needs_human ? 'its agent is gone and no question is open; Resume starts it again' : 'it is not flagged; nothing is waiting on an answer' },
+  { from: ['in_progress'], event: 'answer', when: (f) => f.question && !f.live, set: { needs_human: 0 }, effects: ['note', 'spawn_execute'] },
+  { from: ['testing'], event: 'answer', when: (f) => f.question && !f.live, set: { needs_human: 0 }, effects: ['note', 'spawn_test'] },
+  { from: RUNNING, event: 'typed', when: (f) => f.question && f.live, why: 'it has no open question with a running agent', set: { needs_human: 0 }, effects: ['note'] },
   { from: RUNNING, event: 'exit', set: { needs_human: 1 }, effects: ['note', 'chord'],
     resolve: () => RESUME },
   // The agent is still running: it may be hung on an API call, or sitting at its prompt after an error it cannot get past.
@@ -193,6 +201,7 @@ function facts(b: Board, t: Ticket): Facts {
   const pass = b.db.prepare(`
     SELECT 1 FROM notes WHERE ticket_id = ? AND role = 'tester' AND kind = 'summary' AND body LIKE 'PASS:%'
       AND created_at >= coalesce((SELECT max(started_at) FROM runs WHERE ticket_id = ? AND phase = 'test'), '')`).get(t.id, t.id);
+  const q = t.flags.needs_human ? openQuestion(b.db, t.id) : undefined;
   return {
     status: t.status as Status,
     needs_human: t.flags.needs_human,
@@ -201,7 +210,27 @@ function facts(b: Board, t: Ticket): Facts {
     depsMerged: t.depends_on.every(merged),
     passReported: pass !== undefined,
     live: sessionsOf(t.id).length > 0 || settingUp(t.id),
+    question: q !== undefined,
+    asked: q !== undefined && !q.body.startsWith(PROMPT_ASK),
   };
+}
+
+export function openQuestion(db: DatabaseSync, id: number) {
+  const n = db.prepare("SELECT id, role, kind, body FROM notes WHERE ticket_id = ? AND kind IN ('failure', 'question') ORDER BY id DESC LIMIT 1").get(id) as
+    { id: number; role: Role; kind: string; body: string } | undefined;
+  if (n?.kind !== 'question' || db.prepare("SELECT 1 FROM notes WHERE ticket_id = ? AND kind = 'answer' AND id > ?").get(id, n.id)) return undefined;
+  return n;
+}
+
+export const TYPED = "answered in the agent's terminal";
+
+export function typed(b: Board, s: Session) {
+  if (s.ticketId === null || s.outcome) return;
+  try {
+    apply(b, s.ticketId, 'typed', { note: { role: 'operator', kind: 'answer', body: TYPED } });
+  } catch (e) {
+    if (!(e instanceof Refused)) console.error('[lifecycle]', e);
+  }
 }
 
 type Note = { role: Role | 'operator'; kind: 'question' | 'answer' | 'failure'; body: string };
@@ -251,7 +280,7 @@ export function apply(b: Board, id: number, event: Event, x: { note?: Note; answ
   if (event === 'merged') b.files?.clear();
   // Resume, and Launch on a running ticket whose agent is gone (as recover does after a restart), continue the killed
   // conversation when they can; every other spawn (a retry, a Restart) starts a fresh one.
-  const resume = (event === 'resume' || event === 'launch') && t.status !== 'backlog';
+  const resume = (event === 'resume' || event === 'launch' || event === 'answer') && t.status !== 'backlog';
   const pending: Promise<void>[] = [];
   for (const e of effects) {
     switch (e) {
@@ -975,6 +1004,7 @@ export function tick(b: Board) {
 export const RESTART_NOTE = 'restarted by the operator; the previous session was ended without reporting. Continue from the state of this worktree: read `git status` and `git log` first';
 
 export const RESTARTED = 'agent exited without reporting (the daemon restarted)';
+export const QUESTION_GONE = 'closed unanswered: the daemon restarted and the agent that asked is gone. The agent was started again and asks again if it still needs to.';
 
 /**
  * Daemon start: no agent survives a restart. The agent did nothing wrong, so a running, unflagged ticket is resumed once: the
@@ -991,6 +1021,13 @@ export function recover(b: Board) {
     const role = status === 'testing' ? 'tester' : 'worker';
     // ponytail: no Pause yet; when it lands, a paused board flags here (apply 'exit' with RESTARTED) instead.
     b.db.prepare("INSERT INTO notes (ticket_id, role, kind, body) VALUES (?, ?, 'failure', ?)").run(id, role, RESTARTED);
+    apply(b, id, 'launch');
+  }
+  const asked = b.db.prepare("SELECT id FROM tickets WHERE status IN ('in_progress', 'testing') AND needs_human = 1 AND blocked = 0").all() as { id: number }[];
+  for (const { id } of asked) {
+    const q = openQuestion(b.db, id);
+    if (!q || sessionsOf(id).length > 0 || !existsSync(worktreePath(b.repo, id))) continue;
+    b.db.prepare("INSERT INTO notes (ticket_id, role, kind, body) VALUES (?, ?, 'answer', ?)").run(id, q.role, QUESTION_GONE);
     apply(b, id, 'launch');
   }
   for (const { id } of b.db.prepare("SELECT id FROM tickets WHERE status = 'done' AND merged_at IS NULL AND needs_human = 0 AND blocked = 0").all() as { id: number }[]) {

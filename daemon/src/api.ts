@@ -457,15 +457,14 @@ const routes: [method: string, path: RegExp, mutation: string | null, handler: (
     const t = readTicket(board.db, Number(params[0]));
     return { status: 200, body: { diff: ticketDiff(board.repo, t.id, ticketBase(board.repo, t.tags)) } };
   }],
-  // What a flagged ticket waits on: questions an agent asked with ask_operator that have no answer yet, and, when no newer
-  // question is open, the failure that flagged it. `merged_at` tells the Inbox whether Retry merge applies.
+  // What a flagged ticket waits on, one entry per ticket: its latest question or failure, a question only while it has no
+  // answer. `merged_at` tells the Inbox whether Retry merge applies.
   ['GET', /^\/api\/inbox$/, null, ({ db }) => ({
     status: 200,
     body: (db.prepare(`
       SELECT n.id, n.ticket_id, n.role, n.kind, n.body, n.created_at, t.title, t.status, t.merged_at FROM notes n JOIN tickets t ON t.id = n.ticket_id
-      WHERE t.needs_human = 1 AND (
-        (n.kind = 'question' AND NOT EXISTS (SELECT 1 FROM notes a WHERE a.ticket_id = n.ticket_id AND a.kind = 'answer' AND a.id > n.id))
-        OR (n.kind = 'failure' AND n.id = (SELECT max(id) FROM notes m WHERE m.ticket_id = n.ticket_id AND m.kind IN ('failure', 'question'))))
+      WHERE t.needs_human = 1 AND n.id = (SELECT max(id) FROM notes m WHERE m.ticket_id = n.ticket_id AND m.kind IN ('failure', 'question'))
+        AND (n.kind = 'failure' OR NOT EXISTS (SELECT 1 FROM notes a WHERE a.ticket_id = n.ticket_id AND a.kind = 'answer' AND a.id > n.id))
       ORDER BY n.id`).all() as { kind: string; body: string }[]).map((n) => ({ ...n, permission: n.kind === 'question' ? permissionOf(n.body) : null })),
   })],
   ['GET', /^\/api\/deliverables$/, null, ({ db }) => ({ status: 200, body: listDeliverables(db) })],
