@@ -1,6 +1,6 @@
 # Kanban95
 
-A Windows 95-styled desktop kanban that runs AI coding agents for you. Write tickets (or talk them through with a planner agent), press **Run**, and walk away. The board takes a few tickets at a time (three by default, set in Settings), smallest first. It starts Claude Code or Codex CLI for each one in its own copy of your repo, has a second agent test the work against the acceptance criteria, retries failures, and merges what passes. It calls you only when it is stuck, with a ding, a red card and an Inbox entry saying what to do.
+A Windows 95-styled desktop kanban that runs AI coding agents for you. Write tickets (or talk them through with a planner agent), press **Run**, and walk away. The board takes a few tickets at a time (three by default, set in Settings), lowest ticket id first. It starts Claude Code or Codex CLI for each one in its own copy of your repo, has a second agent test the work against the acceptance criteria, retries failures, and merges what passes. It calls you only when it is stuck, with a ding, a red card and an Inbox entry saying what to do.
 
 ![The board](docs/img/board.png)
 
