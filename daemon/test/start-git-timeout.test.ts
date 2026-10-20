@@ -34,7 +34,7 @@ it('a git that never answers holds the start for one capped wait: the port line 
   try {
     const [chunk] = await once(child.stdout, 'data');
     expect(Date.now() - began).toBeLessThan(10_000);
-    expect(String(chunk)).toMatch(/^KANBAN95 port=\d+\r?\n$/);
+    expect(String(chunk)).toMatch(/^KANBAN95 port=\d+\r?\n/);
     const end = Date.now() + 2_000;
     while (!err.includes('[start] tick') && Date.now() < end) await new Promise((r) => setTimeout(r, 20));
     expect([...err.matchAll(/^\[start\] (.+) \d+\r?$/gm)].map((m) => m[1])).toEqual(STEPS);

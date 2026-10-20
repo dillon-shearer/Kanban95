@@ -405,6 +405,7 @@ if (import.meta.main) {
   // them, then exit 75, which the shell takes as "start me again" (docs/ARCHITECTURE.md -> Restart board).
   const listening = (port: number, board: Board) => {
     handshake(port);
+    tellShell('repo', board.repo);
     board.shutdown = (code) => {
       if (leaving) return;
       leaving = true;

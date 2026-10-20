@@ -132,7 +132,7 @@ export async function fileOn(entry: Entry, name: string, f: Filing): Promise<unk
   return out;
 }
 
-type Verb = 'open' | 'switch' | 'popout' | 'dock' | 'close' | 'restart' | 'check' | 'checknow' | 'update' | 'pick';
+type Verb = 'open' | 'switch' | 'popout' | 'dock' | 'close' | 'restart' | 'check' | 'checknow' | 'update' | 'pick' | 'repo';
 
 export function tellShell(verb: Verb, path: string, rest = ''): void {
   process.stdout.write(`KANBAN95 ${verb}=${path && normal(path)}${rest && ' ' + rest}\n`);

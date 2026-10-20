@@ -197,6 +197,7 @@ enum Verb {
     CheckNow,
     Update,
     Pick,
+    Repo,
 }
 
 fn parse(line: &str) -> Option<(Verb, &str)> {
@@ -212,6 +213,7 @@ fn parse(line: &str) -> Option<(Verb, &str)> {
         "checknow" => Verb::CheckNow,
         "update" => Verb::Update,
         "pick" => Verb::Pick,
+        "repo" => Verb::Repo,
         _ => return None,
     };
     (!path.is_empty()).then_some((verb, path))
@@ -277,6 +279,7 @@ struct Board {
 struct Table {
     boards: BTreeMap<String, Board>,
     main: String,
+    served: String,
     opening: BTreeSet<String>,
     splash: bool,
     closing: Vec<(Child, Instant)>,
@@ -363,6 +366,7 @@ impl Host {
                 match parse(&line) {
                     Some((Verb::Check, _)) => host.updates(Verb::Check, &me, std::mem::take(&mut fresh)),
                     Some((verb @ (Verb::CheckNow | Verb::Update), _)) => host.updates(verb, &me, false),
+                    Some((Verb::Repo, path)) => host.served(&me, path),
                     Some((Verb::Pick, rest)) => match pick_args(rest) {
                         Some((folder, token)) => host.pick(&me, folder, token),
                         None => eprintln!("[shell] ignored a pick line without a kind and token"),
@@ -474,12 +478,22 @@ impl Host {
         }
     }
 
+    fn served(&self, from: &Daemon, path: &str) {
+        let mut t = lock(&self.table);
+        if t.boards.get("").is_some_and(|b| b.port == from.port) {
+            t.served = key(path);
+        }
+    }
+
     fn command(self: &Arc<Self>, verb: Verb, path: &str, from: Option<&Daemon>) {
-        let repo = key(path);
+        let mut repo = key(path);
         let mut fx = vec![];
         let mut t = lock(&self.table);
         if t.done {
             return;
+        }
+        if repo == t.served && !t.boards.contains_key(&repo) && t.boards.contains_key("") {
+            repo = String::new();
         }
         let place = t.boards.get(&repo).map(|b| b.place);
         let waiting = t.boards.get(&repo).is_some_and(|b| b.waiting.is_some());
@@ -1585,7 +1599,6 @@ fn main() {
     add_login_path();
     // The shell's first argument, if any, is the repo of its first board. Without one (Start menu, Dock) the daemon decides,
     // and the board is keyed "" (docs/ARCHITECTURE.md -> Startup without an argument).
-    // ponytail: a board keyed "" that another board then opens by path gets a second daemon; re-keying on the handshake would fix it.
     let repo = std::env::args().nth(1).map(|a| key(&a)).unwrap_or_default();
     let installed = staged(exe_dir().as_deref()).is_some();
     trim_log(&log_path());
@@ -1800,6 +1813,7 @@ mod tests {
         assert_eq!(parse("KANBAN95 checknow=x"), Some((Verb::CheckNow, "x")));
         assert_eq!(parse("KANBAN95 update=x"), Some((Verb::Update, "x")));
         assert_eq!(parse("KANBAN95 pick=C:\\a b folder 0a1b"), Some((Verb::Pick, "C:\\a b folder 0a1b")));
+        assert_eq!(parse("KANBAN95 repo=x"), Some((Verb::Repo, "x")));
         for bad in ["KANBAN95 open=", "KANBAN95 port=41234", "KANBAN95 fly=x", "KANBAN95 open", "kanban95 open=x", " KANBAN95 open=x", "listening"] {
             assert_eq!(parse(bad), None, "{bad}");
         }
@@ -1981,6 +1995,22 @@ mod tests {
         host.command(Verb::Open, "k95-b", None);
         assert_eq!(take(&seen), [show("k95-b", None)], "the shown board is only brought to the front");
         assert_eq!(lock(&host.table).main, "k95-b");
+        host.shutdown();
+    }
+
+    #[test]
+    fn a_board_started_without_an_argument_is_reached_by_the_repo_it_serves() {
+        let (host, seen) = host(|repo, _| if repo.is_empty() { up(41001, &format!("echo KANBAN95 repo=k95-a{THEN}")) } else { up(41002, "") });
+        host.first("", host.start("").unwrap());
+        until("the served repo", || lock(&host.table).served == "k95-a");
+        open_loaded(&host, "k95-b");
+        take(&seen);
+
+        host.command(Verb::Switch, "k95-a", None);
+        assert_eq!(take(&seen), [show("", Some("k95-b")), Effect::Hide(label("k95-b"))]);
+        host.command(Verb::Open, "k95-a", None);
+        assert_eq!(take(&seen), [show("", None)], "no second daemon on the served repo");
+        assert_eq!(hosted(&host).len(), 2);
         host.shutdown();
     }
 

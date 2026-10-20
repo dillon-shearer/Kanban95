@@ -140,7 +140,7 @@ describe('daemon process', () => {
       const r = await d.post('/projects/open', { path: other, where: 'here' });
       expect(r.status).toBe(202);
       await new Promise((ok) => setTimeout(ok, 200));
-      expect(d.out().split('\n').slice(1)).toEqual([`KANBAN95 check=${own}`, `KANBAN95 open=${other}`, '']);
+      expect(d.out().split('\n').slice(1)).toEqual([`KANBAN95 repo=${own}`, `KANBAN95 check=${own}`, `KANBAN95 open=${other}`, '']);
     } finally {
       await d.stop();
     }
@@ -154,7 +154,7 @@ describe('daemon process', () => {
       expect(JSON.parse(readFileSync(entryPath(d.child.pid!), 'utf8')).shell).toBeNull();
       expect((await d.post('/projects/open', { path: other, where: 'here' })).status).toBe(409);
       await new Promise((ok) => setTimeout(ok, 200));
-      expect(d.out().split('\n').slice(1)).toEqual(['']);
+      expect(d.out().split('\n').slice(1)).toEqual([`KANBAN95 repo=${own}`, '']);
     } finally {
       await d.stop();
     }

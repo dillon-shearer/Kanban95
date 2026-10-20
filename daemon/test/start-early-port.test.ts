@@ -51,7 +51,7 @@ it('prints the port line within 1 s while a 3 s pre-commit hook holds the templa
   try {
     const [chunk] = await once(child.stdout, 'data');
     expect(Date.now() - began).toBeLessThan(1_000);
-    expect(String(chunk)).toMatch(/^KANBAN95 port=\d+\r?\n$/);
+    expect(String(chunk)).toMatch(/^KANBAN95 port=\d+\r?\n/);
     expect(git('log', '-1', '--format=%s')).toBe('Seed');
     const end = Date.now() + 15_000;
     while (git('log', '-1', '--format=%s') !== SUBJECT && Date.now() < end) await new Promise((r) => setTimeout(r, 100));
