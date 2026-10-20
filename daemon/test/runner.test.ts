@@ -131,27 +131,35 @@ afterEach(async () => {
 });
 
 describe('runner', { timeout: 60_000 }, () => {
-  it('orders candidates by effort, then criteria lines, then id; skips flagged and unmerged-dependency tickets', () => {
-    const high = ticket('high', { effort: 'high' });
-    const max = ticket('max', { effort: 'max' });
-    const unset = ticket('unset counts as medium', { criteria: 'a\nb\nc' });
-    const medium = ticket('medium', { effort: 'medium', criteria: 'a' });
-    const low2 = ticket('low, blank lines do not count', { effort: 'low', criteria: 'a\n\nb\n  \n' });
-    const low2later = ticket('low, same size, later id', { effort: 'low', criteria: 'x\ny' });
-    const low3 = ticket('low, longer', { effort: 'low', criteria: 'a\nb\nc' });
-    ticket('flagged', { effort: 'low', needs_human: 1 });
-    dep(ticket('on an unmerged ticket', { effort: 'low' }), max);
+  it('orders candidates by id alone; skips flagged, Blocked and unmerged-dependency tickets', () => {
     const merged = ticket('merged', { status: 'done', merged_at: '2026-01-01T00:00:00.000Z' });
-    const onMerged = ticket('on a merged ticket', { effort: 'low', criteria: 'a\nb\nc\nd' });
-    dep(onMerged, merged);
-    expect(candidates(srv.board)).toEqual([low2, low2later, low3, onMerged, medium, unset, high, max]);
+    const first = ticket('on a merged ticket', { effort: 'max', criteria: 'a\nb\nc\nd\ne' });
+    dep(first, merged);
+    const unmerged = ticket('not merged', { status: 'in_progress' });
+    dep(ticket('on an unmerged ticket', { effort: 'low' }), unmerged);
+    ticket('flagged', { effort: 'low', needs_human: 1 });
+    ticket('blocked', { effort: 'low', blocked: 1 });
+    const second = ticket('high', { effort: 'high', criteria: 'a\nb' });
+    const setup = ticket('setup', { effort: 'low', tags: 'setup' });
+    const house = ticket('housekeeping', { effort: 'low', template: 'housekeeping' });
+    expect(candidates(srv.board)).toEqual([first, second, setup, house]);
+  });
+
+  it('launches the lowest eligible id first, not a later setup ticket with no dependencies', async () => {
+    const done = ticket('done', { status: 'done', merged_at: '2026-01-01T00:00:00.000Z' });
+    const a = ticket('A', { model: 'hang', effort: 'max', criteria: 'a\nb\nc' });
+    dep(a, done);
+    const b = ticket('B', { model: 'hang', effort: 'low', tags: 'setup' });
+    await setMax(1);
+    expect((await setRun(true)).running).toEqual([a]);
+    expect(t(b).status).toBe('backlog');
   });
 
   it('with concurrency 1 launches exactly one and the next only after the first merged, then turns itself off with a ding', async () => {
     const a = ticket('First');
     const b = ticket('Second');
     await setMax(1);
-    expect(await setRun(true)).toEqual({ on: true, concurrency: 1, running: [a], setup: [], left: 1, backlog: 1, waits: [], stale: false, unpushed: 0 });
+    expect(await setRun(true)).toEqual({ on: true, concurrency: 1, running: [a], setup: [], left: 1, backlog: 1, stale: false, unpushed: 0 });
     expect(t(b).status).toBe('backlog');
     expect(runs(b)).toEqual([]);
     await landed(a);
@@ -212,7 +220,7 @@ describe('runner', { timeout: 60_000 }, () => {
     for (const id of held) dep(id, gate);
     await setMax(1);
     await setRun(true);
-    expect(await setRun(false)).toEqual({ on: false, concurrency: 1, running: [a], setup: [], left: 1, backlog: 4, waits: [], stale: false, unpushed: 0, cleared: 2 });
+    expect(await setRun(false)).toEqual({ on: false, concurrency: 1, running: [a], setup: [], left: 1, backlog: 4, stale: false, unpushed: 0, cleared: 2 });
     expect(held.map((id) => t(id).flags.blocked_on_deps)).toEqual([false, false]);
     expect((await request('PUT', '/api/runner', { on: 'yes' })).status).toBe(400);
     await landed(a);

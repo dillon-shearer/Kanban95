@@ -31,7 +31,7 @@ const tickets = new Map();
 let sessions = [];
 let inbox = [];
 let deliverables = [];
-let runner = { on: false, concurrency: 3, running: [], left: 0, backlog: 0, waits: [], unpushed: 0 }; // GET /api/runner: the Run button and its status-bar line
+let runner = { on: false, concurrency: 3, running: [], left: 0, backlog: 0, unpushed: 0 }; // GET /api/runner: the Run button and its status-bar line
 let models = null; // models.json this board runs on (this repo's copy, else the global file), for the cards' default model and effort
 // Sounds stay off until /config/settings loads: listen() starts first, and a ding in that gap ignored the operator's choice.
 // `terminals` is absent until then too, so no session is opened or passed over before the operator's phases are known.
@@ -334,9 +334,9 @@ const toggleRunner = () => act(async () => {
   drawBoard();
   if (cleared !== undefined) say(`Runner stopped, ${cleared} ${cleared === 1 ? 'hold' : 'holds'} cleared.`);
 });
-/** While on: what it waits on against the limit, what is left, who waits on shared files, and testers waiting for memory. Off by itself: why. Off by Stop: nothing. */
+/** While on: what it waits on against the limit, what is left, and testers waiting for memory. Off by itself: why. Off by Stop: nothing. */
 const runnerLine = (r) => r.on
-  ? `Running: ${r.running.map((id) => `#${id}`).join(', ') || 'nothing yet'} (${r.running.length} of ${r.concurrency}; ${r.left} of ${r.backlog} candidates left)${r.waits.map((w) => `; #${w.id} waits: shares files with #${w.on}`).join('')}${r.lowMemory ? `; testers waiting for memory: ${r.lowMemory.waiting.map((id) => `#${id}`).join(', ')} (${(r.lowMemory.free / 1024 ** 3).toFixed(1)} GB free)` : ''}`
+  ? `Running: ${r.running.map((id) => `#${id}`).join(', ') || 'nothing yet'} (${r.running.length} of ${r.concurrency}; ${r.left} of ${r.backlog} candidates left)${r.lowMemory ? `; testers waiting for memory: ${r.lowMemory.waiting.map((id) => `#${id}`).join(', ')} (${(r.lowMemory.free / 1024 ** 3).toFixed(1)} GB free)` : ''}`
   : r.why ? `Runner stopped: ${r.why}` : '';
 // Replaces a running ticket's agent, live or hung, with a fresh one in the same phase and worktree (docs/LIFECYCLE.md).
 const restartable = (t) => t?.status === 'in_progress' || t?.status === 'testing';

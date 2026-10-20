@@ -2,7 +2,7 @@
 // picks a row or refuses, apply() writes the row and runs its effects. Nothing else changes a ticket's status or flags.
 import { exec } from 'node:child_process';
 import { EventEmitter } from 'node:events';
-import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { readTicket, transaction, type Ticket } from './api.js';
@@ -184,7 +184,6 @@ export interface Board {
   unpushed?: number;
   lowMemory?: { free: number; floor: number };
   memoryWait?: NodeJS.Timeout;
-  files?: Map<number, { key: string; files: string[] }>;
   update?: { version: string; current: string };
 }
 
@@ -277,7 +276,6 @@ export function apply(b: Board, id: number, event: Event, x: { note?: Note; answ
     return Number(r.lastInsertRowid);
   });
 
-  if (event === 'merged') b.files?.clear();
   // Resume, and Launch on a running ticket whose agent is gone (as recover does after a restart), continue the killed
   // conversation when they can; every other spawn (a retry, a Restart) starts a fresh one.
   const resume = (event === 'resume' || event === 'launch' || event === 'answer') && t.status !== 'backlog';
@@ -823,84 +821,25 @@ const running = (b: Board) => (b.db.prepare(`
   SELECT id FROM tickets WHERE needs_human = 0 AND blocked = 0 AND (status IN ('in_progress', 'testing') OR (status = 'done' AND merged_at IS NULL))
   ORDER BY id`).all() as { id: number }[]).map((r) => r.id);
 
-const EFFORT_RANK: Record<string, number> = { low: 0, medium: 1, high: 2, max: 3 };
-const lines = (s: string) => s.split(/\r?\n/).filter((l) => l.trim()).length;
-
-/**
- * Backlog tickets the runner may launch, next first: unflagged, not Blocked, every dependency merged.
- * ponytail: effort then criteria lines is a rough size; upgrade to a size estimate the planner writes on each ticket.
- */
+/** Backlog tickets the runner may launch, lowest id first: unflagged, not Blocked, every dependency merged. Nothing else orders them. */
 export function candidates(b: Board): number[] {
-  const rows = b.db.prepare(`
-    SELECT id, effort, criteria FROM tickets t WHERE status = 'backlog' AND needs_human = 0 AND blocked = 0 AND NOT EXISTS (
-      SELECT 1 FROM ticket_deps d JOIN tickets x ON x.id = d.depends_on_id WHERE d.ticket_id = t.id AND x.merged_at IS NULL)`).all() as
-    { id: number; effort: string | null; criteria: string }[];
-  const rank = (r: (typeof rows)[number]) => EFFORT_RANK[r.effort ?? 'medium'];
-  return rows.sort((x, y) => rank(x) - rank(y) || lines(x.criteria) - lines(y.criteria) || x.id - y.id).map((r) => r.id);
+  return (b.db.prepare(`
+    SELECT id FROM tickets t WHERE status = 'backlog' AND needs_human = 0 AND blocked = 0 AND NOT EXISTS (
+      SELECT 1 FROM ticket_deps d JOIN tickets x ON x.id = d.depends_on_id WHERE d.ticket_id = t.id AND x.merged_at IS NULL)
+    ORDER BY id`).all() as { id: number }[]).map((r) => r.id);
 }
 
 /**
- * The repo files a ticket touches, docs and markdown left out (every ticket touches those; the merge sync handles them):
- * paths its body or criteria names that exist in the repo, plus, once it has a branch, what that branch changed.
- * ponytail: names in prose are a guess; upgrade to a files list the planner writes on each ticket.
- */
-function files(b: Board, id: number): string[] {
-  const t = b.db.prepare('SELECT body, criteria, tags FROM tickets WHERE id = ?').get(id) as { body: string; criteria: string; tags: string };
-  const head = branchHead(b.repo, id);
-  const key = head === undefined ? undefined : JSON.stringify([head, t.body, t.criteria]);
-  const hit = b.files?.get(id);
-  if (key !== undefined && hit?.key === key) return hit.files;
-  const named = `${t.body}\n${t.criteria}`.match(/[\w./-]+\.\w+/g) ?? [];
-  let diff: string[] = [];
-  try {
-    diff = git(b.repo, 'diff', '--name-only', `${ticketBase(b.repo, t.tags) ?? git(b.repo, 'rev-parse', '--abbrev-ref', 'HEAD')}...${branchName(id)}`).split('\n');
-  } catch { /* no branch yet */ }
-  const inRepo = (f: string) => !f.split('/').includes('..') && existsSync(join(b.repo, f));
-  const all = [...named.map((f) => f.replace(/^\.\//, '')).filter(inRepo), ...diff];
-  const out = [...new Set(all.filter((f) => f && !f.startsWith('docs/') && !f.endsWith('.md')))];
-  if (key !== undefined) (b.files ??= new Map()).set(id, { key, files: out });
-  return out;
-}
-
-function branchHead(repo: string, id: number): string | null | undefined {
-  const dir = join(repo, '.git');
-  if (!statSync(dir, { throwIfNoEntry: false })?.isDirectory() || existsSync(join(dir, 'reftable'))) return undefined;
-  const ref = `refs/heads/${branchName(id)}`;
-  try {
-    return readFileSync(join(dir, ref), 'utf8').trim();
-  } catch {}
-  try {
-    return readFileSync(join(dir, 'packed-refs'), 'utf8').split(/\r?\n/).find((l) => l.endsWith(` ${ref}`))?.split(' ')[0] ?? null;
-  } catch {
-    return null;
-  }
-}
-
-/** Each candidate that shares a file with a running ticket, mapped to the first running ticket it shares one with. */
-function overlaps(b: Board, cs: number[]): Map<number, number> {
-  const owner = new Map<string, number>();
-  for (const id of running(b)) for (const f of files(b, id)) if (!owner.has(f)) owner.set(f, id);
-  const out = new Map<number, number>();
-  if (!owner.size) return out;
-  for (const c of cs) {
-    const f = files(b, c).find((x) => owner.has(x));
-    if (f) out.set(c, owner.get(f)!);
-  }
-  return out;
-}
-
-/**
- * What the status bar shows: the flag, the limit, the tickets it waits on, candidates left of everything in Backlog, deferrals.
+ * What the status bar shows: the flag, the limit, the tickets it waits on, candidates left of everything in Backlog.
  * While stale, `hold`: how many tickets the restart waits for, and who restarts (docs/LIFECYCLE.md → Restart after a merge).
  */
 export function runnerState(b: Board) {
   const { n } = b.db.prepare("SELECT count(*) AS n FROM tickets WHERE status = 'backlog'").get() as { n: number };
   const cs = candidates(b);
-  const waits = [...overlaps(b, cs)].map(([id, on]) => ({ id, on }));
   const restart = b.restart === 'failed' ? 'failed' : b.shell && b.shutdown ? 'self' : 'manual';
   const r = runner(b);
   const ids = running(b);
-  return { ...r, concurrency: limit(b), running: ids, setup: ids.filter(settingUp), left: cs.length, backlog: n, waits, stale: b.stale ?? false, unpushed: b.unpushed ?? 0,
+  return { ...r, concurrency: limit(b), running: ids, setup: ids.filter(settingUp), left: cs.length, backlog: n, stale: b.stale ?? false, unpushed: b.unpushed ?? 0,
     ...(b.release && { release: { pending: true, ...b.release } }), ...(b.stale === 'daemon' && { hold: { finish: toFinish(b), terminals: terminals(), restart } }), ...(b.gitError && { gitError: b.gitError }), ...(b.lowMemory && { lowMemory: { ...b.lowMemory, waiting: testersWaiting() } }) };
 }
 
@@ -967,8 +906,7 @@ let ticking = false;
 
 /**
  * Runs after every apply and on daemon start: while the runner is on and fewer than `concurrency` (settings.json, default 3)
- * tickets are running, launch the next candidate that shares no file with a running ticket, or the first candidate when all
- * do (the merge sync resolves it; waiting forever would be worse). Nothing running and nothing to launch: it turns itself off.
+ * tickets are running, launch the lowest-id candidate. Nothing running and nothing to launch: it turns itself off.
  * A ticket held on a running one is not "nothing": the runner waits for that merge. A board stale on daemon code launches no candidate.
  */
 export function tick(b: Board) {
@@ -987,10 +925,9 @@ export function tick(b: Board) {
       if (go) apply(b, id, 'launch');
     }
     while (b.stale !== 'daemon' && running(b).length < max) {
-      const cs = candidates(b);
-      if (!cs.length) break;
-      const busy = overlaps(b, cs);
-      apply(b, cs.find((c) => !busy.has(c)) ?? cs[0], 'launch');
+      const next = candidates(b)[0];
+      if (next === undefined) break;
+      apply(b, next, 'launch');
     }
     if (running(b).length === 0 && candidates(b).length === 0) {
       setRunner(b, false, 'nothing left to launch');
