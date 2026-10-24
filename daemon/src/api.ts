@@ -50,7 +50,7 @@ const TICKET_FIELDS: Record<string, 'string' | 'int' | 'bool'> = {
 const NULLABLE = new Set(['cli', 'model', 'effort']);
 const TAG = /^[a-z0-9-]+$/;
 export const PERMISSION = 'PERMISSION';
-const permissionOf = (body: string) => {
+export const permissionOf = (body: string) => {
   const m = /^PERMISSION((?: (?:level=[1-9]|read_all=1))+)$/.exec(body.split('\n', 1)[0]);
   if (!m) return null;
   const level = /level=(\d)/.exec(m[1]);
