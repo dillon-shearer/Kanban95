@@ -250,13 +250,20 @@ export function start(config: Config = {}): Promise<{
       ws.send(s.scrollback());
       const out = s.pty.onData((d) => ws.send(d));
       const exit = s.pty.onExit(() => ws.close());
+      let line = '';
       ws.on('error', () => ws.terminate());
       ws.on('message', (m) => {
         try {
           const msg = JSON.parse(String(m));
           if (typeof msg.data === 'string') {
             s.pty.write(msg.data);
-            if (msg.data.includes('\r')) typed(board, s);
+            for (const ch of msg.data.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, '')) {
+              if (ch === '\r') {
+                typed(board, s, line);
+                line = '';
+              } else if (ch === '\x7f' || ch === '\b') line = line.slice(0, -1);
+              else if (ch >= ' ') line += ch;
+            }
           } else if (Array.isArray(msg.resize) && msg.resize.every((n: unknown) => Number.isInteger(n) && (n as number) > 0 && (n as number) < 1000)) {
             s.pty.resize(msg.resize[0], msg.resize[1]);
           }

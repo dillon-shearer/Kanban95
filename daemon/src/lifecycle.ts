@@ -5,9 +5,9 @@ import { EventEmitter } from 'node:events';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
-import { readTicket, transaction, type Ticket } from './api.js';
+import { permissionOf, readTicket, transaction, type Ticket } from './api.js';
 import { branchName, git, gitNotRun, hasBranch, isAncestor, notStarted, syncWorktree, worktreePath } from './git.js';
-import { revoke, type Role } from './grants.js';
+import { audit, revoke, type Role } from './grants.js';
 import { cleanTicket } from './janitor.js';
 import { cancelSetup, killSession, launch, launchRoot, prepareWorktree, SetupCancelled, sessions, sessionsOf, settingUp, transcriptSize, type Session } from './launcher.js';
 import { freeMemory, mark } from './memlog.js';
@@ -223,13 +223,28 @@ export function openQuestion(db: DatabaseSync, id: number) {
 
 export const TYPED = "answered in the agent's terminal";
 
-export function typed(b: Board, s: Session) {
+const APPROVE = /^(y|yes|ok|okay|approved?|allow(ed)?|grant(ed)?)\b/i;
+const DENY = /^(n|no|deny|denied|refused?)\b/i;
+
+export function typed(b: Board, s: Session, line = '') {
   if (s.ticketId === null || s.outcome) return;
+  const id = s.ticketId;
+  const q = openQuestion(b.db, id);
+  const p = q ? permissionOf(q.body) : null;
+  const word = line.trim();
+  const verdict = p && APPROVE.test(word) ? 'approved' : p && DENY.test(word) ? 'denied' : undefined;
+  const asked = p ? [p.level !== null && `level ${p.level}`, p.read_all && 'read all'].filter(Boolean).join(', ') : '';
+  const body = verdict === 'approved' ? `approved: ${asked} (${TYPED})` : verdict ? `denied (${TYPED})` : TYPED;
   try {
-    apply(b, s.ticketId, 'typed', { note: { role: 'operator', kind: 'answer', body: TYPED } });
+    apply(b, id, 'typed', { note: { role: 'operator', kind: 'answer', body } });
   } catch (e) {
     if (!(e instanceof Refused)) console.error('[lifecycle]', e);
+    return;
   }
+  if (verdict !== 'approved' || !p) return;
+  b.db.prepare('UPDATE tickets SET agent_level = max(agent_level, ?), read_all = max(read_all, ?) WHERE id = ?').run(p.level ?? 0, p.read_all ? 1 : 0, id);
+  audit(b.db, { grant_id: null, ticket_id: id, tool: 'tickets.update', args: { ...(p.level !== null && { agent_level: p.level }), ...(p.read_all && { read_all: true }), via: 'terminal' }, outcome: 'ok' });
+  changed(id);
 }
 
 type Note = { role: Role | 'operator'; kind: 'question' | 'answer' | 'failure'; body: string };
