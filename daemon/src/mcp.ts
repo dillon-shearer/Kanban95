@@ -13,7 +13,7 @@ import { attachments } from './attachments.js';
 import { fileOn, registeredBoard } from './boards.js';
 import { postDeliverable } from './deliverables.js';
 import { audit, live, verify, type Grant, type Role } from './grants.js';
-import { apply, changed, Refused, type Board } from './lifecycle.js';
+import { apply, changed, PROMPT_ASK, Refused, type Board } from './lifecycle.js';
 import { EFFORT, readConfig, same, uncatalogued } from './settings.js';
 
 const STATUS = ['backlog', 'in_progress', 'testing', 'done'] as const;
@@ -87,6 +87,14 @@ function reach(board: Board, grant: Grant, t: Tool<z.ZodRawShape>): Pick<Call, '
   const from = t.level ?? MAX_LEVEL;
   const widens = 'operator' in t.access;
   return { as: widens && level >= from ? 'operator' : grant.role, level, readAll: row?.read_all === 1 || all, need: widens && level < from ? from : undefined };
+}
+const manualChecks = z.array(z.string().min(1)).default([])
+  .describe('Checks an agent cannot make itself (a device, DNS, a phone, an account): one string per check. Refused until the operator has answered an ask_operator question on the ticket confirming them.');
+function confirmed(db: DatabaseSync, id: number, checks: string[]) {
+  if (!checks.length) return;
+  const answered = db.prepare(`SELECT 1 FROM notes q WHERE q.ticket_id = ? AND q.kind = 'question' AND q.body NOT LIKE '${PERMISSION}%' AND q.body NOT LIKE ?
+    AND EXISTS (SELECT 1 FROM notes a WHERE a.ticket_id = q.ticket_id AND a.kind = 'answer' AND a.role = 'operator' AND a.id > q.id)`).get(id, `${PROMPT_ASK}%`);
+  if (!answered) throw new Refused(`no operator confirmation of the manual checks on this ticket: ${checks.join('; ')}. Ask the operator to make them with ask_operator, wait for the answer, then call again`);
 }
 const exists = (db: DatabaseSync, id: number) => db.prepare('SELECT 1 FROM tickets WHERE id = ?').get(id) !== undefined;
 /** A Backlog ticket this grant created: the only kind a worker may edit beyond its own, or delete. */
@@ -307,14 +315,15 @@ export const TOOLS: Record<string, Tool<z.ZodRawShape>> = {
       'A move to the column the ticket is already in returns the ticket unchanged. ' +
       'Once the move is accepted your session is over: the board ends it and starts the next agent. ' +
       'An operator grant may move any ticket the same ways, which ends that ticket\x27s agent, not its own session, and may launch a backlog ticket by moving it to in_progress; ' +
-      'it still cannot finish a ticket the tester has not passed. Returns the ticket.',
+      'it still cannot finish a ticket the tester has not passed. ' +
+      'Give manual_checks when a criterion needs something you cannot reach (a device, DNS, a phone, an account): merged code and passing tests do not prove it, and the move is refused until the operator has confirmed the checks through ask_operator. Returns the ticket.',
     access: {
       worker: `own → ${MOVE_TARGETS.worker.join(' / ')}`,
       tester: `own → ${MOVE_TARGETS.tester.join(' / ')}`,
       operator: `any → ${MOVE_TARGETS.operator.join(' / ')}`,
     },
     level: 1,
-    input: { ticket_id: ticketId, status: z.enum(STATUS) },
+    input: { ticket_id: ticketId, status: z.enum(STATUS), manual_checks: manualChecks },
     run(c, a) {
       const { role } = c.grant;
       const id = (c.ticket = own(c, a.ticket_id));
@@ -328,6 +337,7 @@ export const TOOLS: Record<string, Tool<z.ZodRawShape>> = {
       const from = readTicket(c.db, id).status;
       // Already there (a tester whose report_test moved it, then followed the old two-step script): nothing to do.
       if (from === a.status) return readTicket(c.db, id);
+      if (a.status === 'testing' || a.status === 'done') confirmed(c.db, id, a.manual_checks);
       if (a.status === 'backlog') return apply(c.board, id, 'reset').ticket;
       if (a.status !== 'done') return apply(c.board, id, a.status === 'testing' ? 'submit' : from === 'backlog' ? 'launch' : 'fail').ticket;
       try {
@@ -509,7 +519,8 @@ export const TOOLS: Record<string, Tool<z.ZodRawShape>> = {
     description:
       'Record the structured result of testing a ticket against its acceptance criteria. passed is the overall verdict; summary says which criteria passed or failed and why; ' +
       'evidence lists what proves it, one string per item (test output, screenshot paths kept as run evidence, commands run); a single string is taken as one item. The report is the verdict: it moves the ticket to done (the board merges the branch) ' +
-      'or back to in_progress (the worker retries, and a failed report becomes the failure note it sees), and ends your session. No move_ticket is needed. Returns the note id and the ticket.',
+      'or back to in_progress (the worker retries, and a failed report becomes the failure note it sees), and ends your session. No move_ticket is needed. ' +
+      'manual_checks lists the criteria you could not verify yourself because they need a device, DNS, a phone or an account; a pass with manual_checks is refused until the operator has confirmed them through ask_operator, so an empty diff never passes on merged code alone. Returns the note id and the ticket.',
     access: { tester: 'own' },
     input: {
       ticket_id: ticketId,
@@ -517,12 +528,14 @@ export const TOOLS: Record<string, Tool<z.ZodRawShape>> = {
       summary: z.string().min(1),
       // A string is taken as one item: agents passed one 42 times in 28 tickets and had to repeat the call.
       evidence: z.union([z.array(z.string().min(1)), z.string().min(1)]).default([]),
+      manual_checks: manualChecks,
     },
     run(c, a) {
       const id = (c.ticket = own(c, a.ticket_id));
       const { status } = readTicket(c.db, id);
       // Checked before the note is written, so a refused verdict leaves nothing behind.
       if (status !== 'testing') throw new Refused(`cannot report a test on a ticket in ${status}`);
+      if (a.passed) confirmed(c.db, id, a.manual_checks);
       const body = [`${a.passed ? 'PASS' : 'FAIL'}: ${a.summary}`, ...[a.evidence].flat().map((e) => `- ${e}`)].join('\n');
       const { note_id } = addNote(c, id, a.passed ? 'summary' : 'failure', body);
       // The report is the verdict: it drives the move, so a tester that stops after reporting cannot strand the ticket in Testing.
