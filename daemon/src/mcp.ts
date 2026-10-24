@@ -13,7 +13,7 @@ import { attachments } from './attachments.js';
 import { fileOn, registeredBoard } from './boards.js';
 import { postDeliverable } from './deliverables.js';
 import { audit, live, verify, type Grant, type Role } from './grants.js';
-import { apply, changed, openQuestion, PROMPT_ASK, Refused, type Board } from './lifecycle.js';
+import { apply, changed, openQuestion, PROMPT_ASK, Refused, tick, type Board } from './lifecycle.js';
 import { EFFORT, readConfig, same, uncatalogued } from './settings.js';
 
 const STATUS = ['backlog', 'in_progress', 'testing', 'done'] as const;
@@ -157,6 +157,7 @@ export const TOOLS: Record<string, Tool<z.ZodRawShape>> = {
         return id;
       });
       c.ticket = id;
+      tick(c.board);
       return readTicket(c.db, id);
     },
   }),

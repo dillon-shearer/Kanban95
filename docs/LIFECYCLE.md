@@ -174,7 +174,7 @@ There is no Pause yet; when it exists, a paused board flags these tickets (`exit
 
 ## The runner
 
-**Run** (Board toolbar, Start menu, Ctrl+L) lets the board work the backlog by itself, up to `concurrency` tickets start to finish (execute, test, merge) at a time. `tick` in `daemon/src/lifecycle.ts` runs after every `apply`, after a ticket is deleted, and once on daemon start, after `recover`. While the runner is on and fewer than `concurrency` tickets are running, it applies `launch` to the next candidate.
+**Run** (Board toolbar, Start menu, Ctrl+L) lets the board work the backlog by itself, up to `concurrency` tickets start to finish (execute, test, merge) at a time. `tick` in `daemon/src/lifecycle.ts` runs after every `apply`, after a ticket is created (Board, `create_ticket`, or filed from another board), after a ticket is deleted, and once on daemon start, after `recover`. While the runner is on and fewer than `concurrency` tickets are running, it applies `launch` to the next candidate.
 
 - **Concurrency** is `concurrency` in `settings.json` (an integer 1 to 10, default **3**), so it follows the global file or the project's own copy like every other setting. Set it from Settings → Agents → Runner, under the All projects / This project switch. `runner.json` holds only the flag: `{"on", "why"?}`; a `concurrency` key left in an older one is ignored. `PUT /api/runner` refuses a body carrying `concurrency` with `400`. A save of settings.json, or a project copy started or removed, ticks at once: a raise launches straight away, a cut stops new launches until running drops below it; nothing running is stopped. Another board picks up a global change on its next tick.
 
