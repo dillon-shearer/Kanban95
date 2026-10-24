@@ -209,7 +209,7 @@ Ask the human operator a question you cannot resolve from the ticket, the brain 
 
 ### request_permission
 
-Ask the operator to raise your ticket's agent level or turn on read all, when a call was refused with "ask for level N with request_permission". Give level (above the ticket's current one), read_all: true, or both, and a reason saying which call needs it and why. The ticket is flagged needs_human and the operator sees Approve and Deny in the Inbox; the answer is typed into your session as one line. On "approved", retry the refused call: the new level applies from the next call. Refused when the ticket already has what you ask for, or while an earlier request is unanswered. Returns the question id.
+Ask the operator to raise your ticket's agent level or turn on read all, when a call was refused with "ask for level N with request_permission". Give level (above the ticket's current one), read_all: true, or both, and a reason saying which call needs it and why. The ticket is flagged needs_human and the operator sees Approve and Deny in the Inbox; the answer is typed into your session as one line. On "approved", retry the refused call: the new level applies from the next call. Refused when the ticket already has what you ask for, or while an earlier request waits for the operator in the Inbox; one the Inbox no longer shows (left from an earlier session) does not block a new request. Returns the question id.
 
 | argument | type | required | description |
 |---|---|---|---|

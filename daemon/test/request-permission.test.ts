@@ -65,7 +65,7 @@ describe('request_permission', () => {
     const call = await agent('tester', id);
     expect((await call('request_permission', { read_all: true, reason: 'first' })).denied).toBe(false);
     expect(await call('request_permission', { level: 2, reason: 'second' })).toEqual({
-      denied: true, text: 'an earlier request_permission on this ticket is still unanswered; wait for the operator\x27s answer' });
+      denied: true, text: expect.stringContaining('still unanswered; the operator answers it with Approve or Deny in the Inbox or on the Ticket tab of the ticket\x27s window, or by typing yes or no in this terminal') });
     srv.db.prepare("INSERT INTO notes (ticket_id, role, kind, body) VALUES (?, 'operator', 'answer', 'denied')").run(id);
     srv.db.prepare('UPDATE tickets SET agent_level = 3, read_all = 1, needs_human = 0 WHERE id = ?').run(id);
     expect(await call('request_permission', { level: 3, reason: 'again' })).toEqual({ denied: true, text: 'the ticket already has level 3; retry the refused call' });
