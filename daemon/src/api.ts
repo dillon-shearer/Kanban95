@@ -301,6 +301,7 @@ const routes: [method: string, path: RegExp, mutation: string | null, handler: (
       if (targets) setTargets(db, id, targets);
       return id;
     });
+    tick(board);
     return { status: 201, body: readTicket(db, id) };
   }],
   ['GET', /^\/api\/tickets\/(\d+)$/, null, ({ db, params }) => ({ status: 200, body: readTicket(db, Number(params[0])) })],
@@ -875,6 +876,7 @@ export async function receiveFiling(board: Board, req: IncomingMessage, res: Ser
     if (!text('from').trim() || !text('title').trim()) throw new HttpError(400, 'from and title are required');
     const id = fileTicket(db, { from: text('from'), title: text('title'), body: text('body'), criteria: text('criteria'), tags: f.tags ?? [] });
     changed(id);
+    tick(board);
     reply(res, { status: 201, body: readTicket(db, id) });
   } catch (e) {
     const status = e instanceof HttpError ? e.status : 500;
