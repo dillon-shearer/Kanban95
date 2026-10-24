@@ -6,14 +6,14 @@ import type { DatabaseSync } from 'node:sqlite';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import * as z from 'zod';
-import { brainAdd, brainDelete, brainGet, brains, brainSearch, brainUpdate, deleteTicket, fileTicket, normaliseTags, PERMISSION, readTicket, setDeps, setTargets, targetsOf, transaction } from './api.js';
+import { brainAdd, brainDelete, brainGet, brains, brainSearch, brainUpdate, deleteTicket, fileTicket, normaliseTags, PERMISSION, permissionOf, readTicket, setDeps, setTargets, targetsOf, transaction } from './api.js';
 import { bootstrap } from './bootstrap.js';
 import { BRAIN_BODY_MAX, openDb, SCOPES } from './db.js';
 import { attachments } from './attachments.js';
 import { fileOn, registeredBoard } from './boards.js';
 import { postDeliverable } from './deliverables.js';
 import { audit, live, verify, type Grant, type Role } from './grants.js';
-import { apply, changed, PROMPT_ASK, Refused, type Board } from './lifecycle.js';
+import { apply, changed, openQuestion, PROMPT_ASK, Refused, type Board } from './lifecycle.js';
 import { EFFORT, readConfig, same, uncatalogued } from './settings.js';
 
 const STATUS = ['backlog', 'in_progress', 'testing', 'done'] as const;
@@ -63,6 +63,7 @@ const tool = <S extends z.ZodRawShape>(t: Tool<S>) => t as unknown as Tool<z.Zod
 const ticketId = z.number().int().positive().optional()
   .describe('Ticket id. Worker and tester grants are bound to one ticket and may omit it; a planner or operator must give it.');
 
+export const PENDING = 'an earlier request_permission on this ticket is still unanswered; the operator answers it with Approve or Deny in the Inbox or on the Ticket tab of the ticket\x27s window, or by typing yes or no in this terminal. Wait for the answer; do not ask again';
 const ask = (need: number | undefined) => (need === undefined ? '' : `; ask for level ${need} with request_permission`);
 
 /** Resolves the ticket a call is about. In a worker/tester cell: its own, a foreign id is a scope denial. In an operator cell: the id given, else its own. */
@@ -494,7 +495,7 @@ export const TOOLS: Record<string, Tool<z.ZodRawShape>> = {
     description:
       'Ask the operator to raise your ticket\x27s agent level or turn on read all, when a call was refused with "ask for level N with request_permission". Give level (above the ticket\x27s current one), read_all: true, or both, and a reason saying which call needs it and why. ' +
       'The ticket is flagged needs_human and the operator sees Approve and Deny in the Inbox; the answer is typed into your session as one line. On "approved", retry the refused call: the new level applies from the next call. ' +
-      'Refused when the ticket already has what you ask for, or while an earlier request is unanswered. Returns the question id.',
+      'Refused when the ticket already has what you ask for, or while an earlier request waits for the operator in the Inbox; one the Inbox no longer shows (left from an earlier session) does not block a new request. Returns the question id.',
     access: { worker: 'own', tester: 'own' },
     input: {
       level: z.number().int().min(1).max(MAX_LEVEL).optional().describe(`Agent level to ask for, 1 to ${MAX_LEVEL} (docs/MCP.md → Levels).`),
@@ -506,9 +507,8 @@ export const TOOLS: Record<string, Tool<z.ZodRawShape>> = {
       if (a.level === undefined && !a.read_all) throw new Deny('give level, read_all: true, or both');
       if (a.level !== undefined && a.level <= c.level) throw new Deny(`the ticket already has level ${c.level}; retry the refused call`);
       if (a.read_all && c.readAll) throw new Deny('the ticket already reads all tickets; retry the refused call');
-      const open = c.db.prepare(`SELECT 1 FROM notes q WHERE q.ticket_id = ? AND q.kind = 'question' AND q.body LIKE '${PERMISSION} %'
-        AND NOT EXISTS (SELECT 1 FROM notes a WHERE a.ticket_id = q.ticket_id AND a.kind = 'answer' AND a.id > q.id)`).get(id);
-      if (open) throw new Deny('an earlier request_permission on this ticket is still unanswered; wait for the operator\x27s answer');
+      const open = readTicket(c.db, id).flags.needs_human ? openQuestion(c.db, id) : undefined;
+      if (open && permissionOf(open.body)) throw new Deny(PENDING);
       const head = [PERMISSION, a.level !== undefined && `level=${a.level}`, a.read_all && 'read_all=1'].filter(Boolean).join(' ');
       const { noteId } = apply(c.board, id, 'ask', { note: { role: c.grant.role, kind: 'question', body: `${head}\n${a.reason}` } });
       return { question_id: noteId };

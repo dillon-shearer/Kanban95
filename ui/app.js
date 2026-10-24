@@ -808,7 +808,10 @@ function openTicket(id) {
     w.title(`Ticket #${id} — ${t.title}`);
     if (tab === 'Ticket') {
       if (!forms.has(wid)) forms.set(wid, ticketForm(w, t));
-      if (!p.contains(forms.get(wid))) p.replaceChildren(forms.get(wid), h('fieldset', { class: 'k95-attachments' }));
+      if (!p.contains(forms.get(wid))) p.replaceChildren(h('div', { class: 'k95-ask' }), forms.get(wid), h('fieldset', { class: 'k95-attachments' }));
+      forms.get(wid).sync(t);
+      const ask = inbox.find((q) => q.ticket_id === id && q.permission);
+      p.querySelector('.k95-ask')?.replaceChildren(...(ask ? [permissionAsk(ask, h('legend', {}, 'Permission request'))] : []));
       p.querySelector('.k95-facts')?.replaceWith(facts(t));
       p.querySelector('.k95-block')?.replaceWith(blockButton(t));
       const list = await attachmentList(id);
@@ -942,6 +945,12 @@ function ticketForm(w, t) {
       t?.status === 'done' && h('button', { onclick: () => reject(t.id) }, 'Reject'),
       t && blockButton(t)));
   form.changed = () => snap() !== saved;
+  form.sync = (n) => {
+    if (form.changed()) return;
+    level.value = n.agent_level;
+    readAll.checked = n.read_all;
+    saved = snap();
+  };
   return form;
 }
 
@@ -1122,6 +1131,22 @@ function openBrain() {
 
 // ---- inbox ----
 
+function permissionAsk(q, legend) {
+  const { level, read_all } = q.permission;
+  const asked = [level !== null && `level ${level}`, read_all && 'read all'].filter(Boolean).join(', ');
+  const reply = (answer) => api('POST', `/tickets/${q.ticket_id}/answer`, { answer });
+  const approve = async () => {
+    await api('PATCH', `/tickets/${q.ticket_id}`, { ...(level !== null && { agent_level: level }), ...(read_all && { read_all: true }) });
+    await reply(`approved: ${asked}; retry the refused call now`);
+  };
+  return h('fieldset', { class: 'k95-permission', 'data-ticket': q.ticket_id }, legend,
+    h('div', { class: 'note-head' }, `${fmt(q.created_at)} · the ${q.role} asks for ${asked}${level !== null ? ` (${LEVELS[level]})` : ''}:`),
+    h('pre', {}, q.body.split('\n').slice(1).join('\n')),
+    h('div', { class: 'field-row' },
+      h('button', { onclick: () => act(approve, `Approved ${asked} for #${q.ticket_id}.`) }, 'Approve'),
+      h('button', { onclick: () => act(() => reply('denied'), `Denied #${q.ticket_id}.`) }, 'Deny')));
+}
+
 function openInbox() {
   const w = open('inbox', { title: 'Inbox', w: 560, h: 400, persist: true, icon: 'inbox', onClose: () => views.delete('inbox') });
   if (w.body.firstChild) return;
@@ -1144,21 +1169,7 @@ function openInbox() {
             (q.status === 'in_progress' || q.status === 'testing') && h('button', { onclick: () => restart(q.ticket_id) }, 'Restart'),
             q.status !== 'done' && t && h('button', { onclick: () => reset([t]) }, 'Reset to Backlog')));
       }
-      if (q.permission) {
-        const { level, read_all } = q.permission;
-        const asked = [level !== null && `level ${level}`, read_all && 'read all'].filter(Boolean).join(', ');
-        const reply = (answer) => api('POST', `/tickets/${q.ticket_id}/answer`, { answer });
-        const approve = async () => {
-          await api('PATCH', `/tickets/${q.ticket_id}`, { ...(level !== null && { agent_level: level }), ...(read_all && { read_all: true }) });
-          await reply(`approved: ${asked}; retry the refused call now`);
-        };
-        return h('fieldset', { class: 'k95-permission', 'data-ticket': q.ticket_id }, legend,
-          h('div', { class: 'note-head' }, `${fmt(q.created_at)} · the ${q.role} asks for ${asked}${level !== null ? ` (${LEVELS[level]})` : ''}:`),
-          h('pre', {}, q.body.split('\n').slice(1).join('\n')),
-          h('div', { class: 'field-row' },
-            h('button', { onclick: () => act(approve, `Approved ${asked} for #${q.ticket_id}.`) }, 'Approve'),
-            h('button', { onclick: () => act(() => reply('denied'), `Denied #${q.ticket_id}.`) }, 'Deny')));
-      }
+      if (q.permission) return permissionAsk(q, legend);
       const answer = h('textarea', { rows: 3, placeholder: 'Your answer' });
       return h('fieldset', { class: 'k95-question', 'data-ticket': q.ticket_id }, legend,
         h('div', { class: 'note-head' }, `${fmt(q.created_at)} · the ${q.role} asks:`), h('pre', {}, q.body),
