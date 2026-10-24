@@ -120,12 +120,13 @@ Change the model and/or effort a ticket runs with; give either or both. Lower ef
 
 ### move_ticket
 
-Move a ticket to another column. A worker moves its ticket to testing when the work is committed in the worktree and ready to be checked. A tester does not need it: report_test moves the ticket (to done or back to in_progress) and ends the session. A move to the column the ticket is already in returns the ticket unchanged. Once the move is accepted your session is over: the board ends it and starts the next agent. An operator grant may move any ticket the same ways, which ends that ticket's agent, not its own session, and may launch a backlog ticket by moving it to in_progress; it still cannot finish a ticket the tester has not passed. Returns the ticket.
+Move a ticket to another column. A worker moves its ticket to testing when the work is committed in the worktree and ready to be checked. A tester does not need it: report_test moves the ticket (to done or back to in_progress) and ends the session. A move to the column the ticket is already in returns the ticket unchanged. Once the move is accepted your session is over: the board ends it and starts the next agent. An operator grant may move any ticket the same ways, which ends that ticket's agent, not its own session, and may launch a backlog ticket by moving it to in_progress; it still cannot finish a ticket the tester has not passed. Give manual_checks when a criterion needs something you cannot reach (a device, DNS, a phone, an account): merged code and passing tests do not prove it, and the move is refused until the operator has confirmed the checks through ask_operator. Returns the ticket.
 
 | argument | type | required | description |
 |---|---|---|---|
 | ticket_id | integer | no | Ticket id. Worker and tester grants are bound to one ticket and may omit it; a planner or operator must give it. |
 | status | backlog \| in_progress \| testing \| done | yes |  |
+| manual_checks | string[] | default `[]` | Checks an agent cannot make itself (a device, DNS, a phone, an account): one string per check. Refused until the operator has answered an ask_operator question on the ticket confirming them. |
 
 ### add_note
 
@@ -218,7 +219,7 @@ Ask the operator to raise your ticket's agent level or turn on read all, when a 
 
 ### report_test
 
-Record the structured result of testing a ticket against its acceptance criteria. passed is the overall verdict; summary says which criteria passed or failed and why; evidence lists what proves it, one string per item (test output, screenshot paths kept as run evidence, commands run); a single string is taken as one item. The report is the verdict: it moves the ticket to done (the board merges the branch) or back to in_progress (the worker retries, and a failed report becomes the failure note it sees), and ends your session. No move_ticket is needed. Returns the note id and the ticket.
+Record the structured result of testing a ticket against its acceptance criteria. passed is the overall verdict; summary says which criteria passed or failed and why; evidence lists what proves it, one string per item (test output, screenshot paths kept as run evidence, commands run); a single string is taken as one item. The report is the verdict: it moves the ticket to done (the board merges the branch) or back to in_progress (the worker retries, and a failed report becomes the failure note it sees), and ends your session. No move_ticket is needed. manual_checks lists the criteria you could not verify yourself because they need a device, DNS, a phone or an account; a pass with manual_checks is refused until the operator has confirmed them through ask_operator, so an empty diff never passes on merged code alone. Returns the note id and the ticket.
 
 | argument | type | required | description |
 |---|---|---|---|
@@ -226,6 +227,7 @@ Record the structured result of testing a ticket against its acceptance criteria
 | passed | boolean | yes |  |
 | summary | string | yes |  |
 | evidence | string[] \| string | default `[]` |  |
+| manual_checks | string[] | default `[]` | Checks an agent cannot make itself (a device, DNS, a phone, an account): one string per check. Refused until the operator has answered an ask_operator question on the ticket confirming them. |
 
 ### post_deliverable
 
