@@ -319,7 +319,7 @@ fn open(repo: &str, b: &Board) -> Effect {
 }
 
 fn take_main(t: &mut Table, repo: &str, fx: &mut Vec<Effect>) {
-    let like = (t.main != repo && t.boards.contains_key(&t.main)).then(|| label(&t.main));
+    let like = (t.main != repo && t.boards.get(&t.main).is_some_and(|b| b.place == Place::Docked)).then(|| label(&t.main));
     fx.push(Effect::Show { label: label(repo), like: like.clone() });
     fx.extend(like.map(Effect::Hide));
     t.main = repo.into();
@@ -330,13 +330,14 @@ fn switch_in(t: &mut Table, repo: &str, origin: &str, fx: &mut Vec<Effect>) {
         fx.push(Effect::Focus(label(repo)));
         return;
     }
-    let shown = t.main == repo || t.boards[repo].place == Place::Own;
-    if t.boards[repo].place == Place::Docked {
+    let docked = t.boards[repo].place == Place::Docked;
+    let shown = t.main == repo || !docked;
+    if docked {
         t.boards.get_mut(repo).expect("hosted").place = Place::Own;
         fx.push(Effect::Own(label(repo), true));
     }
     if shown {
-        if t.main == repo {
+        if t.main == repo && docked {
             t.boards.get_mut(origin).expect("hosted").place = Place::Docked;
             fx.push(Effect::Own(label(origin), false));
             t.main = origin.into();
@@ -347,6 +348,9 @@ fn switch_in(t: &mut Table, repo: &str, origin: &str, fx: &mut Vec<Effect>) {
         fx.push(Effect::Hide(label(origin)));
         t.boards.get_mut(origin).expect("hosted").place = Place::Docked;
         fx.push(Effect::Own(label(origin), false));
+        if t.main == origin {
+            t.main = repo.into();
+        }
     }
 }
 
@@ -538,13 +542,9 @@ impl Host {
                 }
             }
             (Verb::Popout, Some(Place::Docked)) => {
-                if t.main == repo {
-                    let Some(other) = t.boards.iter().find(|(r, b)| **r != repo && b.place == Place::Docked && b.waiting.is_none()).map(|(r, _)| r.clone()) else {
-                        eprintln!("[shell] {repo} is the only board in the main window; it stays there");
-                        return;
-                    };
-                    fx.push(Effect::Show { label: label(&other), like: Some(label(&repo)) });
-                    t.main = other;
+                if t.main == repo && t.boards.len() == 1 {
+                    eprintln!("[shell] {repo} is the only board; it stays in the main window");
+                    return;
                 }
                 t.boards.get_mut(&repo).expect("hosted").place = Place::Own;
                 fx.push(Effect::Own(label(&repo), true));
@@ -660,8 +660,9 @@ impl Host {
         let b = t.boards.remove(repo)?;
         if t.main == repo {
             let mut ready = t.boards.iter().filter(|(_, b)| b.waiting.is_none());
-            let next = ready.clone().find(|(_, b)| b.place == Place::Docked).or_else(|| ready.next());
-            if let Some(next) = next.map(|(r, _)| r.clone()) {
+            if let Some(own) = ready.clone().find(|(_, nb)| b.place == Place::Own && nb.place == Place::Own).map(|(r, _)| r.clone()) {
+                t.main = own;
+            } else if let Some(next) = ready.clone().find(|(_, b)| b.place == Place::Docked).or_else(|| ready.next()).map(|(r, _)| r.clone()) {
                 let nb = t.boards.get_mut(&next).expect("hosted");
                 if nb.place == Place::Own {
                     nb.place = Place::Docked;
@@ -719,8 +720,8 @@ impl Host {
             return;
         }
         match t.boards.iter().find(|(r, _)| label(r) == window).map(|(r, b)| (r.clone(), b.place)) {
-            Some((repo, Place::Own)) => self.close(&mut t, &repo, &mut fx),
-            Some((_, Place::Docked)) => fx.push(Effect::Exit(0)),
+            Some((repo, Place::Own)) if t.boards.iter().any(|(r, b)| *r != repo && (b.place == Place::Own || *r == t.main)) => self.close(&mut t, &repo, &mut fx),
+            Some(_) => fx.push(Effect::Exit(0)),
             None => {}
         }
         drop(t);
@@ -2091,15 +2092,12 @@ mod tests {
         take(&seen);
 
         host.command(Verb::Popout, "k95-a", None);
-        assert_eq!(take(&seen), [show("k95-b", Some("k95-a")), Effect::Own(label("k95-a"), true), show("k95-a", None)]);
-        assert_eq!(lock(&host.table).main, "k95-b");
-
-        host.command(Verb::Popout, "k95-b", None);
-        assert!(take(&seen).is_empty(), "the only docked board stays docked");
+        assert_eq!(take(&seen), [Effect::Own(label("k95-a"), true), show("k95-a", None)]);
         assert_eq!(hosted(&host), [("k95-a".into(), Place::Own), ("k95-b".into(), Place::Docked)]);
 
         host.command(Verb::Switch, "k95-b", None);
         assert_eq!(take(&seen), [show("k95-b", None)], "a popped-out window is left as it is");
+        assert_eq!(lock(&host.table).main, "k95-b");
 
         host.command(Verb::Dock, "k95-a", None);
         assert_eq!(take(&seen), [Effect::Own(label("k95-a"), false), show("k95-a", Some("k95-b")), Effect::Hide(label("k95-b"))]);
@@ -2117,6 +2115,59 @@ mod tests {
         assert!(take(&seen).is_empty(), "the docked window stays on its board");
         host.window_closed(&label("k95-a"));
         assert_eq!(take(&seen), [Effect::Exit(0)], "closing the docked window exits the shell");
+        host.shutdown();
+    }
+
+    fn popped_main() -> (Arc<Host>, Arc<Mutex<Vec<Effect>>>) {
+        let (host, seen) = host(|repo, _| up(41000 + repo.len() as u16, ""));
+        host.first("k95-a", host.start("k95-a").unwrap());
+        open_loaded(&host, "k95-bb");
+        take(&seen);
+        host.command(Verb::Popout, "k95-bb", None);
+        assert_eq!(take(&seen), [Effect::Own(label("k95-bb"), true), show("k95-bb", None)], "no other board is shown");
+        assert_eq!(hosted(&host), [("k95-a".into(), Place::Docked), ("k95-bb".into(), Place::Own)]);
+        (host, seen)
+    }
+
+    #[test]
+    fn popping_out_the_shown_docked_board_leaves_every_other_window_as_it_is() {
+        let (host, seen) = popped_main();
+        host.command(Verb::Switch, "k95-a", Some(&from(41006)));
+        assert_eq!(take(&seen), [Effect::Own(label("k95-a"), true), show("k95-a", Some("k95-bb")), Effect::Hide(label("k95-bb")), Effect::Own(label("k95-bb"), false)]);
+        assert_eq!(hosted(&host), [("k95-a".into(), Place::Own), ("k95-bb".into(), Place::Docked)]);
+        assert_eq!(lock(&host.table).main, "k95-a");
+        host.command(Verb::Dock, "k95-a", None);
+        assert_eq!(take(&seen), [Effect::Own(label("k95-a"), false), show("k95-a", None)]);
+        assert_eq!(hosted(&host), [("k95-a".into(), Place::Docked), ("k95-bb".into(), Place::Docked)]);
+        host.shutdown();
+    }
+
+    #[test]
+    fn a_board_opened_after_the_shown_docked_board_popped_out_hides_no_window() {
+        let (host, seen) = popped_main();
+        open_loaded(&host, "k95-ccc");
+        assert_eq!(take(&seen).into_iter().filter(|f| !matches!(f, Effect::Open { .. })).collect::<Vec<_>>(), [show("k95-ccc", None)]);
+        host.command(Verb::Switch, "k95-ccc", Some(&from(41006)));
+        assert_eq!(take(&seen), [Effect::Own(label("k95-ccc"), true), Effect::Own(label("k95-bb"), false), Effect::Swap(label("k95-ccc"), label("k95-bb"))]);
+        assert_eq!(lock(&host.table).main, "k95-bb");
+        host.shutdown();
+    }
+
+    #[test]
+    fn closing_the_popped_out_main_board_exits_when_it_is_the_last_window_and_otherwise_closes_only_it() {
+        let (host, seen) = popped_main();
+        host.window_closed(&label("k95-bb"));
+        assert_eq!(take(&seen), [Effect::Exit(0)], "a hidden docked board is no window");
+        host.shutdown();
+
+        let (host, seen) = popped_main();
+        host.command(Verb::Popout, "k95-a", None);
+        take(&seen);
+        host.window_closed(&label("k95-bb"));
+        assert_eq!(take(&seen), [Effect::Close(label("k95-bb"))]);
+        assert_eq!((hosted(&host), lock(&host.table).main.clone()), (vec![("k95-a".into(), Place::Own)], "k95-a".into()));
+        host.window_closed(&label("k95-a"));
+        assert_eq!(take(&seen), [Effect::Exit(0)]);
         host.shutdown();
     }
 
