@@ -242,6 +242,7 @@ enum Effect {
     Open { label: String, url: Url, title: String },
     Show { label: String, like: Option<String> },
     Hide(String),
+    Swap(String, String),
     Navigate { label: String, url: Url, title: String },
     Recreate { label: String, url: Url, title: String },
     Own(String, bool),
@@ -322,6 +323,31 @@ fn take_main(t: &mut Table, repo: &str, fx: &mut Vec<Effect>) {
     fx.push(Effect::Show { label: label(repo), like: like.clone() });
     fx.extend(like.map(Effect::Hide));
     t.main = repo.into();
+}
+
+fn switch_in(t: &mut Table, repo: &str, origin: &str, fx: &mut Vec<Effect>) {
+    if repo == origin {
+        fx.push(Effect::Focus(label(repo)));
+        return;
+    }
+    let shown = t.main == repo || t.boards[repo].place == Place::Own;
+    if t.boards[repo].place == Place::Docked {
+        t.boards.get_mut(repo).expect("hosted").place = Place::Own;
+        fx.push(Effect::Own(label(repo), true));
+    }
+    if shown {
+        if t.main == repo {
+            t.boards.get_mut(origin).expect("hosted").place = Place::Docked;
+            fx.push(Effect::Own(label(origin), false));
+            t.main = origin.into();
+        }
+        fx.push(Effect::Swap(label(repo), label(origin)));
+    } else {
+        fx.push(Effect::Show { label: label(repo), like: Some(label(origin)) });
+        fx.push(Effect::Hide(label(origin)));
+        t.boards.get_mut(origin).expect("hosted").place = Place::Docked;
+        fx.push(Effect::Own(label(origin), false));
+    }
 }
 
 impl Host {
@@ -497,8 +523,11 @@ impl Host {
         }
         let place = t.boards.get(&repo).map(|b| b.place);
         let waiting = t.boards.get(&repo).is_some_and(|b| b.waiting.is_some());
+        let origin = from.and_then(|d| t.boards.iter().find(|(_, b)| b.port == d.port && b.place == Place::Own)).map(|(r, b)| (r.clone(), b.waiting.is_some()));
         match (verb, place) {
             (Verb::Open | Verb::Switch | Verb::Popout | Verb::Dock, Some(_)) if waiting => eprintln!("[shell] ignored {verb:?} for {repo}: its page is still loading"),
+            (Verb::Switch, Some(_)) if origin.as_ref().is_some_and(|(_, w)| *w) => eprintln!("[shell] ignored {verb:?} for {repo}: the window it came from is still loading"),
+            (Verb::Switch, Some(_)) if origin.is_some() => switch_in(&mut t, &repo, &origin.expect("origin").0, &mut fx),
             (Verb::Open | Verb::Popout, Some(Place::Own)) => fx.push(Effect::Focus(label(&repo))),
             (Verb::Open | Verb::Switch, Some(Place::Docked)) => take_main(&mut t, &repo, &mut fx),
             (Verb::Open, None) => {
@@ -1368,34 +1397,58 @@ fn leave_fullscreen<R: Runtime>(w: &WebviewWindow<R>) {
 #[cfg(not(target_os = "macos"))]
 fn leave_fullscreen<R: Runtime>(_: &WebviewWindow<R>) {}
 
-fn take_place<R: Runtime>(b: &WebviewWindow<R>, a: &WebviewWindow<R>) {
+struct Spot {
+    at: tauri::PhysicalPosition<i32>,
+    size: tauri::PhysicalSize<u32>,
+    full: bool,
+    max: bool,
+    screen: Option<tauri::PhysicalPosition<i32>>,
+}
+
+fn screen<R: Runtime>(w: &WebviewWindow<R>) -> Option<tauri::PhysicalPosition<i32>> {
+    w.current_monitor().ok().flatten().map(|m| *m.position())
+}
+
+fn spot<R: Runtime>(a: &WebviewWindow<R>) -> Option<Spot> {
     if a.is_minimized().unwrap_or(false) {
-        return;
+        return None;
     }
     leave_fullscreen(a);
-    leave_fullscreen(b);
     let full = a.is_fullscreen().unwrap_or(false);
-    if !full && b.is_fullscreen().unwrap_or(false) {
+    let (Ok(at), Ok(size)) = (a.outer_position(), a.inner_size()) else { return None };
+    Some(Spot { at, size, full, max: a.is_maximized().unwrap_or(false), screen: screen(a) })
+}
+
+fn put<R: Runtime>(b: &WebviewWindow<R>, s: &Spot) {
+    leave_fullscreen(b);
+    if !s.full && b.is_fullscreen().unwrap_or(false) {
         let _ = b.set_fullscreen(false);
         page_fullscreen(b, false);
     }
-    let (Ok(at), Ok(size)) = (a.outer_position(), a.inner_size()) else { return };
-    if full {
+    if s.full {
         if !b.is_fullscreen().unwrap_or(false) {
-            let _ = b.set_fullscreen_on_monitor(tauri::PhysicalPosition::new(at.x as f64 + size.width as f64 / 2.0, at.y as f64 + size.height as f64 / 2.0));
+            let _ = b.set_fullscreen_on_monitor(tauri::PhysicalPosition::new(s.at.x as f64 + s.size.width as f64 / 2.0, s.at.y as f64 + s.size.height as f64 / 2.0));
             page_fullscreen(b, true);
         }
-    } else if a.is_maximized().unwrap_or(false) {
+    } else if s.max {
         if !b.is_maximized().unwrap_or(false) {
-            let screen = |w: &WebviewWindow<R>| w.current_monitor().ok().flatten().map(|m| *m.position());
-            if screen(b) != screen(a) {
-                let _ = b.set_position(at);
+            if screen(b) != s.screen {
+                let _ = b.set_position(s.at);
             }
             let _ = b.maximize();
         }
     } else {
-        let _ = b.set_position(at);
-        let _ = b.set_size(size);
+        if b.is_maximized().unwrap_or(false) {
+            let _ = b.unmaximize();
+        }
+        let _ = b.set_position(s.at);
+        let _ = b.set_size(s.size);
+    }
+}
+
+fn take_place<R: Runtime>(b: &WebviewWindow<R>, a: &WebviewWindow<R>) {
+    if let Some(s) = spot(a) {
+        put(b, &s);
     }
 }
 
@@ -1466,6 +1519,20 @@ fn apply<R: Runtime>(app: &AppHandle<R>, ports: &Ports, fx: Effect) {
             if let Some(w) = app.get_webview_window(&label) {
                 if let Some(a) = like.and_then(|l| app.get_webview_window(&l)) {
                     take_place(&w, &a);
+                }
+                let _ = w.show();
+                let _ = w.unminimize();
+                let _ = w.set_focus();
+            }
+        }
+        Effect::Swap(label, with) => {
+            if let (Some(w), Some(o)) = (app.get_webview_window(&label), app.get_webview_window(&with)) {
+                let (here, there) = (spot(&o), spot(&w));
+                if let Some(s) = there {
+                    put(&o, &s);
+                }
+                if let Some(s) = here {
+                    put(&w, &s);
                 }
                 let _ = w.show();
                 let _ = w.unminimize();
@@ -2050,6 +2117,57 @@ mod tests {
         assert!(take(&seen).is_empty(), "the docked window stays on its board");
         host.window_closed(&label("k95-a"));
         assert_eq!(take(&seen), [Effect::Exit(0)], "closing the docked window exits the shell");
+        host.shutdown();
+    }
+
+    fn from(port: u16) -> Daemon {
+        Daemon { port, secret: String::new() }
+    }
+
+    fn popped_and_docked() -> (Arc<Host>, Arc<Mutex<Vec<Effect>>>) {
+        let (host, seen) = host(|repo, _| up(41000 + repo.len() as u16, ""));
+        host.first("k95-a", host.start("k95-a").unwrap());
+        open_loaded(&host, "k95-bb");
+        host.command(Verb::Popout, "k95-bb", None);
+        open_loaded(&host, "k95-ccc");
+        take(&seen);
+        assert_eq!(hosted(&host), [("k95-a".into(), Place::Docked), ("k95-bb".into(), Place::Own), ("k95-ccc".into(), Place::Docked)]);
+        assert_eq!(lock(&host.table).main, "k95-ccc");
+        (host, seen)
+    }
+
+    #[test]
+    fn a_switch_from_a_popped_out_window_shows_a_hidden_board_in_that_window() {
+        let (host, seen) = popped_and_docked();
+        host.command(Verb::Switch, "k95-a", Some(&from(41006)));
+        assert_eq!(take(&seen), [Effect::Own(label("k95-a"), true), show("k95-a", Some("k95-bb")), Effect::Hide(label("k95-bb")), Effect::Own(label("k95-bb"), false)]);
+        assert_eq!(hosted(&host), [("k95-a".into(), Place::Own), ("k95-bb".into(), Place::Docked), ("k95-ccc".into(), Place::Docked)]);
+        assert_eq!(lock(&host.table).main, "k95-ccc");
+
+        host.command(Verb::Switch, "k95-bb", Some(&from(41007)));
+        assert_eq!(take(&seen), [show("k95-bb", Some("k95-ccc")), Effect::Hide(label("k95-ccc"))], "from the docked window a switch acts as before");
+        assert_eq!(hosted(&host), [("k95-a".into(), Place::Own), ("k95-bb".into(), Place::Docked), ("k95-ccc".into(), Place::Docked)]);
+        assert_eq!(lock(&host.table).main, "k95-bb");
+        host.shutdown();
+    }
+
+    #[test]
+    fn a_switch_from_a_popped_out_window_to_a_board_on_screen_swaps_the_two() {
+        let (host, seen) = popped_and_docked();
+        host.command(Verb::Switch, "k95-bb", Some(&from(41006)));
+        assert_eq!(take(&seen), [Effect::Focus(label("k95-bb"))], "switching to itself only focuses");
+
+        host.command(Verb::Switch, "k95-ccc", Some(&from(41006)));
+        assert_eq!(take(&seen), [Effect::Own(label("k95-ccc"), true), Effect::Own(label("k95-bb"), false), Effect::Swap(label("k95-ccc"), label("k95-bb"))]);
+        assert_eq!(hosted(&host), [("k95-a".into(), Place::Docked), ("k95-bb".into(), Place::Docked), ("k95-ccc".into(), Place::Own)]);
+        assert_eq!(lock(&host.table).main, "k95-bb");
+
+        host.command(Verb::Popout, "k95-a", None);
+        take(&seen);
+        host.command(Verb::Switch, "k95-a", Some(&from(41007)));
+        assert_eq!(take(&seen), [Effect::Swap(label("k95-a"), label("k95-ccc"))], "two popped-out windows swap and stay popped out");
+        assert_eq!(hosted(&host), [("k95-a".into(), Place::Own), ("k95-bb".into(), Place::Docked), ("k95-ccc".into(), Place::Own)]);
+        assert_eq!(lock(&host.table).main, "k95-bb");
         host.shutdown();
     }
 
