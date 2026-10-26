@@ -107,7 +107,7 @@ describe('worker follow-ups', () => {
     for (const [c, id] of [[workerB, t.id], [workerA, 1], [workerA, 2]] as const) {
       const r = await call(c, 'delete_ticket', { ticket_id: id });
       expect(r.denied).toBe(true);
-      expect(r.text).toMatch(/only delete a ticket its own grant created/);
+      expect(r.text).toMatch(/only delete a ticket a worker of its own ticket created/);
       expect(row(id)).toBeDefined();
     }
     srv.db.prepare("UPDATE tickets SET status = 'in_progress' WHERE id = ?").run(t.id);
