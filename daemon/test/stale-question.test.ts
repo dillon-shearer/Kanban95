@@ -57,7 +57,7 @@ describe('stale questions', { timeout: 60_000 }, () => {
     const r = await post(`/api/tickets/${id}/answer`, { answer: 'yes' });
     expect(r.status).toBe(200);
     expect((await r.json()).flags.needs_human).toBe(false);
-    expect(notes(id, 'answer')).toEqual(['yes']);
+    expect(notes(id, 'answer')).toEqual(['yes [agent level 0, unchanged]']);
     await landed(id);
     expect(runs(id).map((x) => [x.phase, x.outcome])).toEqual([['test', 'pass']]);
   });
