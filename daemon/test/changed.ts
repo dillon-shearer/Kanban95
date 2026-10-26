@@ -35,6 +35,10 @@ export function mapped(paths: string[], testDir: string): string[] {
   return [...out].filter((f) => tests.includes(f)).sort();
 }
 
+export function runsEveryUnit(paths: string[]): boolean {
+  return paths.some((p) => /(^|\/)(package\.json|vite(st)?\.config\.[^/]+)$/.test(p));
+}
+
 export function heavyTests(paths: string[], testDir: string, flags: string[] = []): string[] {
   const { pty, browser, restart } = sortTests(testDir);
   const read = (f: string) => { try { return readFileSync(join(testDir, f), 'utf8'); } catch { return ''; } };
@@ -115,7 +119,7 @@ if (import.meta.main) {
   const code = paths.filter((p) => p.startsWith('daemon/'));
   const heavy = [...new Set([...heavyTests(paths, import.meta.dirname, args), ...extra.filter((f) => !unit.includes(f))])].sort();
   const sources = [...code.map((p) => join(root, p)), ...extra.filter((f) => unit.includes(f)).map((f) => join(import.meta.dirname, f))];
-  if (!sources.length && !heavy.length) {
+  if (!sources.length && !heavy.length && !runsEveryUnit(paths)) {
     console.log(`test:changed: nothing maps to a test (changed against ${base}: ${paths.join(', ') || 'none'}); no tests run.`);
     process.exit(0);
   }
@@ -134,7 +138,10 @@ if (import.meta.main) {
     return status;
   };
   let status = 0;
-  if (sources.length) status = run('unit', ['related', '--run', '--passWithNoTests', '--project', 'unit', ...sources]);
+  if (runsEveryUnit(paths)) {
+    console.log('test:changed: a package.json or vitest config changed, so every unit file runs.');
+    status = run('unit', ['run', '--project', 'unit']);
+  } else if (sources.length) status = run('unit', ['related', '--run', '--passWithNoTests', '--project', 'unit', ...sources]);
   console.log(`test:changed: pty, browser and restart files that import a changed file themselves: ${heavy.join(', ') || 'none'} (--pty or --browser runs all of one kind).`);
   if (heavy.length) status = run('pty/browser/restart', ['run', '--project', 'pty', '--project', 'browser', '--project', 'restart', ...heavy.map((f) => `test/${f}`)]) || status;
   rmSync(reports, { recursive: true, force: true });
