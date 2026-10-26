@@ -37,7 +37,7 @@ const unbound = (r: Role) => r === 'planner' || r === 'operator';
 const an = (r: Role) => `${r === 'operator' ? 'an' : 'a'} ${r}`;
 /** The only ticket columns a worker may edit on its own ticket. */
 const WORKER_FIELDS = ['body', 'criteria'] as const;
-/** What a worker may edit on a follow-up its own grant created, while it is in Backlog. */
+/** What a worker may edit on a follow-up a worker of its ticket created, while it is in Backlog. */
 const FOLLOWUP_FIELDS = ['title', 'body', 'criteria', 'tags', 'depends_on'] as const;
 const BRAIN_SEARCH_MAX = 50;
 const VERSION: string = JSON.parse(readFileSync(resolve(import.meta.dirname, '../../package.json'), 'utf8')).version;
@@ -98,13 +98,16 @@ function confirmed(db: DatabaseSync, id: number, checks: string[]) {
   if (!answered) throw new Refused(`no operator confirmation of the manual checks on this ticket: ${checks.join('; ')}. Ask the operator to make them with ask_operator, wait for the answer, then call again`);
 }
 const exists = (db: DatabaseSync, id: number) => db.prepare('SELECT 1 FROM tickets WHERE id = ?').get(id) !== undefined;
-/** A Backlog ticket this grant created: the only kind a worker may edit beyond its own, or delete. */
+const followUpsOf = (db: DatabaseSync, ticket: number) =>
+  (db.prepare("SELECT t.id FROM tickets t JOIN grants g ON g.id = t.created_by_grant WHERE g.ticket_id = ? AND g.role = 'worker' AND t.id != ? ORDER BY t.id")
+    .all(ticket, ticket) as { id: number }[]).map((r) => r.id);
+/** A Backlog follow-up of this grant's ticket: the only kind a worker may edit beyond its own, or delete. */
 const followUp = (db: DatabaseSync, grant: Grant, id: number) =>
-  db.prepare("SELECT 1 FROM tickets WHERE id = ? AND created_by_grant = ? AND status = 'backlog'").get(id, grant.id) !== undefined;
+  followUpsOf(db, grant.ticket_id!).includes(id) && db.prepare("SELECT 1 FROM tickets WHERE id = ? AND status = 'backlog'").get(id) !== undefined;
 const depsOf = (db: DatabaseSync, id: number) =>
   (db.prepare('SELECT depends_on_id FROM ticket_deps WHERE ticket_id = ?').all(id) as { depends_on_id: number }[]).map((r) => r.depends_on_id);
-/** What a worker or tester grant reads without read_all: its own ticket, its dependencies and its targets. */
-const readable = (db: DatabaseSync, id: number) => [...new Set([id, ...depsOf(db, id), ...targetsOf(db, id).map((t) => t.id)])];
+/** What a worker or tester grant reads without read_all: its own ticket, its dependencies, its targets and its follow-ups. */
+const readable = (db: DatabaseSync, id: number) => [...new Set([id, ...depsOf(db, id), ...targetsOf(db, id).map((t) => t.id), ...followUpsOf(db, id)])];
 /** A target the grant's ticket lists with edit: its worker may update the target's body and criteria. */
 const editTarget = (db: DatabaseSync, grant: Grant, id: number) => targetsOf(db, grant.ticket_id!).some((t) => t.id === id && t.edit);
 const targets = z.array(z.object({
@@ -219,7 +222,7 @@ export const TOOLS: Record<string, Tool<z.ZodRawShape>> = {
     description:
       'Edit a ticket\'s title, body, criteria, dependencies or targets. A worker may only refine the body and criteria of its own ticket, for example to record a clarified scope, ' +
       'rewrite the body and criteria of a ticket its own ticket lists as a target with edit: true, ' +
-      'and fix any of these fields but targets on a Backlog follow-up it created with create_ticket; use add_note for progress and decisions instead. Omitted fields are left unchanged. Returns the ticket.',
+      'and fix any of these fields but targets on a Backlog follow-up it or an earlier worker session of its ticket created with create_ticket; use add_note for progress and decisions instead. Omitted fields are left unchanged. Returns the ticket.',
     access: {
       planner: 'any ticket',
       worker: `own and its edit targets, ${WORKER_FIELDS.join('/')} only; its Backlog follow-ups, ${FOLLOWUP_FIELDS.join('/')}`,
@@ -265,15 +268,15 @@ export const TOOLS: Record<string, Tool<z.ZodRawShape>> = {
   delete_ticket: tool({
     description:
       'Delete a Backlog ticket made by mistake, with its attachments, exactly as the operator\x27s delete does. A planner may delete a Backlog ticket that has no notes and no runs; ' +
-      'a worker may delete only a Backlog follow-up its own grant created with create_ticket. Anything else is refused with the reason. Returns the deleted id.',
+      'a worker may delete only a Backlog follow-up a worker session of its own ticket created with create_ticket. Anything else is refused with the reason. Returns the deleted id.',
     access: { planner: 'Backlog, no notes or runs', worker: 'its Backlog follow-ups', operator: 'Backlog, no notes or runs' },
     level: 3,
     input: { ticket_id: z.number().int().positive() },
     run(c, a) {
       const id = (c.ticket = a.ticket_id);
       const t = readTicket(c.db, id);
-      const mine = c.grant.role === 'worker' && t.created_by_grant === c.grant.id;
-      if (c.as === 'worker' && !mine) throw new Deny(`a worker may only delete a ticket its own grant created; ticket ${id} is not one${ask(c.need)}`);
+      const mine = c.grant.role === 'worker' && followUpsOf(c.db, c.grant.ticket_id!).includes(id);
+      if (c.as === 'worker' && !mine) throw new Deny(`a worker may only delete a ticket a worker of its own ticket created; ticket ${id} is not one${ask(c.need)}`);
       if (t.status !== 'backlog') throw new Deny(`ticket ${id} is in ${t.status}; only a Backlog ticket can be deleted here`);
       if (!mine) {
         const count = (table: 'notes' | 'runs') => (c.db.prepare(`SELECT count(*) AS n FROM ${table} WHERE ticket_id = ?`).get(id) as { n: number }).n;
@@ -373,9 +376,9 @@ export const TOOLS: Record<string, Tool<z.ZodRawShape>> = {
     description:
       'Read one ticket in full: title, body, acceptance criteria, status, flags, dependencies, model settings, the absolute paths of files the operator ' +
       'attached (screenshots and the like: open them with your file reader), and every note on it in order. ' +
-      'A worker or tester may also read the tickets its own ticket depends on, to see what they delivered or decided, and the tickets its own ticket lists as targets; ' +
+      'A worker or tester may also read the tickets its own ticket depends on, to see what they delivered or decided, the tickets its own ticket lists as targets, and the follow-ups any worker session of its own ticket filed with create_ticket; ' +
       'any other ticket is refused unless its ticket has read_all.',
-    access: { planner: 'yes', worker: 'own + its deps + its targets', tester: 'own + its deps + its targets', operator: 'yes' },
+    access: { planner: 'yes', worker: 'own + its deps + its targets + its follow-ups', tester: 'own + its deps + its targets + its follow-ups', operator: 'yes' },
     input: { ticket_id: ticketId },
     run(c, a) {
       const { grant } = c;
@@ -392,8 +395,8 @@ export const TOOLS: Record<string, Tool<z.ZodRawShape>> = {
   list_tickets: tool({
     description:
       'List tickets with id, title, status, tags, flags, dependencies and targets, optionally filtered by status. A planner or operator sees the whole board; ' +
-      'a worker or tester sees its own ticket, the ones it depends on and the ones it lists as targets. Use get_ticket for the body and notes.',
-    access: { planner: 'yes', worker: 'own + its deps + its targets', tester: 'own + its deps + its targets', operator: 'yes' },
+      'a worker or tester sees its own ticket, the ones it depends on, the ones it lists as targets and the follow-ups any worker session of its ticket filed. Use get_ticket for the body and notes.',
+    access: { planner: 'yes', worker: 'own + its deps + its targets + its follow-ups', tester: 'own + its deps + its targets + its follow-ups', operator: 'yes' },
     input: { status: z.enum(STATUS).optional() },
     run(c, a) {
       const { grant } = c;
