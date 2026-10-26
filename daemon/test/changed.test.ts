@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { heavyTests, mapped } from './changed.ts';
+import { heavyTests, mapped, runsEveryUnit } from './changed.ts';
 
 // A fake test dir. The import line is built, not written out, so this file does not itself look like a browser test to
 // vitest.config.ts or to `mapped`.
@@ -45,6 +45,17 @@ describe('test:changed path mapping', () => {
     expect(mapped(['daemon/ui/x.ts', 'docs/templates/x.md', 'daemon/docs/MCP.md'], dir)).toEqual([]);
     // TypeScript under daemon/ is vitest's module graph's job, not the mapping's.
     expect(mapped(['daemon/src/db.ts'], dir)).toEqual([]);
+  });
+});
+
+describe('test:changed every unit file', () => {
+  it('a package.json or vitest config anywhere runs every unit file', () => {
+    for (const p of ['package.json', 'daemon/package.json', 'vitest.config.mts', 'daemon/vitest.config.ts']) expect(runsEveryUnit([p])).toBe(true);
+    expect(runsEveryUnit(['daemon/src/db.ts', 'daemon/vitest.config.ts'])).toBe(true);
+  });
+
+  it('a path that only looks like one does not', () => {
+    expect(runsEveryUnit(['package-lock.json', 'daemon/src/package.json.ts', 'docs/vitest.config.md/x', 'daemon/test/changed.ts', 'mypackage.json'])).toBe(false);
   });
 });
 
