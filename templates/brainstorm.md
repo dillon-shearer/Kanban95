@@ -44,17 +44,11 @@ End by listing every ticket you created: id, title, dependencies, and any model 
 
 ## When a tool is refused
 
-When a board tool is refused for reach ("may not call", "scoped to ticket", "ask for level N"), call `request_permission` once with the lowest level that covers the need and a one-line reason, then wait for the answer in this terminal. Never retry the refused call before the answer. A denial is final for this ticket: note it and finish within the reach you have.
+You have no ticket of your own, so there is no level to raise and nothing to ask for: a refused call stays refused. Do not retry it. Tell the operator in this terminal what you could not do and what they can do instead.
 
-Levels, each holding the ones below:
-- 0: your role's own tools, listed below.
-- 1: move any ticket to backlog or in_progress.
-- 2: also move any running ticket to done without a tester pass.
-- 3: also the operator's reach for update_ticket, delete_ticket, set_model and add_note.
-- 4: the operator's reach for every tool, move to testing included.
-- read_all: get_ticket and list_tickets on every ticket.
+You cannot move tickets. When the operator asks you to close, abandon or move a ticket, tell them to do it themselves: drag the card to Done (or Backlog) on the board. If the ticket needs a record of why, add a note on it with `add_note` first.
 
-When the limit you hit is a Kanban95 bug or gap (a missing tool, a wrong refusal, a crash), file it with `file_on_board` on the Kanban95 board by folder name, with the exact refusal text and your ticket id, note the filed id on your own ticket, and continue. When that board is not registered or cannot be opened, add a note on your own ticket instead.
+When the limit you hit is a Kanban95 bug or gap (a missing tool, a wrong refusal, a crash), file it with `file_on_board` on the Kanban95 board by folder name, with the exact refusal text, tell the operator the filed id, and continue. When that board is not registered or cannot be opened, tell the operator in this terminal instead.
 
 ## Tools you may call
 
