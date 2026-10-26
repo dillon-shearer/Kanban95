@@ -24,8 +24,8 @@ A refused call returns a tool error whose text says why and, for `move_ticket`, 
 | set_model | any | no | no | any |
 | move_ticket | no | own → testing | own → done / in_progress | any → in_progress / testing / done |
 | add_note | any | own | own | any |
-| get_ticket | yes | own + its deps + its targets | own + its deps + its targets | yes |
-| list_tickets | yes | own + its deps + its targets | own + its deps + its targets | yes |
+| get_ticket | yes | own + its deps + its targets + its follow-ups | own + its deps + its targets + its follow-ups | yes |
+| list_tickets | yes | own + its deps + its targets + its follow-ups | own + its deps + its targets + its follow-ups | yes |
 | brain_add | yes | yes | yes | yes |
 | brain_update | yes, and move_to | yes, not move_to | yes, not move_to | yes, and move_to |
 | brain_delete | yes | no | no | yes |
@@ -88,7 +88,7 @@ File a ticket on another Kanban95 board registered on this machine, for a bug or
 
 ### update_ticket
 
-Edit a ticket's title, body, criteria, dependencies or targets. A worker may only refine the body and criteria of its own ticket, for example to record a clarified scope, rewrite the body and criteria of a ticket its own ticket lists as a target with edit: true, and fix any of these fields but targets on a Backlog follow-up it created with create_ticket; use add_note for progress and decisions instead. Omitted fields are left unchanged. Returns the ticket.
+Edit a ticket's title, body, criteria, dependencies or targets. A worker may only refine the body and criteria of its own ticket, for example to record a clarified scope, rewrite the body and criteria of a ticket its own ticket lists as a target with edit: true, and fix any of these fields but targets on a Backlog follow-up it or an earlier worker session of its ticket created with create_ticket; use add_note for progress and decisions instead. Omitted fields are left unchanged. Returns the ticket.
 
 | argument | type | required | description |
 |---|---|---|---|
@@ -102,7 +102,7 @@ Edit a ticket's title, body, criteria, dependencies or targets. A worker may onl
 
 ### delete_ticket
 
-Delete a Backlog ticket made by mistake, with its attachments, exactly as the operator's delete does. A planner may delete a Backlog ticket that has no notes and no runs; a worker may delete only a Backlog follow-up its own grant created with create_ticket. Anything else is refused with the reason. Returns the deleted id.
+Delete a Backlog ticket made by mistake, with its attachments, exactly as the operator's delete does. A planner may delete a Backlog ticket that has no notes and no runs; a worker may delete only a Backlog follow-up a worker session of its own ticket created with create_ticket. Anything else is refused with the reason. Returns the deleted id.
 
 | argument | type | required | description |
 |---|---|---|---|
@@ -140,7 +140,7 @@ Attach a note to a ticket. Kinds: plan (how you intend to do the work, post it b
 
 ### get_ticket
 
-Read one ticket in full: title, body, acceptance criteria, status, flags, dependencies, model settings, the absolute paths of files the operator attached (screenshots and the like: open them with your file reader), and every note on it in order. A worker or tester may also read the tickets its own ticket depends on, to see what they delivered or decided, and the tickets its own ticket lists as targets; any other ticket is refused unless its ticket has read_all.
+Read one ticket in full: title, body, acceptance criteria, status, flags, dependencies, model settings, the absolute paths of files the operator attached (screenshots and the like: open them with your file reader), and every note on it in order. A worker or tester may also read the tickets its own ticket depends on, to see what they delivered or decided, the tickets its own ticket lists as targets, and the follow-ups any worker session of its own ticket filed with create_ticket; any other ticket is refused unless its ticket has read_all.
 
 | argument | type | required | description |
 |---|---|---|---|
@@ -148,7 +148,7 @@ Read one ticket in full: title, body, acceptance criteria, status, flags, depend
 
 ### list_tickets
 
-List tickets with id, title, status, tags, flags, dependencies and targets, optionally filtered by status. A planner or operator sees the whole board; a worker or tester sees its own ticket, the ones it depends on and the ones it lists as targets. Use get_ticket for the body and notes.
+List tickets with id, title, status, tags, flags, dependencies and targets, optionally filtered by status. A planner or operator sees the whole board; a worker or tester sees its own ticket, the ones it depends on, the ones it lists as targets and the follow-ups any worker session of its ticket filed. Use get_ticket for the body and notes.
 
 | argument | type | required | description |
 |---|---|---|---|
