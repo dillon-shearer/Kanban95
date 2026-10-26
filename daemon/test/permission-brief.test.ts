@@ -15,7 +15,7 @@ afterEach(() => rmSync(repo, { recursive: true, force: true }));
 
 describe('permission brief', () => {
   it('every ticket agent brief tells it how to ask for reach and where to file a board gap', () => {
-    for (const name of ['execute', 'test', 'operator'] as TemplateName[]) {
+    for (const name of ['execute', 'test'] as TemplateName[]) {
       const out = render(repo, name, ctx);
       expect(out, name).toContain('request_permission');
       expect(out, name).toMatch(/Never retry the refused call before the answer/);
@@ -29,5 +29,12 @@ describe('permission brief', () => {
     expect(out).not.toContain('request_permission');
     expect(out).toMatch(/drag the card to Done/);
     expect(out).toContain('file_on_board');
+  });
+
+  it('the operator terminal brief never offers request_permission and reports board gaps in the terminal', () => {
+    const out = render(repo, 'operator', ctx);
+    expect(out).not.toContain('request_permission');
+    expect(out).toMatch(/there is no level to raise/);
+    expect(out).toMatch(/file_on_board[\s\S]*tell the operator the filed id in this terminal/);
   });
 });
