@@ -3,6 +3,7 @@ import { createRequire } from 'node:module';
 import { delimiter, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vitest/config';
+import { reportTo } from './test/changed.ts';
 import { sortTests, workers } from './test/projects.ts';
 
 // home.ts gives every test file a throwaway home; real-home-guard.ts fails the run if the real one was touched anyway.
@@ -26,7 +27,7 @@ export default defineConfig({
     // The default reporter leaves a test that passed on its retry out of its output; this line never does.
     reporters: ['default', {
       onTestCaseResult: (t) => { const n = t.diagnostic()?.retryCount; if (n) console.log(`RETRIED x${n}: ${t.module.moduleId} > ${t.fullName}`); },
-    }],
+    }, ...(process.env.KANBAN95_TEST_REPORT ? [reportTo(process.env.KANBAN95_TEST_REPORT)] : [])],
     projects: [
       project('unit', unit),
       // A pty test measured up to 3 s alone against the 5 s default; launches and git under load need headroom.
