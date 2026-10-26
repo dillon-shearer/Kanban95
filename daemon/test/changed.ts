@@ -4,9 +4,11 @@
 // only when they import a changed file themselves or through a changed test helper (`heavyTests`); a ui/ change runs every
 // browser file.
 import { execFileSync, spawnSync } from 'node:child_process';
-import { readdirSync, readFileSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
-import { dirname, join, posix, resolve } from 'node:path';
+import { tmpdir } from 'node:os';
+import { dirname, join, posix, relative, resolve } from 'node:path';
+import type { Reporter } from 'vitest/node';
 import { sortTests } from './projects.ts';
 
 // Docs a test reads or is written from, so editing the doc can fail it. A new doc drift test adds its row here.
@@ -60,6 +62,48 @@ function changedPaths(root: string, base: string): string[] {
   ])];
 }
 
+export type Report = { failed: string[]; errors: { message: string; file: string }[] };
+export type Pass = { name: string; status: number; report?: Report };
+
+export function reportTo(file: string): Reporter {
+  let root = '';
+  const rel = (p: string) => relative(root, p).replaceAll('\\', '/');
+  return {
+    onInit: (vitest) => { root = vitest.config.root; },
+    onTestRunEnd: (modules, unhandled) => {
+      const report: Report = { failed: [], errors: [] };
+      for (const m of modules) {
+        const file = rel(m.moduleId);
+        for (const t of m.children.allTests('failed')) report.failed.push(`${file} > ${t.fullName}`);
+        for (const e of m.errors()) report.errors.push({ message: e.message, file });
+      }
+      for (const e of unhandled) {
+        const path = (e as { VITEST_TEST_PATH?: string }).VITEST_TEST_PATH;
+        report.errors.push({ message: e.message, file: path ? rel(path) : 'no file named' });
+      }
+      writeFileSync(file, JSON.stringify(report));
+    },
+  };
+}
+
+const count = (n: number, what: string) => `${n} ${what}${n === 1 ? '' : 's'}`;
+
+export function summary(passes: Pass[]): string[] {
+  const out = ['test:changed: summary of every vitest pass that ran:'];
+  for (const { name, status, report } of passes) {
+    if (!status) { out.push(`  ${name}: passed`); continue; }
+    const failed = report?.failed ?? [];
+    const errors = report?.errors ?? [];
+    if (failed.length) out.push(`  ${name}: failed, ${count(failed.length, 'failed test')}${errors.length ? `, ${count(errors.length, 'error')}` : ''}`);
+    else if (errors.length) out.push(`  ${name}: failed with every test passing, ${count(errors.length, 'error')}`);
+    else out.push(`  ${name}: failed (exit ${status}) with no failed test or error reported; read that pass's output above`);
+    for (const f of failed) out.push(`    FAIL ${f}`);
+    for (const e of errors) out.push(`    ERROR ${e.message.split('\n')[0]} (${e.file})`);
+  }
+  out.push(`test:changed: ${passes.some((p) => p.status) ? 'FAILED' : 'passed'}`);
+  return out;
+}
+
 if (import.meta.main) {
   const args = process.argv.slice(2);
   const base = args.find((a) => !a.startsWith('--')) || 'main';
@@ -79,10 +123,21 @@ if (import.meta.main) {
   // vitest's bin under this node, not npx through cmd.exe, whose 8191-character line a big diff's paths would overflow.
   // passWithNoTests: a daemon change no test imports (a comment in a script) is not a failure.
   const vitest = join(dirname(createRequire(import.meta.url).resolve('vitest/package.json')), 'vitest.mjs');
-  const run = (argv: string[]) => spawnSync(process.execPath, [vitest, ...argv], { cwd: daemon, stdio: 'inherit' }).status ?? 1;
+  const reports = mkdtempSync(join(tmpdir(), 'k95-test-changed-'));
+  const passes: Pass[] = [];
+  const run = (name: string, argv: string[]) => {
+    const file = join(reports, `${passes.length}.json`);
+    const status = spawnSync(process.execPath, [vitest, ...argv], { cwd: daemon, stdio: 'inherit', env: { ...process.env, KANBAN95_TEST_REPORT: file } }).status ?? 1;
+    let report: Report | undefined;
+    try { report = JSON.parse(readFileSync(file, 'utf8')); } catch {}
+    passes.push({ name, status, report });
+    return status;
+  };
   let status = 0;
-  if (sources.length) status = run(['related', '--run', '--passWithNoTests', '--project', 'unit', ...sources]);
+  if (sources.length) status = run('unit', ['related', '--run', '--passWithNoTests', '--project', 'unit', ...sources]);
   console.log(`test:changed: pty, browser and restart files that import a changed file themselves: ${heavy.join(', ') || 'none'} (--pty or --browser runs all of one kind).`);
-  if (heavy.length) status = run(['run', '--project', 'pty', '--project', 'browser', '--project', 'restart', ...heavy.map((f) => `test/${f}`)]) || status;
+  if (heavy.length) status = run('pty/browser/restart', ['run', '--project', 'pty', '--project', 'browser', '--project', 'restart', ...heavy.map((f) => `test/${f}`)]) || status;
+  rmSync(reports, { recursive: true, force: true });
+  console.log(summary(passes).join('\n'));
   process.exit(status);
 }
