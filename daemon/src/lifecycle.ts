@@ -223,16 +223,49 @@ export function openQuestion(db: DatabaseSync, id: number) {
 
 export const TYPED = "answered in the agent's terminal";
 
-const APPROVE = /^(y|yes|ok|okay|approved?|allow(ed)?|grant(ed)?)\b/i;
+const APPROVE = /^(?:a[).:]?$|(?:a[).:]?\s+)?(?:y|yes|ok|okay|approved?|allow(?:ed)?|grant(?:ed)?|done)\b)/i;
 const DENY = /^(n|no|deny|denied|refused?)\b/i;
+
+function pendingPermission(db: DatabaseSync, id: number) {
+  const n = db.prepare(`SELECT id, body FROM notes q WHERE ticket_id = ? AND kind = 'question' AND body LIKE 'PERMISSION%'
+    AND NOT EXISTS (SELECT 1 FROM notes a WHERE a.ticket_id = q.ticket_id AND a.kind IN ('answer', 'failure') AND a.id > q.id)
+    AND created_at >= coalesce((SELECT max(started_at) FROM runs WHERE ticket_id = q.ticket_id), '')
+    ORDER BY id DESC LIMIT 1`).get(id) as { id: number; body: string } | undefined;
+  const p = n ? permissionOf(n.body) : null;
+  return n && p ? { id: n.id, ...p } : undefined;
+}
+
+function grant(b: Board, id: number, p: { level: number | null; read_all: boolean }, via: 'terminal' | 'answer') {
+  b.db.prepare('UPDATE tickets SET agent_level = max(agent_level, ?), read_all = max(read_all, ?) WHERE id = ?').run(p.level ?? 0, p.read_all ? 1 : 0, id);
+  audit(b.db, { grant_id: null, ticket_id: id, tool: 'tickets.update', args: { ...(p.level !== null && { agent_level: p.level }), ...(p.read_all && { read_all: true }), via }, outcome: 'ok' });
+}
+
+const levelOf = (t: { agent_level: number; read_all: boolean }) => `agent level ${t.agent_level}${t.read_all ? ', read all' : ''}`;
+
+export function answer(b: Board, id: number, text: string) {
+  const t = readTicket(b.db, id);
+  const q = t.flags.needs_human ? openQuestion(b.db, id) : undefined;
+  const direct = q ? permissionOf(q.body) : null;
+  const p = q && !direct && APPROVE.test(text.trim()) ? pendingPermission(b.db, id) : undefined;
+  const after = p ? { agent_level: Math.max(t.agent_level, p.level ?? 0), read_all: t.read_all || p.read_all } : t;
+  const said = p ? `[approved request_permission ${p.id}: ${levelOf(after)} now, was ${levelOf(t)}; retry the refused call now]`
+    : direct && text.startsWith('approved') ? `[${levelOf(t)} now]` : `[${levelOf(t)}, unchanged]`;
+  const body = `${text} ${said}`;
+  const r = apply(b, id, 'answer', { note: { role: 'operator', kind: 'answer', body }, answer: body });
+  if (!p) return r;
+  grant(b, id, p, 'answer');
+  changed(id);
+  return { ...r, ticket: readTicket(b.db, id) };
+}
 
 export function typed(b: Board, s: Session, line = '') {
   if (s.ticketId === null || s.outcome) return;
   const id = s.ticketId;
   const q = openQuestion(b.db, id);
-  const p = q ? permissionOf(q.body) : null;
+  const direct = q ? permissionOf(q.body) : null;
   const word = line.trim();
-  const verdict = p && APPROVE.test(word) ? 'approved' : p && DENY.test(word) ? 'denied' : undefined;
+  const p = direct ?? (q && APPROVE.test(word) ? pendingPermission(b.db, id) ?? null : null);
+  const verdict = p && APPROVE.test(word) ? 'approved' : direct && DENY.test(word) ? 'denied' : undefined;
   const asked = p ? [p.level !== null && `level ${p.level}`, p.read_all && 'read all'].filter(Boolean).join(', ') : '';
   const body = verdict === 'approved' ? `approved: ${asked} (${TYPED})` : verdict ? `denied (${TYPED})` : TYPED;
   try {
@@ -242,8 +275,7 @@ export function typed(b: Board, s: Session, line = '') {
     return;
   }
   if (verdict !== 'approved' || !p) return;
-  b.db.prepare('UPDATE tickets SET agent_level = max(agent_level, ?), read_all = max(read_all, ?) WHERE id = ?').run(p.level ?? 0, p.read_all ? 1 : 0, id);
-  audit(b.db, { grant_id: null, ticket_id: id, tool: 'tickets.update', args: { ...(p.level !== null && { agent_level: p.level }), ...(p.read_all && { read_all: true }), via: 'terminal' }, outcome: 'ok' });
+  grant(b, id, p, 'terminal');
   changed(id);
 }
 
