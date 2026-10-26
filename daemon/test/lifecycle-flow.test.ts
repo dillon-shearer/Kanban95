@@ -91,13 +91,13 @@ describe('lifecycle', { timeout: 60_000 }, () => {
     const r = await post(`/api/tickets/${id}/answer`, { answer: 'blue,\r\nand bold' });
     expect(r.status).toBe(200);
     expect((await r.json()).flags.needs_human).toBe(false);
-    expect(notes(id, 'answer')).toEqual(['blue,\r\nand bold']);
+    expect(notes(id, 'answer')).toEqual(['blue,\r\nand bold [agent level 0, unchanged]']);
     expect((await post(`/api/tickets/${id}/answer`, { answer: 'again' })).status).toBe(409); // nothing is asked now
     await until(() => writes.length === 2, 'the Enter');
-    expect(writes).toEqual(['blue, and bold', '\r']); // Enter on its own, or Claude Code takes the burst as a paste
+    expect(writes).toEqual(['blue, and bold [agent level 0, unchanged]', '\r']); // Enter on its own, or Claude Code takes the burst as a paste
 
     await landed(id);
-    expect(git('show', 'HEAD:answer.txt')).toBe('blue, and bold');
+    expect(git('show', 'HEAD:answer.txt')).toBe('blue, and bold [agent level 0, unchanged]');
   });
 
   it('an agent that exits without reporting, or never starts, cannot leave the ticket unflagged', async () => {

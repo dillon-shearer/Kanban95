@@ -64,6 +64,8 @@ const ticketId = z.number().int().positive().optional()
   .describe('Ticket id. Worker and tester grants are bound to one ticket and may omit it; a planner or operator must give it.');
 
 export const PENDING = 'an earlier request_permission on this ticket is still unanswered; the operator answers it with Approve or Deny in the Inbox or on the Ticket tab of the ticket\x27s window, or by typing yes or no in this terminal. Wait for the answer; do not ask again';
+const RAISE = /\b(?:raise|bump|increase|lift|grant|give|set|approve)\b[^\n]{0,80}?\b(?:agent[ _-]?level|level\s*[1-4]\b|read[ _-]?all)/i;
+export const RAISE_ASK = 'an ask_operator answer never changes the ticket\x27s agent level or read all, so this question is refused; call request_permission with the level or read_all and a reason, and the operator gets Approve and Deny in the Inbox';
 const ask = (need: number | undefined) => (need === undefined ? '' : `; ask for level ${need} with request_permission`);
 
 /** Resolves the ticket a call is about. In a worker/tester cell: its own, a foreign id is a scope denial. In an operator cell: the id given, else its own. */
@@ -485,11 +487,16 @@ export const TOOLS: Record<string, Tool<z.ZodRawShape>> = {
   ask_operator: tool({
     description:
       'Ask the human operator a question you cannot resolve from the ticket, the brain or the code. The ticket is flagged needs_human and the operator is alerted; ' +
-      'the answer is typed into your session as one line and kept as a note on the ticket. Until it is answered, move_ticket to testing is refused: wait for it. Ask once with full context and the options you see, rather than many small questions. Returns the question id.',
+      'the answer is typed into your session as one line and kept as a note on the ticket. Until it is answered, move_ticket to testing is refused: wait for it. Ask once with full context and the options you see, rather than many small questions. ' +
+      'Refused for a question asking the operator to raise the ticket\x27s agent level or read all (use request_permission), and while your request_permission waits for its answer. ' +
+      'The answer ends with the ticket\x27s agent level in brackets and whether it changed. Returns the question id.',
     access: { worker: 'own', tester: 'own' },
     input: { ticket_id: ticketId, question: z.string().min(1) },
     run(c, a) {
       const id = (c.ticket = own(c, a.ticket_id));
+      if (RAISE.test(a.question)) throw new Deny(RAISE_ASK);
+      const open = readTicket(c.db, id).flags.needs_human ? openQuestion(c.db, id) : undefined;
+      if (open && permissionOf(open.body)) throw new Deny(PENDING);
       const { noteId } = apply(c.board, id, 'ask', { note: { role: c.grant.role, kind: 'question', body: a.question } });
       return { question_id: noteId };
     },

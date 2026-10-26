@@ -11,7 +11,7 @@ import { BRAIN_BODY_MAX, BRAIN_RANK, isConstraintError, SCOPES, type Brains, typ
 import { hasBranch, ticketDiff } from './git.js';
 import { audit, revoke } from './grants.js';
 import { cancelSetup, killGrantSession, killSession, sessions, sessionsOf, type Session } from './launcher.js';
-import { apply, brainstorm, BUMPS, changed, events, housekeeping, isKanban95, operator, pushBase, Refused, release, releaseInfo, releaseOn, releasePending, relaunch, restartBoard, runnerState, setRunner, tick, ticketBase, type Board, type Bump } from './lifecycle.js';
+import { answer, apply, brainstorm, BUMPS, changed, events, housekeeping, isKanban95, operator, pushBase, Refused, release, releaseInfo, releaseOn, releasePending, relaunch, restartBoard, runnerState, setRunner, tick, ticketBase, type Board, type Bump } from './lifecycle.js';
 import { addOverride, BadConfig, boardHome, dropOverride, gone, globalPath, isOverridable, knownModels, project, projectPath, projectsPath, readProjects, setBoardHome, uncatalogued, writeConfig, writeLastBoard, writePreferences, writeProjects, type OverridableName } from './settings.js';
 import { isStale, resetTemplate, templatePath, TEMPLATES, unknownVar, VARS, writeTemplate, type TemplateName } from './templates.js';
 import { bootstrap } from './bootstrap.js';
@@ -422,7 +422,7 @@ const routes: [method: string, path: RegExp, mutation: string | null, handler: (
     if (typeof body.answer !== 'string' || !body.answer.trim()) throw new HttpError(400, 'answer must be a non-empty string');
     const id = Number(params[0]);
     readTicket(board.db, id);
-    return { status: 200, body: apply(board, id, 'answer', { note: { role: 'operator', kind: 'answer', body: body.answer }, answer: body.answer }).ticket };
+    return { status: 200, body: answer(board, id, body.answer).ticket };
   }],
   // The operator's reason goes to the next worker as a failure note (docs/LIFECYCLE.md → Reject).
   ['POST', /^\/api\/tickets\/(\d+)\/reject$/, 'tickets.reject', ({ board, params, body }) => {
