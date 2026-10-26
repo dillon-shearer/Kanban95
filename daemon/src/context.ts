@@ -23,6 +23,16 @@ interface ContextOpts {
   brainChars?: number;
   /** The global brain: its rows join the brain section in the same ranking. Without it, the section is the project's only. */
   global?: DatabaseSync;
+  /** The daemon's port and the session's CLI: `{{context}}`, how to call GET /api/context for this ticket. */
+  port?: number;
+  cli?: string;
+}
+
+function contextLine(id: number, { port, cli }: ContextOpts): string {
+  if (!port) return '(none)';
+  const url = `http://127.0.0.1:${port}/api/context?task_ref=${id}`;
+  const auth = cli === 'codex' ? '-H "Authorization: Bearer $KANBAN95_TOKEN"' : '-H @<folder holding this prompt.md>/auth.header';
+  return `\`curl -s ${auth} "${url}"\` lists the repo files this ticket should read first (paths from the repo root, the same in your worktree).`;
 }
 
 const orNone = (s: string) => s.trim() || '(none)';
@@ -98,7 +108,7 @@ export function buildContext(db: DatabaseSync, repo: string, ticketId: number | 
     .join('\n');
   const preferences = orNone(readPreferences(repo));
   const worktrees = worktreesRoot(repo);
-  if (ticketId === null) return { ticket: '(none)', criteria: '(none)', brain: '(none)', notes: '(none)', retry: '0', diff: '', tools, base: '(none)', preferences, mission: '(none)', worktrees, ready: '(none)' };
+  if (ticketId === null) return { ticket: '(none)', criteria: '(none)', brain: '(none)', notes: '(none)', retry: '0', diff: '', tools, base: '(none)', preferences, mission: '(none)', worktrees, ready: '(none)', context: '(none)' };
 
   const t = readTicket(db, ticketId);
   let diff = '';
@@ -119,6 +129,7 @@ export function buildContext(db: DatabaseSync, repo: string, ticketId: number | 
     mission: '(none)',
     worktrees,
     ready: '(none)',
+    context: contextLine(t.id, opts),
   };
 }
 

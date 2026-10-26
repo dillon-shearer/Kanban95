@@ -3,7 +3,7 @@
 import { exec } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { isAbsolute, join, resolve } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { permissionOf, readTicket, transaction, type Ticket } from './api.js';
 import { branchName, git, gitNotRun, hasBranch, isAncestor, notStarted, syncWorktree, worktreePath } from './git.js';
@@ -771,6 +771,15 @@ const repoConfig = (repo: string) => (existsSync(repoConfigPath(repo)) ? JSON.pa
 function worktreeSetup(repo: string): string | undefined {
   const c = repoConfig(repo).worktree_setup;
   if (c !== undefined && (typeof c !== 'string' || !c.trim())) throw new BadConfig(`${repoConfigPath(repo)} worktree_setup must be a non-empty string`);
+  return c;
+}
+
+/** config.json `context`: repo-relative paths or globs an agent reads first, listed by GET /api/context (docs/DATA.md). */
+export function contextGlobs(repo: string): string[] {
+  const c = repoConfig(repo).context;
+  if (c === undefined) return [];
+  const ok = Array.isArray(c) && c.every((g) => typeof g === 'string' && g.trim() && !isAbsolute(g) && !g.split(/[\\/]/).includes('..'));
+  if (!ok) throw new BadConfig(`${repoConfigPath(repo)} context must be a list of repo-relative paths or globs`);
   return c;
 }
 

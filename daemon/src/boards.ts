@@ -4,7 +4,7 @@ import { execFile, spawn } from 'node:child_process';
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
-import { boardHome, dataHome, gone, normal, readProjects, same } from './settings.js';
+import { boardHome, dataHome, gone, localHome, normal, readProjects, same } from './settings.js';
 
 interface Entry { pid: number; repo: string; port: number; started: string; shell: number | null; agents: number; attention: number; key?: string }
 
@@ -18,6 +18,8 @@ export function register(repo: string, port: number, shell: number | null): () =
   mkdirSync(join(dataHome(), 'running'), { recursive: true });
   own = { pid: process.pid, repo: normal(repo), port, started: new Date().toISOString(), shell, agents: 0, attention: 0, key: randomBytes(32).toString('hex') };
   writeFileSync(file, JSON.stringify(own) + '\n');
+  running();
+  if (!same(normal(localHome()), normal(boardHome()))) live(join(localHome(), 'running'));
   return () => {
     own = null;
     rmSync(file, { force: true });
@@ -50,15 +52,17 @@ function alive(pid: number): boolean {
  * ponytail: Windows reuses pids, so a stale entry whose pid now belongs to another process reads as running until that
  * process ends; checking the process's start time against `started` would close that.
  */
-export function running(): Entry[] {
+export const running = (): Entry[] => live(runningDir());
+
+function live(dir: string): Entry[] {
   let names: string[];
   try {
-    names = readdirSync(runningDir()).filter((n) => /^\d+\.json$/.test(n));
+    names = readdirSync(dir).filter((n) => /^\d+\.json$/.test(n));
   } catch {
     return [];
   }
   return names.flatMap((n) => {
-    const file = join(runningDir(), n);
+    const file = join(dir, n);
     let e: Entry;
     try {
       e = JSON.parse(readFileSync(file, 'utf8'));

@@ -42,6 +42,7 @@ If a failure note reports a merge conflict, `{{base}}` has moved on and no longe
 - If the ticket's work is already on `{{base}}` (another ticket landed it), do not invent a change. Prove each criterion against the code: run the checks the criteria name, then post a `decision` note naming the commits on `{{base}}` that did the work and the evidence for each criterion. Finish as below with nothing to commit; the tester judges the criteria against `{{base}}` and passes an empty diff when they all hold.
 - If a criterion needs a device, DNS, a phone or an account you cannot reach, merged code and passing tests do not meet it, and an empty diff does not either. Ask the operator to make each such check with `ask_operator`, naming the exact steps and what they should see, and wait for the answer. Then call `move_ticket` with those checks in `manual_checks`; it is refused until the operator has answered. If the answer says a check failed, fix it or report that in your summary; do not submit it as done.
 - Use `get_ticket` and `brain_search` when you need more context. Nothing else will be sent to you.
+- Board REST: {{context}}
 - Commit your work in this worktree. Commit message: a plain imperative sentence saying what changed, no ticket or phase ids, no `Co-Authored-By` or other trailer. Add a body only when the why is not obvious.
 
 ## Operator preferences
