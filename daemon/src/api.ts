@@ -19,7 +19,7 @@ import { trustStatus, untrustClaude } from './trust.js';
 import { download, status as voiceStatus } from './voice.js';
 import { limits } from './limits.js';
 import { requirements } from './requirements.js';
-import { mode as recordingMode, renderAgain, start as startRecording, stop as stopRecording, tools as recordingTools, view as recordingView } from './recording.js';
+import { loadPaused, mode as recordingMode, pause as pauseRecording, renderAgain, resume as resumeRecording, start as startRecording, stop as stopRecording, tools as recordingTools, view as recordingView } from './recording.js';
 import { readiness, readyText } from './ready.js';
 import { busy, checkNow, installNow, relay, REPORT, VERSION } from './update.js';
 import { finishPick, startPick } from './pick.js';
@@ -697,6 +697,8 @@ const routes: [method: string, path: RegExp, mutation: string | null, handler: (
     if (body.mode !== 'regular' && body.mode !== 'fast') throw new HttpError(400, 'mode must be regular or fast');
     return { status: 200, body: recordingMode(body.mode, board.repo) };
   }],
+  ['POST', /^\/api\/recording\/pause$/, 'recording.pause', async ({ board }) => ({ status: 200, body: await pauseRecording(board.repo) })],
+  ['POST', /^\/api\/recording\/resume$/, 'recording.resume', async ({ board }) => ({ status: 200, body: await resumeRecording(board) })],
   ['POST', /^\/api\/recording\/stop$/, 'recording.stop', ({ board }) => ({ status: 200, body: stopRecording(board.repo) })],
   ['POST', /^\/api\/recording\/render$/, 'recording.render', ({ board, body }) => {
     if (typeof body.raw !== 'string') throw new HttpError(400, 'raw must be a path');
@@ -742,6 +744,7 @@ function settingsChanged(board: Board) {
   releasePending(board);
   changed(null);
   tick(board);
+  loadPaused(board);
 }
 
 function configName(s: string): OverridableName {

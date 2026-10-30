@@ -1995,7 +1995,7 @@ function taskbar() {
 }
 
 const recTime = () => {
-  const s = Math.max(0, Math.floor((Date.now() - Date.parse(recording.started)) / 1000));
+  const s = Math.max(0, Math.floor(recording.elapsed + (Date.now() - Date.parse(recording.started)) / 1000));
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 };
 function recLine() {
@@ -2010,8 +2010,8 @@ function paintRec() {
   rec.hidden = m.hidden = !settings.recording.enabled;
   rec.disabled = r.state === 'rendering';
   rec.classList.toggle('live', live);
-  rec.lastChild.textContent = live ? recTime() : r.state === 'rendering' ? `Rendering ${Math.round((r.progress ?? 0) * 100)}%` : 'Rec';
-  rec.title = live ? 'Stop recording and render' : r.state === 'rendering' ? 'Rendering the recording' : 'Start recording';
+  rec.lastChild.textContent = live ? recTime() : r.state === 'rendering' ? `Rendering ${Math.round((r.progress ?? 0) * 100)}%` : r.state === 'paused' ? 'Paused' : 'Rec';
+  rec.title = live || r.state === 'paused' ? 'Stop recording and render' : r.state === 'rendering' ? 'Rendering the recording' : 'Start recording';
   m.disabled = !live;
   m.classList.toggle('reg', live && !fast);
   m.classList.toggle('fast', fast);
@@ -2030,7 +2030,7 @@ function paintRec() {
   }
 }
 const recToggle = () => recording.state !== 'rendering' && act(async () => {
-  recording = await api('POST', `/recording/${recording.state === 'recording' ? 'stop' : 'start'}`);
+  recording = await api('POST', `/recording/${recording.state === 'recording' || recording.state === 'paused' ? 'stop' : 'start'}`);
   paintRec();
 });
 const recMode = () => recording.state === 'recording' && act(async () => {

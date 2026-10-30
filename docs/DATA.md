@@ -24,8 +24,9 @@ Living document. Update it in the same change that alters the schema.
   - `worktree_setup` (a shell command run once in each new ticket worktree before its first agent, `npm ci` in this repo; `docs/LIFECYCLE.md` → Worktree setup).
 - `<repo>/.kanban95/runner.json`: `{"on": true | false, "why"?: "nothing left to launch"}`, the Run toggle (`docs/LIFECYCLE.md` → The runner). A `concurrency` key from an older board is ignored: it is `settings.json` `concurrency` now. Written by the daemon on Run, Stop and when the runner stops itself; git-ignored. Absent means off.
 - `<recording.output>/<stamp>/` (`settings.json` `recording.output`, default `<home>/Videos/Kanban95`), one folder per recording, created on start, `<stamp>` being the local start time `YYYY-MM-DD HH-mm` (` (2)`, ` (3)`, ... appended when that folder exists), written by `daemon/src/recording.ts`:
-  - `markers.json` (`{speed, fps, marks: [{t, mode}]}`: `t` seconds on ffmpeg's clock, `mode` `regular` or `fast`, starting with `{t: 0, mode: "regular"}`; rewritten on each change)
-  - `raw.mkv` (the whole session in real time, libx264, no audio)
+  - `markers.json` (`{speed, fps, marks: [{t, mode}]}`: `t` seconds on ffmpeg's clock, summed across segments, `mode` `regular` or `fast`, starting with `{t: 0, mode: "regular"}`; rewritten on each change; after a pause also `paused: true` and `segments: [{file, seconds}]`, the finished segments in order, both dropped when stop joins them)
+  - `raw.mkv` (the whole session in real time, libx264, no audio; after a pause, the first segment)
+  - `raw-2.mkv`, `raw-3.mkv`, ... (one per resume, only until stop joins them into `raw.mkv`)
   - `<speed>x.mp4` (the render, `<speed>` the rounded `recording.speed` it used, for example `10x.mp4`: fast stretches at `speed` times; listed in the Inbox)
   The raw and markers files are deleted after a successful render when `recording.keepRaw` is false; the folder and the mp4 stay. Outside the repo and never given to an agent.
 - `~/.kanban95/` is this machine's local board directory, overridable as a whole by the `KANBAN95_HOME` environment variable (the only override; `localHome` in `daemon/src/settings.ts`). `~` is `os.homedir()` (`HOME`, `USERPROFILE` on Windows), or the OS account's home (`os.userInfo().homedir`, getpwuid on POSIX) when that is unset, empty or not an absolute path. It holds the data folder pointer and the worktrees, and is the data folder when there is no pointer. Under vitest the daemon refuses the real one and throws unless `KANBAN95_HOME` is set, which `daemon/test/home.ts` does for every test file.
@@ -195,7 +196,9 @@ A grant is live when `revoked_at IS NULL AND expires_at > now`. Rows are kept af
   - `grants.revoke`
   - `operator.launch`
   - `recording.mode`
+  - `recording.pause`
   - `recording.render`
+  - `recording.resume`
   - `recording.start`
   - `recording.stop`
   - `runner.set`
