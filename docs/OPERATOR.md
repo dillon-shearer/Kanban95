@@ -235,7 +235,7 @@ The top of the Settings window has a switch with two positions, **All projects**
 - **Fast speed** (`recording.speed`): 2 to 60 times.
 - **Output folder** (`recording.output`): blank for `<home>\Videos\Kanban95`, or type a folder or press **...**.
 - **Keep the raw recording and markers next to the final video** (`recording.keepRaw`).
-- **Render again**: pick a `<stamp> raw.mkv` (its `<stamp> markers.json` must sit beside it) and press **Render**. It says why when refused, else "Rendering..." and then "Done: <mp4 path>" or the error.
+- **Render again**: pick a recording folder's `raw.mkv` (its `markers.json` must sit beside it) and press **Render**. It writes `<speed>x.mp4` in that folder. It says why when refused, else "Rendering..." and then "Done: <mp4 path>" or the error.
 
 Under the fields a line repeats the keys: Ctrl+Shift+R starts and stops, Ctrl+Shift+Space switches between regular and fast.
 
@@ -333,7 +333,9 @@ If the microphone is blocked, the board says how to allow it for the system it r
 
 Turn it on in **Settings → Recording → Enable recording** (`recording.enabled` in `~/.kanban95/settings.json`). With it on (Windows only, ffmpeg on PATH or in `recording.ffmpeg`), the board records the screen `recording.monitor` names, with no audio. Start it, work, and switch between regular and fast as you go; every switch is a mark on the recording's own clock. Stop ends the capture and renders one mp4 in which the fast stretches run `recording.speed` times faster (10 by default). The mp4 shows in the Inbox with Open folder.
 
-Files go to `recording.output`, by default `<home>\Videos\Kanban95`: `<YYYY-MM-DD HH-mm> raw.mkv` (the whole session in real time), `<YYYY-MM-DD HH-mm> markers.json` (the marks) and `<YYYY-MM-DD HH-mm>.mp4`. With `recording.keepRaw` false the first two are deleted once the render succeeds. A failed render keeps both and says why; render the raw again once fixed. Closing the board while recording ends the raw file cleanly but does not render it.
+Each recording gets its own folder in `recording.output`, by default `<home>\Videos\Kanban95`, named for its start minute: `<YYYY-MM-DD HH-mm>\` (` (2)`, ` (3)`, ... when two start in the same minute). It holds `raw.mkv` (the whole session in real time), `markers.json` (the marks) and `<speed>x.mp4` (for example `10x.mp4`); the Inbox shows it as `Recording <folder name> <speed>x`. Delete the folder to delete the recording. With `recording.keepRaw` false the raw and markers are deleted once the render succeeds; the folder and the mp4 stay. A failed render keeps both and says why; render the raw again once fixed. Closing the board while recording ends the raw file cleanly but does not render it.
+
+Old recordings from before folders (a raw `.mkv` and a markers `.json` loose in the output folder) are not moved. To render one again, make a folder, move both files into it, rename them to `raw.mkv` and `markers.json`, then use **Render again**.
 
 **Taskbar.** With `recording.enabled` on, two buttons sit at the start of the tray, left of Inbox (they show or hide as soon as Settings saves the key):
 - **Rec** (Ctrl+Shift+R): a grey dot and "Rec" when idle; click to start. While recording the dot is steady red and the text is the elapsed time (12:34); click to stop and render. While rendering it reads "Rendering 40%" and is disabled. If the render fails it reads "Rec" again and the Board's status bar shows the error.

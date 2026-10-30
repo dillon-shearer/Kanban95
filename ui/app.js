@@ -1754,7 +1754,7 @@ async function recordingPanel(p, redraw) {
       h('button', { id: 'rec-save', onclick: save }, 'Save'),
       h('p', {}, 'Shortcuts inside the board: Ctrl+Shift+R starts and stops, Ctrl+Shift+Space switches between regular and fast.')];
   }, redraw);
-  const raw = h('input', { type: 'text', id: 'rec-raw', 'data-mic': 'off', size: 40, placeholder: '<YYYY-MM-DD HH-mm> raw.mkv' });
+  const raw = h('input', { type: 'text', id: 'rec-raw', 'data-mic': 'off', size: 40, placeholder: '<recording folder>\\raw.mkv' });
   const said = h('span', { id: 'rec-render-status' });
   const render = async () => {
     said.textContent = 'Rendering...';

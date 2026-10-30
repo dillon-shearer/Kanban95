@@ -129,10 +129,16 @@ async function input(exe: string, monitor: number, fps: number): Promise<string[
 
 const pad = (n: number) => String(n).padStart(2, '0');
 const stampOf = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}-${pad(d.getMinutes())}`;
-const RAW = ' raw.mkv';
-const MARKERS = ' markers.json';
+const RAW = 'raw.mkv';
+const MARKERS = 'markers.json';
 
-type Capture = Proc & { stem: string; marks: Mark[]; speed: number; fps: number; stopping: boolean; halted: boolean };
+export function folderFor(dir: string, now: Date): string {
+  let folder = join(dir, stampOf(now));
+  for (let n = 2; existsSync(folder); n++) folder = join(dir, `${stampOf(now)} (${n})`);
+  return folder;
+}
+
+type Capture = Proc & { folder: string; marks: Mark[]; speed: number; fps: number; stopping: boolean; halted: boolean };
 
 // ponytail: one recording per daemon, so two boards can record at once. A machine-wide lock would go in the running-registry
 // entry (boards.ts register).
@@ -166,7 +172,7 @@ function emit() {
   events.emit('event', { recording: view(owner?.repo) });
 }
 
-const save = (c: Capture) => writeFileSync(c.stem + MARKERS, JSON.stringify({ speed: c.speed, fps: c.fps, marks: c.marks }, null, 2));
+const save = (c: Capture) => writeFileSync(join(c.folder, MARKERS), JSON.stringify({ speed: c.speed, fps: c.fps, marks: c.marks }, null, 2));
 
 export async function start(board: Board) {
   const cfg = readConfig('settings', board.repo).recording;
@@ -187,18 +193,17 @@ export async function start(board: Board) {
   }
   busy();
   const dir = cfg.output || OUTPUT();
-  try {
-    mkdirSync(dir, { recursive: true });
-  } catch (e) {
-    throw new Refused(`cannot create ${dir}: ${(e as Error).message}`);
-  }
   const now = new Date();
-  let stem = join(dir, stampOf(now));
-  for (let n = 2; [RAW, MARKERS, '.mp4'].some((s) => existsSync(stem + s)); n++) stem = join(dir, `${stampOf(now)} (${n})`);
-  const raw = run(cfg.ffmpeg || 'ffmpeg', [...args, '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '18', '-pix_fmt', 'yuv420p', '-r', String(cfg.fps), '-an', '-stats_period', '0.1', '-n', stem + RAW], (t) => {
+  const folder = folderFor(dir, now);
+  try {
+    mkdirSync(folder, { recursive: true });
+  } catch (e) {
+    throw new Refused(`cannot create ${folder}: ${(e as Error).message}`);
+  }
+  const raw = run(cfg.ffmpeg || 'ffmpeg', [...args, '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '18', '-pix_fmt', 'yuv420p', '-r', String(cfg.fps), '-an', '-stats_period', '0.1', '-n', join(folder, RAW)], (t) => {
     if (capture === c) elapsed = t;
   });
-  const c: Capture = { ...raw, stem, marks: [{ t: 0, mode: 'regular' }], speed: cfg.speed, fps: cfg.fps, stopping: false, halted: false };
+  const c: Capture = { ...raw, folder, marks: [{ t: 0, mode: 'regular' }], speed: cfg.speed, fps: cfg.fps, stopping: false, halted: false };
   save(c);
   state = 'recording';
   capture = c;
@@ -249,16 +254,17 @@ export function stop(repo?: string) {
     await quit(c);
     if (c.halted) return;
     capture = null;
-    await render(owner!, c.stem + RAW, c.stem + MARKERS, `${c.stem}.mp4`, elapsed);
+    await render(owner!, join(c.folder, RAW), join(c.folder, MARKERS), elapsed);
   })();
   return view(repo);
 }
 
 export function renderAgain(board: Board, raw: string) {
   if (starting || state !== 'idle') throw new Refused(state === 'rendering' ? 'a render is running' : 'a recording is running');
-  if (!isAbsolute(raw) || !raw.endsWith(RAW) || !existsSync(raw)) throw new Refused(`${raw} is not a raw recording (<stamp>${RAW})`);
-  const stem = raw.slice(0, -RAW.length);
-  if (!existsSync(stem + MARKERS)) throw new Refused(`${basename(stem) + MARKERS} is missing beside ${basename(raw)}`);
+  const layout = `expected <recording folder>\\${RAW} with ${MARKERS} beside it`;
+  if (!isAbsolute(raw) || basename(raw) !== RAW || !existsSync(raw)) throw new Refused(`${raw} is not a raw recording (${layout})`);
+  const markers = join(dirname(raw), MARKERS);
+  if (!existsSync(markers)) throw new Refused(`${MARKERS} is missing beside ${raw} (${layout})`);
   owner = board;
   state = 'rendering';
   started = null;
@@ -267,13 +273,14 @@ export function renderAgain(board: Board, raw: string) {
   output = null;
   error = null;
   emit();
-  void render(board, raw, stem + MARKERS, `${stem}.mp4`);
+  void render(board, raw, markers);
   return view(board.repo);
 }
 
-async function render(board: Board, raw: string, markers: string, out: string, seconds?: number): Promise<void> {
+async function render(board: Board, raw: string, markers: string, seconds?: number): Promise<void> {
   try {
     const cfg = readConfig('settings', board.repo).recording;
+    const out = join(dirname(raw), `${Math.round(cfg.speed)}x.mp4`);
     const exe = cfg.ffmpeg || 'ffmpeg';
     const { marks } = JSON.parse(readFileSync(markers, 'utf8')) as { marks: Mark[] };
     const total = (await probe(exe, raw)) ?? seconds;
@@ -290,7 +297,7 @@ async function render(board: Board, raw: string, markers: string, out: string, s
       rmSync(out, { force: true });
       throw new Error(failed(p, code));
     }
-    postDeliverable(board.db, out, null, `Recording ${basename(out)}`);
+    postDeliverable(board.db, out, null, `Recording ${basename(dirname(raw))} ${Math.round(cfg.speed)}x`);
     changed(null);
     if (!cfg.keepRaw) for (const f of [raw, markers]) rmSync(f, { force: true });
     output = out;
