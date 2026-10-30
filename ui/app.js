@@ -1995,29 +1995,32 @@ function taskbar() {
 }
 
 const recTime = () => {
-  const s = Math.max(0, Math.floor(recording.elapsed + (Date.now() - Date.parse(recording.started)) / 1000));
+  const s = Math.max(0, Math.floor(recording.elapsed + (recording.started ? (Date.now() - Date.parse(recording.started)) / 1000 : 0)));
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 };
 function recLine() {
   const r = recording;
   if (r.state === 'recording') return `Recording ${recTime()}, ${r.mode === 'fast' ? `fast ${r.speed}x` : 'regular'} · fast stretches so far: ${r.fastStretches}`;
+  if (r.state === 'paused') return `Paused ${recTime()} · fast stretches so far: ${r.fastStretches}`;
   if (r.state === 'rendering') return `Rendering ${Math.round((r.progress ?? 0) * 100)}%`;
   return r.error ?? '';
 }
 function paintRec() {
-  const r = recording, live = r.state === 'recording', fast = live && r.mode === 'fast';
+  const r = recording, live = r.state === 'recording', paused = r.state === 'paused', fast = live && r.mode === 'fast';
   const rec = document.getElementById('rec'), m = document.getElementById('rec-mode');
   rec.hidden = m.hidden = !settings.recording.enabled;
   rec.disabled = r.state === 'rendering';
   rec.classList.toggle('live', live);
-  rec.lastChild.textContent = live ? recTime() : r.state === 'rendering' ? `Rendering ${Math.round((r.progress ?? 0) * 100)}%` : r.state === 'paused' ? 'Paused' : 'Rec';
-  rec.title = live || r.state === 'paused' ? 'Stop recording and render' : r.state === 'rendering' ? 'Rendering the recording' : 'Start recording';
-  m.disabled = !live;
+  rec.classList.toggle('paused', paused);
+  rec.lastChild.textContent = live || paused ? recTime() : r.state === 'rendering' ? `Rendering ${Math.round((r.progress ?? 0) * 100)}%` : 'Rec';
+  rec.title = live ? 'Pause recording' : paused ? 'Resume recording' : r.state === 'rendering' ? 'Rendering the recording' : 'Start recording';
+  m.disabled = !live && !paused;
   m.classList.toggle('reg', live && !fast);
   m.classList.toggle('fast', fast);
-  m.firstChild.textContent = fast ? '▶▶' : '▶';
-  m.lastChild.textContent = fast ? `${r.speed}x` : '1x';
-  m.title = fast ? `Fast ${r.speed}x. Click for regular` : 'Regular speed. Click for fast';
+  m.classList.toggle('stop', paused);
+  m.firstChild.textContent = paused ? '■' : fast ? '▶▶' : '▶';
+  m.lastChild.textContent = paused ? 'Stop' : fast ? `${r.speed}x` : '1x';
+  m.title = paused ? 'Stop and render' : fast ? `Fast ${r.speed}x. Click for regular` : 'Regular speed. Click for fast';
   const f = document.querySelector('.k95-board .k95-recording');
   if (f) {
     f.textContent = f.title = recLine();
@@ -2030,7 +2033,12 @@ function paintRec() {
   }
 }
 const recToggle = () => recording.state !== 'rendering' && act(async () => {
-  recording = await api('POST', `/recording/${recording.state === 'recording' || recording.state === 'paused' ? 'stop' : 'start'}`);
+  recording = await api('POST', `/recording/${{ recording: 'pause', paused: 'resume' }[recording.state] ?? 'start'}`);
+  paintRec();
+});
+const recStop = () => act(async () => {
+  if ((await dialog('Stop recording', 'Stop and render?', ['OK', 'Cancel'])) !== 'OK') return;
+  recording = await api('POST', '/recording/stop');
   paintRec();
 });
 const recMode = () => recording.state === 'recording' && act(async () => {
@@ -2125,7 +2133,7 @@ async function boot() {
   document.getElementById('restart-badge').addEventListener('click', restartBoard);
   document.getElementById('limits').addEventListener('click', openLimits);
   document.getElementById('rec').addEventListener('click', recToggle);
-  document.getElementById('rec-mode').addEventListener('click', recMode);
+  document.getElementById('rec-mode').addEventListener('click', () => (recording.state === 'paused' ? recStop() : recMode()));
   desktopIcons();
   loadProjectItems();
   const lastBoard = () => api('POST', '/last-board', location.hash === '#own' ? { window: 'own' } : {}).catch(() => {});
