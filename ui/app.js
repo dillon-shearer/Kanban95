@@ -37,6 +37,8 @@ let models = null; // models.json this board runs on (this repo's copy, else the
 // `terminals` is absent until then too, so no session is opened or passed over before the operator's phases are known.
 const SETTINGS = { paths: {}, sounds: { merge: false, attention: false, done: false }, voice: { backend: 'local', mode: 'push' }, housekeeping: { auto: true, every: 10 }, recording: { enabled: false, ffmpeg: '', monitor: 0, fps: 60, quality: 'high', speed: 10, output: '', keepRaw: true }, idle_minutes: 20, zoom: 1, push_after_merge: true, sleepAfterMinutes: 30, concurrency: 3, updateCheck: true, release: false, workers_read: 'deps', startup: 'last' };
 let settings = { ...SETTINGS };
+let recording = { state: 'idle', mode: 'regular', started: null, elapsed: 0, speed: 10, progress: null, output: null, error: null, fastStretches: 0 };
+let recTick = null;
 let limits = null; // GET /api/limits: { rows, errors, fetched_at }, null until the first answer
 const views = new Map(); // open window id → redraw(Set of changed ticket ids | undefined)
 const forms = new Map();
@@ -80,7 +82,11 @@ function listen() {
       else if (e.sound === 'done' && e.ticket != null) say(`#${e.ticket} passed, in Done.`);
       return;
     }
-    if (e.recording) return onRecording?.(e.recording);
+    if (e.recording) {
+      recording = e.recording;
+      onRecording?.(e.recording);
+      return paintRec();
+    }
     if (e.update) return onUpdate(e.update);
     if (e.type === 'pick') return pickDone(e);
     if (e.type === 'open-failed') return say(`${e.folder} did not open: ${e.reason}`);
@@ -693,6 +699,7 @@ function openBoard() {
   // runner.unpushed: commits on the base its upstream lacks, counted on start; Push runs the merge queue's push.
   const unpushedText = h('span');
   const unpushedField = h('p', { class: 'status-bar-field k95-unpushed' }, unpushedText, ' ', h('button', { onclick: pushBase }, 'Push'));
+  const recField = h('p', { class: 'status-bar-field k95-recording', hidden: true });
   const cols = h('div', { class: 'k95-columns', onclick: (e) => { // a click on empty column space clears the selection
     if (!e.target.closest('.card')) selection.clear(), drawBoard();
   } });
@@ -713,7 +720,7 @@ function openBoard() {
       filter),
     empty,
     cols,
-    h('div', { class: 'status-bar' }, status, runField, releaseField, unpushedField, heldField));
+    h('div', { class: 'status-bar' }, status, runField, recField, releaseField, unpushedField, heldField));
   say = (msg) => { status.textContent = msg; status.title = msg; };
   views.set('board', () => {
     const all = [...tickets.values()];
@@ -753,6 +760,7 @@ function openBoard() {
     releaseField.hidden = !rel;
   });
   drawBoard();
+  paintRec();
 }
 const drawBoard = () => views.get('board')?.(null);
 const setupBoard = () => act(async () => {
@@ -1203,6 +1211,7 @@ async function loadSettings() {
   settings = settingsFrom(r.value);
   settingsOwn = r.overridden;
   configure(settings.voice);
+  paintRec();
 }
 async function loadModels() {
   models = (await api('GET', '/config/models?scope=project')).value;
@@ -1728,7 +1737,6 @@ async function recordingPanel(p, redraw) {
       const next = { enabled: enabled.checked, ffmpeg: ffmpeg.value.trim(), monitor: monitor.value === '' ? r.monitor : Number(monitor.value), fps: Number(fps.value),
         quality: quality.value, speed: Number(speed.value), output: output.value.trim(), keepRaw: keepRaw.checked };
       Object.assign(r, (await putSettings(scope, { recording: next })).recording);
-      taskbar();
       tools = await api('GET', '/recording/tools');
       show();
     }, 'Saved.');
@@ -1985,6 +1993,50 @@ function taskbar() {
   l.classList.toggle('flag', !!r && pct(r) >= 90);
 }
 
+const recTime = () => {
+  const s = Math.max(0, Math.floor((Date.now() - Date.parse(recording.started)) / 1000));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+};
+function recLine() {
+  const r = recording;
+  if (r.state === 'recording') return `Recording ${recTime()}, ${r.mode === 'fast' ? `fast ${r.speed}x` : 'regular'} · fast stretches so far: ${r.fastStretches}`;
+  if (r.state === 'rendering') return `Rendering ${Math.round((r.progress ?? 0) * 100)}%`;
+  return r.error ?? '';
+}
+function paintRec() {
+  const r = recording, live = r.state === 'recording', fast = live && r.mode === 'fast';
+  const rec = document.getElementById('rec'), m = document.getElementById('rec-mode');
+  rec.hidden = m.hidden = !settings.recording.enabled;
+  rec.disabled = r.state === 'rendering';
+  rec.classList.toggle('live', live);
+  rec.lastChild.textContent = live ? recTime() : r.state === 'rendering' ? `Rendering ${Math.round((r.progress ?? 0) * 100)}%` : 'Rec';
+  rec.title = live ? 'Stop recording and render' : r.state === 'rendering' ? 'Rendering the recording' : 'Start recording';
+  m.disabled = !live;
+  m.classList.toggle('reg', live && !fast);
+  m.classList.toggle('fast', fast);
+  m.firstChild.textContent = fast ? '▶▶' : '▶';
+  m.lastChild.textContent = fast ? `${r.speed}x` : '1x';
+  m.title = fast ? `Fast ${r.speed}x. Click for regular` : 'Regular speed. Click for fast';
+  const f = document.querySelector('.k95-board .k95-recording');
+  if (f) {
+    f.textContent = f.title = recLine();
+    f.hidden = !f.textContent;
+  }
+  if (live && !recTick) recTick = setInterval(paintRec, 1000);
+  else if (!live && recTick) {
+    clearInterval(recTick);
+    recTick = null;
+  }
+}
+const recToggle = () => recording.state !== 'rendering' && act(async () => {
+  recording = await api('POST', `/recording/${recording.state === 'recording' ? 'stop' : 'start'}`);
+  paintRec();
+});
+const recMode = () => recording.state === 'recording' && act(async () => {
+  recording = await api('POST', '/recording/mode', { mode: recording.mode === 'fast' ? 'regular' : 'fast' });
+  paintRec();
+});
+
 const clock = () => { document.getElementById('clock').textContent = new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }); };
 
 // Esc closes the focused window, Ctrl+L turns the runner on or off, Ctrl+A selects every card the filter shows in an open column on a focused Board,
@@ -2034,6 +2086,12 @@ addEventListener('keydown', (e) => {
     if (!id) return;
     e.preventDefault(); // not a page reload
     restart(Number(id));
+  } else if (e.ctrlKey && e.shiftKey && !e.altKey && settings.recording.enabled && e.key.toLowerCase() === 'r') {
+    e.preventDefault();
+    recToggle();
+  } else if (e.ctrlKey && e.shiftKey && !e.altKey && settings.recording.enabled && e.key === ' ') {
+    e.preventDefault();
+    recMode();
   } else if (e.ctrlKey && e.shiftKey && !e.altKey && e.key.toLowerCase() === 'n') {
     e.preventDefault();
     newOperator();
@@ -2065,6 +2123,8 @@ async function boot() {
   document.getElementById('inbox-count').addEventListener('click', openInbox);
   document.getElementById('restart-badge').addEventListener('click', restartBoard);
   document.getElementById('limits').addEventListener('click', openLimits);
+  document.getElementById('rec').addEventListener('click', recToggle);
+  document.getElementById('rec-mode').addEventListener('click', recMode);
   desktopIcons();
   loadProjectItems();
   const lastBoard = () => api('POST', '/last-board', location.hash === '#own' ? { window: 'own' } : {}).catch(() => {});
@@ -2090,6 +2150,7 @@ async function boot() {
     LAYOUT[id]();
   }
   console.log(`First paint: ${Math.round(performance.now())} ms`);
+  api('GET', '/recording').then((r) => { recording = r; paintRec(); }, () => {});
   update.then((u) => {
     appVersion = u.version;
     canRelease = u.release;

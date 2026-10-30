@@ -83,6 +83,13 @@ fieldset {
 .k95-switch-row .x { flex: none; min-width: 0; min-height: 0; width: 16px; height: 14px; padding: 0; font-size: 9px; font-weight: bold; }
 .k95-switch-none { padding: 2px 4px; color: grey; }
 .tray-button.flag { color: #a00; font-weight: bold; }
+#rec, #rec-mode { display: flex; align-items: center; gap: 3px; }
+#rec[hidden], #rec-mode[hidden] { display: none; }
+#rec .dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: grey; border: 1px solid #404040; box-sizing: border-box; }
+#rec.live .dot { background: #e00; border-color: #800; }
+#rec-mode .icon { font-size: 7px; }
+#rec-mode.reg { background: #0a0; text-shadow: 0 0 #fff; }
+#rec-mode.fast { background: #00a; text-shadow: 0 0 #fff; }
 
 /* Menus (Start, card context menu) */
 .k95-menu { position: fixed; z-index: 100000; margin: 0; padding: 2px; list-style: none; background: silver; min-width: 150px;
