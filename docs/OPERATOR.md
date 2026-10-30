@@ -313,6 +313,12 @@ If the microphone is blocked, the board says how to allow it for the system it r
 
 **Zero-code fallback: Win+H.** Windows' own dictation works in any field of the board, including the terminals, with nothing to set up. It is Windows' feature and its privacy terms, not the board's; the mic button is the board's own path.
 
+## Recording
+
+With `recording.enabled` true in `~/.kanban95/settings.json` (Windows only, ffmpeg on PATH or in `recording.ffmpeg`), the board records the screen `recording.monitor` names, with no audio. Start it, work, and switch between regular and fast as you go; every switch is a mark on the recording's own clock. Stop ends the capture and renders one mp4 in which the fast stretches run `recording.speed` times faster (10 by default). The mp4 shows in the Inbox with Open folder.
+
+Files go to `recording.output`, by default `<home>VideosKanban95`: `<YYYY-MM-DD HH-mm> raw.mkv` (the whole session in real time), `<YYYY-MM-DD HH-mm> markers.json` (the marks) and `<YYYY-MM-DD HH-mm>.mp4`. With `recording.keepRaw` false the first two are deleted once the render succeeds. A failed render keeps both and says why; render the raw again once fixed. Closing the board while recording ends the raw file cleanly but does not render it.
+
 ## Sounds
 
 - **Ding** (a soft two-tone chime): a ticket merged; the status bar says "#<id> merged." It also plays once, with no message, when the runner stops because nothing is left to launch.

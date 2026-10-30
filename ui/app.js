@@ -80,6 +80,7 @@ function listen() {
       else if (e.sound === 'done' && e.ticket != null) say(`#${e.ticket} passed, in Done.`);
       return;
     }
+    if (e.recording) return;
     if (e.update) return onUpdate(e.update);
     if (e.type === 'pick') return pickDone(e);
     if (e.type === 'open-failed') return say(`${e.folder} did not open: ${e.reason}`);
@@ -1176,7 +1177,7 @@ function openInbox() {
         h('div', { class: 'field-row' }, answer),
         h('button', { onclick: () => act(() => api('POST', `/tickets/${q.ticket_id}/answer`, { answer: answer.value }), `Answer sent to #${q.ticket_id}.`) }, 'Answer'));
     }), ...deliverables.map((d) => h('fieldset', { class: 'k95-deliverable', 'data-folder': d.folder }, h('legend', {}, d.folder),
-      h('div', { class: 'note-head' }, `#${d.ticket_id} ${d.title} · posted ${fmt(d.merged_at)}`),
+      h('div', { class: 'note-head' }, `${d.ticket_id == null ? '' : `#${d.ticket_id} `}${d.title} · posted ${fmt(d.merged_at)}`),
       h('div', { class: 'field-row' },
         h('button', { onclick: () => act(() => api('POST', '/deliverables/open', { folder: d.folder })) }, 'Open folder'),
         h('button', { onclick: () => act(() => api('DELETE', '/deliverables', { folder: d.folder })) }, 'Dismiss'))))] : [h('p', {}, 'Nothing needs you.')]));

@@ -19,7 +19,7 @@ import { trustStatus, untrustClaude } from './trust.js';
 import { download, status as voiceStatus } from './voice.js';
 import { limits } from './limits.js';
 import { requirements } from './requirements.js';
-import { tools as recordingTools } from './recording.js';
+import { mode as recordingMode, renderAgain, start as startRecording, stop as stopRecording, tools as recordingTools, view as recordingView } from './recording.js';
 import { readiness, readyText } from './ready.js';
 import { busy, checkNow, installNow, relay, REPORT, VERSION } from './update.js';
 import { finishPick, startPick } from './pick.js';
@@ -691,6 +691,17 @@ const routes: [method: string, path: RegExp, mutation: string | null, handler: (
   ['GET', /^\/api\/limits$/, null, async ({ url }) => ({ status: 200, body: await limits(url.searchParams.has('refresh')) })],
   ['GET', /^\/api\/requirements$/, null, async ({ board }) => ({ status: 200, body: await requirements(board.repo) })],
   ['GET', /^\/api\/recording\/tools$/, null, async ({ board }) => ({ status: 200, body: await recordingTools(board.repo) })],
+  ['GET', /^\/api\/recording$/, null, ({ board }) => ({ status: 200, body: recordingView(board.repo) })],
+  ['POST', /^\/api\/recording\/start$/, 'recording.start', async ({ board }) => ({ status: 200, body: await startRecording(board) })],
+  ['POST', /^\/api\/recording\/mode$/, 'recording.mode', ({ board, body }) => {
+    if (body.mode !== 'regular' && body.mode !== 'fast') throw new HttpError(400, 'mode must be regular or fast');
+    return { status: 200, body: recordingMode(body.mode, board.repo) };
+  }],
+  ['POST', /^\/api\/recording\/stop$/, 'recording.stop', ({ board }) => ({ status: 200, body: stopRecording(board.repo) })],
+  ['POST', /^\/api\/recording\/render$/, 'recording.render', ({ board, body }) => {
+    if (typeof body.raw !== 'string') throw new HttpError(400, 'raw must be a path');
+    return { status: 200, body: renderAgain(board, body.raw) };
+  }],
   ['GET', /^\/api\/ready$/, null, async ({ board }) => ({ status: 200, body: await readiness(board) })],
   ['GET', /^\/api\/voice$/, null, async () => ({ status: 200, body: await voiceStatus() })],
   // The board's only network call, started by the operator's OK in the download dialog (docs/SECURITY.md → Voice model).
