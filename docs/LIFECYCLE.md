@@ -15,7 +15,7 @@ Status is one of **backlog → in_progress → testing → done**. Two flags sit
 | `pass` | the tester's `report_test(passed: true)` (an operator's `move_ticket(done)` after it) |
 | `fail` | the tester's `report_test(passed: false)`, or an operator's `move_ticket(in_progress)` on a ticket in testing |
 | `ask` | `ask_operator` from any agent, or the silence watch when a Claude Code agent sits on its own prompt (Claude Code prompts below) |
-| `answer` | the operator, `POST /api/tickets/:id/answer` |
+| `answer` | the operator, `POST /api/tickets/:id/answer`, or the operator terminal's `answer_question` (its note starts "answered from the operator terminal"; it never answers a permission request or a Claude Code prompt and never confirms manual checks) |
 | `typed` | the operator pressing Enter in the agent's terminal while the ticket's question is open (an answer given there, not in the Inbox) |
 | `exit` | the agent's terminal closed without a `move_ticket` or `report_test`, or its launch failed, or Windows failed to start its CLI more than `START_RETRY.max` times in a row (Processes that never started below) |
 | `silent` | the silence watch, when a live agent's transcript has gained no line for `idle_minutes` (Silent agents below) |
