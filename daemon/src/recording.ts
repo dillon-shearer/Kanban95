@@ -157,7 +157,7 @@ function speedOf(repo?: string): number | null {
 }
 
 export function view(repo?: string) {
-  return { state, mode: current, started: started?.toISOString() ?? null, elapsed, speed: capture?.speed ?? speedOf(repo), progress, output, error };
+  return { state, mode: current, started: started?.toISOString() ?? null, elapsed, speed: capture?.speed ?? speedOf(repo), progress, output, error, fastStretches: capture?.marks.filter((m) => m.mode === 'fast').length ?? 0 };
 }
 
 function emit() {

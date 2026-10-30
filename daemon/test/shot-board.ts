@@ -32,7 +32,7 @@ export async function withBoard(zoom: number, shoot: (login: string, base: strin
     writeFileSync(join(process.env.KANBAN95_HOME, 'models.json'), JSON.stringify({
       cli: 'claude', claude: { plan: { model: 'plan', effort: 'low' }, execute: { model: 'work', effort: 'low' }, test: { model: 'pass', effort: 'low' } },
     }));
-    writeFileSync(join(process.env.KANBAN95_HOME, 'settings.json'), JSON.stringify({ zoom, updateCheck: false }));
+    writeFileSync(join(process.env.KANBAN95_HOME, 'settings.json'), JSON.stringify({ zoom, updateCheck: false, recording: { enabled: true } }));
     mkdirSync(repo);
     const git = (...a: string[]) => execFileSync('git', a, { cwd: repo, stdio: 'ignore' });
     git('init', '-q', '-b', 'main');
