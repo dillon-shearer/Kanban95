@@ -3,13 +3,13 @@ import { existsSync, statSync } from 'node:fs';
 import { dirname, isAbsolute, resolve } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 
-export type Deliverable = { folder: string; ticket_id: number; title: string; merged_at: string };
+export type Deliverable = { folder: string; ticket_id: number | null; title: string; merged_at: string };
 
 const PUT = `INSERT INTO deliverables (folder, ticket_id, title, merged_at) VALUES (?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
     ON CONFLICT (folder) DO UPDATE SET ticket_id = excluded.ticket_id, title = excluded.title, merged_at = excluded.merged_at`;
 const firstLine = (title: string) => title.split(/\r?\n/)[0].trim();
 
-export function postDeliverable(db: DatabaseSync, folder: string, ticketId: number, title: string): Deliverable {
+export function postDeliverable(db: DatabaseSync, folder: string, ticketId: number | null, title: string): Deliverable {
   if (!isAbsolute(folder)) throw new Error(`${folder} is not an absolute path`);
   const path = resolve(folder);
   if (!existsSync(path)) throw new Error(`${path} does not exist`);

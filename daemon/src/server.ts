@@ -17,6 +17,7 @@ import { countUnpushed, events, recover, releasePending, tick, typed, watchSilen
 import { handleMcp } from './mcp.js';
 import { startMemoryLog } from './memlog.js';
 import { idle } from './merge.js';
+import { halt } from './recording.js';
 import { addProject, dataHome, gone, missingHome, onReadOnly, readConfig } from './settings.js';
 import { handleSetup, setupPage, startupProject } from './setup.js';
 import { initTemplates } from './templates.js';
@@ -347,6 +348,7 @@ export function start(config: Config = {}): Promise<{
           clearInterval(daily);
           unwatch();
           clearTimeout(nap);
+          await halt();
           await killAll(); // run rows and exit flags are written before the db closes
           await idle(); // and every queued merge has finished
           stopMemoryLog();
