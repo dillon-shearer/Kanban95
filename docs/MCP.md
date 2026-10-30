@@ -31,6 +31,7 @@ A refused call returns a tool error whose text says why and, for `move_ticket`, 
 | brain_delete | yes | no | no | yes |
 | brain_search | yes | yes | yes | yes |
 | ask_operator | no | own | own | no |
+| answer_question | no | no | no | any |
 | request_permission | no | own | own | no |
 | report_test | no | no | own | no |
 | post_deliverable | no | own | no | any |
@@ -206,6 +207,15 @@ Ask the human operator a question you cannot resolve from the ticket, the brain 
 |---|---|---|---|
 | ticket_id | integer | no | Ticket id. Worker and tester grants are bound to one ticket and may omit it; a planner or operator must give it. |
 | question | string | yes |  |
+
+### answer_question
+
+Answer the open ask_operator question on a ticket when the operator has handed you the decision ("you handle it"). The answer is kept as an answer note that names the operator terminal, typed into the ticket's agent as one line (or, with no agent running, the agent starts again and reads it), and the ticket's needs_human flag clears, so its move to testing is no longer refused. It never confirms manual_checks. Refused when the ticket has no open question, for a request_permission or a Claude Code prompt (those stay the human operator's, in the Inbox), and for an agent's own ticket. Returns the ticket.
+
+| argument | type | required | description |
+|---|---|---|---|
+| ticket_id | integer | no | Ticket id. Worker and tester grants are bound to one ticket and may omit it; a planner or operator must give it. |
+| answer | string | yes | The answer, one line. |
 
 ### request_permission
 
