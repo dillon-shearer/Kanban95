@@ -87,6 +87,7 @@ fieldset {
 #rec[hidden], #rec-mode[hidden] { display: none; }
 #rec .dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: grey; border: 1px solid #404040; box-sizing: border-box; }
 #rec.live .dot { background: #e00; border-color: #800; }
+#rec.paused .dot { background: #e90; border-color: #840; }
 #rec-mode .icon { font-size: 7px; }
 #rec-mode.reg { background: #0a0; text-shadow: 0 0 #fff; }
 #rec-mode.fast { background: #00a; text-shadow: 0 0 #fff; }
