@@ -66,6 +66,7 @@ const ticketId = z.number().int().positive().optional()
 export const PENDING = 'an earlier request_permission on this ticket is still unanswered; the operator answers it with Approve or Deny in the Inbox or on the Ticket tab of the ticket\x27s window, or by typing yes or no in this terminal. Wait for the answer; do not ask again';
 const RAISE = /\b(?:raise|bump|increase|lift|grant|give|set|approve)\b[^\n]{0,80}?\b(?:agent[ _-]?level|level\s*[1-4]\b|read[ _-]?all)/i;
 export const RAISE_ASK = 'an ask_operator answer never changes the ticket\x27s agent level or read all, so this question is refused; call request_permission with the level or read_all and a reason, and the operator gets Approve and Deny in the Inbox';
+const REOPENED = 'reopened from Done with move_ticket; read the earlier notes with get_ticket and carry on from the work already done';
 const ask = (need: number | undefined) => (need === undefined ? '' : `; ask for level ${need} with request_permission`);
 
 /** Resolves the ticket a call is about. In a worker/tester cell: its own, a foreign id is a scope denial. In an operator cell: the id given, else its own. */
@@ -321,7 +322,7 @@ export const TOOLS: Record<string, Tool<z.ZodRawShape>> = {
       'A tester does not need it: report_test moves the ticket (to done or back to in_progress) and ends the session. ' +
       'A move to the column the ticket is already in returns the ticket unchanged. ' +
       'Once the move is accepted your session is over: the board ends it and starts the next agent. ' +
-      'An operator grant may move any ticket the same ways, which ends that ticket\x27s agent, not its own session, may launch a backlog ticket by moving it to in_progress, and may park any ticket by moving it to backlog, as Reset to Backlog does; ' +
+      'An operator grant may move any ticket the same ways, which ends that ticket\x27s agent, not its own session, may launch a backlog ticket by moving it to in_progress, may reopen a done ticket by moving it to in_progress, as Reject does (a fresh worker, retry 0; it gets a note saying the ticket was reopened and every failure note added since its last run, so add_note what to change first), and may park any ticket by moving it to backlog, as Reset to Backlog does; ' +
       'it still cannot finish a ticket the tester has not passed. ' +
       'Give manual_checks when a criterion needs something you cannot reach (a device, DNS, a phone, an account): merged code and passing tests do not prove it, and the move is refused until the operator has confirmed the checks through ask_operator. Returns the ticket.',
     access: {
@@ -340,12 +341,13 @@ export const TOOLS: Record<string, Tool<z.ZodRawShape>> = {
         const need = unbound(role) ? -1 : LEVEL_MOVES.findIndex((m) => m.includes(a.status));
         throw new Deny(`${an(role)} may only move ${unbound(role) ? 'a' : mine ? 'its' : 'another'} ticket to: ${allowed.join(', ')}${ask(need > 0 ? need : undefined)}`);
       }
-      // Into in_progress: from backlog it is a launch, from testing a failed test.
+      // Into in_progress: from backlog it is a launch, from testing a failed test, from done a reopen (the operator's Reject).
       const from = readTicket(c.db, id).status;
       // Already there (a tester whose report_test moved it, then followed the old two-step script): nothing to do.
       if (from === a.status) return readTicket(c.db, id);
       if (a.status === 'testing' || a.status === 'done') confirmed(c.db, id, a.manual_checks);
       if (a.status === 'backlog') return apply(c.board, id, 'reset').ticket;
+      if (a.status === 'in_progress' && from === 'done') return apply(c.board, id, 'reject', { note: { role, kind: 'failure', body: REOPENED } }).ticket;
       if (a.status !== 'done') return apply(c.board, id, a.status === 'testing' ? 'submit' : from === 'backlog' ? 'launch' : 'fail').ticket;
       try {
         return apply(c.board, id, 'pass').ticket;

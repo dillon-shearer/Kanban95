@@ -28,7 +28,7 @@ Status is one of **backlog → in_progress → testing → done**. Two flags sit
 | `merge` | the operator retrying a failed merge, `POST /api/tickets/:id/merge` |
 | `resume` | the operator, Resume in the card menu or the Inbox, `POST /api/tickets/:id/resume` |
 | `restart` | the operator, Restart in the card menu, the ticket window (Ctrl+R) or the Inbox, `POST /api/tickets/:id/restart` |
-| `reject` | the operator, Reject on a Done card's menu or in its ticket window, `POST /api/tickets/:id/reject` |
+| `reject` | the operator, Reject on a Done card's menu or in its ticket window, `POST /api/tickets/:id/reject`; an operator grant's `move_ticket(in_progress)` on a done ticket, or a worker or tester grant's from level 1 |
 | `reset` | an operator grant's `move_ticket(backlog)`, or a worker or tester grant's, allowed from level 1 (Agent moves under a level below) |
 | `close` | a worker or tester grant's `move_ticket(done)` on a ticket the tester has not passed, allowed from level 2 (Agent moves under a level below) |
 
@@ -98,6 +98,8 @@ A drag into any other column is the same PATCH with that `status`, and is not a 
 
 Reject is how the operator sends a Done ticket they do not accept back to a worker, with a reason, instead of Reset to Backlog, which loses both the reason and the work. The reason is required (the REST route refuses a missing or blank one with `400`, the dialog will not submit it) and is written as a `failure` note with role `operator`, so the worker sees it under "What failed on the last attempt" as `- [operator] …`. `retry` goes back to 0: a rejection starts a new cycle, it is not a failed test. No chord, nothing in the Inbox: the ticket is simply running again.
 
+`move_ticket(in_progress)` on a done ticket is the same row, for an operator terminal or an agent at level 1 or more. It has no reason argument, so its failure note says the ticket was reopened and tells the worker to read the earlier notes with `get_ticket`. A failure note added with `add_note` before the move also reaches the worker, since every failure note since the last execute run does.
+
 - **Not merged yet** (waiting in the merge queue, or flagged `dirty` or `conflict`): the worktree is still there and the worker continues in it. The queued merge job checks the status before it waits on the tester's pty, after it, and once more with no await between that check and starting `git merge` (`merge`'s `wanted`, `daemon/src/merge.ts`), so a ticket no longer `done` is dropped and never lands. Only a reject that arrives while `git merge` itself is running is too late: that merge lands, the ticket stays with its worker (no `merged` row) and the next pass merges again.
 - **Merged**: its worktree and branch were removed on merge. The launch forks a fresh worktree from the current base, which holds the merged work, so the worker continues from what shipped. If the branch survived (removed by hand, or cleanup failed), `createWorktree` (`daemon/src/git.ts`) resets it to the base when the base already contains it, and reuses it when it holds work the base lacks. `merged_at` keeps the first merge's time until the next `pass` clears it; the next merge is a new merge commit of the same branch, titled with the ticket title as always. While `merged_at` is kept the ticket is not `done`, so the janitor treats its worktree as the new cycle's: the sweep leaves it, and a merge cleanup still retrying stops (audit `janitor.worktree` `skipped: reopened`) instead of removing the worktree the new worker sits in.
 
@@ -105,7 +107,7 @@ The `merge` row is not in the original spec: it is how the operator finishes a f
 
 ### Agent moves under a level
 
-A ticket's `agent_level` (`docs/MCP.md` → Levels) lets its worker and tester grants move other tickets. Into In Progress they use the operator's rows (`launch` from backlog, `fail` from testing) with the same guards. Into Backlog is `reset`, the agent form of Reset to Backlog. Into Done from level 2 is `pass` when the tester reported a pass during the current test run, else `close`.
+A ticket's `agent_level` (`docs/MCP.md` → Levels) lets its worker and tester grants move other tickets. Into In Progress they use the operator's rows (`launch` from backlog, `fail` from testing, `reject` from done) with the same guards. Into Backlog is `reset`, the agent form of Reset to Backlog. Into Done from level 2 is `pass` when the tester reported a pass during the current test run, else `close`.
 
 `close` ends the ticket's live sessions the way a reset does and marks it done. It queues no merge: the work was not tested, so it does not land by itself. A merge already waiting in the queue for the ticket is left alone and lands as usual. `merged_at` is not touched, so an unmerged closed ticket still holds its dependents; the operator lands its branch with Retry merge, or Rejects it to send it back to a worker. A ticket in Backlog has no `close` row: launch it first, or leave it there.
 
