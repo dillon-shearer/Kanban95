@@ -33,14 +33,14 @@ describe('ui-permission', { timeout: 60_000 }, () => {
       await click(`${box(yes.id)} button`);
       await until(() => ticketRow(yes.id).needs_human === 0, 'the approved flag to clear', 5000);
       expect(ticketRow(yes.id).agent_level).toBe(3);
-      expect(answers(yes.id)).toEqual([{ body: 'approved: level 3; retry the refused call now' }]);
-      expect(yes.written).toContain('approved: level 3; retry the refused call now');
+      expect(answers(yes.id)).toEqual([{ body: 'approved: level 3; retry the refused call now [agent level 3 now]' }]);
+      expect(yes.written).toContain('approved: level 3; retry the refused call now [agent level 3 now]');
 
       await until(() => page.evaluate(`!document.querySelector('${box(yes.id)}') && !!document.querySelector('${box(no.id)}')`), 'the second request alone');
       await click(`${box(no.id)} button:last-child`);
       await until(() => ticketRow(no.id).needs_human === 0, 'the denied flag to clear', 5000);
       expect(ticketRow(no.id).agent_level).toBe(0);
-      expect(answers(no.id)).toEqual([{ body: 'denied' }]);
+      expect(answers(no.id)).toEqual([{ body: 'denied [agent level 0, unchanged]' }]);
     } finally {
       yes.end();
       no.end();

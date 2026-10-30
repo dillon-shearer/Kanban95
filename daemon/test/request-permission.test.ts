@@ -95,7 +95,7 @@ describe('request_permission', () => {
       expect((await call('request_permission', { level: 1, reason: 'reset #other' })).denied).toBe(false);
       expect((await rest('PATCH', `/tickets/${id}`, { agent_level: 1 })).status).toBe(200);
       expect((await rest('POST', `/tickets/${id}/answer`, { answer: 'approved: level 1; retry the refused call now' })).status).toBe(200);
-      expect(s.written[0]).toBe('approved: level 1; retry the refused call now');
+      expect(s.written[0]).toBe('approved: level 1; retry the refused call now [agent level 1 now]');
       expect(row(id).needs_human).toBe(0);
       expect((await call('move_ticket', { ticket_id: other, status: 'backlog' })).denied).toBe(false);
       expect(row(other).status).toBe('backlog');

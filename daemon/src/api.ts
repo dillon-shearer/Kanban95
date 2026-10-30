@@ -1,7 +1,7 @@
 // UI-facing REST under /api. Operator-only (no grant); every mutation writes an audit row.
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, globSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { basename, dirname, extname, isAbsolute, join, resolve } from 'node:path';
+import { basename, dirname, extname, isAbsolute, join, resolve, sep } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { agentsMap, askShell, attentionMap, focusProject, hostedMap, keyOk, missingMap, NotListed, openProject, othersHosted, runningMap, tellShell } from './boards.js';
 import { attachmentDir, attachments, MAX_ATTACHMENT, safeName, saveAttachment } from './attachments.js';
@@ -9,9 +9,9 @@ import { hasOutput, readOutput } from './output.js';
 import { dismissDeliverable, listDeliverables, openDeliverable } from './deliverables.js';
 import { BRAIN_BODY_MAX, BRAIN_RANK, isConstraintError, SCOPES, type Brains, type Scope } from './db.js';
 import { hasBranch, ticketDiff } from './git.js';
-import { audit, revoke } from './grants.js';
+import { audit, revoke, verify } from './grants.js';
 import { cancelSetup, killGrantSession, killSession, sessions, sessionsOf, type Session } from './launcher.js';
-import { answer, apply, brainstorm, BUMPS, changed, events, housekeeping, isKanban95, operator, pushBase, Refused, release, releaseInfo, releaseOn, releasePending, relaunch, restartBoard, runnerState, setRunner, tick, ticketBase, type Board, type Bump } from './lifecycle.js';
+import { answer, apply, brainstorm, BUMPS, changed, contextGlobs, events, housekeeping, isKanban95, operator, pushBase, Refused, release, releaseInfo, releaseOn, releasePending, relaunch, restartBoard, runnerState, setRunner, tick, ticketBase, type Board, type Bump } from './lifecycle.js';
 import { addOverride, BadConfig, boardHome, dropOverride, gone, globalPath, isOverridable, knownModels, project, projectPath, projectsPath, readProjects, setBoardHome, uncatalogued, writeConfig, writeLastBoard, writePreferences, writeProjects, type OverridableName } from './settings.js';
 import { isStale, resetTemplate, templatePath, TEMPLATES, unknownVar, VARS, writeTemplate, type TemplateName } from './templates.js';
 import { bootstrap } from './bootstrap.js';
@@ -841,6 +841,45 @@ export async function handleApi(board: Board, req: IncomingMessage, res: ServerR
     changed(mutation === 'tickets.delete' ? ticketId : id); // the UI refetches it (a deleted ticket answers 404 and leaves the board)
   }
   reply(res, out);
+}
+
+const inRepo = (repo: string, p: string) => {
+  const full = resolve(repo, p);
+  return full.startsWith(resolve(repo) + sep) && existsSync(full);
+};
+const slash = (p: string) => p.replaceAll('\\', '/');
+
+export function contextFor(repo: string, t: Ticket): { ticket: { id: number; title: string; status: string }; files: string[]; named: string[] } {
+  const files = [...new Set(globSync(contextGlobs(repo), { cwd: repo }).filter((p) => inRepo(repo, p)).map(slash))].sort();
+  const text = `${t.title}\n${t.body}\n${t.criteria}`;
+  const tokens = text.match(/[\w.-]+(?:\/[\w.-]+)+\/?|[\w-]+\.[A-Za-z]\w*/g) ?? [];
+  const named = [...new Set(tokens.map((p) => p.replace(/[./]+$/, '')).filter((p) => p && !p.split('/').includes('..') && inRepo(repo, p)))].sort();
+  return { ticket: { id: t.id, title: t.title, status: t.status }, files, named };
+}
+
+export function serveContext(board: Board, req: IncomingMessage, res: ServerResponse, url: URL): void {
+  if (req.method !== 'GET') return reply(res, { status: 405, body: { error: 'method not allowed' } });
+  const { db } = board;
+  const m = /^Bearer ([A-Za-z0-9_-]+)$/.exec(req.headers.authorization ?? '');
+  const grant = m && verify(db, m[1]);
+  if (!grant) return reply(res, { status: 401, body: { error: 'unauthorized: a live bearer grant is required' } });
+  const ref = url.searchParams.get('task_ref') ?? '';
+  const id = /^[1-9]\d*$/.test(ref) ? Number(ref) : null;
+  let outcome: 'ok' | 'denied' | 'error' = 'ok';
+  try {
+    if (id === null) throw new HttpError(400, 'task_ref must be a ticket id');
+    if (grant.ticket_id !== null && grant.ticket_id !== id) {
+      outcome = 'denied';
+      throw new HttpError(403, `this grant is scoped to ticket ${grant.ticket_id}`);
+    }
+    reply(res, { status: 200, body: contextFor(board.repo, readTicket(db, id)) });
+  } catch (e) {
+    if (outcome === 'ok') outcome = 'error';
+    const status = e instanceof HttpError ? e.status : e instanceof BadConfig ? 409 : 500;
+    reply(res, { status, body: { error: status === 500 ? 'internal error' : (e as Error).message } });
+  } finally {
+    audit(db, { grant_id: grant.id, ticket_id: id !== null && db.prepare('SELECT 1 FROM tickets WHERE id = ?').get(id) ? id : null, tool: 'api.context', args: { task_ref: ref }, outcome });
+  }
 }
 
 const FILING_MAX = 64 * 1024;

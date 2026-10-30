@@ -303,7 +303,7 @@ export function launch(d: Daemon, o: { ticketId: number; template: TicketTemplat
   // and launch `codex resume <id>` (docs/CLIS.md → Resuming a killed session).
   const prior = o.resume && o.cli === 'claude' ? resumable(d.db, o.ticketId, phase) : undefined;
   const sessionId = o.cli === 'claude' ? prior ?? randomUUID() : undefined;
-  const run = startRun(d.db, d.repo, { ...o, worktree: wt.path, base: wt.base, sessionId, global: d.brain });
+  const run = startRun(d.db, d.repo, { ...o, worktree: wt.path, base: wt.base, sessionId, global: d.brain, port: d.port });
   return spawnSession(d, { ...o, sessionId, resume: prior !== undefined }, { runId: run.id, ticketId: o.ticketId, role, phase, cwd: wt.path, prompt: run.prompt });
 }
 
@@ -351,6 +351,7 @@ function spawnSession(d: Daemon, o: RunSettings & { sessionId?: string; resume?:
     if (o.cli === 'claude') {
       const cfg = { mcpServers: { kanban95: { type: 'http', url: mcpUrl, headers: { Authorization: `Bearer ${grant.token}` } } } };
       writeFileSync(mcpConfigPath, JSON.stringify(cfg, null, 2), { mode: 0o600 });
+      writeFileSync(join(dir, 'auth.header'), `Authorization: Bearer ${grant.token}\n`, { mode: 0o600 });
       // No commit or PR trailer (CLAUDE.md), held by the board now that the operator's own attribution setting is not loaded.
       if (unattended(r.role)) writeFileSync(settingsPath, JSON.stringify(BOARD_SETTINGS), { mode: 0o600 });
     }
