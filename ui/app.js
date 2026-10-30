@@ -35,7 +35,7 @@ let runner = { on: false, concurrency: 3, running: [], left: 0, backlog: 0, unpu
 let models = null; // models.json this board runs on (this repo's copy, else the global file), for the cards' default model and effort
 // Sounds stay off until /config/settings loads: listen() starts first, and a ding in that gap ignored the operator's choice.
 // `terminals` is absent until then too, so no session is opened or passed over before the operator's phases are known.
-const SETTINGS = { paths: {}, sounds: { merge: false, attention: false, done: false }, voice: { backend: 'local', mode: 'push' }, housekeeping: { auto: true, every: 10 }, idle_minutes: 20, zoom: 1, push_after_merge: true, sleepAfterMinutes: 30, concurrency: 3, updateCheck: true, release: false, workers_read: 'deps', startup: 'last' };
+const SETTINGS = { paths: {}, sounds: { merge: false, attention: false, done: false }, voice: { backend: 'local', mode: 'push' }, housekeeping: { auto: true, every: 10 }, recording: { enabled: false, ffmpeg: '', monitor: 0, fps: 60, quality: 'high', speed: 10, output: '', keepRaw: true }, idle_minutes: 20, zoom: 1, push_after_merge: true, sleepAfterMinutes: 30, concurrency: 3, updateCheck: true, release: false, workers_read: 'deps', startup: 'last' };
 let settings = { ...SETTINGS };
 let limits = null; // GET /api/limits: { rows, errors, fetched_at }, null until the first answer
 const views = new Map(); // open window id → redraw(Set of changed ticket ids | undefined)
@@ -1192,7 +1192,7 @@ function openInbox() {
 const settingsFrom = (v) => {
   const sounds = v?.sounds;
   return { ...SETTINGS, ...v,
-    sounds: typeof sounds === 'boolean' ? { merge: sounds, attention: sounds, done: sounds } : { merge: true, attention: true, done: true, ...sounds }, voice: { ...SETTINGS.voice, ...v?.voice }, housekeeping: { ...SETTINGS.housekeeping, ...v?.housekeeping },
+    sounds: typeof sounds === 'boolean' ? { merge: sounds, attention: sounds, done: sounds } : { merge: true, attention: true, done: true, ...sounds }, voice: { ...SETTINGS.voice, ...v?.voice }, housekeeping: { ...SETTINGS.housekeeping, ...v?.housekeeping }, recording: { ...SETTINGS.recording, ...v?.recording },
     terminals: { auto: ['plan', 'execute', 'test'], tile: true, ...v?.terminals } };
 };
 let settingsOwn = false;

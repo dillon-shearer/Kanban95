@@ -20,9 +20,9 @@ describe('ui-inbox', { timeout: 60_000 }, () => {
     await click(`${box} button:not(.k95-mic)`);
 
     await until(() => page.evaluate(`!document.querySelector('${flagged}')`), 'the badge to clear', 5000);
-    expect(db.prepare("SELECT body FROM notes WHERE ticket_id = ? AND kind = 'answer'").all(id)).toEqual([{ body: 'Navy blue' }]);
+    expect(db.prepare("SELECT body FROM notes WHERE ticket_id = ? AND kind = 'answer'").all(id)).toEqual([{ body: 'Navy blue [agent level 0, unchanged]' }]);
     await until(() => (db.prepare('SELECT merged_at FROM tickets WHERE id = ?').get(id) as { merged_at: string | null }).merged_at, 'the merge', 30_000);
-    expect(git('show', 'HEAD:answer.txt')).toBe('Navy blue');
+    expect(git('show', 'HEAD:answer.txt')).toBe('Navy blue [agent level 0, unchanged]');
   });
 
   it('lists a failed merge in the Inbox with its note and the buttons that fix it, and counts it in the taskbar', async () => {
