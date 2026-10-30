@@ -29,7 +29,7 @@ const PLANNER_DENY = ['Bash', 'PowerShell', 'Agent'];
 
 /** Workers and testers run without the operator at the keyboard; planner and operator sessions are interactive. */
 const unattended = (role: Role) => role === 'worker' || role === 'tester';
-const BOARD_SETTINGS = { attribution: { commit: '', pr: '' } };
+const BOARD_SETTINGS = { attribution: { commit: '', pr: '' }, skipDangerousModePermissionPrompt: true };
 /** The initial message of a resumed Claude Code session, in place of the brief: the conversation already holds it. */
 export const RESUME_MESSAGE = 'The board restarted this session after it ended without reporting. Your board tools work again under a new grant; carry on where you left off.';
 
