@@ -39,7 +39,7 @@ export type Event =
   | 'resume' // the operator restarts the agent of a flagged running ticket whose agent is gone
   | 'restart' // the operator replaces a running ticket's agent, live or not, with a fresh one in the same phase
   | 'reject' // the operator sends a done ticket, merged or not, back to a worker with a reason
-  | 'reset' // an agent grant at level 1 or more moves a ticket to backlog
+  | 'reset' // an operator grant, or an agent grant at level 1 or more, moves a ticket to backlog
   | 'close'; // an agent grant at level 2 or more moves a running ticket to done without a tester pass
 type Effect =
   | 'spawn_execute' | 'spawn_test' | 'end_session' | 'enqueue_merge' | 'note' | 'answer_pty'

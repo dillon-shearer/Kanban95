@@ -22,7 +22,7 @@ const MOVE_TARGETS: Record<Role, readonly (typeof STATUS)[number][]> = {
   planner: [],
   worker: ['testing'],
   tester: ['done', 'in_progress'],
-  operator: ['in_progress', 'testing', 'done'],
+  operator: ['backlog', 'in_progress', 'testing', 'done'],
 };
 const LEVEL_MOVES: readonly (typeof STATUS)[number][][] = [
   [],
@@ -322,7 +322,7 @@ export const TOOLS: Record<string, Tool<z.ZodRawShape>> = {
       'A tester does not need it: report_test moves the ticket (to done or back to in_progress) and ends the session. ' +
       'A move to the column the ticket is already in returns the ticket unchanged. ' +
       'Once the move is accepted your session is over: the board ends it and starts the next agent. ' +
-      'An operator grant may move any ticket the same ways, which ends that ticket\x27s agent, not its own session, and may launch a backlog ticket by moving it to in_progress; ' +
+      'An operator grant may move any ticket the same ways, which ends that ticket\x27s agent, not its own session, may launch a backlog ticket by moving it to in_progress, and may park any ticket by moving it to backlog, as Reset to Backlog does; ' +
       'it still cannot finish a ticket the tester has not passed. ' +
       'Give manual_checks when a criterion needs something you cannot reach (a device, DNS, a phone, an account): merged code and passing tests do not prove it, and the move is refused until the operator has confirmed the checks through ask_operator. Returns the ticket.',
     access: {
