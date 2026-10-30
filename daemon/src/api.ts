@@ -168,6 +168,8 @@ function endSessions(db: DatabaseSync, id: number, outcome: string) {
 /** Deletes a ticket with its sessions and attachments. The UI's DELETE route and the delete_ticket tool both come here. */
 export function deleteTicket(board: Board, id: number) {
   const { db } = board;
+  const dependents = (db.prepare('SELECT ticket_id FROM ticket_deps WHERE depends_on_id = ? ORDER BY ticket_id').all(id) as { ticket_id: number }[]).map((d) => `#${d.ticket_id}`);
+  if (dependents.length) throw new HttpError(400, `${dependents.join(', ')} ${dependents.length === 1 ? 'depends' : 'depend'} on #${id}. Remove #${id} from their depends on list first.`);
   const r = db.prepare('DELETE FROM tickets WHERE id = ?').run(id);
   if (r.changes === 0) throw new HttpError(404, 'no such ticket');
   // Its agents stop with it. The outcome makes their exit expected, so it flags nothing on a ticket that is gone.
