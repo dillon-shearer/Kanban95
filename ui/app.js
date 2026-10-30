@@ -1755,6 +1755,7 @@ async function recordingPanel(p, redraw) {
       h('p', {}, 'Shortcuts inside the board: Ctrl+Shift+R starts and stops, Ctrl+Shift+Space switches between regular and fast.')];
   }, redraw);
   const raw = h('input', { type: 'text', id: 'rec-raw', 'data-mic': 'off', size: 40, placeholder: '<recording folder>\\raw.mkv' });
+  const speed = h('input', { type: 'number', id: 'rec-render-speed', min: 2, max: 60, step: 1, value: settings.recording.speed });
   const said = h('span', { id: 'rec-render-status' });
   const render = async () => {
     said.textContent = 'Rendering...';
@@ -1764,7 +1765,7 @@ async function recordingPanel(p, redraw) {
       said.textContent = v.error ?? `Done: ${v.output}`;
     };
     try {
-      await api('POST', '/recording/render', { raw: raw.value.trim() });
+      await api('POST', '/recording/render', { raw: raw.value.trim(), speed: Number(speed.value) });
     } catch (e) {
       onRecording = null;
       said.textContent = e.message;
@@ -1773,7 +1774,7 @@ async function recordingPanel(p, redraw) {
   p.replaceChildren(...part,
     h('fieldset', {}, h('legend', {}, 'Render again'),
       h('div', { class: 'field-row' }, h('label', { for: 'rec-raw' }, 'Raw recording'), raw, browse(raw, 'file')),
-      h('div', { class: 'field-row' }, h('button', { id: 'rec-render', onclick: render }, 'Render'), said)));
+      h('div', { class: 'field-row' }, h('label', { for: 'rec-render-speed' }, 'Speed'), speed, 'x', h('button', { id: 'rec-render', onclick: render }, 'Render'), said)));
 }
 
 // ---- limits ----

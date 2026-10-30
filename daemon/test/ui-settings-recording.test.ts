@@ -45,4 +45,14 @@ describe('ui-settings-recording', { timeout: 60_000 }, () => {
     await until(() => saved()?.recording?.speed === 12, 'recording.speed 12 in settings.json');
     expect(saved().recording.ffmpeg).toBe(fake);
   });
+
+  it('Render again has a speed box filled with the saved Fast speed and posts its value as speed', async () => {
+    await page.evaluate(`document.querySelector('[data-win="settings"] [role=tab] a').click()`);
+    await page.evaluate(`[...document.querySelectorAll('[data-win="settings"] [role=tab] a')].find((t) => t.textContent === 'Recording').click()`);
+    await until(() => page.evaluate(`document.querySelector('#rec-render-speed')?.value === '12'`), 'the speed box at 12');
+    await page.evaluate(`window.k95Sent = null; const f = window.fetch; window.fetch = (u, o) => { if (String(u).endsWith('/recording/render')) window.k95Sent = JSON.parse(o.body); return f(u, o); }`);
+    await page.evaluate(`document.querySelector('#rec-raw').value = 'C:/nope/raw.mkv'; document.querySelector('#rec-render-speed').value = '3'; document.querySelector('#rec-render').click()`);
+    await until(() => page.evaluate(`!!window.k95Sent`), 'the render request');
+    expect(await page.evaluate(`window.k95Sent`)).toEqual({ raw: 'C:/nope/raw.mkv', speed: 3 });
+  });
 });

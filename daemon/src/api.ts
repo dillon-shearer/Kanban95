@@ -12,7 +12,7 @@ import { hasBranch, ticketDiff } from './git.js';
 import { audit, revoke, verify } from './grants.js';
 import { cancelSetup, killGrantSession, killSession, sessions, sessionsOf, type Session } from './launcher.js';
 import { answer, apply, brainstorm, BUMPS, changed, contextGlobs, events, housekeeping, isKanban95, operator, pushBase, Refused, release, releaseInfo, releaseOn, releasePending, relaunch, restartBoard, runnerState, setRunner, tick, ticketBase, type Board, type Bump } from './lifecycle.js';
-import { addOverride, BadConfig, boardHome, dropOverride, gone, globalPath, isOverridable, knownModels, project, projectPath, projectsPath, readProjects, setBoardHome, uncatalogued, writeConfig, writeLastBoard, writePreferences, writeProjects, type OverridableName } from './settings.js';
+import { addOverride, BadConfig, boardHome, dropOverride, gone, globalPath, isOverridable, knownModels, project, projectPath, projectsPath, readConfig, readProjects, setBoardHome, uncatalogued, writeConfig, writeLastBoard, writePreferences, writeProjects, type OverridableName } from './settings.js';
 import { isStale, resetTemplate, templatePath, TEMPLATES, unknownVar, VARS, writeTemplate, type TemplateName } from './templates.js';
 import { bootstrap } from './bootstrap.js';
 import { trustStatus, untrustClaude } from './trust.js';
@@ -700,7 +700,9 @@ const routes: [method: string, path: RegExp, mutation: string | null, handler: (
   ['POST', /^\/api\/recording\/stop$/, 'recording.stop', ({ board }) => ({ status: 200, body: stopRecording(board.repo) })],
   ['POST', /^\/api\/recording\/render$/, 'recording.render', ({ board, body }) => {
     if (typeof body.raw !== 'string') throw new HttpError(400, 'raw must be a path');
-    return { status: 200, body: renderAgain(board, body.raw) };
+    const speed = body.speed === undefined ? readConfig('settings', board.repo).recording.speed : body.speed;
+    if (typeof speed !== 'number' || !Number.isFinite(speed) || speed < 2 || speed > 60) throw new HttpError(400, 'speed must be a number from 2 to 60');
+    return { status: 200, body: renderAgain(board, body.raw, speed) };
   }],
   ['GET', /^\/api\/ready$/, null, async ({ board }) => ({ status: 200, body: await readiness(board) })],
   ['GET', /^\/api\/voice$/, null, async () => ({ status: 200, body: await voiceStatus() })],

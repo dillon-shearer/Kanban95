@@ -235,7 +235,7 @@ The top of the Settings window has a switch with two positions, **All projects**
 - **Fast speed** (`recording.speed`): 2 to 60 times.
 - **Output folder** (`recording.output`): blank for `<home>\Videos\Kanban95`, or type a folder or press **...**.
 - **Keep the raw recording and markers next to the final video** (`recording.keepRaw`).
-- **Render again**: pick a recording folder's `raw.mkv` (its `markers.json` must sit beside it) and press **Render**. It writes `<speed>x.mp4` in that folder. It says why when refused, else "Rendering..." and then "Done: <mp4 path>" or the error.
+- **Render again**: pick a recording folder's `raw.mkv` (its `markers.json` must sit beside it), set **Speed** (2 to 60, filled with the saved Fast speed each time the tab opens; changing it does not change the setting) and press **Render**. It writes `<speed>x.mp4` in that folder beside any earlier render; a speed already rendered is overwritten, other files are not. Each render shows in the Inbox as `Recording <folder name> <speed>x`. The raw file is what gets rendered, so leave **Keep the raw recording** on if you may want another speed later. It says why when refused, else "Rendering..." and then "Done: <mp4 path>" or the error.
 
 Under the fields a line repeats the keys: Ctrl+Shift+R starts and stops, Ctrl+Shift+Space switches between regular and fast.
 

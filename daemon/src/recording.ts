@@ -154,6 +154,7 @@ let progress: number | null = null;
 let output: string | null = null;
 let error: string | null = null;
 let sent = 0;
+let rendering: number | null = null;
 
 function speedOf(repo?: string): number | null {
   try {
@@ -164,7 +165,7 @@ function speedOf(repo?: string): number | null {
 }
 
 export function view(repo?: string) {
-  return { state, mode: current, started: started?.toISOString() ?? null, elapsed, speed: capture?.speed ?? speedOf(repo), progress, output, error, fastStretches: capture?.marks.filter((m) => m.mode === 'fast').length ?? 0 };
+  return { state, mode: current, started: started?.toISOString() ?? null, elapsed, speed: capture?.speed ?? rendering ?? speedOf(repo), progress, output, error, fastStretches: capture?.marks.filter((m) => m.mode === 'fast').length ?? 0 };
 }
 
 function emit() {
@@ -254,12 +255,12 @@ export function stop(repo?: string) {
     await quit(c);
     if (c.halted) return;
     capture = null;
-    await render(owner!, join(c.folder, RAW), join(c.folder, MARKERS), elapsed);
+    await render(owner!, join(c.folder, RAW), join(c.folder, MARKERS), readConfig('settings', owner!.repo).recording.speed, elapsed);
   })();
   return view(repo);
 }
 
-export function renderAgain(board: Board, raw: string) {
+export function renderAgain(board: Board, raw: string, speed: number) {
   if (starting || state !== 'idle') throw new Refused(state === 'rendering' ? 'a render is running' : 'a recording is running');
   const layout = `expected <recording folder>\\${RAW} with ${MARKERS} beside it`;
   if (!isAbsolute(raw) || basename(raw) !== RAW || !existsSync(raw)) throw new Refused(`${raw} is not a raw recording (${layout})`);
@@ -272,21 +273,23 @@ export function renderAgain(board: Board, raw: string) {
   progress = 0;
   output = null;
   error = null;
+  rendering = speed;
   emit();
-  void render(board, raw, markers);
+  void render(board, raw, markers, speed);
   return view(board.repo);
 }
 
-async function render(board: Board, raw: string, markers: string, seconds?: number): Promise<void> {
+async function render(board: Board, raw: string, markers: string, speed: number, seconds?: number): Promise<void> {
+  rendering = speed;
   try {
     const cfg = readConfig('settings', board.repo).recording;
-    const out = join(dirname(raw), `${Math.round(cfg.speed)}x.mp4`);
+    const out = join(dirname(raw), `${Math.round(speed)}x.mp4`);
     const exe = cfg.ffmpeg || 'ffmpeg';
     const { marks } = JSON.parse(readFileSync(markers, 'utf8')) as { marks: Mark[] };
     const total = (await probe(exe, raw)) ?? seconds;
     if (!total) throw new Error(`cannot read the length of ${basename(raw)}`);
-    const expected = length(marks, total, cfg.speed);
-    const p = run(exe, ['-y', '-i', raw, '-filter_complex', graph(marks, total, cfg.speed, cfg.fps), '-map', '[out]', '-c:v', 'libx264', '-preset', 'medium', '-crf', String(CRF[cfg.quality]), '-pix_fmt', 'yuv420p', '-movflags', '+faststart', '-an', out], (t) => {
+    const expected = length(marks, total, speed);
+    const p = run(exe, ['-y', '-i', raw, '-filter_complex', graph(marks, total, speed, cfg.fps), '-map', '[out]', '-c:v', 'libx264', '-preset', 'medium', '-crf', String(CRF[cfg.quality]), '-pix_fmt', 'yuv420p', '-movflags', '+faststart', '-an', out], (t) => {
       progress = Math.min(1, t / expected);
       if (Date.now() - sent >= PROGRESS_MS) emit();
     });
@@ -297,7 +300,7 @@ async function render(board: Board, raw: string, markers: string, seconds?: numb
       rmSync(out, { force: true });
       throw new Error(failed(p, code));
     }
-    postDeliverable(board.db, out, null, `Recording ${basename(dirname(raw))} ${Math.round(cfg.speed)}x`);
+    postDeliverable(board.db, out, null, `Recording ${basename(dirname(raw))} ${Math.round(speed)}x`);
     changed(null);
     if (!cfg.keepRaw) for (const f of [raw, markers]) rmSync(f, { force: true });
     output = out;
@@ -306,6 +309,7 @@ async function render(board: Board, raw: string, markers: string, seconds?: numb
   }
   state = 'idle';
   progress = null;
+  rendering = null;
   emit();
 }
 
