@@ -1,11 +1,11 @@
 import './home.ts';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import WebSocket from 'ws';
-import { graph } from '../src/recording.ts';
+import { folderFor, graph } from '../src/recording.ts';
 import { start } from '../src/server.ts';
 import { boardHome, readConfig } from '../src/settings.ts';
 import { removeTemp } from './home.ts';
@@ -139,24 +139,65 @@ it('mode, stop and render are refused when there is nothing to act on', async ()
   expect((await api('POST', '/recording/render', { raw: join(repo, 'nope raw.mkv') })).status).toBe(409);
 });
 
-it.runIf(hasFfmpeg)('renders a 5 s raw with 1-5 s at 4x into a 2 s mp4 and lists it in the Inbox', async () => {
-  const dir = join(repo, 'render');
+it('a recording gets a folder named for its start minute, with (2), (3) when that minute is taken', () => {
+  const dir = join(repo, 'folders');
+  const at = new Date(2026, 9, 30, 14, 5, 59);
+  expect(folderFor(dir, at)).toBe(join(dir, '2026-10-30 14-05'));
+  mkdirSync(join(dir, '2026-10-30 14-05'), { recursive: true });
+  expect(folderFor(dir, at)).toBe(join(dir, '2026-10-30 14-05 (2)'));
+  mkdirSync(join(dir, '2026-10-30 14-05 (2)'));
+  expect(folderFor(dir, at)).toBe(join(dir, '2026-10-30 14-05 (3)'));
+});
+
+it('render again refuses a file not named raw.mkv and a raw.mkv without markers.json, naming the layout', async () => {
+  const dir = join(repo, 'layout');
   mkdirSync(dir, { recursive: true });
-  const raw = join(dir, 'clip raw.mkv');
+  const flat = join(dir, '2026-10-30 14-05 raw.mkv');
+  const raw = join(dir, 'raw.mkv');
+  writeFileSync(flat, '');
+  writeFileSync(join(dir, '2026-10-30 14-05 markers.json'), '{}');
+  writeFileSync(raw, '');
+  for (const p of [flat, raw]) {
+    const r = await api('POST', '/recording/render', { raw: p });
+    expect(r.status, p).toBe(409);
+    expect((await r.json()).error).toContain('<recording folder>\\raw.mkv with markers.json beside it');
+  }
+});
+
+const clip = (folder: string) => {
+  const dir = join(repo, folder);
+  mkdirSync(dir, { recursive: true });
+  const raw = join(dir, 'raw.mkv');
   execFileSync('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'testsrc=duration=5:size=320x240:rate=30', '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', raw], { windowsHide: true });
-  writeFileSync(join(dir, 'clip markers.json'), JSON.stringify({ speed: 4, fps: 30, marks: [{ t: 0, mode: 'regular' }, { t: 1, mode: 'fast' }] }));
+  writeFileSync(join(dir, 'markers.json'), JSON.stringify({ speed: 4, fps: 30, marks: [{ t: 0, mode: 'regular' }, { t: 1, mode: 'fast' }] }));
+  return { dir, raw };
+};
+
+it.runIf(hasFfmpeg)('renders a 5 s raw with 1-5 s at 4x into <folder>\\4x.mp4 of 2 s and lists it in the Inbox by folder and speed', async () => {
+  const { dir, raw } = clip('2026-10-30 14-05');
   write({ recording: { speed: 4, fps: 30, quality: 'small', keepRaw: true } });
   const r = await api('POST', '/recording/render', { raw });
   expect(r.status).toBe(200);
   expect((await r.json()).state).toBe('rendering');
   expect((await api('POST', '/recording/render', { raw })).status).toBe(409);
   const done = await idle();
-  const out = join(dir, 'clip.mp4');
+  const out = join(dir, '4x.mp4');
   expect(done).toMatchObject({ output: out, error: null });
   expect(Math.abs(duration(out) - 2)).toBeLessThan(0.2);
   expect(existsSync(raw)).toBe(true);
+  expect(existsSync(join(dir, 'markers.json'))).toBe(true);
   const inbox = await (await api('GET', '/deliverables')).json();
-  expect(inbox).toContainEqual(expect.objectContaining({ folder: out, ticket_id: null }));
+  expect(inbox).toContainEqual(expect.objectContaining({ folder: out, ticket_id: null, title: 'Recording 2026-10-30 14-05 4x' }));
+}, 60_000);
+
+it.runIf(hasFfmpeg)('with keepRaw off a successful render deletes raw.mkv and markers.json and keeps the folder with the mp4', async () => {
+  const { dir, raw } = clip('drop');
+  write({ recording: { speed: 4, fps: 30, quality: 'small', keepRaw: false } });
+  expect((await api('POST', '/recording/render', { raw })).status).toBe(200);
+  expect(await idle()).toMatchObject({ output: join(dir, '4x.mp4'), error: null });
+  expect(existsSync(raw)).toBe(false);
+  expect(existsSync(join(dir, 'markers.json'))).toBe(false);
+  expect(existsSync(join(dir, '4x.mp4'))).toBe(true);
 }, 60_000);
 
 it.runIf(hasFfmpeg && process.platform === 'win32')('records the desktop, sends a recording frame on start, mode change and stop, and drops the raw when keepRaw is off', async () => {
@@ -176,6 +217,10 @@ it.runIf(hasFfmpeg && process.platform === 'win32')('records the desktop, sends 
     expect(body.state).toBe('recording');
     expect((await api('POST', '/recording/start')).status).toBe(409);
     await wait(1500);
+    const [stamp] = readdirSync(dir);
+    expect(stamp).toMatch(/^\d{4}-\d\d-\d\d \d\d-\d\d$/);
+    expect(existsSync(join(dir, stamp, 'raw.mkv'))).toBe(true);
+    expect(existsSync(join(dir, stamp, 'markers.json'))).toBe(true);
     expect((await (await api('POST', '/recording/mode', { mode: 'fast' })).json()).mode).toBe('fast');
     await api('POST', '/recording/mode', { mode: 'fast' });
     await wait(1500);
@@ -186,9 +231,11 @@ it.runIf(hasFfmpeg && process.platform === 'win32')('records the desktop, sends 
     expect(frames.slice(0, 3).map((f) => [f.state, f.mode])).toEqual([['recording', 'regular'], ['recording', 'fast'], ['rendering', 'fast']]);
     expect(frames.at(-1)).toMatchObject({ state: 'idle', output: done.output });
     expect(existsSync(done.output)).toBe(true);
-    const stem = done.output.slice(0, -'.mp4'.length);
-    expect(existsSync(`${stem} raw.mkv`)).toBe(false);
-    expect(existsSync(`${stem} markers.json`)).toBe(false);
+    expect(basename(done.output)).toBe('10x.mp4');
+    const folder = join(dir, stamp);
+    expect(done.output).toBe(join(folder, '10x.mp4'));
+    expect(existsSync(join(folder, 'raw.mkv'))).toBe(false);
+    expect(existsSync(join(folder, 'markers.json'))).toBe(false);
   } finally {
     ws.close();
   }
