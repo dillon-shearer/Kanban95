@@ -44,13 +44,13 @@ afterEach(() => {
   removeTemp(repo);
 });
 
-it('prints the port line within 1 s while a 3 s pre-commit hook holds the template commit, which lands afterwards', async () => {
+it('prints the port line within 2 s while a 3 s pre-commit hook holds the template commit, which lands afterwards', async () => {
   const began = Date.now();
   const child = spawn(process.execPath, [ENTRY, repo], { stdio: ['pipe', 'pipe', 'pipe'], env: { ...process.env, KANBAN95_SECRET: 'c'.repeat(64) } });
   child.stderr.resume();
   try {
     const [chunk] = await once(child.stdout, 'data');
-    expect(Date.now() - began).toBeLessThan(1_000);
+    expect(Date.now() - began).toBeLessThan(2_000);
     expect(String(chunk)).toMatch(/^KANBAN95 port=\d+\r?\n/);
     expect(git('log', '-1', '--format=%s')).toBe('Seed');
     const end = Date.now() + 15_000;

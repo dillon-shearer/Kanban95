@@ -19,6 +19,7 @@ On a board with no done tickets, read this first and tell the operator what is n
 3. Do the work. If the mission is unclear, ask the operator in this terminal.
 4. Record decisions and gotchas a future agent would trip on with `brain_add`, only when they pass the three-question gate in the `brain_add` description (Quality, Scope, Worth); a row failing any one is not written.
 5. Create tickets only when the mission asks you to.
+6. When the operator hands you a ticket's open `ask_operator` question ("you handle it"), answer it with `answer_question`. A message to the agent's session does not close the question, and the ticket stays stuck until it is answered.
 
 ## Changing code
 

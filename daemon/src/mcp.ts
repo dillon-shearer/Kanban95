@@ -13,7 +13,7 @@ import { attachments } from './attachments.js';
 import { fileOn, registeredBoard } from './boards.js';
 import { postDeliverable } from './deliverables.js';
 import { audit, live, verify, type Grant, type Role } from './grants.js';
-import { apply, changed, openQuestion, PROMPT_ASK, Refused, tick, type Board } from './lifecycle.js';
+import { answer, apply, changed, openQuestion, PROMPT_ASK, Refused, tick, type Board } from './lifecycle.js';
 import { EFFORT, readConfig, same, uncatalogued } from './settings.js';
 
 const STATUS = ['backlog', 'in_progress', 'testing', 'done'] as const;
@@ -67,6 +67,7 @@ export const PENDING = 'an earlier request_permission on this ticket is still un
 const RAISE = /\b(?:raise|bump|increase|lift|grant|give|set|approve)\b[^\n]{0,80}?\b(?:agent[ _-]?level|level\s*[1-4]\b|read[ _-]?all)/i;
 export const RAISE_ASK = 'an ask_operator answer never changes the ticket\x27s agent level or read all, so this question is refused; call request_permission with the level or read_all and a reason, and the operator gets Approve and Deny in the Inbox';
 const REOPENED = 'reopened from Done with move_ticket; read the earlier notes with get_ticket and carry on from the work already done';
+export const OPERATOR_TERMINAL = 'answered from the operator terminal';
 const ask = (need: number | undefined) => (need === undefined ? '' : `; ask for level ${need} with request_permission`);
 
 /** Resolves the ticket a call is about. In a worker/tester cell: its own, a foreign id is a scope denial. In an operator cell: the id given, else its own. */
@@ -97,7 +98,7 @@ const manualChecks = z.array(z.string().min(1)).default([])
 function confirmed(db: DatabaseSync, id: number, checks: string[]) {
   if (!checks.length) return;
   const answered = db.prepare(`SELECT 1 FROM notes q WHERE q.ticket_id = ? AND q.kind = 'question' AND q.body NOT LIKE '${PERMISSION}%' AND q.body NOT LIKE ?
-    AND EXISTS (SELECT 1 FROM notes a WHERE a.ticket_id = q.ticket_id AND a.kind = 'answer' AND a.role = 'operator' AND a.id > q.id)`).get(id, `${PROMPT_ASK}%`);
+    AND EXISTS (SELECT 1 FROM notes a WHERE a.ticket_id = q.ticket_id AND a.kind = 'answer' AND a.role = 'operator' AND a.body NOT LIKE ? AND a.id > q.id)`).get(id, `${PROMPT_ASK}%`, `${OPERATOR_TERMINAL}%`);
   if (!answered) throw new Refused(`no operator confirmation of the manual checks on this ticket: ${checks.join('; ')}. Ask the operator to make them with ask_operator, wait for the answer, then call again`);
 }
 const exists = (db: DatabaseSync, id: number) => db.prepare('SELECT 1 FROM tickets WHERE id = ?').get(id) !== undefined;
@@ -501,6 +502,23 @@ export const TOOLS: Record<string, Tool<z.ZodRawShape>> = {
       if (open && permissionOf(open.body)) throw new Deny(PENDING);
       const { noteId } = apply(c.board, id, 'ask', { note: { role: c.grant.role, kind: 'question', body: a.question } });
       return { question_id: noteId };
+    },
+  }),
+
+  answer_question: tool({
+    description:
+      'Answer the open ask_operator question on a ticket when the operator has handed you the decision ("you handle it"). The answer is kept as an answer note that names the operator terminal, ' +
+      'typed into the ticket\x27s agent as one line (or, with no agent running, the agent starts again and reads it), and the ticket\x27s needs_human flag clears, so its move to testing is no longer refused. ' +
+      'It never confirms manual_checks. Refused when the ticket has no open question, for a request_permission or a Claude Code prompt (those stay the human operator\x27s, in the Inbox), and for an agent\x27s own ticket. Returns the ticket.',
+    access: { operator: 'any' },
+    input: { ticket_id: ticketId, answer: z.string().min(1).describe('The answer, one line.') },
+    run(c, a) {
+      const id = (c.ticket = own(c, a.ticket_id));
+      if (id === c.grant.ticket_id) throw new Deny('an agent may not answer its own ticket\x27s question');
+      const q = readTicket(c.db, id).flags.needs_human ? openQuestion(c.db, id) : undefined;
+      if (!q) throw new Refused(`ticket ${id} has no open question to answer`);
+      if (permissionOf(q.body) || q.body.startsWith(PROMPT_ASK)) throw new Deny(`ticket ${id} waits on a permission request or a Claude Code prompt; only the operator answers it, in the Inbox`);
+      return answer(c.board, id, `${OPERATOR_TERMINAL}: ${a.answer.trim()}`).ticket;
     },
   }),
 
