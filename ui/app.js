@@ -84,6 +84,7 @@ function listen() {
     }
     if (e.recording) {
       recording = e.recording;
+      onRecording?.(e.recording);
       return paintRec();
     }
     if (e.update) return onUpdate(e.update);
@@ -101,6 +102,7 @@ function listen() {
   };
 }
 let restarting = false;
+let onRecording = null;
 
 const dirty = new Set();
 let projectDirty = false;
@@ -1527,7 +1529,7 @@ function openSettings(tab) {
   const pick = (v, id, label) => [h('input', { type: 'radio', id, name: 'settings-scope', checked: settingsScope === v,
     onchange: () => { settingsScope = v; titled(); tb.show(); } }), label];
   const scopeRow = h('div', { class: 'field-row k95-scope' }, ...pick('global', 'scope-global', h('label', { for: 'scope-global' }, 'All projects')), ...pick('project', 'scope-project', here));
-  const tb = settingsTabs = tabs(['Agents', 'Prompts', 'Board', 'Projects', 'Grants'], async (tab, p, first) => {
+  const tb = settingsTabs = tabs(['Agents', 'Prompts', 'Board', 'Recording', 'Projects', 'Grants'], async (tab, p, first) => {
     if (tab === 'Grants') {
       const grants = (await api('GET', '/grants')).filter(liveGrant);
       return p.replaceChildren(h('p', {}, 'Every live agent grant. Revoke invalidates its token and stops its terminal.'), grants.length ? grantTable(grants) : h('p', {}, 'No live grants.'));
@@ -1693,6 +1695,8 @@ function openSettings(tab) {
         h('fieldset', {}, h('legend', {}, 'Speech model'),
           h('p', {}, `Speech model ${v.id}, ${(v.size / 1e6).toFixed(1)} MB: ${v.downloaded ? 'downloaded and verified' : 'not downloaded'}. It runs inside this window; audio is never sent anywhere.`),
           !v.downloaded && h('button', { onclick: async () => { if (await ensureModel()) tb.show(); } }, 'Download…')));
+    } else if (tab === 'Recording') {
+      await recordingPanel(p, redraw);
     } else if (tab === 'Projects') {
       await projectsPanel(p);
     }
@@ -1700,6 +1704,76 @@ function openSettings(tab) {
   titled();
   w.body.append(scopeRow, ...tb.el);
   views.set('settings', () => tb.redraw());
+}
+
+async function recordingPanel(p, redraw) {
+  let tools = await api('GET', '/recording/tools');
+  const part = await scoped('settings', (value, scope) => {
+    const r = settingsFrom(value).recording;
+    const enabled = h('input', { type: 'checkbox', id: 'rec-enabled', checked: r.enabled });
+    const ffmpeg = h('input', { type: 'text', id: 'rec-ffmpeg', 'data-mic': 'off', size: 40, value: r.ffmpeg, placeholder: 'ffmpeg (found on PATH)' });
+    const found = h('p', { id: 'rec-found' });
+    const monitor = h('select', { id: 'rec-monitor' });
+    const lost = h('p', { id: 'rec-monitor-lost' });
+    const fps = h('select', { id: 'rec-fps' }, [30, 60].map((n) => h('option', { value: n, selected: r.fps === n }, String(n))));
+    const quality = h('select', { id: 'rec-quality' }, [['high', 'High (CRF 18)'], ['medium', 'Medium (CRF 23)'], ['small', 'Small file (CRF 28)']]
+      .map(([v, l]) => h('option', { value: v, selected: r.quality === v }, l)));
+    const speed = h('input', { type: 'number', id: 'rec-speed', min: 2, max: 60, step: 1, value: r.speed });
+    const output = h('input', { type: 'text', id: 'rec-output', 'data-mic': 'off', size: 40, value: r.output, placeholder: tools.output });
+    const keepRaw = h('input', { type: 'checkbox', id: 'rec-keep-raw', checked: r.keepRaw });
+    const show = () => {
+      found.textContent = tools.ffmpeg ? `found: ${tools.ffmpeg.path} ${tools.ffmpeg.version}` : 'not found';
+      found.className = tools.ffmpeg ? '' : 'k95-not-found';
+      const at = Number(monitor.value || r.monitor);
+      monitor.replaceChildren(...tools.monitors.map((m) => h('option', { value: m.index, selected: m.index === at },
+        `${m.index + 1}: ${m.name} ${m.width}x${m.height}${m.primary ? ' (primary)' : ''}`)));
+      const gone = !tools.monitors.some((m) => m.index === at);
+      lost.textContent = gone ? `Monitor ${at + 1} was not found; the first one is selected.` : '';
+      lost.hidden = !gone;
+    };
+    const refresh = () => act(async () => { tools = await api('GET', '/recording/tools'); show(); });
+    show();
+    const save = () => act(async () => {
+      const next = { enabled: enabled.checked, ffmpeg: ffmpeg.value.trim(), monitor: monitor.value === '' ? r.monitor : Number(monitor.value), fps: Number(fps.value),
+        quality: quality.value, speed: Number(speed.value), output: output.value.trim(), keepRaw: keepRaw.checked };
+      Object.assign(r, (await putSettings(scope, { recording: next })).recording);
+      tools = await api('GET', '/recording/tools');
+      show();
+    }, 'Saved.');
+    return [
+      h('div', { class: 'field-row' }, enabled, h('label', { for: 'rec-enabled' }, 'Enable recording')),
+      h('div', { class: 'field-row' }, h('label', { for: 'rec-ffmpeg' }, 'ffmpeg'), ffmpeg, browse(ffmpeg, 'file')),
+      found,
+      h('div', { class: 'field-row' }, h('label', { for: 'rec-monitor' }, 'Monitor'), monitor, h('button', { id: 'rec-refresh', onclick: refresh }, 'Refresh')),
+      lost,
+      h('div', { class: 'field-row' }, h('label', { for: 'rec-fps' }, 'Frame rate'), fps),
+      h('div', { class: 'field-row' }, h('label', { for: 'rec-quality' }, 'Quality'), quality),
+      h('div', { class: 'field-row' }, h('label', { for: 'rec-speed' }, 'Fast speed'), speed, 'x'),
+      h('div', { class: 'field-row' }, h('label', { for: 'rec-output' }, 'Output folder'), output, browse(output, 'folder')),
+      h('div', { class: 'field-row' }, keepRaw, h('label', { for: 'rec-keep-raw' }, 'Keep the raw recording and markers next to the final video')),
+      h('button', { id: 'rec-save', onclick: save }, 'Save'),
+      h('p', {}, 'Shortcuts inside the board: Ctrl+Shift+R starts and stops, Ctrl+Shift+Space switches between regular and fast.')];
+  }, redraw);
+  const raw = h('input', { type: 'text', id: 'rec-raw', 'data-mic': 'off', size: 40, placeholder: '<YYYY-MM-DD HH-mm> raw.mkv' });
+  const said = h('span', { id: 'rec-render-status' });
+  const render = async () => {
+    said.textContent = 'Rendering...';
+    onRecording = (v) => {
+      if (v.state !== 'idle') return;
+      onRecording = null;
+      said.textContent = v.error ?? `Done: ${v.output}`;
+    };
+    try {
+      await api('POST', '/recording/render', { raw: raw.value.trim() });
+    } catch (e) {
+      onRecording = null;
+      said.textContent = e.message;
+    }
+  };
+  p.replaceChildren(...part,
+    h('fieldset', {}, h('legend', {}, 'Render again'),
+      h('div', { class: 'field-row' }, h('label', { for: 'rec-raw' }, 'Raw recording'), raw, browse(raw, 'file')),
+      h('div', { class: 'field-row' }, h('button', { id: 'rec-render', onclick: render }, 'Render'), said)));
 }
 
 // ---- limits ----

@@ -9,7 +9,7 @@ import { changed, events, Refused, type Board } from './lifecycle.js';
 import { configPath, readConfig } from './settings.js';
 
 export interface Monitor { index: number; name: string; width: number; height: number; left: number; top: number; primary: boolean }
-export interface Tools { ffmpeg: { path: string; version: string } | null; monitors: Monitor[] }
+export interface Tools { ffmpeg: { path: string; version: string } | null; monitors: Monitor[]; output: string }
 export type Mode = 'regular' | 'fast';
 export interface Mark { t: number; mode: Mode }
 
@@ -19,6 +19,7 @@ const CRF = { high: 18, medium: 23, small: 28 } as const;
 const QUIT_MS = 10_000;
 const PROGRESS_MS = 500;
 const TAIL = 50;
+const OUTPUT = () => join(homedir(), 'Videos', 'Kanban95');
 
 function configured(repo?: string): string {
   try {
@@ -56,7 +57,7 @@ async function monitors(): Promise<Monitor[]> {
 
 export async function tools(repo?: string): Promise<Tools> {
   const [f, m] = await Promise.all([ffmpeg(configured(repo)), monitors()]);
-  return { ffmpeg: f, monitors: m };
+  return { ffmpeg: f, monitors: m, output: OUTPUT() };
 }
 
 export function stretches(marks: Mark[], total: number): { start: number; end: number; mode: Mode }[] {
@@ -185,7 +186,7 @@ export async function start(board: Board) {
     starting = false;
   }
   busy();
-  const dir = cfg.output || join(homedir(), 'Videos', 'Kanban95');
+  const dir = cfg.output || OUTPUT();
   try {
     mkdirSync(dir, { recursive: true });
   } catch (e) {

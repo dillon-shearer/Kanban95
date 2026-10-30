@@ -217,13 +217,27 @@ At 100% and 200% the UI text is 98.css's pixel font. That font is drawn for whol
 
 Models (`models.json`), board settings (`settings.json`) and preferences (`preferences.md`) live in `~/.kanban95/` and apply to every project. A project can have its own copy of any of them in `~/.kanban95/projects/<repo key>/`, outside the repo so nothing is committed. A copy starts as a copy of the global file and, while it exists, replaces that file whole for that project's board: keys are never mixed between the two. Delete the copy and the project follows the global file again. Every operator setting follows this rule, runner concurrency included. Left per repo on purpose: Trusted folders (Claude Code's own file), Grants, the Projects list, window layout (`<repo>/.kanban95/ui.json`) and prompt templates.
 
-The top of the Settings window has a switch with two positions, **All projects** and **This project (<folder name>)**. It picks which file the Agents tab (models.json for Models; settings.json for Executables, Runner, Silent agents and Housekeeping), the Board tab (settings.json) and the Preferences editor on the Prompts tab edit. Templates, Projects and Grants are not affected. It starts on All projects each time the page loads.
+The top of the Settings window has a switch with two positions, **All projects** and **This project (<folder name>)**. It picks which file the Agents tab (models.json for Models; settings.json for Executables, Runner, Silent agents and Housekeeping), the Board and Recording tabs (settings.json) and the Preferences editor on the Prompts tab edit. Templates, Projects and Grants are not affected. It starts on All projects each time the page loads.
 
 - **All projects** edits the global files in `~/.kanban95/`, as before.
 - **This project** with no copy yet shows the global values greyed, the line "Uses the global settings" and a **Customize for this project** button. The button starts this project's copy of that one file and shows it for editing. Each file has its own button, so a project can have its own models and keep the global sounds.
 - **This project** with a copy edits the copy; **Save** writes it. **Use the global settings again** asks first, then deletes the copy and goes back to the greyed view.
 
 **Settings → Agents → Executables** has a box per CLI, `claude` and `codex`: blank uses the one on PATH, or type the full path to the executable, or press **...** to pick the file in a native dialog.
+
+**Settings → Recording** edits the `recording` keys of settings.json. **Save** writes every field at once and says "Saved."; the Enable box shows or hides the taskbar's recording buttons at once. Top to bottom:
+
+- **Enable recording** (`recording.enabled`).
+- **ffmpeg** (`recording.ffmpeg`): blank uses ffmpeg on PATH, or type the path or press **...**. The line under it says "found: <path> <version>" or "not found" in red.
+- **Monitor** (`recording.monitor`): every attached monitor as "<n>: <name> <width>x<height>", the primary marked "(primary)". **Refresh** asks again for ffmpeg and the monitors. A saved monitor that is gone shows the first one selected and a note saying so.
+- **Frame rate** (`recording.fps`): 30 or 60.
+- **Quality** (`recording.quality`): High (CRF 18), Medium (CRF 23) or Small file (CRF 28).
+- **Fast speed** (`recording.speed`): 2 to 60 times.
+- **Output folder** (`recording.output`): blank for `<home>\Videos\Kanban95`, or type a folder or press **...**.
+- **Keep the raw recording and markers next to the final video** (`recording.keepRaw`).
+- **Render again**: pick a `<stamp> raw.mkv` (its `<stamp> markers.json` must sit beside it) and press **Render**. It says why when refused, else "Rendering..." and then "Done: <mp4 path>" or the error.
+
+Under the fields a line repeats the keys: Ctrl+Shift+R starts and stops, Ctrl+Shift+Space switches between regular and fast.
 
 Every **...** button opens the dialog through the Kanban95 app and shows only there, not on a board opened in a plain browser. It is greyed while its dialog is open; Cancel leaves the box as it was, and typing a path by hand works the same either way.
 
@@ -317,9 +331,9 @@ If the microphone is blocked, the board says how to allow it for the system it r
 
 ## Recording
 
-With `recording.enabled` true in `~/.kanban95/settings.json` (Windows only, ffmpeg on PATH or in `recording.ffmpeg`), the board records the screen `recording.monitor` names, with no audio. Start it, work, and switch between regular and fast as you go; every switch is a mark on the recording's own clock. Stop ends the capture and renders one mp4 in which the fast stretches run `recording.speed` times faster (10 by default). The mp4 shows in the Inbox with Open folder.
+Turn it on in **Settings → Recording → Enable recording** (`recording.enabled` in `~/.kanban95/settings.json`). With it on (Windows only, ffmpeg on PATH or in `recording.ffmpeg`), the board records the screen `recording.monitor` names, with no audio. Start it, work, and switch between regular and fast as you go; every switch is a mark on the recording's own clock. Stop ends the capture and renders one mp4 in which the fast stretches run `recording.speed` times faster (10 by default). The mp4 shows in the Inbox with Open folder.
 
-Files go to `recording.output`, by default `<home>VideosKanban95`: `<YYYY-MM-DD HH-mm> raw.mkv` (the whole session in real time), `<YYYY-MM-DD HH-mm> markers.json` (the marks) and `<YYYY-MM-DD HH-mm>.mp4`. With `recording.keepRaw` false the first two are deleted once the render succeeds. A failed render keeps both and says why; render the raw again once fixed. Closing the board while recording ends the raw file cleanly but does not render it.
+Files go to `recording.output`, by default `<home>\Videos\Kanban95`: `<YYYY-MM-DD HH-mm> raw.mkv` (the whole session in real time), `<YYYY-MM-DD HH-mm> markers.json` (the marks) and `<YYYY-MM-DD HH-mm>.mp4`. With `recording.keepRaw` false the first two are deleted once the render succeeds. A failed render keeps both and says why; render the raw again once fixed. Closing the board while recording ends the raw file cleanly but does not render it.
 
 **Taskbar.** With `recording.enabled` on, two buttons sit at the start of the tray, left of Inbox (they show or hide as soon as Settings saves the key):
 - **Rec** (Ctrl+Shift+R): a grey dot and "Rec" when idle; click to start. While recording the dot is steady red and the text is the elapsed time (12:34); click to stop and render. While rendering it reads "Rendering 40%" and is disabled. If the render fails it reads "Rec" again and the Board's status bar shows the error.
