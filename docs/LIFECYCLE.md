@@ -29,7 +29,7 @@ Status is one of **backlog → in_progress → testing → done**. Two flags sit
 | `resume` | the operator, Resume in the card menu or the Inbox, `POST /api/tickets/:id/resume` |
 | `restart` | the operator, Restart in the card menu, the ticket window (Ctrl+R) or the Inbox, `POST /api/tickets/:id/restart` |
 | `reject` | the operator, Reject on a Done card's menu or in its ticket window, `POST /api/tickets/:id/reject` |
-| `reset` | a worker or tester grant's `move_ticket(backlog)`, allowed from level 1 (Agent moves under a level below) |
+| `reset` | an operator grant's `move_ticket(backlog)`, or a worker or tester grant's, allowed from level 1 (Agent moves under a level below) |
 | `close` | a worker or tester grant's `move_ticket(done)` on a ticket the tester has not passed, allowed from level 2 (Agent moves under a level below) |
 
 The tester's verdict is the move: `report_test` writes the PASS or FAIL note, then applies `pass` or `fail`, so a tester that stops after reporting cannot leave the ticket in Testing. It is refused, with no note written, on a ticket not in testing. A `move_ticket` to the column the ticket is already in returns the ticket unchanged and raises no event, so an agent following the old report-then-move script is not refused.

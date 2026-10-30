@@ -22,7 +22,7 @@ A refused call returns a tool error whose text says why and, for `move_ticket`, 
 | update_ticket | any ticket | own and its edit targets, body/criteria only; its Backlog follow-ups, title/body/criteria/tags/depends_on | no | any ticket |
 | delete_ticket | Backlog, no notes or runs | its Backlog follow-ups | no | Backlog, no notes or runs |
 | set_model | any | no | no | any |
-| move_ticket | no | own → testing | own → done / in_progress | any → in_progress / testing / done |
+| move_ticket | no | own → testing | own → done / in_progress | any → backlog / in_progress / testing / done |
 | add_note | any | own | own | any |
 | get_ticket | yes | own + its deps + its targets + its follow-ups | own + its deps + its targets + its follow-ups | yes |
 | list_tickets | yes | own + its deps + its targets + its follow-ups | own + its deps + its targets + its follow-ups | yes |
@@ -120,7 +120,7 @@ Change the model and/or effort a ticket runs with; give either or both. Lower ef
 
 ### move_ticket
 
-Move a ticket to another column. A worker moves its ticket to testing when the work is committed in the worktree and ready to be checked. A tester does not need it: report_test moves the ticket (to done or back to in_progress) and ends the session. A move to the column the ticket is already in returns the ticket unchanged. Once the move is accepted your session is over: the board ends it and starts the next agent. An operator grant may move any ticket the same ways, which ends that ticket's agent, not its own session, and may launch a backlog ticket by moving it to in_progress; it still cannot finish a ticket the tester has not passed. Give manual_checks when a criterion needs something you cannot reach (a device, DNS, a phone, an account): merged code and passing tests do not prove it, and the move is refused until the operator has confirmed the checks through ask_operator. Returns the ticket.
+Move a ticket to another column. A worker moves its ticket to testing when the work is committed in the worktree and ready to be checked. A tester does not need it: report_test moves the ticket (to done or back to in_progress) and ends the session. A move to the column the ticket is already in returns the ticket unchanged. Once the move is accepted your session is over: the board ends it and starts the next agent. An operator grant may move any ticket the same ways, which ends that ticket's agent, not its own session, may launch a backlog ticket by moving it to in_progress, and may park any ticket by moving it to backlog, as Reset to Backlog does; it still cannot finish a ticket the tester has not passed. Give manual_checks when a criterion needs something you cannot reach (a device, DNS, a phone, an account): merged code and passing tests do not prove it, and the move is refused until the operator has confirmed the checks through ask_operator. Returns the ticket.
 
 | argument | type | required | description |
 |---|---|---|---|
