@@ -17,7 +17,7 @@ import { countUnpushed, events, recover, releasePending, tick, typed, watchSilen
 import { handleMcp } from './mcp.js';
 import { startMemoryLog } from './memlog.js';
 import { idle } from './merge.js';
-import { halt } from './recording.js';
+import { halt, loadPaused } from './recording.js';
 import { addProject, dataHome, gone, missingHome, onReadOnly, readConfig } from './settings.js';
 import { handleSetup, setupPage, startupProject } from './setup.js';
 import { initTemplates } from './templates.js';
@@ -332,6 +332,7 @@ export function start(config: Config = {}): Promise<{
       await later();
       step('release', () => releasePending(board));
       step('recover', () => recover(board));
+      step('recording', () => loadPaused(board));
       board.starting = false;
       step('tick', () => tick(board)); // the runner picks up where it was
       const daily = setInterval(() => sweep(board).catch(() => {}), SWEEP_MS).unref();
