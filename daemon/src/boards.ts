@@ -208,7 +208,7 @@ export async function focusProject(path: unknown): Promise<{ name: string; focus
   if (process.platform !== 'win32') return { name, focused: false };
   // ponytail: the daemon has no IPC to the other shell, so this finds the top-level window by its exact title. Two
   // projects with the same folder name share a title and the first found wins; the registry could record the shell's pid.
-  const ok = await powershell(FOCUS_PS, { K95_TITLE: `${name} — Kanban95` });
+  const { ok } = await powershell(FOCUS_PS, { K95_TITLE: `${name} — Kanban95` });
   return { name, focused: ok };
 }
 
@@ -228,10 +228,10 @@ if ($h -eq [IntPtr]::Zero) { exit 1 }
 const START_PS = `$e = [Environment]::GetEnvironmentVariables(); $e.Remove('K95_CMD')
 $s = New-CimInstance -ClassName Win32_ProcessStartup -ClientOnly -Property @{ ShowWindow = [uint16]0; EnvironmentVariables = [string[]]($e.Keys | % { "$_=$($e[$_])" }) }
 exit (Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $env:K95_CMD; ProcessStartupInformation = $s }).ReturnValue`;
-const powershell = (script: string, env: Record<string, string>) =>
-  new Promise<boolean>((ok, fail) => {
+export const powershell = (script: string, env: Record<string, string> = {}) =>
+  new Promise<{ ok: boolean; out: string }>((ok, fail) => {
     execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { env: { ...process.env, ...env }, windowsHide: true, timeout: 30_000 },
-      (e) => (e && typeof e.code !== 'number' ? fail(e) : ok(!e)));
+      (e, out) => (e && typeof e.code !== 'number' ? fail(e) : ok({ ok: !e, out: String(out) })));
   });
 
 /**
@@ -245,7 +245,7 @@ const powershell = (script: string, env: Record<string, string>) =>
 async function startDetached(cmd: string, args: string[]): Promise<void> {
   if (process.platform === 'win32') {
     const line = [cmd, ...args].map((a) => `"${a}"`).join(' ');
-    if (!(await powershell(START_PS, { K95_CMD: line }))) throw new Error(`could not start ${basename(cmd)}`);
+    if (!(await powershell(START_PS, { K95_CMD: line })).ok) throw new Error(`could not start ${basename(cmd)}`);
     return;
   }
   await new Promise<void>((ok, fail) => {
