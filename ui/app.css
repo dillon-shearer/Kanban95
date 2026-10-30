@@ -221,6 +221,7 @@ fieldset { margin: 0; }
 .k95-setup .field-row input { flex: 1; }
 .k95-setup-note { margin: 0; }
 .k95-setup-error { color: #a00000; }
+.k95-not-found { color: #a00000; }
 .k95-setup-buttons { justify-content: flex-end; }
 .k95-setup-requirements { margin-bottom: 8px; }
 .k95-requirement-hint { margin: 2px 0 6px 12px; }
