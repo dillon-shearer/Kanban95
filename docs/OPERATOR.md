@@ -198,6 +198,8 @@ Drag a card to any column to put it there by hand (docs/LIFECYCLE.md → Moves b
 | Ctrl+F | focus the Board's Filter box (Esc in the box clears it) |
 | Ctrl+N | New brainstorm |
 | Ctrl+Shift+N | New operator terminal |
+| Ctrl+Shift+R | Start recording, or stop it and render (the tray's Rec button; only with `recording.enabled`, not inside a terminal) |
+| Ctrl+Shift+Space | Switch the recording between regular and fast (the tray's speed button; only while recording, not inside a terminal) |
 | Ctrl+= or Ctrl++ | Zoom the whole UI in by 10% (up to 200%) |
 | Ctrl+- | Zoom out by 10% (down to 80%) |
 | Ctrl+0 | Zoom back to 100% |
@@ -318,6 +320,12 @@ If the microphone is blocked, the board says how to allow it for the system it r
 With `recording.enabled` true in `~/.kanban95/settings.json` (Windows only, ffmpeg on PATH or in `recording.ffmpeg`), the board records the screen `recording.monitor` names, with no audio. Start it, work, and switch between regular and fast as you go; every switch is a mark on the recording's own clock. Stop ends the capture and renders one mp4 in which the fast stretches run `recording.speed` times faster (10 by default). The mp4 shows in the Inbox with Open folder.
 
 Files go to `recording.output`, by default `<home>VideosKanban95`: `<YYYY-MM-DD HH-mm> raw.mkv` (the whole session in real time), `<YYYY-MM-DD HH-mm> markers.json` (the marks) and `<YYYY-MM-DD HH-mm>.mp4`. With `recording.keepRaw` false the first two are deleted once the render succeeds. A failed render keeps both and says why; render the raw again once fixed. Closing the board while recording ends the raw file cleanly but does not render it.
+
+**Taskbar.** With `recording.enabled` on, two buttons sit at the start of the tray, left of Inbox (they show or hide as soon as Settings saves the key):
+- **Rec** (Ctrl+Shift+R): a grey dot and "Rec" when idle; click to start. While recording the dot is steady red and the text is the elapsed time (12:34); click to stop and render. While rendering it reads "Rendering 40%" and is disabled. If the render fails it reads "Rec" again and the Board's status bar shows the error.
+- **Speed** (Ctrl+Shift+Space): green "1x" while recording at regular speed, blue "10x" (`recording.speed`) while fast; click to switch. Grey and disabled when idle or rendering.
+
+The Board's status bar shows one field: `Recording 12:34, regular` or `Recording 12:34, fast 10x`, then `fast stretches so far: n`; `Rendering 40%` while rendering; the error of a failed recording or render until the next start; nothing when idle.
 
 ## Sounds
 

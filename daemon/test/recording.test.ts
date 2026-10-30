@@ -51,7 +51,7 @@ const get = async () => {
 it('GET /api/recording on a fresh board answers idle', async () => {
   const r = await api('GET', '/recording');
   expect(r.status).toBe(200);
-  expect(await r.json()).toEqual({ state: 'idle', mode: 'regular', started: null, elapsed: 0, speed: 10, progress: null, output: null, error: null });
+  expect(await r.json()).toEqual({ state: 'idle', mode: 'regular', started: null, elapsed: 0, speed: 10, progress: null, output: null, error: null, fastStretches: 0 });
 });
 
 it('a settings.json without recording yields the recording defaults', () => {
