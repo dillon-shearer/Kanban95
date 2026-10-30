@@ -1,6 +1,6 @@
 import './home.ts';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
@@ -198,6 +198,29 @@ it.runIf(hasFfmpeg)('with keepRaw off a successful render deletes raw.mkv and ma
   expect(existsSync(raw)).toBe(false);
   expect(existsSync(join(dir, 'markers.json'))).toBe(false);
   expect(existsSync(join(dir, '4x.mp4'))).toBe(true);
+}, 60_000);
+
+it('render again answers 400 for a speed of 1, 61 or a non-number', async () => {
+  for (const speed of [1, 61, '3', null]) expect((await api('POST', '/recording/render', { raw: join(repo, 'raw.mkv'), speed })).status, String(speed)).toBe(400);
+});
+
+it.runIf(hasFfmpeg)('render again at 3x writes 3x.mp4 at that speed beside an earlier 10x.mp4, and without speed renders at recording.speed', async () => {
+  const { dir, raw } = clip('2026-10-30 15-00');
+  const old = join(dir, '10x.mp4');
+  writeFileSync(old, 'earlier render');
+  write({ recording: { speed: 4, fps: 30, quality: 'small', keepRaw: true } });
+  const r = await api('POST', '/recording/render', { raw, speed: 3 });
+  expect(r.status).toBe(200);
+  expect((await r.json()).speed).toBe(3);
+  const out = join(dir, '3x.mp4');
+  expect(await idle()).toMatchObject({ output: out, error: null });
+  expect(Math.abs(duration(out) - (1 + 4 / 3))).toBeLessThan(0.2);
+  expect(readFileSync(old, 'utf8')).toBe('earlier render');
+  expect((await api('POST', '/recording/render', { raw })).status).toBe(200);
+  expect(await idle()).toMatchObject({ output: join(dir, '4x.mp4'), error: null });
+  expect(existsSync(out)).toBe(true);
+  const titles = (await (await api('GET', '/deliverables')).json()).map((d: { title: string }) => d.title);
+  expect(titles).toEqual(expect.arrayContaining(['Recording 2026-10-30 15-00 3x', 'Recording 2026-10-30 15-00 4x']));
 }, 60_000);
 
 it.runIf(hasFfmpeg && process.platform === 'win32')('records the desktop, sends a recording frame on start, mode change and stop, and drops the raw when keepRaw is off', async () => {
