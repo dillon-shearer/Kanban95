@@ -7,7 +7,7 @@ import { extname, resolve, sep } from 'node:path';
 import { pipeline } from 'node:stream';
 import type { DatabaseSync } from 'node:sqlite';
 import { WebSocketServer } from 'ws';
-import { handleApi, receiveFiling, serveContext } from './api.js';
+import { handleApi, receiveFiling, receiveRecording, serveContext } from './api.js';
 import { countBoard, entryPath, register, tellShell } from './boards.js';
 import { innerGitignore, openDb, openGlobalBrain } from './db.js';
 import { commitPaths, git, gitWithin, guardFileMode, initRepo, type GitCap } from './git.js';
@@ -104,6 +104,7 @@ async function handle(board: Board | null, self: string, secret: string, req: In
     return res.end();
   }
   if (url.pathname === '/api/boards/file' && board) return receiveFiling(board, req, res);
+  if (url.pathname.startsWith('/api/recording/relay/') && board) return receiveRecording(board, req, res, url.pathname.slice('/api/recording/relay/'.length));
   if (url.pathname === '/api/context' && board) return serveContext(board, req, res, url);
   if (url.pathname.startsWith('/api/')) {
     if (!authed(req, secret)) return send(res, 401, 'unauthorized');

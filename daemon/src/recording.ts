@@ -3,10 +3,10 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, s
 import { homedir } from 'node:os';
 import { basename, dirname, extname, isAbsolute, join } from 'node:path';
 import { createInterface } from 'node:readline';
-import { powershell } from './boards.js';
+import { ownEntry, powershell, running } from './boards.js';
 import { postDeliverable } from './deliverables.js';
 import { changed, events, Refused, type Board } from './lifecycle.js';
-import { configPath, readConfig } from './settings.js';
+import { boardHome, configPath, dataHome, readConfig } from './settings.js';
 
 export interface Monitor { index: number; name: string; width: number; height: number; left: number; top: number; primary: boolean }
 export interface Tools { ffmpeg: { path: string; version: string } | null; monitors: Monitor[]; output: string }
@@ -142,8 +142,9 @@ export function folderFor(dir: string, now: Date): string {
 type Rec = { folder: string; marks: Mark[]; speed: number; fps: number; segments: Segment[]; args: string[] | null };
 type Capture = Proc & { file: string; stopping: boolean; halted: boolean; closed?: Promise<void> };
 
-// ponytail: one recording per daemon, so two boards can record at once. A machine-wide lock would go in the running-registry
-// entry (boards.ts register).
+// One recording per machine. The daemon recording, paused or rendering owns it and writes <data folder>/recording.json on
+// every change; every other daemon shows that file's view and forwards mode, pause, resume and stop to the owner's
+// key-checked route (docs/ARCHITECTURE.md -> REST).
 let state: 'idle' | 'recording' | 'paused' | 'rendering' = 'idle';
 let starting = false;
 let current: Mode = 'regular';
@@ -160,6 +161,122 @@ let error: string | null = null;
 let sent = 0;
 let rendering: number | null = null;
 let checked: string | null = null;
+let here: Board | null = null;
+let poll: NodeJS.Timeout | null = null;
+let seen = '';
+let shown = '';
+
+type View = ReturnType<typeof local>;
+type Shared = View & { pid: number | null; port: number | null; repo: string | null };
+const SHARED = 'recording.json';
+
+function readShared(): { raw: string; s: Shared | null } {
+  let raw = '';
+  try {
+    raw = readFileSync(join(boardHome(), SHARED), 'utf8');
+  } catch {
+    return { raw, s: null };
+  }
+  try {
+    const s = JSON.parse(raw);
+    return { raw, s: s && typeof s === 'object' && typeof s.state === 'string' ? s : null };
+  } catch {
+    return { raw, s: null };
+  }
+}
+
+const ownerOf = (s: Shared | null) => (s && Number.isInteger(s.pid) && s.pid !== process.pid ? running().find((e) => e.pid === s.pid) ?? null : null);
+const nameOf = (s: Shared) => basename(s.repo ?? '') || `pid ${s.pid}`;
+const active = () => starting || state !== 'idle';
+
+function foreign() {
+  const { s } = readShared();
+  const entry = ownerOf(s);
+  return entry ? { s: s!, entry } : null;
+}
+
+function writeShared(v: Shared) {
+  try {
+    const file = join(dataHome(), SHARED);
+    const tmp = `${file}.${process.pid}.tmp`;
+    writeFileSync(tmp, JSON.stringify(v));
+    try {
+      renameSync(tmp, file);
+    } catch {
+      rmSync(tmp, { force: true });
+      writeFileSync(file, JSON.stringify(v));
+    }
+  } catch {}
+}
+
+function publish() {
+  if (state !== 'idle') return writeShared({ ...local(owner?.repo), pid: process.pid, port: ownEntry()?.port ?? null, repo: owner?.repo ?? here?.repo ?? null });
+  if (readShared().s?.pid !== process.pid) return;
+  try {
+    rmSync(join(boardHome(), SHARED), { force: true });
+  } catch {}
+}
+
+function busyElsewhere(f: ReturnType<typeof foreign>) {
+  if (!f) return;
+  throw new Refused(f.s.state === 'rendering' ? `a render is running on ${nameOf(f.s)}` : `${nameOf(f.s)} is recording`);
+}
+
+// ponytail: a 1 s poll of recording.json, so another board's change shows up to 1 s late and every daemon reads the file
+// and the running registry once a second. fs.watch on the data folder would make it immediate.
+function look() {
+  const { raw, s } = readShared();
+  if (raw && !s) return;
+  if (state === 'paused' && !capture && !starting && ownerOf(s)) {
+    rec = null;
+    state = 'idle';
+    elapsed = 0;
+    current = 'regular';
+    emit();
+  }
+  if (raw !== seen) {
+    seen = raw;
+    if (here && s?.state === 'paused' && s.pid !== process.pid && !ownerOf(s)) {
+      checked = null;
+      loadPaused(here);
+    }
+  }
+  if (active()) return;
+  const v = JSON.stringify(view(here?.repo));
+  if (v === shown) return;
+  shown = v;
+  events.emit('event', { recording: JSON.parse(v) });
+}
+
+function share(board: Board) {
+  here = board;
+  if (poll) return;
+  seen = readShared().raw;
+  poll = setInterval(look, 1000);
+  poll.unref();
+}
+
+export async function relay(action: 'mode' | 'pause' | 'resume' | 'stop', body: { mode?: Mode } = {}): Promise<View | null> {
+  if (active()) return null;
+  const f = foreign();
+  if (!f) return null;
+  const name = nameOf(f.s);
+  if (!f.entry.key) throw new Refused(`${name} runs an older Kanban95 that cannot share its recording`);
+  let r: Response;
+  try {
+    r = await fetch(`http://127.0.0.1:${f.entry.port}/api/recording/relay/${action}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-K95-Key': f.entry.key },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(30_000),
+    });
+  } catch (e) {
+    throw new Refused(`${name} did not answer: ${(e as Error).message}`);
+  }
+  const out = await r.json().catch(() => ({})) as View & { error?: string };
+  if (!r.ok) throw new Refused(r.status === 409 && out.error ? out.error : `${name} refused (${r.status}): ${out.error ?? r.statusText}`);
+  return out;
+}
 
 function speedOf(repo?: string): number | null {
   try {
@@ -169,13 +286,23 @@ function speedOf(repo?: string): number | null {
   }
 }
 
-export function view(repo?: string) {
+export function view(repo?: string): View {
+  const f = active() ? null : foreign();
+  if (!f) return local(repo);
+  const { pid: _p, port: _o, repo: _r, ...v } = f.s;
+  return v;
+}
+
+function local(repo?: string) {
   return { state, mode: current, started: started?.toISOString() ?? null, elapsed, speed: rec?.speed ?? rendering ?? speedOf(repo), progress, output, error, fastStretches: rec?.marks.filter((m) => m.mode === 'fast').length ?? 0 };
 }
 
 function emit() {
   sent = Date.now();
-  events.emit('event', { recording: view(owner?.repo) });
+  publish();
+  const v = view(owner?.repo ?? here?.repo);
+  shown = JSON.stringify(v);
+  events.emit('event', { recording: v });
 }
 
 const save = (r: Rec) => writeFileSync(join(r.folder, MARKERS), JSON.stringify({ speed: r.speed, fps: r.fps, marks: r.marks, ...(r.segments.length ? { paused: true, segments: r.segments } : {}) }, null, 2));
@@ -214,6 +341,7 @@ export async function start(board: Board) {
   if (process.platform !== 'win32') throw new Refused('recording is Windows only');
   const busy = () => {
     if (starting || state !== 'idle') throw new Refused(state === 'rendering' ? 'a render is running' : state === 'paused' ? PAUSED : 'already recording');
+    busyElsewhere(foreign());
   };
   busy();
   starting = true;
@@ -312,6 +440,7 @@ export async function resume(board: Board) {
 }
 
 export function loadPaused(board: Board) {
+  share(board);
   let dir: string;
   try {
     dir = readConfig('settings', board.repo).recording.output || OUTPUT();
@@ -320,7 +449,7 @@ export function loadPaused(board: Board) {
   }
   if (dir === checked) return;
   checked = dir;
-  if (starting || state !== 'idle') return;
+  if (active() || foreign()) return;
   let found: { r: Rec; at: number } | null = null;
   try {
     for (const name of readdirSync(dir)) {
@@ -402,6 +531,7 @@ export function stop(repo?: string) {
 
 export function renderAgain(board: Board, raw: string, speed: number) {
   if (starting || state !== 'idle') throw new Refused(state === 'rendering' ? 'a render is running' : state === 'paused' ? PAUSED : 'a recording is running');
+  busyElsewhere(foreign());
   const layout = `expected <recording folder>\\${RAW} with ${MARKERS} beside it`;
   if (!isAbsolute(raw) || basename(raw) !== RAW || !existsSync(raw)) throw new Refused(`${raw} is not a raw recording (${layout})`);
   const markers = join(dirname(raw), MARKERS);
@@ -461,6 +591,7 @@ export async function halt() {
     await close(c, rec);
   }
   if (c || state === 'paused') {
+    writeShared({ ...local(owner?.repo), state: 'paused', started: null, pid: null, port: null, repo: null });
     capture = null;
     rec = null;
     state = 'idle';
@@ -468,5 +599,9 @@ export async function halt() {
     elapsed = 0;
   }
   checked = null;
+  if (poll) clearInterval(poll);
+  poll = null;
+  here = null;
+  seen = shown = '';
   encoder?.kill();
 }
