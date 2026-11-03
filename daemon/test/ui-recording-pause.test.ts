@@ -34,7 +34,7 @@ const show = (r: Partial<typeof idle>, ready: (t: Awaited<ReturnType<typeof tray
   return ready(await tray());
 }, `the ${r.state} frame`);
 const paused = { state: 'paused', elapsed: 754, started: null, fastStretches: 1 };
-const keys = (key: string) => page.evaluate(`dispatchEvent(new KeyboardEvent('keydown', { key: ${JSON.stringify(key)}, ctrlKey: true, shiftKey: true, bubbles: true }))`);
+const keys = (key: string, code = '') => page.evaluate<boolean>(`dispatchEvent(new KeyboardEvent('keydown', { key: ${JSON.stringify(key)}, code: ${JSON.stringify(code)}, ctrlKey: true, shiftKey: true, bubbles: true, cancelable: true }))`);
 
 describe('ui-recording-pause', { timeout: 60_000 }, () => {
   afterEach(() => {
@@ -98,7 +98,7 @@ describe('ui-recording-pause', { timeout: 60_000 }, () => {
     await open();
     await show(paused, (t) => t.rec.paused);
     await keys(' ');
-    await keys('R');
+    await keys('|', 'Backslash');
     await until(async () => (await posts()).length === 1, 'the resume post');
     expect(await posts()).toEqual(['/api/recording/resume']);
 
@@ -106,5 +106,14 @@ describe('ui-recording-pause', { timeout: 60_000 }, () => {
     await keys(' ');
     await until(async () => (await posts()).length === 2, 'the mode post');
     expect((await posts())[1]).toBe('/api/recording/mode');
+  });
+
+  it('Ctrl+Shift+\\ pauses while recording and Ctrl+Shift+R is left to the webview', async () => {
+    await open();
+    await show({ state: 'recording', started: new Date().toISOString() }, (t) => t.rec.live);
+    expect(await keys('R', 'KeyR')).toBe(true);
+    expect(await keys('|', 'Backslash')).toBe(false);
+    await until(async () => (await posts()).length === 1, 'the pause post');
+    expect(await posts()).toEqual(['/api/recording/pause']);
   });
 });

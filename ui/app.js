@@ -1757,7 +1757,7 @@ async function recordingPanel(p, redraw) {
       h('div', { class: 'field-row' }, h('label', { for: 'rec-output' }, 'Output folder'), output, browse(output, 'folder')),
       h('div', { class: 'field-row' }, keepRaw, h('label', { for: 'rec-keep-raw' }, 'Keep the raw recording and markers next to the final video')),
       h('button', { id: 'rec-save', onclick: save }, 'Save'),
-      h('p', {}, 'Shortcuts inside the board: Ctrl+Shift+R starts and stops, Ctrl+Shift+Space switches between regular and fast.')];
+      h('p', {}, 'Shortcuts inside the board: Ctrl+Shift+\\ starts and stops, Ctrl+Shift+Space switches between regular and fast.')];
   }, redraw);
   const raw = h('input', { type: 'text', id: 'rec-raw', 'data-mic': 'off', size: 40, placeholder: '<recording folder>\\raw.mkv' });
   const speed = h('input', { type: 'number', id: 'rec-render-speed', min: 2, max: 60, step: 1, value: settings.recording.speed });
@@ -2055,7 +2055,7 @@ const clock = () => { document.getElementById('clock').textContent = new Date().
 
 // Esc closes the focused window, Ctrl+L turns the runner on or off, Ctrl+A selects every card the filter shows in an open column on a focused Board,
 // Ctrl+F focuses the Board's filter, Ctrl+N starts a brainstorm, Ctrl+Shift+N an operator terminal, Ctrl+R restarts the focused
-// ticket's agent, Ctrl+= (or Ctrl++) and Ctrl+- zoom the UI and Ctrl+0 resets it. Inside a terminal every key goes to the agent
+// ticket's agent, Ctrl+Shift+\ starts, pauses or resumes the recording,Ctrl+= (or Ctrl++) and Ctrl+- zoom the UI and Ctrl+0 resets it. Inside a terminal every key goes to the agent
 // instead (Esc interrupts Claude Code, Ctrl+L clears the screen, Ctrl+- and Ctrl+= are the agent's).
 /** Start → Full screen, or F11: the page's fullscreen, which the shell turns into a borderless window over the whole screen. */
 function toggleFullscreen() { // a declaration: START, built at load, refers to it
@@ -2100,7 +2100,7 @@ addEventListener('keydown', (e) => {
     if (!id) return;
     e.preventDefault(); // not a page reload
     restart(Number(id));
-  } else if (e.ctrlKey && e.shiftKey && !e.altKey && settings.recording.enabled && e.key.toLowerCase() === 'r') {
+  } else if (e.ctrlKey && e.shiftKey && !e.altKey && settings.recording.enabled && e.code === 'Backslash') {
     e.preventDefault();
     recToggle();
   } else if (e.ctrlKey && e.shiftKey && !e.altKey && settings.recording.enabled && e.key === ' ') {
