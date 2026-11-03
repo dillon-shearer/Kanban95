@@ -708,8 +708,9 @@ function openBoard() {
       h('div', { class: 'title-bar' }, h('div', { class: 'title-bar-text' }, 'This board is empty')),
       h('div', { class: 'window-body' },
         h('p', {}, 'Set up this board adds the starter tickets from .kanban95/templates/bootstrap.md to Backlog.'),
-        h('p', {}, 'To plan your own work, New brainstorm is in the Start menu.'),
-        h('button', { onclick: setupBoard }, 'Set up this board'))));
+        h('p', {}, 'Start blank shows the empty columns, to plan by hand with New ticket or a brainstorm from the Start menu.'),
+        h('button', { onclick: setupBoard }, 'Set up this board'), ' ',
+        h('button', { onclick: () => { ui.set('k95.blank', true); drawBoard(); } }, 'Start blank'))));
   w.body.classList.add('k95-board');
   w.body.append(
     h('div', { class: 'k95-toolbar' },
@@ -724,7 +725,7 @@ function openBoard() {
   say = (msg) => { status.textContent = msg; status.title = msg; };
   views.set('board', () => {
     const all = [...tickets.values()];
-    empty.hidden = all.length > 0;
+    empty.hidden = all.length > 0 || ui.get('k95.blank') === true;
     cols.hidden = !empty.hidden;
     // A rebuild resets each column's scroll and drops focus; carry both across by status and card id.
     const scroll = Object.fromEntries([...cols.querySelectorAll('.col')].map((c) => [c.dataset.status, c.querySelector('.cards').scrollTop]));
