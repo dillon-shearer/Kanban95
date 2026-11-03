@@ -19,7 +19,7 @@ import { trustStatus, untrustClaude } from './trust.js';
 import { download, status as voiceStatus } from './voice.js';
 import { limits } from './limits.js';
 import { requirements } from './requirements.js';
-import { loadPaused, mode as recordingMode, pause as pauseRecording, renderAgain, resume as resumeRecording, start as startRecording, stop as stopRecording, tools as recordingTools, view as recordingView } from './recording.js';
+import { loadPaused, mode as recordingMode, pause as pauseRecording, relay as relayRecording, renderAgain, resume as resumeRecording, start as startRecording, stop as stopRecording, tools as recordingTools, view as recordingView } from './recording.js';
 import { readiness, readyText } from './ready.js';
 import { busy, checkNow, installNow, relay, REPORT, VERSION } from './update.js';
 import { finishPick, startPick } from './pick.js';
@@ -693,13 +693,13 @@ const routes: [method: string, path: RegExp, mutation: string | null, handler: (
   ['GET', /^\/api\/recording\/tools$/, null, async ({ board }) => ({ status: 200, body: await recordingTools(board.repo) })],
   ['GET', /^\/api\/recording$/, null, ({ board }) => ({ status: 200, body: recordingView(board.repo) })],
   ['POST', /^\/api\/recording\/start$/, 'recording.start', async ({ board }) => ({ status: 200, body: await startRecording(board) })],
-  ['POST', /^\/api\/recording\/mode$/, 'recording.mode', ({ board, body }) => {
+  ['POST', /^\/api\/recording\/mode$/, 'recording.mode', async ({ board, body }) => {
     if (body.mode !== 'regular' && body.mode !== 'fast') throw new HttpError(400, 'mode must be regular or fast');
-    return { status: 200, body: recordingMode(body.mode, board.repo) };
+    return { status: 200, body: (await relayRecording('mode', { mode: body.mode })) ?? recordingMode(body.mode, board.repo) };
   }],
-  ['POST', /^\/api\/recording\/pause$/, 'recording.pause', async ({ board }) => ({ status: 200, body: await pauseRecording(board.repo) })],
-  ['POST', /^\/api\/recording\/resume$/, 'recording.resume', async ({ board }) => ({ status: 200, body: await resumeRecording(board) })],
-  ['POST', /^\/api\/recording\/stop$/, 'recording.stop', ({ board }) => ({ status: 200, body: stopRecording(board.repo) })],
+  ['POST', /^\/api\/recording\/pause$/, 'recording.pause', async ({ board }) => ({ status: 200, body: (await relayRecording('pause')) ?? await pauseRecording(board.repo) })],
+  ['POST', /^\/api\/recording\/resume$/, 'recording.resume', async ({ board }) => ({ status: 200, body: (await relayRecording('resume')) ?? await resumeRecording(board) })],
+  ['POST', /^\/api\/recording\/stop$/, 'recording.stop', async ({ board }) => ({ status: 200, body: (await relayRecording('stop')) ?? stopRecording(board.repo) })],
   ['POST', /^\/api\/recording\/render$/, 'recording.render', ({ board, body }) => {
     if (typeof body.raw !== 'string') throw new HttpError(400, 'raw must be a path');
     const speed = body.speed === undefined ? readConfig('settings', board.repo).recording.speed : body.speed;
@@ -903,6 +903,26 @@ export function serveContext(board: Board, req: IncomingMessage, res: ServerResp
 }
 
 const FILING_MAX = 64 * 1024;
+
+export async function receiveRecording(board: Board, req: IncomingMessage, res: ServerResponse, action: string): Promise<void> {
+  if (req.method !== 'POST') return reply(res, { status: 405, body: { error: 'method not allowed' } });
+  if (!keyOk(req.headers['x-k95-key'])) return reply(res, { status: 401, body: { error: 'unauthorized' } });
+  try {
+    const body = await readJson(req);
+    let out: unknown;
+    if (action === 'mode') {
+      if (body.mode !== 'regular' && body.mode !== 'fast') throw new HttpError(400, 'mode must be regular or fast');
+      out = recordingMode(body.mode, board.repo);
+    } else if (action === 'pause') out = await pauseRecording(board.repo);
+    else if (action === 'resume') out = await resumeRecording(board);
+    else if (action === 'stop') out = stopRecording(board.repo);
+    else throw new HttpError(404, 'not found');
+    reply(res, { status: 200, body: out });
+  } catch (e) {
+    const status = e instanceof HttpError ? e.status : e instanceof Refused ? 409 : 500;
+    reply(res, { status, body: { error: status === 500 ? 'internal error' : (e as Error).message } });
+  }
+}
 
 export function fileTicket(db: DatabaseSync, f: { from: string; title: string; body: string; criteria: string; tags: unknown }): number {
   const r = db.prepare('INSERT INTO tickets (title, body, criteria, tags) VALUES (?, ?, ?, ?)')

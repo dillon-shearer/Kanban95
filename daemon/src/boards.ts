@@ -34,6 +34,7 @@ export function countBoard(agents: number, attention: number): void {
 }
 
 const digest = (s: string) => createHash('sha256').update(s).digest();
+export const ownEntry = () => own;
 export const keyOk = (given: unknown) => typeof given === 'string' && !!own?.key && timingSafeEqual(digest(given), digest(own.key));
 
 /** EPERM: the pid exists but belongs to someone else, so it is alive. */
