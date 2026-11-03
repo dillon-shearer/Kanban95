@@ -61,6 +61,7 @@ const FILES = {
     updateCheck: z.boolean().default(true),
     release: z.boolean().default(false),
     workers_read: z.enum(['deps', 'all']).default('deps'),
+    mcp_servers: z.array(z.string().trim().min(1).refine((n) => n !== 'kanban95', 'kanban95 is the board itself')).default([]),
     startup: z.string().refine((p) => p === 'last' || isAbsolute(p), 'must be "last" or an absolute path').default('last'),
   }).strict(),
 };

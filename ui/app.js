@@ -35,7 +35,7 @@ let runner = { on: false, concurrency: 3, running: [], left: 0, backlog: 0, unpu
 let models = null; // models.json this board runs on (this repo's copy, else the global file), for the cards' default model and effort
 // Sounds stay off until /config/settings loads: listen() starts first, and a ding in that gap ignored the operator's choice.
 // `terminals` is absent until then too, so no session is opened or passed over before the operator's phases are known.
-const SETTINGS = { paths: {}, sounds: { merge: false, attention: false, done: false }, voice: { backend: 'local', mode: 'push' }, housekeeping: { auto: true, every: 10 }, recording: { enabled: false, ffmpeg: '', monitor: 0, fps: 60, quality: 'high', speed: 10, output: '', keepRaw: true }, idle_minutes: 20, zoom: 1, push_after_merge: true, sleepAfterMinutes: 30, concurrency: 3, updateCheck: true, release: false, workers_read: 'deps', startup: 'last' };
+const SETTINGS = { paths: {}, sounds: { merge: false, attention: false, done: false }, voice: { backend: 'local', mode: 'push' }, housekeeping: { auto: true, every: 10 }, recording: { enabled: false, ffmpeg: '', monitor: 0, fps: 60, quality: 'high', speed: 10, output: '', keepRaw: true }, idle_minutes: 20, zoom: 1, push_after_merge: true, sleepAfterMinutes: 30, concurrency: 3, updateCheck: true, release: false, workers_read: 'deps', mcp_servers: [], startup: 'last' };
 let settings = { ...SETTINGS };
 let recording = { state: 'idle', mode: 'regular', started: null, elapsed: 0, speed: 10, progress: null, output: null, error: null, fastStretches: 0 };
 let recTick = null;
@@ -1580,6 +1580,7 @@ function openSettings(tab) {
         const hkEvery = h('input', { type: 'number', id: 'hk-every', min: 1, step: 1, value: s.housekeeping.every });
         const at = h('input', { type: 'number', id: 'concurrency', min: 1, max: 10, step: 1, value: s.concurrency });
         const reads = h('select', { id: 'workers-read' }, [['deps', 'own ticket and dependencies'], ['all', 'all tickets']].map(([v, l]) => h('option', { value: v, selected: s.workers_read === v }, l)));
+        const mcp = h('input', { type: 'text', id: 'mcp-servers', 'data-mic': 'off', size: 44, value: s.mcp_servers.join(', '), placeholder: 'e.g. figma' });
         const saveRunner = () => act(async () => {
           Object.assign(s, await putSettings(scope, { concurrency: Number(at.value) }));
           runner = await api('GET', '/runner');
@@ -1595,6 +1596,10 @@ function openSettings(tab) {
             h('div', { class: 'field-row' }, h('label', { for: 'workers-read' }, 'Workers and testers read'), reads),
             h('p', {}, "All tickets lets every worker and tester read the whole board, as a ticket's Read all tickets box does."),
             h('button', { onclick: () => put({ workers_read: reads.value }) }, 'Save')),
+          h('fieldset', {}, h('legend', {}, 'Extra MCP servers'),
+            h('div', { class: 'field-row' }, h('label', { for: 'mcp-servers' }, 'Servers'), mcp),
+            h('p', {}, 'Names from your Claude Code config (claude mcp list), comma separated. Every Claude session on this board loads them next to the board server.'),
+            h('button', { onclick: () => put({ mcp_servers: mcp.value.split(',').map((n) => n.trim()).filter(Boolean) }) }, 'Save')),
           h('fieldset', {}, h('legend', {}, 'Silent agents'),
             h('div', { class: 'field-row' }, h('label', { for: 'idle-minutes' }, 'Flag an agent whose transcript is quiet for (minutes)'), idle),
             h('p', {}, 'Keep it above the 10 min tool timeout, so a long test run is not flagged.'),

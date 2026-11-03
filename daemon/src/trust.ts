@@ -8,10 +8,10 @@ import { worktreesRoot } from './git.js';
 import { audit } from './grants.js';
 
 /** Claude Code's state file; it lives under CLAUDE_CONFIG_DIR when that is set. */
-const claudeState = () => join(process.env.CLAUDE_CONFIG_DIR ?? homedir(), '.claude.json');
+export const claudeState = () => join(process.env.CLAUDE_CONFIG_DIR ?? homedir(), '.claude.json');
 
 /** Claude Code's key for a folder: the absolute path with forward slashes. */
-const claudeKey = (path: string) => resolve(path).replaceAll('\\', '/');
+export const claudeKey = (path: string) => resolve(path).replaceAll('\\', '/');
 
 /**
  * Before a Claude Code launch in `dir`'s tree: the repo's worktrees root (`worktreesRoot`) for a ticket, the repo itself for a

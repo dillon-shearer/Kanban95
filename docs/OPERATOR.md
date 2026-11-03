@@ -133,7 +133,7 @@ If you review a Done ticket and it is not right, **Reject** it (card menu, or th
 
 What the Settings window holds, one subject per tab:
 
-- **Agents**: the default CLI, model and effort per phase, CLI paths, trusted folders (**Clear Claude trust**), runner concurrency (Tickets running at once, `concurrency` in `settings.json`, default 3), Workers read (own ticket and dependencies, the default, or all tickets: `workers_read` in `settings.json`), silent agents, housekeeping
+- **Agents**: the default CLI, model and effort per phase, CLI paths, trusted folders (**Clear Claude trust**), runner concurrency (Tickets running at once, `concurrency` in `settings.json`, default 3), Workers read (own ticket and dependencies, the default, or all tickets: `workers_read` in `settings.json`), Extra MCP servers (names from `claude mcp list`, such as `figma`, that every Claude session loads next to the board server: `mcp_servers` in `settings.json`), silent agents, housekeeping
 - **Prompts**: preferences, templates
 - **Board**: zoom, sounds, which phases open a terminal by themselves, push after merge, voice (speech model, mic button mode)
 - **Projects**: the repos this board knows

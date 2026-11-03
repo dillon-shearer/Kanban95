@@ -38,7 +38,7 @@ claude --mcp-config <session>/mcp.json --strict-mcp-config [ticket: --session-id
 | model | `--model <model>` | alias or full name, taken from the board's model config |
 | effort | `--effort <level>` | accepts `low medium high xhigh max`; the board uses `low medium high max` unchanged |
 | MCP | `--mcp-config <file>` | variadic, so it comes first and a boolean flag separates it from the message |
-| only the board's MCP | `--strict-mcp-config` | the operator's other MCP servers are not loaded into agent sessions |
+| only the board's MCP | `--strict-mcp-config` | the operator's other MCP servers are not loaded into agent sessions, except those named in `mcp_servers` (Extra MCP servers below) |
 | permissions off | `--dangerously-skip-permissions` | every role; approved by the operator (2026-10-07): the board trusts agent actions and limits reach per role with each CLI's own scoping instead of approvals |
 | planner reach | `--disallowedTools Bash PowerShell Agent` | variadic, so a flag follows it. See Reach by role |
 | no user settings | `--setting-sources project,local` | worker and tester only. The operator's `~/.claude/settings.json` is not loaded, so neither are its plugins: their SessionStart hooks and skill listing were ≈15k of the ≈17k tokens written fresh every session and re-read on every call (ticket #43; operator approved 2026-10-08). The repo's `.claude/settings.json`, `settings.local.json`, `CLAUDE.md` and auto-memory still load. Planner and operator sessions keep the operator's settings: someone is watching them |
@@ -61,6 +61,10 @@ claude --mcp-config <session>/mcp.json --strict-mcp-config [ticket: --session-id
 ```
 
 The host must be `127.0.0.1`, not `localhost`: the daemon's origin guard refuses any other `Host`.
+
+### Extra MCP servers
+
+`mcp_servers` in `settings.json` (Settings → Agents → Extra MCP servers) names servers from the operator's Claude Code config to add to every Claude session's `mcp.json`, next to `kanban95` (`operatorMcpServers` in `daemon/src/extra-mcp.ts`). Each entry is copied as written from the first place that holds the name: `projects[<folder>].mcpServers` in `~/.claude.json` (`$CLAUDE_CONFIG_DIR/.claude.json` when set) for the session's working directory or a folder above it, then the repo root or a folder above it, then `.mcp.json` in the working directory, then the user-scope `mcpServers`. A name found nowhere fails the launch with a BadConfig naming it; `kanban95` is refused. An OAuth server works with no new sign-in: Claude Code keys its token by server name and the entry's type, url and headers, not by scope, so the copied entry finds the token the operator's own sign-in stored (checked live 2026-11-02 with Figma's remote server, `https://mcp.figma.com/mcp`: a `--strict-mcp-config` session listed its `mcp__figma__*` tools). Codex is untouched: it already loads the operator's `~/.codex/config.toml` servers.
 
 ## Codex CLI
 
