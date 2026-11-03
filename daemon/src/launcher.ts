@@ -13,7 +13,8 @@ import { mark, who } from './memlog.js';
 import { saveOutput } from './output.js';
 import { childEnv, cmdSafe, lastLines, spawnPty } from './pty.js';
 import { fill, loadTemplate, TEMPLATES, type TicketTemplate } from './templates.js';
-import { BadConfig, type Cli, type Effort } from './settings.js';
+import { BadConfig, readConfig, type Cli, type Effort } from './settings.js';
+import { operatorMcpServers } from './extra-mcp.js';
 import { preTrustClaude } from './trust.js';
 
 /** Codex reads the bearer token for the board's MCP server from this variable; it is set only in the CLI's own environment. */
@@ -349,7 +350,8 @@ function spawnSession(d: Daemon, o: RunSettings & { sessionId?: string; resume?:
     const settingsPath = join(dir, 'settings.json');
     writeFileSync(promptPath, r.prompt, { mode: o.cli === 'claude' ? 0o600 : 0o644 });
     if (o.cli === 'claude') {
-      const cfg = { mcpServers: { kanban95: { type: 'http', url: mcpUrl, headers: { Authorization: `Bearer ${grant.token}` } } } };
+      const extra = operatorMcpServers(readConfig('settings', repo).mcp_servers, r.cwd, repo);
+      const cfg = { mcpServers: { ...extra, kanban95: { type: 'http', url: mcpUrl, headers: { Authorization: `Bearer ${grant.token}` } } } };
       writeFileSync(mcpConfigPath, JSON.stringify(cfg, null, 2), { mode: 0o600 });
       writeFileSync(join(dir, 'auth.header'), `Authorization: Bearer ${grant.token}\n`, { mode: 0o600 });
       // No commit or PR trailer (CLAUDE.md), held by the board now that the operator's own attribution setting is not loaded.

@@ -44,6 +44,7 @@ Living document. Update it in the same change that alters the schema.
   - `concurrency` (an integer 1 to 10, default 3: how many tickets the runner keeps running, `docs/LIFECYCLE.md` → The runner)
   - `housekeeping` (`auto`: boolean, default true; `every`: a positive integer, default 10)
   - `idle_minutes` (a positive integer, default 20: how long a running agent's transcript may gain no line before its ticket is flagged, `docs/LIFECYCLE.md` → Silent agents)
+  - `mcp_servers` (an array of server names, default `[]`: Settings → Agents → Extra MCP servers. Each is copied from the operator's Claude Code config into every Claude session's `mcp.json`; `kanban95` is refused, `docs/CLIS.md` → Extra MCP servers)
   - `paths` (`claude`, `codex`: an absolute path to the executable, empty for PATH)
   - `push_after_merge` (boolean, default true: the merge queue pushes the base to its upstream before a ticket counts as merged, `docs/LIFECYCLE.md` → Push)
   - `recording` (desktop recording, Windows only; all keys optional):
