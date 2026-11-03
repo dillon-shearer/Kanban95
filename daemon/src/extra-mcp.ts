@@ -19,17 +19,20 @@ function ancestors(path: string): string[] {
 export function operatorMcpServers(names: string[], cwd: string, repo: string): Servers {
   if (!names.length) return {};
   const state = read(claudeState());
-  const projects: Record<string, { mcpServers?: Servers }> = state.projects ?? {};
+  const projects: Record<string, { mcpServers?: Servers; enabledMcpjsonServers?: string[] }> = state.projects ?? {};
+  const project = (k: string) => Object.entries(projects).find(([p]) => same(p, k))?.[1];
   const keys = [...new Set([...ancestors(cwd), ...ancestors(repo)])];
+  const approved = new Set([claudeKey(cwd), claudeKey(repo)].flatMap((k) => project(k)?.enabledMcpjsonServers ?? []));
+  const mcpjson: Servers = read(join(cwd, '.mcp.json')).mcpServers ?? {};
   const layers: Servers[] = [
-    ...keys.map((k) => Object.entries(projects).find(([p]) => same(p, k))?.[1]?.mcpServers ?? {}),
-    read(join(cwd, '.mcp.json')).mcpServers ?? {},
+    ...keys.map((k) => project(k)?.mcpServers ?? {}),
     state.mcpServers ?? {},
+    Object.fromEntries(Object.entries(mcpjson).filter(([n]) => approved.has(n))),
   ];
   const out: Servers = {};
   for (const name of names) {
     const found = layers.find((l) => Object.hasOwn(l, name));
-    if (!found) throw new BadConfig(`MCP server "${name}" (settings.json mcp_servers) is not in ${claudeState()} or ${join(cwd, '.mcp.json')}: add it with claude mcp add, or remove it from Settings → Agents → Extra MCP servers`);
+    if (!found) throw new BadConfig(`MCP server "${name}" (settings.json mcp_servers) is not in ${claudeState()} or ${join(cwd, '.mcp.json')}: add it with claude mcp add (a .mcp.json server must be approved in Claude Code first), or remove it from Settings → Agents → Extra MCP servers`);
     out[name] = found[name];
   }
   return out;
