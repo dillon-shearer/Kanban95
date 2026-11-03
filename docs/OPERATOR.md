@@ -198,7 +198,7 @@ Drag a card to any column to put it there by hand (docs/LIFECYCLE.md → Moves b
 | Ctrl+F | focus the Board's Filter box (Esc in the box clears it) |
 | Ctrl+N | New brainstorm |
 | Ctrl+Shift+N | New operator terminal |
-| Ctrl+Shift+R | Start, pause or resume the recording (the tray's Rec button; only with `recording.enabled`, not inside a terminal) |
+| Ctrl+Shift+\ | Start, pause or resume the recording (the tray's Rec button; only with `recording.enabled`, not inside a terminal) |
 | Ctrl+Shift+Space | Switch the recording between regular and fast (the tray's speed button; only while recording, not while paused, not inside a terminal) |
 | Ctrl+= or Ctrl++ | Zoom the whole UI in by 10% (up to 200%) |
 | Ctrl+- | Zoom out by 10% (down to 80%) |
@@ -237,7 +237,7 @@ The top of the Settings window has a switch with two positions, **All projects**
 - **Keep the raw recording and markers next to the final video** (`recording.keepRaw`).
 - **Render again**: pick a recording folder's `raw.mkv` (its `markers.json` must sit beside it), set **Speed** (2 to 60, filled with the saved Fast speed each time the tab opens; changing it does not change the setting) and press **Render**. It writes `<speed>x.mp4` in that folder beside any earlier render; a speed already rendered is overwritten, other files are not. Each render shows in the Inbox as `Recording <folder name> <speed>x`. The raw file is what gets rendered, so leave **Keep the raw recording** on if you may want another speed later. It says why when refused, else "Rendering..." and then "Done: <mp4 path>" or the error.
 
-Under the fields a line repeats the keys: Ctrl+Shift+R starts, pauses and resumes, Ctrl+Shift+Space switches between regular and fast.
+Under the fields a line repeats the keys: Ctrl+Shift+\ starts, pauses and resumes, Ctrl+Shift+Space switches between regular and fast.
 
 Every **...** button opens the dialog through the Kanban95 app and shows only there, not on a board opened in a plain browser. It is greyed while its dialog is open; Cancel leaves the box as it was, and typing a path by hand works the same either way.
 
@@ -340,7 +340,7 @@ Each recording gets its own folder in `recording.output`, by default `<home>\Vid
 Old recordings from before folders (a raw `.mkv` and a markers `.json` loose in the output folder) are not moved. To render one again, make a folder, move both files into it, rename them to `raw.mkv` and `markers.json`, then use **Render again**.
 
 **Taskbar.** With `recording.enabled` on, two buttons sit at the start of the tray, left of Inbox (they show or hide as soon as Settings saves the key):
-- **Rec** (Ctrl+Shift+R): a grey dot and "Rec" when idle; click to start. While recording the dot is steady red and the text is the elapsed time (12:34); click to pause. While paused the dot is amber and the time stands still; click to resume. While rendering it reads "Rendering 40%" and is disabled. If the render fails it reads "Rec" again and the Board's status bar shows the error.
+- **Rec** (Ctrl+Shift+\): a grey dot and "Rec" when idle; click to start. While recording the dot is steady red and the text is the elapsed time (12:34); click to pause. While paused the dot is amber and the time stands still; click to resume. While rendering it reads "Rendering 40%" and is disabled. If the render fails it reads "Rec" again and the Board's status bar shows the error.
 - **Speed** (Ctrl+Shift+Space): green "1x" while recording at regular speed, blue "10x" (`recording.speed`) while fast; click to switch. Grey and disabled when idle or rendering.
 - **Stop**: while paused the speed button becomes Stop (a filled square). Click it and confirm "Stop and render?" with OK to stop and render; Cancel keeps the recording paused. On resume or stop it is the speed button again.
 
