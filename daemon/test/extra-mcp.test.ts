@@ -40,10 +40,24 @@ describe('operatorMcpServers', () => {
     expect(operatorMcpServers(['figma'], wt, repo)).toEqual({ figma });
   });
 
-  it('falls back to the worktree .mcp.json, then the user scope', () => {
-    const tool = { type: 'stdio', command: 'tool' };
+  it('takes the user scope over a repo .mcp.json server of the same name, even an approved one', () => {
+    const mine = { type: 'stdio', command: 'mine' };
+    writeFileSync(join(wt, '.mcp.json'), JSON.stringify({ mcpServers: { tool: { type: 'stdio', command: 'repo' } } }));
+    writeFileSync(state, JSON.stringify({ mcpServers: { tool: mine }, projects: { [claudeKey(repo)]: { enabledMcpjsonServers: ['tool'] } } }));
+    expect(operatorMcpServers(['tool'], wt, repo)).toEqual({ tool: mine });
+  });
+
+  it('refuses a .mcp.json server the operator has not approved for the project', () => {
+    writeFileSync(join(wt, '.mcp.json'), JSON.stringify({ mcpServers: { tool: { type: 'stdio', command: 'repo' } } }));
+    writeFileSync(state, JSON.stringify({ projects: { [claudeKey(repo)]: { enabledMcpjsonServers: ['other'] }, [claudeKey(join(repo, '..'))]: { enabledMcpjsonServers: ['tool'] } } }));
+    expect(() => operatorMcpServers(['tool'], wt, repo)).toThrow(BadConfig);
+    expect(() => operatorMcpServers(['tool'], wt, repo)).toThrow(/must be approved in Claude Code/);
+  });
+
+  it('copies a .mcp.json server approved for the project', () => {
+    const tool = { type: 'stdio', command: 'repo' };
     writeFileSync(join(wt, '.mcp.json'), JSON.stringify({ mcpServers: { tool } }));
-    writeFileSync(state, JSON.stringify({ mcpServers: { figma, tool: { type: 'stdio', command: 'other' } } }));
+    writeFileSync(state, JSON.stringify({ mcpServers: { figma }, projects: { [claudeKey(repo)]: { enabledMcpjsonServers: ['tool'] } } }));
     expect(operatorMcpServers(['tool', 'figma'], wt, repo)).toEqual({ tool, figma });
   });
 
