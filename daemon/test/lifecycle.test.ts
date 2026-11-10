@@ -8,7 +8,7 @@ import { MAX_RETRY, Refused, TABLE, TO_RESOLVE, transition, type Event, type Fac
 const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 describe('transition table', () => {
-  const f = (o: Partial<Facts>): Facts => ({ status: 'backlog', needs_human: false, retry: 0, merged: false, depsMerged: true, passReported: false, live: true, question: false, asked: false, ...o });
+  const f = (o: Partial<Facts>): Facts => ({ status: 'backlog', needs_human: false, retry: 0, merged: false, depsMerged: true, passReported: false, live: true, question: false, asked: false, feedback: false, heard: false, ...o });
   // Written out by hand from docs/LIFECYCLE.md, not derived from TABLE, so a changed row fails here.
   const rows: [string, Partial<Facts>, Event, ReturnType<typeof transition>][] = [
     ['launch, deps merged', { status: 'backlog' }, 'launch', { to: 'in_progress', set: { blocked_on_deps: 0 }, effects: ['spawn_execute'] }],
@@ -21,6 +21,8 @@ describe('transition table', () => {
     ['restart a flagged ticket in testing with no agent', { status: 'testing', live: false, needs_human: true }, 'restart', { to: 'testing', set: { needs_human: 0 }, effects: ['end_session', 'note', 'spawn_test'] }],
     ['worker submits', { status: 'in_progress' }, 'submit', { to: 'testing', set: { needs_human: 0 }, effects: ['end_session', 'spawn_test'] }],
     ['worker submits past a stale flag or its answered Claude Code menu', { status: 'in_progress', needs_human: true, question: true }, 'submit', { to: 'testing', set: { needs_human: 0 }, effects: ['end_session', 'spawn_test'] }],
+    ['worker submits a feedback ticket the operator answered', { status: 'in_progress', feedback: true, heard: true }, 'submit', { to: 'testing', set: { needs_human: 0 }, effects: ['end_session', 'spawn_test'] }],
+    ['worker settles a feedback ticket the operator answered', { status: 'in_progress', feedback: true, heard: true }, 'settle', { to: 'done', set: { merged: false, needs_human: 0 }, effects: ['end_session', 'done', 'enqueue_merge'] }],
     ['tester passes after report_test(pass)', { status: 'testing', passReported: true }, 'pass', { to: 'done', set: { merged: false, needs_human: 0 }, effects: ['end_session', 'done', 'enqueue_merge'] }],
     ['first failure', { status: 'testing', retry: 0 }, 'fail', { to: 'in_progress', set: { retry: '+1', needs_human: 0 }, effects: ['end_session', 'spawn_execute'] }],
     ['third failure is the last retry', { status: 'testing', retry: MAX_RETRY - 1 }, 'fail', { to: 'in_progress', set: { retry: '+1', needs_human: 0 }, effects: ['end_session', 'spawn_execute'] }],
@@ -62,7 +64,7 @@ describe('transition table', () => {
     testing: ['launch', 'resume', 'restart', 'pass', 'fail', 'ask', 'answer', 'typed', 'exit', 'silent', 'woke', 'reset', 'close'],
     done: ['merged', 'conflict', 'merge', 'dirty', 'unmerged', 'unpushed', 'reject', 'reset'],
   };
-  const EVENTS: Event[] = ['launch', 'submit', 'pass', 'fail', 'ask', 'answer', 'typed', 'exit', 'silent', 'woke', 'merged', 'conflict', 'merge', 'dirty', 'unmerged', 'unpushed', 'resume', 'restart', 'reject', 'reset', 'close'];
+  const EVENTS: Event[] = ['launch', 'submit', 'pass', 'fail', 'ask', 'answer', 'typed', 'exit', 'silent', 'woke', 'merged', 'conflict', 'merge', 'dirty', 'unmerged', 'unpushed', 'resume', 'restart', 'reject', 'reset', 'close', 'settle'];
   it('refuses every other event in every status', () => {
     let n = 0;
     for (const status of Object.keys(allowed) as Status[]) {
@@ -76,6 +78,9 @@ describe('transition table', () => {
 
   it('refuses a guarded row whose guard fails, saying why', () => {
     expect(() => transition(f({ status: 'testing' }), 'pass')).toThrow('cannot pass a ticket in testing: call report_test with passed: true first');
+    expect(() => transition(f({ status: 'in_progress', feedback: true }), 'submit')).toThrow('cannot submit a ticket in in_progress: this ticket is tagged feedback and the operator has not answered');
+    expect(() => transition(f({ status: 'in_progress', feedback: true }), 'settle')).toThrow('this ticket is tagged feedback and the operator has not answered');
+    expect(() => transition(f({ status: 'in_progress', heard: true }), 'settle')).toThrow('only a ticket tagged feedback closes without a tester');
     expect(() => transition(f({ status: 'testing', needs_human: false }), 'answer')).toThrow('cannot answer a ticket in testing: it is not flagged; nothing is waiting on an answer');
     expect(() => transition(f({ status: 'testing', needs_human: true, live: false }), 'answer')).toThrow('cannot answer a ticket in testing: its agent is gone and no question is open; Resume starts it again');
     expect(() => transition(f({ status: 'in_progress', needs_human: true, question: true, asked: true }), 'submit')).toThrow('cannot submit a ticket in in_progress: your question to the operator is not answered yet');

@@ -1,7 +1,7 @@
 // Builds the exact context an agent is given for a ticket. Everything else is pull (get_ticket, brain_search).
 import { execFileSync } from 'node:child_process';
 import type { DatabaseSync } from 'node:sqlite';
-import { brainSearch, readTicket } from './api.js';
+import { brainSearch, FEEDBACK, readTicket } from './api.js';
 import { attachments } from './attachments.js';
 import { worktreesRoot } from './git.js';
 import type { Role } from './grants.js';
@@ -13,6 +13,7 @@ const BRAIN_LIMIT = 8;
 /** How many of the top rows carry their body; the rest are one line each, fetched with brain_search `id` when they apply. */
 const BRAIN_BODIES = 2;
 const BRAIN_CHARS = 2500;
+const FEEDBACK_LINE = 'Tagged feedback: the output of this ticket is for the operator to review. The Rules say how to wait for their answer.';
 export const BRAIN_TRUNCATED = '\n[brain truncated; search for more with brain_search]';
 
 interface ContextOpts {
@@ -117,7 +118,7 @@ export function buildContext(db: DatabaseSync, repo: string, ticketId: number | 
     diff = orNone(gitDiff(opts.worktree, opts.base));
   }
   return {
-    ticket: [`#${t.id} ${t.title}\n\n${t.body}`.trimEnd(), attachmentList(repo, t.id)].filter(Boolean).join('\n\n'),
+    ticket: [`#${t.id} ${t.title}\n\n${t.body}`.trimEnd(), t.tags.split(' ').includes(FEEDBACK) && FEEDBACK_LINE, attachmentList(repo, t.id)].filter(Boolean).join('\n\n'),
     criteria: orNone(t.criteria),
     brain: orNone(brainFor(db, `${t.title} ${t.body}`, opts.brainLimit, opts.brainChars, opts.global)),
     notes: orNone(attemptNotes(db, t.id, role === 'tester' ? ['decision', 'summary', 'failure'] : ['failure'])),
