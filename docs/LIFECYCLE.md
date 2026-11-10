@@ -333,7 +333,7 @@ The ticket's `cli` overrides `cli`; its `model` and `effort` override the execut
 
 ## Operator preferences
 
-Every template has a `## Operator preferences` section holding `{{preferences}}`: the contents of `~/.kanban95/preferences.md` (Settings → Prompts), read fresh at each render, `(none)` when the file is absent or empty. It is the operator's file, not the repo's, so it applies to every repo the board works on. Capped at 16 KB; a bigger save is refused.
+Every template has a `## Operator preferences` section holding `{{preferences}}`: the contents of `~/.kanban95/preferences.md` (Settings → Prompts), followed by the `text` of each snippet that is on in `~/.kanban95/snippets.json` (in list order, a blank line between, names never injected; `docs/DATA.md`), read fresh at each render, `(none)` when both give nothing. A running agent keeps the prompt it started with. It is the operator's file, not the repo's, so it applies to every repo the board works on. Capped at 16 KB; a bigger save is refused.
 
 A repo's prompts come from its own `.kanban95/templates/`, copied from `templates/`. On daemon start an unedited copy is replaced by a changed default, so it gets the section by itself; a copy edited in Settings → Prompts is never overwritten and needs the section added by hand (or Reset). Add it only once the board has been restarted on a build that knows `{{preferences}}`, because an older daemon refuses any template naming an unknown variable and every launch would fail. How a copy counts as unedited: `docs/ARCHITECTURE.md` → Prompts.
 

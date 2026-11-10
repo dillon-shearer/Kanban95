@@ -12,7 +12,7 @@ import { hasBranch, ticketDiff } from './git.js';
 import { audit, revoke, verify } from './grants.js';
 import { cancelSetup, killGrantSession, killSession, sessions, sessionsOf, type Session } from './launcher.js';
 import { answer, apply, brainstorm, BUMPS, changed, contextGlobs, events, housekeeping, isKanban95, operator, pushBase, Refused, release, releaseInfo, releaseOn, releasePending, relaunch, restartBoard, runnerState, setRunner, tick, ticketBase, type Board, type Bump } from './lifecycle.js';
-import { addOverride, BadConfig, boardHome, dropOverride, gone, globalPath, isOverridable, knownModels, project, projectPath, projectsPath, readConfig, readProjects, setBoardHome, uncatalogued, writeConfig, writeLastBoard, writePreferences, writeProjects, type OverridableName } from './settings.js';
+import { addOverride, BadConfig, boardHome, dropOverride, gone, globalPath, isOverridable, knownModels, project, projectPath, projectsPath, readConfig, readProjects, setBoardHome, uncatalogued, writeConfig, writeLastBoard, writePreferences, writeProjects, writeSnippets, type OverridableName } from './settings.js';
 import { isStale, resetTemplate, templatePath, TEMPLATES, unknownVar, VARS, writeTemplate, type TemplateName } from './templates.js';
 import { bootstrap } from './bootstrap.js';
 import { trustStatus, untrustClaude } from './trust.js';
@@ -627,14 +627,14 @@ const routes: [method: string, path: RegExp, mutation: string | null, handler: (
     renameSync(`${file}.tmp`, file);
     return { status: 200, body };
   }],
-  // ~/.kanban95/models.json, settings.json and preferences.md, or this repo's copy (?scope=project) in projects/<repo key>/.
-  // GET shows the file as it is (null when absent; preferences is text, '' when absent); scope=project shows the global file
+  // ~/.kanban95/models.json, settings.json, preferences.md and snippets.json, or this repo's copy (?scope=project) in projects/<repo key>/.
+  // GET shows the file as it is (null when absent; preferences is text, '' when absent; snippets [] when absent); scope=project shows the global file
   // until a copy exists. PUT checks it whole, then writes; scope=project writes (and starts) the copy. See configView.
   ['GET', /^\/api\/config\/(\w+)$/, null, ({ board, params, url }) => ({ status: 200, body: configView(board, configName(params[0]), url) })],
   ['PUT', /^\/api\/config\/(\w+)$/, 'config.write', ({ board, params, body, url }) => {
     const name = configName(params[0]);
     const repo = configScope(url) === 'project' ? board.repo : undefined;
-    const value = name === 'preferences' ? writePreferences(body.value, repo) : writeConfig(name, body, repo);
+    const value = name === 'preferences' ? writePreferences(body.value, repo) : name === 'snippets' ? writeSnippets(body.value, repo) : writeConfig(name, body, repo);
     if (name === 'settings') settingsChanged(board);
     return { status: 200, body: { path: repo ? projectPath(name, repo) : globalPath(name), value } };
   }],
@@ -775,7 +775,7 @@ function configView(board: Board, name: OverridableName, url: URL, scope = confi
   const own = projectPath(name, board.repo);
   const overridden = existsSync(own);
   const path = scope === 'project' && overridden ? own : globalPath(name);
-  let value: unknown = name === 'preferences' ? '' : null;
+  let value: unknown = name === 'preferences' ? '' : name === 'snippets' ? [] : null;
   try {
     const text = readFileSync(path, 'utf8');
     value = name === 'preferences' ? text : JSON.parse(text);
