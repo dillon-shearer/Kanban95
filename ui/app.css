@@ -198,6 +198,7 @@ fieldset { margin: 0; }
 .k95-scoped { border: 0; border-image: none; background: none; padding: 0; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
 .k95-scoped:disabled { color: grey; }
 .k95-scope-bar { flex: none; }
+.k95-snippets label { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 
 /* Terminal */
 .k95-term { padding: 0 !important; margin: 2px !important; background: #000; overflow: hidden !important; }

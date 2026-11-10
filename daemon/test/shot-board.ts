@@ -6,11 +6,11 @@ import { parseArgs } from 'node:util';
 
 export const OPEN = ['board', 'start', 'switch', 'taskmenu'];
 
-export function shotArgs(cmd: string) {
+export function shotArgs(cmd: string, open = OPEN) {
   const { values, positionals } = parseArgs({ allowPositionals: true, options: { zoom: { type: 'string', default: '100' }, open: { type: 'string', default: 'board' } } });
   const zoom = Number(values.zoom) / 100;
-  if (positionals.length !== 1 || !OPEN.includes(values.open!) || !(zoom >= 0.8 && zoom <= 2)) {
-    console.error(`usage: npm run ${cmd} -- <out.png> [--zoom 80..200] [--open ${OPEN.join('|')}]`);
+  if (positionals.length !== 1 || !open.includes(values.open!) || !(zoom >= 0.8 && zoom <= 2)) {
+    console.error(`usage: npm run ${cmd} -- <out.png> [--zoom 80..200] [--open ${open.join('|')}]`);
     process.exit(2);
   }
   return { out: resolve(process.env.INIT_CWD ?? process.cwd(), positionals[0]), zoom, open: values.open! };
