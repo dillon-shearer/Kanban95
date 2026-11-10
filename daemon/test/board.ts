@@ -119,7 +119,7 @@ export let repo: string;
 export let srv: Awaited<ReturnType<typeof start>>;
 export let db: DatabaseSync;
 export let sounds: { sound: string; ticket: number }[];
-const onEvent = (e: { sound: string; ticket: number }) => sounds.push(e);
+const onEvent = (e: { sound?: string; ticket: number }) => { if (e.sound) sounds.push(e as { sound: string; ticket: number }); };
 export const git = (...a: string[]) => execFileSync('git', a, { cwd: repo, encoding: 'utf8' }).trim();
 export const models = (o: { execute?: string; test?: string } = {}) =>
   writeFileSync(join(process.env.USERPROFILE!, '.kanban95', 'models.json'), JSON.stringify({
