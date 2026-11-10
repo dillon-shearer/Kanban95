@@ -2,7 +2,7 @@
 // models.json: which CLI, and the model and effort per phase (docs/LIFECYCLE.md → Run settings). settings.json: CLI paths,
 // sounds, voice, housekeeping, auto-opened terminals, idle minutes, UI zoom, push after merge, sleep minutes,
 // runner concurrency, the automatic update check, what workers read, the startup board. projects.json: every repo with a board and its wallpaper colour. All are read on every use, so an edit applies to the next run without a restart.
-// models.json, settings.json and preferences.md may have a per-project copy in projects/<repo key>/, used whole instead of the global file.
+// models.json, settings.json, preferences.md and snippets.json may have a per-project copy in projects/<repo key>/, used whole instead of the global file.
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { accessSync, constants, copyFileSync, createReadStream, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, rmdirSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
@@ -162,9 +162,9 @@ export function repoKey(repo: string): string {
 }
 
 /** A file that may have a per-project copy. */
-export type OverridableName = ConfigName | 'preferences';
+export type OverridableName = ConfigName | 'preferences' | 'snippets';
 const fileName = (name: OverridableName) => (name === 'preferences' ? 'preferences.md' : `${name}.json`);
-export const isOverridable = (s: string): s is OverridableName => s === 'preferences' || (CONFIGS as string[]).includes(s);
+export const isOverridable = (s: string): s is OverridableName => s === 'preferences' || s === 'snippets' || (CONFIGS as string[]).includes(s);
 
 /** <board home>/projects/<repo key>/<file>: the repo's own copy, whether or not it exists. */
 export const projectPath = (name: OverridableName, repo: string) => join(boardHome(), 'projects', repoKey(repo), fileName(name));
@@ -180,7 +180,7 @@ export function configPath(name: OverridableName, repo?: string): string {
 }
 
 /**
- * Starts a project copy as a copy of the global file (settings: `{}`, preferences: empty when there is none). False when
+ * Starts a project copy as a copy of the global file (settings: `{}`, preferences: empty, snippets: `[]` when there is none). False when
  * the copy exists already. No global models.json is BadConfig: there is nothing to start from.
  */
 export function addOverride(name: OverridableName, repo: string): boolean {
@@ -191,7 +191,7 @@ export function addOverride(name: OverridableName, repo: string): boolean {
   dataHome();
   mkdirSync(dirname(own), { recursive: true });
   if (existsSync(global)) copyFileSync(global, own);
-  else writeFileSync(own, name === 'settings' ? '{}\n' : '');
+  else writeFileSync(own, name === 'settings' ? '{}\n' : name === 'snippets' ? '[]\n' : '');
   return true;
 }
 
@@ -391,6 +391,50 @@ export function writePreferences(value: unknown, repo?: string): string {
   const file = repo ? projectPath('preferences', repo) : globalPath('preferences');
   locked(() => replace(file, value));
   return value;
+}
+
+/** ~/.kanban95/snippets.json (or the repo's project copy): named prompt text the operator switches on and off; those on follow {{preferences}}. */
+const snippetList = z.array(z.object({ name: z.string().min(1), text: z.string(), on: z.boolean() }).strict());
+export type Snippet = z.output<typeof snippetList>[number];
+
+function checkSnippets(value: unknown, where: string): Snippet[] {
+  const r = snippetList.safeParse(value);
+  if (!r.success) throw new BadConfig(`${where}: ${z.prettifyError(r.error).replaceAll('\n', '; ')}`);
+  const names = new Set<string>();
+  for (const s of r.data) {
+    if (names.has(s.name)) throw new BadConfig(`${where}: snippet ${JSON.stringify(s.name)} is listed twice`);
+    names.add(s.name);
+  }
+  return r.data;
+}
+
+/** A missing file is an empty list; a file that does not parse or pass the schema is BadConfig. */
+export function readSnippets(repo?: string): Snippet[] {
+  const file = configPath('snippets', repo);
+  let text: string;
+  try {
+    text = readFileSync(file, 'utf8');
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    throw e;
+  }
+  let raw: unknown;
+  try {
+    raw = JSON.parse(text);
+  } catch (e) {
+    throw new BadConfig(`${file}: ${(e as Error).message}`);
+  }
+  return checkSnippets(raw, file);
+}
+
+/** Refused over 16 KB as written, like preferences.md. With a repo, to its project copy. */
+export function writeSnippets(value: unknown, repo?: string): Snippet[] {
+  const list = checkSnippets(value, 'snippets.json');
+  const data = JSON.stringify(list, null, 2) + '\n';
+  if (Buffer.byteLength(data) > PREFERENCES_MAX) throw new BadConfig(`snippets.json: over ${PREFERENCES_MAX / 1024} KB`);
+  const file = repo ? projectPath('snippets', repo) : globalPath('snippets');
+  locked(() => replace(file, data));
+  return list;
 }
 
 /**

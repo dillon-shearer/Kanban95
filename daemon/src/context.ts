@@ -6,7 +6,7 @@ import { attachments } from './attachments.js';
 import { worktreesRoot } from './git.js';
 import type { Role } from './grants.js';
 import { TOOLS } from './mcp.js';
-import { readPreferences } from './settings.js';
+import { configPath, readPreferences, readSnippets } from './settings.js';
 import { fill, loadTemplate, TEMPLATES, type Ctx, type TicketTemplate } from './templates.js';
 
 const BRAIN_LIMIT = 8;
@@ -37,6 +37,18 @@ function contextLine(id: number, { port, cli }: ContextOpts): string {
 }
 
 const orNone = (s: string) => s.trim() || '(none)';
+
+const withSnippets = (prefs: string, on: string[]) =>
+  (on.length ? [prefs, ...on].map((s) => s.trimEnd()).filter((s) => s.trim()).join('\n\n') : prefs);
+
+function snippetsOn(repo: string): string[] {
+  try {
+    return readSnippets(repo).filter((s) => s.on).map((s) => s.text);
+  } catch (e) {
+    console.error(`[snippets] ${configPath('snippets', repo)} ignored: ${(e as Error).message}`);
+    return [];
+  }
+}
 const bullet = (head: string, body: string) => `- ${head}${body.replaceAll('\n', '\n  ')}`;
 
 /**
@@ -107,7 +119,7 @@ export function buildContext(db: DatabaseSync, repo: string, ticketId: number | 
     .filter(([, t]) => role in t.access)
     .map(([name, t]) => `- ${name} (${t.access[role]})`)
     .join('\n');
-  const preferences = orNone(readPreferences(repo));
+  const preferences = orNone(withSnippets(readPreferences(repo), snippetsOn(repo)));
   const worktrees = worktreesRoot(repo);
   if (ticketId === null) return { ticket: '(none)', criteria: '(none)', brain: '(none)', notes: '(none)', retry: '0', diff: '', tools, base: '(none)', preferences, mission: '(none)', worktrees, ready: '(none)', context: '(none)' };
 
