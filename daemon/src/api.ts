@@ -58,6 +58,14 @@ export const permissionOf = (body: string) => {
   return { level: level ? Number(level[1]) : null, read_all: m[1].includes('read_all=1') };
 };
 
+export const FEEDBACK = 'feedback';
+const ASKS_FEEDBACK = /\bpaste[sd]?\b[^.\n]{0,40}\bback\b|\bpicks?\b[^.\n]{0,40}\bchoices\b|\bchoice sheet\b|\bfor (?:the operator'?s? |your |my |his |her |their )?(?:feedback|review)\b/i;
+export function feedbackTags(tags: string, text: string, flag?: boolean): string {
+  const rest = tags.split(' ').filter((t) => t && t !== FEEDBACK);
+  const on = flag ?? (tags.split(' ').includes(FEEDBACK) || ASKS_FEEDBACK.test(text));
+  return (on ? [...rest, FEEDBACK] : rest).join(' ');
+}
+
 /**
  * Tags as stored: distinct lowercase tokens joined by one space. A string splits on commas and whitespace; an array gives
  * one tag per element. A token outside [a-z0-9-] (a quote, a space inside an element) is refused. Shared by REST and MCP.

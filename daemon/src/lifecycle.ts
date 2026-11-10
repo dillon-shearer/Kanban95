@@ -5,7 +5,7 @@ import { EventEmitter } from 'node:events';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { isAbsolute, join, resolve } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
-import { permissionOf, readTicket, transaction, type Ticket } from './api.js';
+import { FEEDBACK, PERMISSION, permissionOf, readTicket, transaction, type Ticket } from './api.js';
 import { branchName, git, gitNotRun, hasBranch, isAncestor, notStarted, syncWorktree, worktreePath } from './git.js';
 import { audit, revoke, type Role } from './grants.js';
 import { cleanTicket } from './janitor.js';
@@ -40,7 +40,8 @@ export type Event =
   | 'restart' // the operator replaces a running ticket's agent, live or not, with a fresh one in the same phase
   | 'reject' // the operator sends a done ticket, merged or not, back to a worker with a reason
   | 'reset' // an operator grant, or an agent grant at level 1 or more, moves a ticket to backlog
-  | 'close'; // an agent grant at level 2 or more moves a running ticket to done without a tester pass
+  | 'close' // an agent grant at level 2 or more moves a running ticket to done without a tester pass
+  | 'settle'; // move_ticket(done) on a feedback ticket in progress, once the operator answered
 type Effect =
   | 'spawn_execute' | 'spawn_test' | 'end_session' | 'enqueue_merge' | 'note' | 'answer_pty'
   | 'chord' | 'ding' | 'done' | 'remove_worktree' | 'release_dependents' | 'housekeeping';
@@ -56,6 +57,8 @@ export interface Facts {
   live: boolean;
   question: boolean;
   asked: boolean;
+  feedback: boolean;
+  heard: boolean;
 }
 interface Row {
   from: Status[];
@@ -83,6 +86,8 @@ export const TO_RESOLVE = `To resolve: ${RESUME}`;
 const busy = (f: Facts) => f.live ? 'it already has a running agent; open its terminal, or Reset to Backlog to stop it' : '';
 const resumable = (f: Facts) => f.needs_human && !f.live;
 const notResumable = (f: Facts) => busy(f) || 'it is not flagged; nothing failed, so there is nothing to resume';
+const ASKED = 'your question to the operator is not answered yet; wait for the answer in this terminal, then move the ticket';
+const UNHEARD = 'this ticket is tagged feedback and the operator has not answered a question on it yet. Post the deliverable, ask_operator for their feedback naming the exact path, and wait for the Inbox answer; one typed in the terminal is not kept on the ticket, so ask again for it to be pasted in the Inbox';
 export const TABLE: Row[] = [
   { from: ['backlog'], event: 'launch', when: (f) => f.depsMerged, to: 'in_progress', set: { blocked_on_deps: 0 }, effects: ['spawn_execute'] },
   { from: ['backlog'], event: 'launch', when: (f) => !f.depsMerged, set: { blocked_on_deps: 1 }, effects: [] },
@@ -94,7 +99,7 @@ export const TABLE: Row[] = [
   // end_session sets the outcome before the kill, so exited() does not flag the killed session.
   { from: ['in_progress'], event: 'restart', set: { needs_human: 0 }, effects: ['end_session', 'note', 'spawn_execute'] },
   { from: ['testing'], event: 'restart', set: { needs_human: 0 }, effects: ['end_session', 'note', 'spawn_test'] },
-  { from: ['in_progress'], event: 'submit', when: (f) => !f.asked, why: 'your question to the operator is not answered yet; wait for the answer in this terminal, then move the ticket',
+  { from: ['in_progress'], event: 'submit', when: (f) => !f.asked && (!f.feedback || f.heard), why: (f) => f.asked ? ASKED : UNHEARD,
     to: 'testing', set: { needs_human: 0 }, effects: ['end_session', 'spawn_test'] },
   // merged: false clears the merged_at an earlier cycle left (a rejected ticket), so the queue merges this pass again.
   { from: ['testing'], event: 'pass', when: (f) => f.passReported, why: 'call report_test with passed: true first', to: 'done', set: { merged: false, needs_human: 0 }, effects: ['end_session', 'done', 'enqueue_merge'] },
@@ -134,6 +139,8 @@ export const TABLE: Row[] = [
   { from: ['done'], event: 'merge', when: (f) => !f.merged, why: 'already merged', effects: ['enqueue_merge'] },
   { from: [...RUNNING, 'done'], event: 'reset', to: 'backlog', set: { needs_human: 0, blocked_on_deps: 0, retry: 0 }, effects: ['end_session'] },
   { from: RUNNING, event: 'close', to: 'done', set: { needs_human: 0 }, effects: ['end_session'] },
+  { from: ['in_progress'], event: 'settle', when: (f) => f.feedback && f.heard && !f.asked, why: (f) => !f.feedback ? 'only a ticket tagged feedback closes without a tester; move it to testing' : f.asked ? ASKED : UNHEARD,
+    to: 'done', set: { merged: false, needs_human: 0 }, effects: ['end_session', 'done', 'enqueue_merge'] },
 ];
 
 /** A transition the table does not have. Refused, never forced. */
@@ -211,8 +218,18 @@ function facts(b: Board, t: Ticket): Facts {
     live: sessionsOf(t.id).length > 0 || settingUp(t.id),
     question: q !== undefined,
     asked: q !== undefined && !q.body.startsWith(PROMPT_ASK),
+    feedback: t.tags.split(' ').includes(FEEDBACK),
+    heard: answeredFeedback(b.db, t.id),
   };
 }
+
+export const OPERATOR_TERMINAL = 'answered from the operator terminal';
+
+const answeredFeedback = (db: DatabaseSync, id: number) =>
+  db.prepare(`SELECT 1 FROM notes a JOIN notes q ON q.ticket_id = a.ticket_id AND q.kind = 'question' AND q.id < a.id
+    AND q.body NOT LIKE '${PERMISSION}%' AND q.body NOT LIKE ?
+    WHERE a.ticket_id = ? AND a.kind = 'answer' AND a.role = 'operator' AND a.body NOT LIKE ? AND a.body NOT LIKE ?`)
+    .get(`${PROMPT_ASK}%`, id, `${OPERATOR_TERMINAL}%`, `%${TYPED}%`) !== undefined;
 
 export function openQuestion(db: DatabaseSync, id: number) {
   const n = db.prepare("SELECT id, role, kind, body FROM notes WHERE ticket_id = ? AND kind IN ('failure', 'question') ORDER BY id DESC LIMIT 1").get(id) as

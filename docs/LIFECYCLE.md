@@ -31,6 +31,7 @@ Status is one of **backlog → in_progress → testing → done**. Two flags sit
 | `reject` | the operator, Reject on a Done card's menu or in its ticket window, `POST /api/tickets/:id/reject`; an operator grant's `move_ticket(in_progress)` on a done ticket, or a worker or tester grant's from level 1 |
 | `reset` | an operator grant's `move_ticket(backlog)`, or a worker or tester grant's, allowed from level 1 (Agent moves under a level below) |
 | `close` | a worker or tester grant's `move_ticket(done)` on a ticket the tester has not passed, allowed from level 2 (Agent moves under a level below) |
+| `settle` | `move_ticket(done)` on a ticket tagged `feedback` in progress, by its worker or any grant that may move it there, once the operator answered (Feedback tickets below) |
 
 The tester's verdict is the move: `report_test` writes the PASS or FAIL note, then applies `pass` or `fail`, so a tester that stops after reporting cannot leave the ticket in Testing. It is refused, with no note written, on a ticket not in testing. A `move_ticket` to the column the ticket is already in returns the ticket unchanged and raises no event, so an agent following the old report-then-move script is not refused.
 
@@ -48,7 +49,7 @@ The tester's verdict is the move: `report_test` writes the PASS or FAIL note, th
 | testing | resume | `needs_human` on and no live agent session | testing | `needs_human` off | test agent again, as for launch |
 | in_progress | restart | | in_progress | `needs_human` off | end every live session (outcome `restart`, grant revoked, pty killed), operator failure note, execute agent again |
 | testing | restart | | testing | `needs_human` off | as above, then test agent again (the diff is re-rendered from the worktree) |
-| in_progress | submit | no open question of the agent's own (see Open questions below) | testing | `needs_human` off | the base merged into the worktree first (see Sync below); clean or already up to date: worker session ended (grant revoked, pty killed), tester grant, test agent. Otherwise `conflict` instead. Refused while the worker's own question is open: "your question to the operator is not answered yet; wait for the answer in this terminal, then move the ticket" |
+| in_progress | submit | no open question of the agent's own (see Open questions below) | testing | `needs_human` off | the base merged into the worktree first (see Sync below); clean or already up to date: worker session ended (grant revoked, pty killed), tester grant, test agent. Otherwise `conflict` instead. Refused while the worker's own question is open: "your question to the operator is not answered yet; wait for the answer in this terminal, then move the ticket", and on a ticket tagged `feedback` until the operator answered (Feedback tickets below) |
 | testing | pass | the tester called `report_test(passed: true)` during this test run | done | `merged_at` cleared (set again when it lands; only a rejected ticket had one), `needs_human` off | tester session ended, done sound, merge queued |
 | testing | fail | `retry` < 3 | in_progress | `retry` + 1, `needs_human` off | tester session ended, execute agent again, with the failure notes and the ticket's (possibly escalated) model |
 | testing | fail | `retry` = 3 | in_progress | `retry` + 1, `needs_human` on | tester session ended, failure note "stopped after 4 failed tests", chord. Stops |
@@ -71,6 +72,7 @@ The tester's verdict is the move: `report_test` writes the PASS or FAIL note, th
 | done | merge | not merged yet | done | | merge queued again |
 | done | reject | no live agent session | in_progress | `needs_human` off, `retry` 0, `merged_at` kept | the operator's reason as an `operator` failure note, execute agent (see Reject below) |
 | running, done | reset | | backlog | `needs_human` off, `blocked_on_deps` off, `retry` 0 | every live session ended (outcome `reset`), no agent started; as the operator's Reset to Backlog |
+| in_progress | settle | the ticket is tagged `feedback`, the operator answered a question on it, and no question of the agent's is open | done | `merged_at` cleared, `needs_human` off | worker session ended, done sound, merge queued; no tester runs (Feedback tickets below) |
 | running | close | | done | `needs_human` off, `merged_at` unchanged | every live session ended (outcome `close`), no agent started, no merge queued (see Agent moves under a level below) |
 
 Resume and launch on a running ticket are not in the original spec. Before them, the only way past a silent exit was Reset to Backlog and Launch, which threw away `retry` and the phase. The new prompt carries the exit's failure note like any retry (`attemptNotes` in `daemon/src/context.ts`: failure notes since the latest execute run). Resume is the strict form (only a flagged ticket); Launch on a running ticket also starts an unflagged one with no agent, such as one dragged by hand into a running column.
@@ -107,7 +109,7 @@ The `merge` row is not in the original spec: it is how the operator finishes a f
 
 ### Agent moves under a level
 
-A ticket's `agent_level` (`docs/MCP.md` → Levels) lets its worker and tester grants move other tickets. Into In Progress they use the operator's rows (`launch` from backlog, `fail` from testing, `reject` from done) with the same guards. Into Backlog is `reset`, the agent form of Reset to Backlog. Into Done from level 2 is `pass` when the tester reported a pass during the current test run, else `close`.
+A ticket's `agent_level` (`docs/MCP.md` → Levels) lets its worker and tester grants move other tickets. Into In Progress they use the operator's rows (`launch` from backlog, `fail` from testing, `reject` from done) with the same guards. Into Backlog is `reset`, the agent form of Reset to Backlog. Into Done from level 2 is `pass` when the tester reported a pass during the current test run, `settle` on an answered feedback ticket in progress, else `close`.
 
 `close` ends the ticket's live sessions the way a reset does and marks it done. It queues no merge: the work was not tested, so it does not land by itself. A merge already waiting in the queue for the ticket is left alone and lands as usual. `merged_at` is not touched, so an unmerged closed ticket still holds its dependents; the operator lands its branch with Retry merge, or Rejects it to send it back to a worker. A ticket in Backlog has no `close` row: launch it first, or leave it there.
 
@@ -142,6 +144,12 @@ A ticket can be filed or launched after another ticket already landed its work (
 ### Checks the agent cannot make
 
 Some criteria need a device, DNS, a phone or an account no agent can reach (ticket #290: an HTTPS-on-a-Pi ticket passed twice on merged code and green unit tests and was never deployed). Merged code does not prove them, and neither does an empty diff. The worker asks the operator to make each such check with `ask_operator`, waits for the answer, and lists the checks in `move_ticket`'s `manual_checks`; the tester lists the ones it cannot verify in `report_test`'s `manual_checks`. Both calls are refused (`move_ticket` to testing or done, `report_test` with `passed: true`) while the ticket has no operator answer to an `ask_operator` question; a `request_permission` question or a Claude Code prompt does not count. The tester reads the answer and fails the ticket, naming the missing check, when it is absent or says the check did not hold (`daemon/test/manual-checks.test.ts`).
+
+### Feedback tickets
+
+Some tickets exist to get the operator's answer: a mockup, a choice sheet, a draft to review (Portfolio Website #87: the worker built a videos-page mockup, the tester passed it and it merged a minute before the operator pasted their choices in as a failure note). Such a ticket carries the tag `feedback`. The planner sets it with `create_ticket`'s `feedback: true`; with `feedback` omitted, a title, body or criteria asking the operator to paste something back, pick choices, or give feedback or review tags it too, and `feedback: false` never does (`feedbackTags` in `daemon/src/api.ts`). The operator can add or remove the tag by hand. The worker's prompt says so under the ticket.
+
+On such a ticket `submit` and `settle` are refused until the ticket has an operator answer to an `ask_operator` question. A `request_permission` question, a Claude Code prompt, an answer from the operator terminal (`answer_question`) and one typed in the agent's terminal (its text is not kept) do not count. The answer is an ordinary `answer` note, read with `get_ticket` by the worker and the planner. The worker then moves the ticket to done (`settle`: merged like a pass, with no tester run), files the follow-up build ticket with the feedback in its body first when the answer asks for one, or moves it to testing when it also built something a tester can check (`templates/execute.md`, `daemon/test/feedback-hold.test.ts`).
 
 ### Escalation
 

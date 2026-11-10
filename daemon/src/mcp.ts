@@ -6,14 +6,14 @@ import type { DatabaseSync } from 'node:sqlite';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import * as z from 'zod';
-import { brainAdd, brainDelete, brainGet, brains, brainSearch, brainUpdate, deleteTicket, fileTicket, normaliseTags, PERMISSION, permissionOf, readTicket, setDeps, setTargets, targetsOf, transaction } from './api.js';
+import { brainAdd, brainDelete, brainGet, brains, brainSearch, brainUpdate, deleteTicket, FEEDBACK, feedbackTags, fileTicket, normaliseTags, PERMISSION, permissionOf, readTicket, setDeps, setTargets, targetsOf, transaction } from './api.js';
 import { bootstrap } from './bootstrap.js';
 import { BRAIN_BODY_MAX, openDb, SCOPES } from './db.js';
 import { attachments } from './attachments.js';
 import { fileOn, registeredBoard } from './boards.js';
 import { postDeliverable } from './deliverables.js';
 import { audit, live, verify, type Grant, type Role } from './grants.js';
-import { answer, apply, changed, openQuestion, PROMPT_ASK, Refused, tick, type Board } from './lifecycle.js';
+import { answer, apply, changed, openQuestion, OPERATOR_TERMINAL, PROMPT_ASK, Refused, tick, type Board } from './lifecycle.js';
 import { EFFORT, readConfig, same, uncatalogued } from './settings.js';
 
 const STATUS = ['backlog', 'in_progress', 'testing', 'done'] as const;
@@ -67,7 +67,7 @@ export const PENDING = 'an earlier request_permission on this ticket is still un
 const RAISE = /\b(?:raise|bump|increase|lift|grant|give|set|approve)\b[^\n]{0,80}?\b(?:agent[ _-]?level|level\s*[1-4]\b|read[ _-]?all)/i;
 export const RAISE_ASK = 'an ask_operator answer never changes the ticket\x27s agent level or read all, so this question is refused; call request_permission with the level or read_all and a reason, and the operator gets Approve and Deny in the Inbox';
 const REOPENED = 'reopened from Done with move_ticket; read the earlier notes with get_ticket and carry on from the work already done';
-export const OPERATOR_TERMINAL = 'answered from the operator terminal';
+export { OPERATOR_TERMINAL };
 const ask = (need: number | undefined) => (need === undefined ? '' : `; ask for level ${need} with request_permission`);
 
 /** Resolves the ticket a call is about. In a worker/tester cell: its own, a foreign id is a scope denial. In an operator cell: the id given, else its own. */
@@ -134,7 +134,8 @@ export const TOOLS: Record<string, Tool<z.ZodRawShape>> = {
       'List depends_on ids when this work must wait for other tickets. Tags (lowercase a-z, 0-9, -) group related tickets on the board. Set model and effort only when the work clearly warrants it: trivial work gets effort low, hard work gets high. ' +
       'List targets when the work must read other tickets without waiting on them, with edit: true when it must rewrite their body or criteria. ' +
       'A worker files a follow-up or a manual touch it found this way instead of widening its own scope: it lands in Backlog, its body starts with "Filed by #<your ticket>", ' +
-      'it runs on the operator\x27s default model and effort, and the worker may fix or delete it while it is still in Backlog. Returns the ticket.',
+      'it runs on the operator\x27s default model and effort, and the worker may fix or delete it while it is still in Backlog. ' +
+      'Set feedback: true when the ticket\x27s output is for the operator to review (a mockup, a choice sheet, a draft): it is tagged feedback and held until the operator answers. Omitted, a body asking the operator to pick choices or paste them back tags it too; false never tags it. Returns the ticket.',
     access: { planner: 'yes', worker: 'yes, Backlog follow-up, no model/effort/targets', operator: 'yes' },
     input: {
       title: z.string().min(1).describe('Short imperative title.'),
@@ -145,6 +146,7 @@ export const TOOLS: Record<string, Tool<z.ZodRawShape>> = {
       tags: z.array(z.string()).optional().describe('Grouping tags, each lowercase a-z, 0-9 and - only, e.g. ["ui", "daemon"].'),
       model: z.string().min(1).optional().describe('Model override; omit for the phase default.'),
       effort: z.enum(EFFORT).optional().describe('Effort override; omit for the phase default.'),
+      feedback: z.boolean().optional().describe('true: the output is for the operator to review, so the ticket waits on their answer. false: never tagged feedback. Omitted: found from the body.'),
     },
     run(c, a) {
       const worker = c.as === 'worker';
@@ -153,7 +155,7 @@ export const TOOLS: Record<string, Tool<z.ZodRawShape>> = {
       const bad = a.model && uncatalogued(a.model, null, c.board.repo);
       if (bad) throw new Error(bad);
       const body = c.grant.ticket_id !== null ? `Filed by #${c.grant.ticket_id}\n\n${a.body}` : a.body;
-      const tags = normaliseTags(a.tags ?? []);
+      const tags = feedbackTags(normaliseTags(a.tags ?? []), `${a.title}\n${a.body}\n${a.criteria}`, a.feedback);
       const id = transaction(c.db, () => {
         const r = c.db
           .prepare('INSERT INTO tickets (title, body, criteria, tags, model, effort, created_by_grant) VALUES (?, ?, ?, ?, ?, ?, ?)')
@@ -320,6 +322,7 @@ export const TOOLS: Record<string, Tool<z.ZodRawShape>> = {
   move_ticket: tool({
     description:
       'Move a ticket to another column. A worker moves its ticket to testing when the work is committed in the worktree and ready to be checked. ' +
+      'On a ticket tagged feedback (its output is for the operator to review) the move is refused until the operator has answered an ask_operator question on it; then the worker moves it to done, which merges the branch with no tester run, or to testing when it also built something to test. ' +
       'A tester does not need it: report_test moves the ticket (to done or back to in_progress) and ends the session. ' +
       'A move to the column the ticket is already in returns the ticket unchanged. ' +
       'Once the move is accepted your session is over: the board ends it and starts the next agent. ' +
@@ -337,7 +340,7 @@ export const TOOLS: Record<string, Tool<z.ZodRawShape>> = {
       const { role } = c.grant;
       const id = (c.ticket = own(c, a.ticket_id));
       const mine = id === c.grant.ticket_id;
-      const allowed = unbound(role) ? MOVE_TARGETS[role] : [...new Set([...(mine ? MOVE_TARGETS[role] : []), ...LEVEL_MOVES[c.level]])];
+      const allowed = unbound(role) ? MOVE_TARGETS[role] : [...new Set([...(mine ? MOVE_TARGETS[role] : []), ...(mine && role === 'worker' && readTicket(c.db, id).tags.split(' ').includes(FEEDBACK) ? ['done' as const] : []), ...LEVEL_MOVES[c.level]])];
       if (!allowed.includes(a.status)) {
         const need = unbound(role) ? -1 : LEVEL_MOVES.findIndex((m) => m.includes(a.status));
         throw new Deny(`${an(role)} may only move ${unbound(role) ? 'a' : mine ? 'its' : 'another'} ticket to: ${allowed.join(', ')}${ask(need > 0 ? need : undefined)}`);
@@ -351,7 +354,7 @@ export const TOOLS: Record<string, Tool<z.ZodRawShape>> = {
       if (a.status === 'in_progress' && from === 'done') return apply(c.board, id, 'reject', { note: { role, kind: 'failure', body: REOPENED } }).ticket;
       if (a.status !== 'done') return apply(c.board, id, a.status === 'testing' ? 'submit' : from === 'backlog' ? 'launch' : 'fail').ticket;
       try {
-        return apply(c.board, id, 'pass').ticket;
+        return apply(c.board, id, from === 'in_progress' ? 'settle' : 'pass').ticket;
       } catch (e) {
         if (!(e instanceof Refused) || unbound(role) || !LEVEL_MOVES[c.level].includes('done')) throw e;
         return apply(c.board, id, 'close').ticket;

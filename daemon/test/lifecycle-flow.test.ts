@@ -13,7 +13,7 @@ describe('lifecycle', { timeout: 60_000 }, () => {
   it('launch → execute → test → merge: one plain merge commit by the operator, a done sound then a ding, and nothing left behind', async () => {
     const ws = new WebSocket(`ws://127.0.0.1:${srv.port}/events`, { origin: `http://127.0.0.1:${srv.port}`, headers: { cookie: `k95=${srv.secret}` } });
     const frames: { sound?: string; ticket: number | null }[] = [];
-    ws.on('message', (m) => frames.push(JSON.parse(String(m))));
+    ws.on('message', (m) => { const f = JSON.parse(String(m)); if (!('recording' in f)) frames.push(f); });
     await new Promise((r) => ws.on('open', r));
 
     const id = ticket('Add the greeting');
