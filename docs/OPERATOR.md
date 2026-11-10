@@ -134,7 +134,7 @@ If you review a Done ticket and it is not right, **Reject** it (card menu, or th
 What the Settings window holds, one subject per tab:
 
 - **Agents**: the default CLI, model and effort per phase, CLI paths, trusted folders (**Clear Claude trust**), runner concurrency (Tickets running at once, `concurrency` in `settings.json`, default 3), Workers read (own ticket and dependencies, the default, or all tickets: `workers_read` in `settings.json`), Extra MCP servers (names from `claude mcp list`, such as `figma`, that every Claude session loads next to the board server: `mcp_servers` in `settings.json`), silent agents, housekeeping
-- **Prompts**: preferences, templates
+- **Prompts**: preferences, snippets, templates
 - **Board**: zoom, sounds, which phases open a terminal by themselves, push after merge, voice (speech model, mic button mode)
 - **Projects**: the repos this board knows
 - **Grants**: every live agent grant
@@ -217,7 +217,7 @@ At 100% and 200% the UI text is 98.css's pixel font. That font is drawn for whol
 
 Models (`models.json`), board settings (`settings.json`) and preferences (`preferences.md`) live in `~/.kanban95/` and apply to every project. A project can have its own copy of any of them in `~/.kanban95/projects/<repo key>/`, outside the repo so nothing is committed. A copy starts as a copy of the global file and, while it exists, replaces that file whole for that project's board: keys are never mixed between the two. Delete the copy and the project follows the global file again. Every operator setting follows this rule, runner concurrency included. Left per repo on purpose: Trusted folders (Claude Code's own file), Grants, the Projects list, window layout (`<repo>/.kanban95/ui.json`) and prompt templates.
 
-The top of the Settings window has a switch with two positions, **All projects** and **This project (<folder name>)**. It picks which file the Agents tab (models.json for Models; settings.json for Executables, Runner, Silent agents and Housekeeping), the Board and Recording tabs (settings.json) and the Preferences editor on the Prompts tab edit. Templates, Projects and Grants are not affected. It starts on All projects each time the page loads.
+The top of the Settings window has a switch with two positions, **All projects** and **This project (<folder name>)**. It picks which file the Agents tab (models.json for Models; settings.json for Executables, Runner, Silent agents and Housekeeping), the Board and Recording tabs (settings.json) and the Preferences editor and Snippets list on the Prompts tab edit. Templates, Projects and Grants are not affected. It starts on All projects each time the page loads.
 
 - **All projects** edits the global files in `~/.kanban95/`, as before.
 - **This project** with no copy yet shows the global values greyed, the line "Uses the global settings" and a **Customize for this project** button. The button starts this project's copy of that one file and shows it for editing. Each file has its own button, so a project can have its own models and keep the global sounds.
@@ -298,6 +298,8 @@ Updates are signed: the app installs only a download signed with the project's k
 ## Preferences
 
 Standing instructions for every agent, for example "No em dashes or non-ASCII characters in output" or "Keep responses brief". Write them in **Settings → Prompts → Preferences** and press **Save**; that writes `~/.kanban95/preferences.md` (the path is shown on the tab), up to 16 KB. Every prompt rendered after that (brainstorm, operator, plan, execute, test, housekeeping) carries them under "Operator preferences"; sessions already running keep the prompt they started with. They are yours, not the repo's, so they apply to every project the board works on. Never put a key or token in them: they are copied into every session's prompt.
+
+**Settings → Prompts → Snippets**, under Preferences, is a list of named bits of prompt text you switch on and off, for example while testing a prompt change. Each row has a checkbox, the name, **Edit** and **Delete**; **Add** is under the list. Ticking or unticking a box saves at once, with no Save click. **Add** and **Edit** open a small form with a name and the text; a new snippet starts off. **Delete** asks first. A save the daemon refuses (empty name, a name another snippet has, the file over 16 KB) shows its reason in the status bar and leaves the list as it was. The text of each ticked snippet is added after your preferences, in list order, under "Operator preferences" in every agent prompt; the name never is. The next agent started gets the change; sessions already running keep theirs. It writes `~/.kanban95/snippets.json` (the path is shown under the legend). The All projects / This project switch applies as it does to Preferences: on This project with no project copy the list is greyed until you press **Customize for this project**. Same rule as preferences: no keys or tokens.
 
 ## Prompt templates
 

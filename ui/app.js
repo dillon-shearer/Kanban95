@@ -1464,11 +1464,12 @@ function projectKey(e) {
 
 let settingsTabs = null;
 let settingsScope = 'global';
-const FILES = { models: 'models.json', settings: 'settings.json', preferences: 'preferences.md' };
+const FILES = { models: 'models.json', settings: 'settings.json', preferences: 'preferences.md', snippets: 'snippets.json' };
 const RELOAD = {
   models: async () => { await loadModels(); drawBoard(); },
   settings: async () => { await loadSettings(); applyZoom(settings.zoom); setTiling(settings.terminals.tile); },
   preferences: async () => {},
+  snippets: async () => {},
 };
 async function putSettings(scope, patch) {
   const cur = settingsFrom((await api('GET', `/config/settings?scope=${scope}`)).value);
@@ -1621,13 +1622,50 @@ function openSettings(tab) {
         ...await settingsPart,
         h('fieldset', { id: 'requirements' }, h('legend', {}, 'Requirements'), ...requirementsList()));
     } else if (tab === 'Prompts') {
-      const [prefs, tpls] = await Promise.all([scoped('preferences', (value, scope, path) => {
+      const [prefs, snips, tpls] = await Promise.all([scoped('preferences', (value, scope, path) => {
         const text = h('textarea', { id: 'preferences', rows: 10, placeholder: 'e.g. No em dashes or non-ASCII characters in output.' });
         text.value = value;
         return h('fieldset', {}, h('legend', {}, 'Preferences'),
           h('p', {}, `Standing instructions every agent prompt gets under "Operator preferences". Up to 16 KB. ${path}`),
           h('div', { class: 'field-row' }, text),
           h('button', { onclick: () => act(() => api('PUT', `/config/preferences?scope=${scope}`, { value: text.value }), `Saved ${path}.`) }, 'Save'));
+      }, redraw), scoped('snippets', (value, scope, path) => {
+        let list = value ?? [];
+        const rows = h('div', { class: 'k95-snippets' });
+        const save = (next, ok) => act(async () => {
+          try {
+            list = (await api('PUT', `/config/snippets?scope=${scope}`, { value: next })).value;
+          } finally {
+            draw();
+          }
+        }, ok);
+        const edit = async (i) => {
+          const cur = list[i] ?? { name: '', text: '', on: false };
+          const name = h('input', { type: 'text', id: 'snippet-name', 'data-mic': 'off', size: 40, value: cur.name });
+          const text = h('textarea', { id: 'snippet-text', rows: 8, cols: 50 });
+          text.value = cur.text;
+          const form = h('div', {},
+            h('div', { class: 'field-row-stacked' }, h('label', { for: 'snippet-name' }, 'Name'), name),
+            h('div', { class: 'field-row-stacked' }, h('label', { for: 'snippet-text' }, 'Text'), text));
+          if ((await dialog(i == null ? 'Add snippet' : 'Edit snippet', form, ['Save', 'Cancel'])) !== 'Save') return;
+          const s = { name: name.value.trim(), text: text.value, on: cur.on };
+          save(i == null ? [...list, s] : list.map((x, j) => (j === i ? s : x)), `Saved ${path}.`);
+        };
+        const remove = async (i) => {
+          if ((await dialog('Delete snippet', `Delete the snippet "${list[i].name}"?`, ['Delete', 'Cancel'])) !== 'Delete') return;
+          save(list.filter((_, j) => j !== i), `Saved ${path}.`);
+        };
+        const draw = () => rows.replaceChildren(...(list.length ? list.map((s, i) => h('div', { class: 'field-row' },
+          h('input', { type: 'checkbox', id: `snippet-${i}`, checked: s.on,
+            onchange: (e) => save(list.map((x, j) => (j === i ? { ...x, on: e.target.checked } : x)), `Saved ${path}.`) }),
+          h('label', { for: `snippet-${i}` }, s.name),
+          h('button', { onclick: () => edit(i) }, 'Edit'),
+          h('button', { onclick: () => remove(i) }, 'Delete'))) : [h('p', {}, 'No snippets.')]));
+        draw();
+        return h('fieldset', { id: 'snippets' }, h('legend', {}, 'Snippets'),
+          h('p', {}, `Ticked snippets are added to every agent prompt after Preferences; the next agent started gets them. ${path}`),
+          rows,
+          h('button', { id: 'snippet-add', onclick: () => edit() }, 'Add'));
       }, redraw), api('GET', '/templates')]);
       // One template at a time: the select picks it, Save and Reset replace its entry with what the daemon wrote.
       const byName = Object.fromEntries(tpls.templates.map((t) => [t.name, t]));
@@ -1644,7 +1682,7 @@ function openSettings(tab) {
       };
       pick.onchange = () => show(byName[pick.value]);
       show(tpls.templates[0]);
-      p.replaceChildren(...prefs,
+      p.replaceChildren(...prefs, ...snips,
         h('fieldset', {}, h('legend', {}, 'Templates'),
           h('p', {}, 'The prompt each phase starts from; the next run uses what you save.'),
           h('div', { class: 'field-row' }, h('label', { for: 'template' }, 'Template'), pick),
