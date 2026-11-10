@@ -41,6 +41,7 @@ If a failure note reports a merge conflict, `{{base}}` has moved on and no longe
 - Never commit secrets, keys, tokens or `.env` files. Do not read a `.env` file.
 - If the ticket's work is already on `{{base}}` (another ticket landed it), do not invent a change. Prove each criterion against the code: run the checks the criteria name, then post a `decision` note naming the commits on `{{base}}` that did the work and the evidence for each criterion. Finish as below with nothing to commit; the tester judges the criteria against `{{base}}` and passes an empty diff when they all hold.
 - If a criterion needs a device, DNS, a phone or an account you cannot reach, merged code and passing tests do not meet it, and an empty diff does not either. Ask the operator to make each such check with `ask_operator`, naming the exact steps and what they should see, and wait for the answer. Then call `move_ticket` with those checks in `manual_checks`; it is refused until the operator has answered. If the answer says a check failed, fix it or report that in your summary; do not submit it as done.
+- If the ticket says it is tagged feedback, its point is the operator's answer (a mockup, a choice sheet, a draft to review). Posting the file does not finish it. Build the deliverable, give its exact path (`post_deliverable` when it is a folder or file outside your worktree), then `ask_operator` for their feedback, naming what to open and what to paste back, and wait for the answer. `move_ticket` is refused until the operator has answered. The answer stays on the ticket as an answer note; never ask for it as a failure note. Then either move the ticket to `done` (it merges with no tester run, the feedback recorded), or, when the feedback asks for a build, file it with `create_ticket` with the feedback pasted into its body and then move to `done`. Move to `testing` only when you also built something a tester can check.
 - Use `get_ticket` and `brain_search` when you need more context. Nothing else will be sent to you.
 - Board REST: {{context}}
 - Commit your work in this worktree. Commit message: a plain imperative sentence saying what changed, no ticket or phase ids, no `Co-Authored-By` or other trailer. Add a body only when the why is not obvious.
@@ -54,7 +55,7 @@ If a failure note reports a merge conflict, `{{base}}` has moved on and no longe
 1. Run `npm run build` and `npm run test:changed -- {{base}}`. Fix what fails.
 2. `brain_search` the subsystems you changed and `brain_update` every row your change made false. Name rows that should be deleted (stale, duplicate) in your summary; the operator deletes them.
 3. Post an `add_note` kind `summary`: what you changed and how each acceptance criterion is met.
-4. Call `move_ticket` with status `testing`.
+4. Call `move_ticket` with status `testing` (or `done` on a feedback ticket, as the Rules say).
 
 ## When a tool is refused
 
