@@ -81,7 +81,7 @@ it.runIf(hasFfmpeg)('stop on a paused recording joins raw.mkv and raw-2.mkv into
   const done = await idle();
   const folder = join(out, NEW);
   expect(done).toMatchObject({ output: join(folder, '4x.mp4'), error: null, started: null });
-  expect(readdirSync(folder).sort()).toEqual(['4x.mp4', 'markers.json', 'raw.mkv']);
+  expect(readdirSync(folder).sort()).toEqual(['4x.mp4', 'markers.json', 'raw.mkv', 'recording.log']);
   expect(Math.abs(duration(join(folder, 'raw.mkv')) - 5)).toBeLessThan(0.2);
   expect(Math.abs(duration(join(folder, '4x.mp4')) - (1 + 1 / 4 + 1 + 2 / 4))).toBeLessThan(0.2);
   const m = markers(NEW);
@@ -127,7 +127,7 @@ it.runIf(live)('pause closes raw.mkv into a segment, resume records raw-2.mkv on
   expect((await api('POST', '/recording/stop')).status).toBe(200);
   const done = await idle();
   expect(done.error).toBeNull();
-  expect(readdirSync(join(out, folder)).sort()).toEqual(['4x.mp4', 'markers.json', 'raw.mkv']);
+  expect(readdirSync(join(out, folder)).sort()).toEqual(['4x.mp4', 'markers.json', 'raw.mkv', 'recording.log']);
   const m = markers(folder);
   expect(m).not.toHaveProperty('paused');
   expect(m).not.toHaveProperty('segments');

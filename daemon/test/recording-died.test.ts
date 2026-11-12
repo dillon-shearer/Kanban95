@@ -145,7 +145,7 @@ it.runIf(live)('resume after the capture died records raw-2.mkv in the same fold
   f.stdout.write('out_time_us=1000000\n');
   expect((await api('POST', '/recording/stop')).status).toBe(200);
   expect(await until('idle')).toMatchObject({ output: join(folder, '4x.mp4'), error: null });
-  expect(readdirSync(folder).sort()).toEqual(['4x.mp4', 'markers.json', 'raw.mkv']);
+  expect(readdirSync(folder).sort()).toEqual(['4x.mp4', 'markers.json', 'raw.mkv', 'recording.log']);
   expect(Math.abs(duration(join(folder, '4x.mp4')) - 3)).toBeLessThan(0.2);
 }, 60_000);
 
