@@ -549,6 +549,27 @@ export function renderAgain(board: Board, raw: string, speed: number) {
   return view(board.repo);
 }
 
+async function repaired(exe: string, raw: string): Promise<{ seconds: number | null; tail: string[] }> {
+  const seconds = await probe(exe, raw);
+  if (seconds) return { seconds, tail: [] };
+  const tmp = join(dirname(raw), 'raw-repair.mkv');
+  const p = run(exe, ['-y', '-i', raw, '-c', 'copy', tmp], () => {});
+  const code = await p.exited;
+  const fixed = code === 0 ? await probe(exe, tmp) : null;
+  if (!fixed) {
+    rmSync(tmp, { force: true });
+    return { seconds: null, tail: [`repair: ${failed(p, code)}`] };
+  }
+  try {
+    renameSync(raw, join(dirname(raw), 'raw-broken.mkv'));
+  } catch (e) {
+    rmSync(tmp, { force: true });
+    return { seconds: null, tail: [`repair: cannot rename ${basename(raw)} (is it open in another program?): ${(e as Error).message}`] };
+  }
+  renameSync(tmp, raw);
+  return { seconds: fixed, tail: [] };
+}
+
 async function render(board: Board, raw: string, markers: string, speed: number, seconds?: number): Promise<void> {
   rendering = speed;
   try {
@@ -556,8 +577,9 @@ async function render(board: Board, raw: string, markers: string, speed: number,
     const out = join(dirname(raw), `${Math.round(speed)}x.mp4`);
     const exe = cfg.ffmpeg || 'ffmpeg';
     const { marks } = JSON.parse(readFileSync(markers, 'utf8')) as { marks: Mark[] };
-    const total = (await probe(exe, raw)) ?? seconds;
-    if (!total) throw new Error(`cannot read the length of ${basename(raw)}`);
+    const fixed = await repaired(exe, raw);
+    const total = fixed.seconds ?? seconds;
+    if (!total) throw new Error([`cannot read the length of ${basename(raw)}`, ...fixed.tail].join('\n'));
     const expected = length(marks, total, speed);
     const p = run(exe, ['-y', '-i', raw, '-filter_complex', graph(marks, total, speed, cfg.fps), '-map', '[out]', '-c:v', 'libx264', '-preset', 'medium', '-crf', String(CRF[cfg.quality]), '-pix_fmt', 'yuv420p', '-movflags', '+faststart', '-an', out], (t) => {
       progress = Math.min(1, t / expected);
