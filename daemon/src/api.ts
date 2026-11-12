@@ -10,7 +10,7 @@ import { dismissDeliverable, listDeliverables, openDeliverable } from './deliver
 import { BRAIN_BODY_MAX, BRAIN_RANK, isConstraintError, SCOPES, type Brains, type Scope } from './db.js';
 import { hasBranch, ticketDiff } from './git.js';
 import { audit, revoke, verify } from './grants.js';
-import { cancelSetup, killGrantSession, killSession, sessions, sessionsOf, type Session } from './launcher.js';
+import { cancelSetup, killGrantSession, killSession, sessions, sessionsOf, settingUp, type Session } from './launcher.js';
 import { answer, apply, brainstorm, BUMPS, changed, contextGlobs, events, housekeeping, isKanban95, operator, pushBase, Refused, release, releaseInfo, releaseOn, releasePending, relaunch, restartBoard, runnerState, setRunner, tick, ticketBase, type Board, type Bump } from './lifecycle.js';
 import { addOverride, BadConfig, boardHome, dropOverride, gone, globalPath, isOverridable, knownModels, project, projectPath, projectsPath, readConfig, readProjects, setBoardHome, uncatalogued, writeConfig, writeLastBoard, writePreferences, writeProjects, writeSnippets, type OverridableName } from './settings.js';
 import { isStale, resetTemplate, templatePath, TEMPLATES, unknownVar, VARS, writeTemplate, type TemplateName } from './templates.js';
@@ -513,6 +513,17 @@ const routes: [method: string, path: RegExp, mutation: string | null, handler: (
       } catch (e) {
         if (!(e instanceof Refused)) throw e; // the ticket has moved on; nothing to flag
       }
+    }
+    return { status: 204 };
+  }],
+  ['DELETE', /^\/api\/tickets\/(\d+)\/setup$/, 'sessions.end', async ({ board, params }) => {
+    const id = Number(params[0]);
+    if (!settingUp(id)) throw new HttpError(404, 'no worktree_setup running for this ticket');
+    await cancelSetup(id);
+    try {
+      apply(board, id, 'exit', { note: { role: 'operator', kind: 'failure', body: 'ended by the operator from the terminal window' } });
+    } catch (e) {
+      if (!(e instanceof Refused)) throw e;
     }
     return { status: 204 };
   }],

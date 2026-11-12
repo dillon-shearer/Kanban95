@@ -148,7 +148,7 @@ type RunSettings = { cli: Cli; model: string; effort: Effort; path?: string };
 const SETUP_TAIL = 20;
 const SETUP_TIMEOUT_MS = 15 * 60 * 1000;
 
-type Setup = { child?: ChildProcess; cancelled: boolean; closed: Promise<void>; started_at: string; out: string };
+type Setup = { child?: ChildProcess; cancelled: boolean; closed: Promise<void>; started_at: string; out: string; shown: string; watchers: Set<(d: string) => void> };
 const setups = new Map<number, Setup>();
 
 export class SetupCancelled extends Error {}
@@ -163,6 +163,13 @@ export const setupProgress = (ticketId: number) => {
   const s = setups.get(ticketId)!;
   return { ticket_id: ticketId, started_at: s.started_at, output: lastLines(s.out, SETUP_LIVE).join('\n') };
 };
+
+export function watchSetup(ticketId: number, on: (d: string) => void) {
+  const s = setups.get(ticketId);
+  if (!s) return undefined;
+  s.watchers.add(on);
+  return { text: s.shown, closed: s.closed, off: () => s.watchers.delete(on) };
+}
 
 export function cancelSetup(ticketId: number): Promise<void> {
   const s = setups.get(ticketId);
@@ -183,11 +190,12 @@ export function cancelSetup(ticketId: number): Promise<void> {
  */
 export function prepareWorktree(repo: string, ticketId: number, command?: string, timeoutMs = SETUP_TIMEOUT_MS, base?: string): Promise<void> | null {
   const prev = setups.get(ticketId);
-  if (!prev && (!command || setupDone(repo, ticketId, command, base).done)) return null;
-  const me: Setup = { cancelled: false, closed: Promise.resolve(), started_at: new Date().toISOString(), out: '' };
+  const first = prev || !command ? undefined : setupDone(repo, ticketId, command, base);
+  if (!prev && (!command || first!.done)) return null;
+  const me: Setup = { cancelled: false, closed: Promise.resolve(), started_at: new Date().toISOString(), out: '', shown: '', watchers: new Set() };
   const run = (prev ? cancelSetup(ticketId) : Promise.resolve()).then(() => {
     if (me.cancelled) throw new SetupCancelled('worktree_setup was cancelled');
-    const { done, marker, path } = setupDone(repo, ticketId, command, base);
+    const { done, marker, path } = first ?? setupDone(repo, ticketId, command, base);
     if (done || !command) return;
     return runSetup(me, command, path, marker, timeoutMs);
   });
@@ -214,7 +222,16 @@ function runSetup(me: Setup, command: string, cwd: string, marker: string, timeo
       timedOut = true;
       void killTree(child);
     }, timeoutMs);
-    const take = (d: Buffer) => (me.out = (me.out + d).slice(-65536));
+    const show = (d: string) => {
+      const t = d.replace(/\r?\n/g, '\r\n');
+      me.shown = (me.shown + t).slice(-65536);
+      for (const w of me.watchers) w(t);
+    };
+    show(`> ${command}\n`);
+    const take = (d: Buffer) => {
+      me.out = (me.out + d).slice(-65536);
+      show(String(d));
+    };
     child.stdout.on('data', take);
     child.stderr.on('data', take);
     child.on('error', (e) => {
