@@ -65,7 +65,7 @@ while (!existsSync('go')) await new Promise((r) => setTimeout(r, 25));
     expect(readFileSync(wt(id, 'setup.log'), 'utf8')).toBe(`${dirname(process.execPath)}\n`);
     expect(runs(id)).toEqual([]); // no agent while setup runs, and a second launch is refused
     expect((await post(`/api/tickets/${id}/launch`)).status).toBe(409);
-    const setupIds = async () => (await (await send('GET')('/api/runner')).json()).setup;
+    const setupIds = async () => (await (await send('GET')('/api/runner')).json()).setup.map((s: { ticket_id: number }) => s.ticket_id);
     expect(await setupIds()).toEqual([id]);
     writeFileSync(wt(id, 'go'), '');
     await until(() => runs(id).length === 1, 'the agent after setup');

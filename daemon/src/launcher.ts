@@ -148,12 +148,21 @@ type RunSettings = { cli: Cli; model: string; effort: Effort; path?: string };
 const SETUP_TAIL = 20;
 const SETUP_TIMEOUT_MS = 15 * 60 * 1000;
 
-type Setup = { child?: ChildProcess; cancelled: boolean; closed: Promise<void> };
+type Setup = { child?: ChildProcess; cancelled: boolean; closed: Promise<void>; started_at: string; out: string };
 const setups = new Map<number, Setup>();
 
 export class SetupCancelled extends Error {}
 
 export const settingUp = (ticketId: number) => setups.get(ticketId)?.cancelled === false;
+
+/** How many of the setup command's last output lines the `setting up` badge shows while it runs. */
+const SETUP_LIVE = 3;
+
+/** A running setup for GET /api/runner: when it started and its last few output lines, so a long `npm ci` does not look hung. */
+export const setupProgress = (ticketId: number) => {
+  const s = setups.get(ticketId)!;
+  return { ticket_id: ticketId, started_at: s.started_at, output: lastLines(s.out, SETUP_LIVE).join('\n') };
+};
 
 export function cancelSetup(ticketId: number): Promise<void> {
   const s = setups.get(ticketId);
@@ -175,7 +184,7 @@ export function cancelSetup(ticketId: number): Promise<void> {
 export function prepareWorktree(repo: string, ticketId: number, command?: string, timeoutMs = SETUP_TIMEOUT_MS, base?: string): Promise<void> | null {
   const prev = setups.get(ticketId);
   if (!prev && (!command || setupDone(repo, ticketId, command, base).done)) return null;
-  const me: Setup = { cancelled: false, closed: Promise.resolve() };
+  const me: Setup = { cancelled: false, closed: Promise.resolve(), started_at: new Date().toISOString(), out: '' };
   const run = (prev ? cancelSetup(ticketId) : Promise.resolve()).then(() => {
     if (me.cancelled) throw new SetupCancelled('worktree_setup was cancelled');
     const { done, marker, path } = setupDone(repo, ticketId, command, base);
@@ -205,8 +214,7 @@ function runSetup(me: Setup, command: string, cwd: string, marker: string, timeo
       timedOut = true;
       void killTree(child);
     }, timeoutMs);
-    let out = '';
-    const take = (d: Buffer) => (out = (out + d).slice(-65536));
+    const take = (d: Buffer) => (me.out = (me.out + d).slice(-65536));
     child.stdout.on('data', take);
     child.stderr.on('data', take);
     child.on('error', (e) => {
@@ -220,7 +228,7 @@ function runSetup(me: Setup, command: string, cwd: string, marker: string, timeo
         writeFileSync(marker, command);
         return ok();
       }
-      const tail = out.split(/\r?\n/).filter((l) => l.trim()).slice(-SETUP_TAIL).join('\n');
+      const tail = me.out.split(/\r?\n/).filter((l) => l.trim()).slice(-SETUP_TAIL).join('\n');
       fail(new Error(`worktree_setup "${command}" failed (${timedOut ? `timed out after ${timeoutMs / 1000} s` : code ?? signal}) in ${cwd}; last output:\n${tail || '(none)'}`));
     });
   });
