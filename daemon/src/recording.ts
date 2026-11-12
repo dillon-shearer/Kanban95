@@ -1,5 +1,5 @@
 import { execFile, spawn, type ChildProcess } from 'node:child_process';
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, extname, isAbsolute, join } from 'node:path';
 import { createInterface } from 'node:readline';
@@ -106,6 +106,17 @@ function run(exe: string, args: string[], time: (seconds: number) => void): Proc
   });
   return { proc, exited, stderr };
 }
+
+const LOG = 'recording.log';
+const quoted = (a: string) => (/[\s"]/.test(a) || !a ? JSON.stringify(a) : a);
+
+function note(folder: string, line: string) {
+  try {
+    appendFileSync(join(folder, LOG), `${new Date().toISOString()} ${line.replace(/\r?\n/g, '\n  | ')}\n`);
+  } catch {}
+}
+
+const exitNote = (folder: string, step: string, p: Proc, code: number | null) => note(folder, [`${step}: ffmpeg exited with code ${code}`, ...p.stderr].join('\n'));
 
 const failed = (p: Proc, code: number | null) => [`ffmpeg exited with code ${code}`, ...p.stderr].join('\n');
 
@@ -308,8 +319,10 @@ function emit() {
 const save = (r: Rec) => writeFileSync(join(r.folder, MARKERS), JSON.stringify({ speed: r.speed, fps: r.fps, marks: r.marks, ...(r.segments.length ? { paused: true, segments: r.segments } : {}) }, null, 2));
 const exeOf = (repo?: string) => readConfig('settings', repo).recording.ffmpeg || 'ffmpeg';
 
-function capturing(r: Rec, exe: string, file: string) {
-  const raw = run(exe, [...r.args!, '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '18', '-pix_fmt', 'yuv420p', '-r', String(r.fps), '-an', '-stats_period', '0.1', '-n', join(r.folder, file)], (t) => {
+function capturing(r: Rec, exe: string, file: string, how: 'start' | 'resume') {
+  const args = [...r.args!, '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '18', '-pix_fmt', 'yuv420p', '-r', String(r.fps), '-an', '-stats_period', '0.1', '-n', join(r.folder, file)];
+  note(r.folder, `${how} ${file}: ${[exe, ...args].map(quoted).join(' ')}`);
+  const raw = run(exe, args, (t) => {
     if (capture === c) clock = t;
   });
   const c: Capture = { ...raw, file, stopping: false, halted: false };
@@ -322,6 +335,7 @@ function capturing(r: Rec, exe: string, file: string) {
   output = null;
   error = null;
   void c.exited.then(async (code) => {
+    exitNote(r.folder, `capture ${file}`, c, code);
     if (c.stopping || capture !== c) return;
     const why = failed(c, code);
     let size = 0;
@@ -382,7 +396,7 @@ export async function start(board: Board) {
   rec = r;
   owner = board;
   elapsed = 0;
-  capturing(r, cfg.ffmpeg || 'ffmpeg', RAW);
+  capturing(r, cfg.ffmpeg || 'ffmpeg', RAW, 'start');
   emit();
   return view(board.repo);
 }
@@ -399,9 +413,12 @@ export function mode(m: Mode, repo?: string) {
   return view(repo);
 }
 
-async function quit(c: Capture) {
+async function quit(c: Capture, folder: string) {
   c.proc.stdin!.end('q');
-  const timer = setTimeout(() => c.proc.kill(), QUIT_MS);
+  const timer = setTimeout(() => {
+    note(folder, `kill ${c.file}: ffmpeg did not quit within ${QUIT_MS / 1000} s`);
+    c.proc.kill();
+  }, QUIT_MS);
   await c.exited;
   clearTimeout(timer);
 }
@@ -410,8 +427,10 @@ function close(c: Capture, r: Rec) {
   c.stopping = true;
   c.closed ??= (async () => {
     const ran = clock;
-    await quit(c);
-    const seconds = (await probe(exeOf(owner?.repo), join(r.folder, c.file))) ?? Math.max(ran, clock);
+    await quit(c, r.folder);
+    const probed = await probe(exeOf(owner?.repo), join(r.folder, c.file));
+    const seconds = probed ?? Math.max(ran, clock);
+    note(r.folder, `length ${c.file}: ${sec(seconds)} s from ${probed ? 'ffprobe' : 'the clock'}`);
     r.segments.push({ file: c.file, seconds });
     elapsed += seconds;
     clock = 0;
@@ -425,6 +444,7 @@ export async function pause(repo?: string) {
   const c = capture;
   const r = rec;
   if (!c || !r || c.stopping || state !== 'recording') throw new Refused(state === 'paused' ? 'already paused' : 'not recording');
+  note(r.folder, 'pause');
   await close(c, r);
   if (capture !== c) return view(repo);
   capture = null;
@@ -450,7 +470,7 @@ export async function resume(board: Board) {
   if (r.marks.at(-1)!.mode === 'fast') r.marks.push({ t: elapsed, mode: 'regular' });
   save(r);
   owner = board;
-  capturing(r, exe, `raw-${n}.mkv`);
+  capturing(r, exe, `raw-${n}.mkv`, 'resume');
   emit();
   return view(board.repo);
 }
@@ -502,6 +522,7 @@ async function joined(r: Rec, exe: string): Promise<string> {
     writeFileSync(list, r.segments.map((s) => `file '${s.file}'\n`).join(''));
     const p = run(exe, ['-y', '-f', 'concat', '-safe', '0', '-i', list, '-c', 'copy', tmp], () => {});
     const code = await p.exited;
+    exitNote(r.folder, 'join', p, code);
     rmSync(list, { force: true });
     if (code !== 0) {
       rmSync(tmp, { force: true });
@@ -520,6 +541,7 @@ export function stop(repo?: string) {
   const r = rec;
   if (!r || (state !== 'recording' && state !== 'paused') || c?.stopping) throw new Refused('not recording');
   if (c) c.stopping = true;
+  note(r.folder, 'stop');
   state = 'rendering';
   progress = 0;
   error = null;
@@ -572,6 +594,7 @@ async function repaired(exe: string, raw: string): Promise<{ seconds: number | n
   const tmp = join(dirname(raw), 'raw-repair.mkv');
   const p = run(exe, ['-y', '-i', raw, '-c', 'copy', tmp], () => {});
   const code = await p.exited;
+  exitNote(dirname(raw), 'repair', p, code);
   const fixed = code === 0 ? await probe(exe, tmp) : null;
   if (!fixed) {
     rmSync(tmp, { force: true });
@@ -589,6 +612,7 @@ async function repaired(exe: string, raw: string): Promise<{ seconds: number | n
 
 async function render(board: Board, raw: string, markers: string, speed: number, seconds?: number): Promise<void> {
   rendering = speed;
+  const folder = dirname(raw);
   try {
     const cfg = readConfig('settings', board.repo).recording;
     const out = join(dirname(raw), `${Math.round(speed)}x.mp4`);
@@ -598,6 +622,7 @@ async function render(board: Board, raw: string, markers: string, speed: number,
     const total = fixed.seconds ?? seconds;
     if (!total) throw new Error([`cannot read the length of ${basename(raw)}`, ...fixed.tail].join('\n'));
     const expected = length(marks, total, speed);
+    note(folder, `render: speed ${speed}x, total ${sec(total)} s`);
     const p = run(exe, ['-y', '-i', raw, '-filter_complex', graph(marks, total, speed, cfg.fps), '-map', '[out]', '-c:v', 'libx264', '-preset', 'medium', '-crf', String(CRF[cfg.quality]), '-pix_fmt', 'yuv420p', '-movflags', '+faststart', '-an', out], (t) => {
       progress = Math.min(1, t / expected);
       if (Date.now() - sent >= PROGRESS_MS) emit();
@@ -605,6 +630,7 @@ async function render(board: Board, raw: string, markers: string, speed: number,
     encoder = p.proc;
     const code = await p.exited;
     encoder = null;
+    exitNote(folder, 'render', p, code);
     if (code !== 0) {
       rmSync(out, { force: true });
       throw new Error(failed(p, code));
@@ -613,8 +639,10 @@ async function render(board: Board, raw: string, markers: string, speed: number,
     changed(null);
     if (!cfg.keepRaw) for (const f of [raw, markers]) rmSync(f, { force: true });
     output = out;
+    note(folder, `render done: ${out}`);
   } catch (e) {
     error = (e as Error).message;
+    note(folder, `render failed: ${error}`);
   }
   state = 'idle';
   started = null;
@@ -626,6 +654,7 @@ async function render(board: Board, raw: string, markers: string, speed: number,
 export async function halt() {
   const c = capture;
   if (c && rec) {
+    note(rec.folder, 'halt');
     c.halted = true;
     await close(c, rec);
   }

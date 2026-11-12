@@ -63,7 +63,7 @@ it.runIf(hasFfmpeg)('render again repairs a raw.mkv with no readable length, kee
   expect(Math.abs(Number(duration(out)) - 2)).toBeLessThan(0.2);
   expect(Math.abs(Number(duration(raw)) - 5)).toBeLessThan(0.2);
   expect(readFileSync(join(dir, 'raw-broken.mkv')).equals(original)).toBe(true);
-  expect(readdirSync(dir).sort()).toEqual(['4x.mp4', 'markers.json', 'raw-broken.mkv', 'raw.mkv']);
+  expect(readdirSync(dir).sort()).toEqual(['4x.mp4', 'markers.json', 'raw-broken.mkv', 'raw.mkv', 'recording.log']);
 }, 60_000);
 
 it.runIf(hasFfmpeg)('render again on a raw.mkv that cannot be repaired leaves it untouched, leaves no temp file and names raw.mkv in the error', async () => {
@@ -75,7 +75,7 @@ it.runIf(hasFfmpeg)('render again on a raw.mkv that cannot be repaired leaves it
   expect(done.error).toContain('cannot read the length of raw.mkv');
   expect(done.error).toContain('repair: ffmpeg exited with code');
   expect(readFileSync(raw, 'utf8')).toBe('not a video');
-  expect(readdirSync(dir).sort()).toEqual(['markers.json', 'raw.mkv']);
+  expect(readdirSync(dir).sort()).toEqual(['markers.json', 'raw.mkv', 'recording.log']);
 }, 60_000);
 
 it.runIf(hasFfmpeg)('when raw.mkv cannot be renamed the repair leaves it untouched, removes the temp file and says why', async () => {
@@ -89,5 +89,5 @@ it.runIf(hasFfmpeg)('when raw.mkv cannot be renamed the repair leaves it untouch
   expect(done.error).toContain('cannot read the length of raw.mkv');
   expect(done.error).toContain('repair: cannot rename raw.mkv');
   expect(readFileSync(raw).equals(original)).toBe(true);
-  expect(readdirSync(dir).sort()).toEqual(['markers.json', 'raw-broken.mkv', 'raw.mkv']);
+  expect(readdirSync(dir).sort()).toEqual(['markers.json', 'raw-broken.mkv', 'raw.mkv', 'recording.log']);
 }, 60_000);
