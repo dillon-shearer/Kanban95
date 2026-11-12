@@ -51,6 +51,12 @@ describe('ui-recording-pause', { timeout: 60_000 }, () => {
     expect(await field()).toBe('Paused 12:34 · fast stretches so far: 1');
   });
 
+  it('a frame paused because the capture died shows the ffmpeg error in the status line', async () => {
+    await open();
+    await show({ ...paused, error: 'ffmpeg exited with code 1' }, (t) => t.rec.paused);
+    expect(await field()).toBe('Paused 12:34 · ffmpeg exited with code 1');
+  });
+
   it('a recording frame adds the running part to elapsed and puts the speed button back', async () => {
     await open();
     await show(paused, (t) => t.mode.stop);

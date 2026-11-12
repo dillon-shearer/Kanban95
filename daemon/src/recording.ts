@@ -17,7 +17,7 @@ export interface Segment { file: string; seconds: number }
 const MONITORS_PS = `Add-Type -AssemblyName System.Windows.Forms
 ConvertTo-Json -Compress -InputObject @([System.Windows.Forms.Screen]::AllScreens | % { [pscustomobject]@{ name = $_.DeviceName; width = $_.Bounds.Width; height = $_.Bounds.Height; left = $_.Bounds.X; top = $_.Bounds.Y; primary = $_.Primary } })`;
 const CRF = { high: 18, medium: 23, small: 28 } as const;
-const QUIT_MS = 10_000;
+const QUIT_MS = 60_000;
 const PROGRESS_MS = 500;
 const TAIL = 50;
 const OUTPUT = () => join(homedir(), 'Videos', 'Kanban95');
@@ -321,13 +321,29 @@ function capturing(r: Rec, exe: string, file: string) {
   progress = null;
   output = null;
   error = null;
-  void c.exited.then((code) => {
+  void c.exited.then(async (code) => {
     if (c.stopping || capture !== c) return;
+    const why = failed(c, code);
+    let size = 0;
+    try {
+      size = statSync(join(r.folder, file)).size;
+    } catch {}
+    if (size) {
+      await close(c, r);
+      if (capture !== c) return;
+      r.marks = r.marks.filter((m) => m.t <= elapsed);
+      save(r);
+      capture = null;
+      state = 'paused';
+      current = r.marks.at(-1)?.mode ?? 'regular';
+      error = why;
+      return emit();
+    }
     capture = null;
     rec = null;
     state = 'idle';
     started = null;
-    error = failed(c, code);
+    error = why;
     emit();
   });
 }
@@ -506,6 +522,7 @@ export function stop(repo?: string) {
   if (c) c.stopping = true;
   state = 'rendering';
   progress = 0;
+  error = null;
   emit();
   void (async () => {
     if (c) {
