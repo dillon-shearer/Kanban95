@@ -2100,7 +2100,7 @@ const recTime = () => {
 function recLine() {
   const r = recording;
   if (r.state === 'recording') return `Recording ${recTime()}, ${r.mode === 'fast' ? `fast ${r.speed}x` : 'regular'} · fast stretches so far: ${r.fastStretches}`;
-  if (r.state === 'paused') return `Paused ${recTime()} · fast stretches so far: ${r.fastStretches}`;
+  if (r.state === 'paused') return `Paused ${recTime()} · ${r.error ?? `fast stretches so far: ${r.fastStretches}`}`;
   if (r.state === 'rendering') return `Rendering ${Math.round((r.progress ?? 0) * 100)}%`;
   return r.error ?? '';
 }
