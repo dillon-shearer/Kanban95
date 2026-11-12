@@ -1,6 +1,6 @@
 // One git worktree per ticket: <board home>/worktrees/<repo key>/t-<id> on branch ticket/<id>, forked from the repo's current branch.
 import { execFileSync } from 'node:child_process';
-import { appendFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, realpathSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, realpathSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { INNER_GITIGNORE } from './db.js';
 import { localHome, repoKey } from './settings.js';
@@ -188,7 +188,15 @@ export function createWorktree(repo: string, ticketId: number, override?: string
   const branch = branchName(ticketId);
   const current = git(repo, 'rev-parse', '--abbrev-ref', 'HEAD');
   const base = override ?? current;
-  if (existsSync(path)) return { path, branch, base };
+  if (existsSync(join(path, '.git'))) return { path, branch, base };
+  if (existsSync(path)) {
+    try {
+      unlinkLinks(repo, path);
+      rmSync(path, { recursive: true, force: true });
+    } catch (e) {
+      throw new Error(`${path} is left over from an earlier worktree (it has no .git entry) and could not be removed: ${(e as Error).message}`);
+    }
+  }
 
   git(repo, 'worktree', 'prune'); // a worktree directory deleted by hand stays registered and blocks its branch
   // A ticket launched before worktrees left the repo has its branch checked out at the old place: move it, work and all.
