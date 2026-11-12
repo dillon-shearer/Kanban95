@@ -190,11 +190,12 @@ export function cancelSetup(ticketId: number): Promise<void> {
  */
 export function prepareWorktree(repo: string, ticketId: number, command?: string, timeoutMs = SETUP_TIMEOUT_MS, base?: string): Promise<void> | null {
   const prev = setups.get(ticketId);
-  if (!prev && (!command || setupDone(repo, ticketId, command, base).done)) return null;
+  const first = prev || !command ? undefined : setupDone(repo, ticketId, command, base);
+  if (!prev && (!command || first!.done)) return null;
   const me: Setup = { cancelled: false, closed: Promise.resolve(), started_at: new Date().toISOString(), out: '', shown: '', watchers: new Set() };
   const run = (prev ? cancelSetup(ticketId) : Promise.resolve()).then(() => {
     if (me.cancelled) throw new SetupCancelled('worktree_setup was cancelled');
-    const { done, marker, path } = setupDone(repo, ticketId, command, base);
+    const { done, marker, path } = first ?? setupDone(repo, ticketId, command, base);
     if (done || !command) return;
     return runSetup(me, command, path, marker, timeoutMs);
   });
