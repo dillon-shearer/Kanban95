@@ -1,12 +1,13 @@
 // Removes what the board created once nothing needs it. Every deletion writes an audit row (tool `janitor.*`, no grant).
 import { execFile } from 'node:child_process';
 import { existsSync, readdirSync, rmSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { git, removeWorktree, unlinkLinks, worktreePath, worktreesRoot } from './git.js';
 import { audit, revoke } from './grants.js';
 import { outputDir, outputPath, saveOutput } from './output.js';
 import { killTree, sessions } from './launcher.js';
+import { readProjects, repoKey } from './settings.js';
 
 const SCROLLBACK_DAYS = 30;
 export const SWEEP_MS = 24 * 60 * 60 * 1000;
@@ -97,6 +98,7 @@ export function sweep(b: Board): Promise<void> {
     const error = remove(repo, legacy); // OneDrive may still hold it: left for the next sweep
     log(db, null, 'janitor.worktree', { path: legacy, error }, error ? 'error' : 'ok');
   }
+  sweepRoots(b, dirname(wtRoot));
 
   const sessRoot = join(repo, '.kanban95', 'sessions');
   if (existsSync(sessRoot)) {
@@ -148,7 +150,30 @@ export function sweep(b: Board): Promise<void> {
   return processes;
 }
 
-const PS_LIST = 'Get-CimInstance Win32_Process | ForEach-Object { "$($_.ProcessId) $($_.ParentProcessId) $($_.CommandLine)" }';
+/**
+ * Worktree roots of repo paths no registered project has any more (a repo moved or renamed changes its key): a root whose
+ * folders all lack a `.git` entry holds no worktree and is removed whole. A root with one real worktree, or of any project in
+ * projects.json, is left alone; an unreadable projects.json skips this step.
+ */
+function sweepRoots({ db, repo }: Board, all: string) {
+  if (!existsSync(all)) return;
+  const fold = (s: string) => (process.platform === 'win32' ? s.toLowerCase() : s);
+  let keys: Set<string>;
+  try {
+    keys = new Set([repo, ...readProjects().map((p) => p.path)].map((p) => fold(repoKey(p))));
+  } catch (e) {
+    return log(db, null, 'janitor.worktree', { root: all, error: message(e) }, 'error');
+  }
+  for (const d of readdirSync(all, { withFileTypes: true })) {
+    if (!d.isDirectory() || !/-[0-9a-f]{8}$/.test(d.name) || keys.has(fold(d.name))) continue;
+    const root = join(all, d.name);
+    if (readdirSync(root, { withFileTypes: true }).some((w) => w.isDirectory() && existsSync(join(root, w.name, '.git')))) continue;
+    const error = remove(repo, root);
+    log(db, null, 'janitor.worktree', { path: root, unregistered: true, error }, error ? 'error' : 'ok');
+  }
+}
+
+const PS_LIST ='Get-CimInstance Win32_Process | ForEach-Object { "$($_.ProcessId) $($_.ParentProcessId) $($_.CommandLine)" }';
 const listProcesses = () => new Promise<{ pid: number; ppid: number; args: string }[]>((ok, fail) => {
   const [cmd, argv] = process.platform === 'win32'
     ? ['powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', PS_LIST]]
