@@ -6,13 +6,13 @@ import { readFile, stat } from 'node:fs/promises';
 import { extname, resolve, sep } from 'node:path';
 import { pipeline } from 'node:stream';
 import type { DatabaseSync } from 'node:sqlite';
-import { WebSocketServer } from 'ws';
+import { WebSocketServer, type WebSocket } from 'ws';
 import { handleApi, receiveFiling, receiveRecording, serveContext } from './api.js';
 import { countBoard, entryPath, register, tellShell } from './boards.js';
 import { innerGitignore, openDb, openGlobalBrain } from './db.js';
 import { commitPaths, git, gitWithin, guardFileMode, initRepo, type GitCap } from './git.js';
 import { sweep, SWEEP_MS } from './janitor.js';
-import { killAll, launch, sessions } from './launcher.js';
+import { killAll, launch, sessions, sessionsOf, watchSetup, type Session } from './launcher.js';
 import { countUnpushed, events, recover, releasePending, tick, typed, watchSilence, type Board } from './lifecycle.js';
 import { handleMcp } from './mcp.js';
 import { startMemoryLog } from './memlog.js';
@@ -224,14 +224,80 @@ export function start(config: Config = {}): Promise<{
     }
     if (minutes > 0) nap = setTimeout(() => { if (!sessions.size && !watchers && !board.closing) tellShell('close', repo); }, minutes * 60_000).unref();
   };
+  const sized = (r: unknown): r is [number, number] => Array.isArray(r) && r.length === 2 && r.every((n: unknown) => Number.isInteger(n) && (n as number) > 0 && (n as number) < 1000);
+  const attach = (ws: WebSocket, s: Session, size?: [number, number]) => {
+    if (size) s.pty.resize(size[0], size[1]);
+    ws.send(s.scrollback());
+    const out = s.pty.onData((d) => ws.send(d));
+    const exit = s.pty.onExit(() => ws.close());
+    let line = '';
+    ws.on('error', () => ws.terminate());
+    ws.on('message', (m) => {
+      try {
+        const msg = JSON.parse(String(m));
+        if (typeof msg.data === 'string') {
+          s.pty.write(msg.data);
+          for (const ch of msg.data.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, '')) {
+            if (ch === '\r') {
+              typed(board, s, line);
+              line = '';
+            } else if (ch === '\x7f' || ch === '\b') line = line.slice(0, -1);
+            else if (ch >= ' ') line += ch;
+          }
+        } else if (sized(msg.resize)) {
+          s.pty.resize(msg.resize[0], msg.resize[1]);
+        }
+      } catch {
+        // not JSON: ignored
+      }
+    });
+    ws.on('close', () => {
+      out.dispose();
+      exit.dispose();
+    });
+  };
+  const agent = (id: number) => sessionsOf(id).find((x) => !x.outcome && x.exitCode === undefined);
+  const watch = (ws: WebSocket, id: number) => {
+    let size: [number, number] | undefined;
+    const w = watchSetup(id, (d) => ws.send(d));
+    if (!w) {
+      const s = agent(id);
+      return s ? attach(ws, s) : ws.close();
+    }
+    const sizer = (m: unknown) => {
+      try {
+        const r = JSON.parse(String(m)).resize;
+        if (sized(r)) size = r;
+      } catch {
+        return;
+      }
+    };
+    ws.send(w.text);
+    ws.on('error', () => ws.terminate());
+    ws.on('message', sizer);
+    ws.on('close', w.off);
+    void w.closed.then(() => {
+      w.off();
+      ws.off('message', sizer);
+      if (ws.readyState !== ws.OPEN) return;
+      const s = agent(id);
+      if (s) attach(ws, s, size);
+      else ws.close();
+    });
+  };
   server.on('upgrade', (req, socket, head) => {
     const s = sessions.get(Number(/^\/pty\/(-?\d+)$/.exec(req.url ?? '')?.[1]));
-    if (!req.headers.origin || !sameOrigin(req, self) || !(s || req.url === '/events')) {
+    const setup = Number(/^\/pty\/setup\/(\d+)$/.exec(req.url ?? '')?.[1]);
+    if (!req.headers.origin || !sameOrigin(req, self) || !(s || setup || req.url === '/events')) {
       socket.end('HTTP/1.1 403 Forbidden\r\n\r\n');
       return;
     }
     if (!authed(req, secret)) {
       socket.end('HTTP/1.1 401 Unauthorized\r\n\r\n');
+      return;
+    }
+    if (setup) {
+      wss.handleUpgrade(req, socket, head, (ws) => watch(ws, setup));
       return;
     }
     if (!s) {
@@ -249,36 +315,7 @@ export function start(config: Config = {}): Promise<{
       });
       return;
     }
-    wss.handleUpgrade(req, socket, head, (ws) => {
-      ws.send(s.scrollback());
-      const out = s.pty.onData((d) => ws.send(d));
-      const exit = s.pty.onExit(() => ws.close());
-      let line = '';
-      ws.on('error', () => ws.terminate());
-      ws.on('message', (m) => {
-        try {
-          const msg = JSON.parse(String(m));
-          if (typeof msg.data === 'string') {
-            s.pty.write(msg.data);
-            for (const ch of msg.data.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, '')) {
-              if (ch === '\r') {
-                typed(board, s, line);
-                line = '';
-              } else if (ch === '\x7f' || ch === '\b') line = line.slice(0, -1);
-              else if (ch >= ' ') line += ch;
-            }
-          } else if (Array.isArray(msg.resize) && msg.resize.every((n: unknown) => Number.isInteger(n) && (n as number) > 0 && (n as number) < 1000)) {
-            s.pty.resize(msg.resize[0], msg.resize[1]);
-          }
-        } catch {
-          // not JSON: ignored
-        }
-      });
-      ws.on('close', () => {
-        out.dispose();
-        exit.dispose();
-      });
-    });
+    wss.handleUpgrade(req, socket, head, (ws) => attach(ws, s));
   });
   return new Promise((ok, fail) => {
     server.once('error', fail);

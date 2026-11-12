@@ -1022,8 +1022,21 @@ function termLabel(s) {
  */
 function openNewTerminals() {
   if (!settings.terminals) return;
+  for (const u of runner.setup ?? []) {
+    const id = `setup-${u.ticket_id}-${Date.parse(u.started_at)}`;
+    if (seen.has(id)) continue;
+    const phase = tickets.get(u.ticket_id)?.status === 'testing' ? 'test' : 'execute';
+    const s = { id, setup: true, ticket_id: u.ticket_id, run_id: null, role: phase === 'test' ? 'tester' : 'worker', phase, model: '' };
+    if (settings.terminals.auto.includes(phase)) openTerminal(s, true);
+    else seen.add(id);
+  }
   for (const s of sessions) {
     if (seen.has(s.id)) continue;
+    const host = s.ticket_id !== null && [...terms.values()].find((x) => x.s.setup && x.s.ticket_id === s.ticket_id && !x.ended());
+    if (host) {
+      host.adopt(s);
+      continue;
+    }
     if (s.ticket_id === null || settings.terminals.auto.includes(s.phase)) openTerminal(s, true);
     else seen.add(s.id);
   }
@@ -1036,10 +1049,13 @@ function openNewTerminals() {
  */
 function openTerminal(s, auto = false) {
   seen.add(s.id);
+  const host = [...terms.entries()].find(([, x]) => x.s.id === s.id);
+  if (host) return focus(host[0]);
   const wid = `term-${s.id}`;
   if (isOpen(wid)) return focus(wid);
-  const title = s.ticket_id === null ? `${s.role === 'operator' ? 'Operator' : 'Brainstorm'} — ${s.model || 'CLI default'}` : `#${s.ticket_id} — ${s.phase} — ${s.model}`;
-  const ws = new WebSocket(`ws://${location.host}/pty/${s.id}`);
+  const titleOf = (s) => s.ticket_id === null ? `${s.role === 'operator' ? 'Operator' : 'Brainstorm'} — ${s.model || 'CLI default'}` : `#${s.ticket_id} — ${s.phase} — ${s.setup ? 'setup' : s.model}`;
+  const title = titleOf(s);
+  const ws = new WebSocket(`ws://${location.host}/pty/${s.setup ? `setup/${s.ticket_id}` : s.id}`);
   const send = (msg) => ws.readyState === WebSocket.OPEN && ws.send(JSON.stringify(msg));
   const type = (d) => {
     for (let i = 0; i < d.length;) {
@@ -1049,13 +1065,17 @@ function openTerminal(s, auto = false) {
       i = j;
     }
   };
-  const term = new Terminal({ fontFamily: 'Consolas, "Courier New", monospace', fontSize: 13, scrollback: 5000 });
+  const term = new Terminal({ fontFamily: 'Consolas, "Courier New", monospace', fontSize: 13, scrollback: 5000, scrollOnEraseInDisplay: !!s.setup });
   const fit = new FitAddon();
   const ro = new ResizeObserver(() => fit.fit());
   // Spoken words are typed into the agent's terminal without Enter; the operator presses it.
   // X ends the agent for good, after a confirm; the board's own closes (after a report, a deleted ticket) never do.
   const onX = async () => {
     if (w.el.classList.contains('ended')) return w.close();
+    if (s.setup) {
+      if ((await dialog('End setup', `Stop the worktree setup for #${s.ticket_id}? The ticket is flagged so you can resume it.`, ['End', 'Cancel'])) !== 'End') return;
+      return api('DELETE', `/tickets/${s.ticket_id}/setup`).then(w.close, (e) => say(e.message));
+    }
     const ask = s.ticket_id === null ? `End this ${s.role === 'operator' ? 'operator terminal' : 'brainstorm'}?` : `End the agent for #${s.ticket_id}? The ticket is flagged so you can resume it.`;
     if ((await dialog('End agent', `${ask} Minimize to keep it running.`, ['End', 'Cancel'])) !== 'End') return;
     try {
@@ -1076,7 +1096,14 @@ function openTerminal(s, auto = false) {
     if (state) w.el.dataset.state = state;
     else delete w.el.dataset.state; // an unknown phase keeps the 98.css look
   };
-  terms.set(wid, { s, paint, fit: () => fit.fit() });
+  const entry = { s, paint, fit: () => fit.fit(), ended: () => w.el.classList.contains('ended') };
+  entry.adopt = (next) => {
+    seen.add(next.id);
+    s = entry.s = next;
+    w.title(titleOf(s), termLabel(s));
+    paint();
+  };
+  terms.set(wid, entry);
   paint();
   w.body.classList.add('k95-term');
   term.loadAddon(fit);
@@ -1085,7 +1112,7 @@ function openTerminal(s, auto = false) {
   ws.onopen = () => { fit.fit(); send({ resize: [term.cols, term.rows] }); };
   ws.onclose = () => {
     term.write('\r\n\x1b[90m[session ended]\x1b[0m\r\n');
-    w.title(`${title} (ended)`, `${termLabel(s)} (ended)`);
+    w.title(`${titleOf(s)} (ended)`, `${termLabel(s)} (ended)`);
     w.el.classList.add('ended');
     paint();
     if (s.run_id === null) return;
