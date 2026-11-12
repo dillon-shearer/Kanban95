@@ -175,6 +175,34 @@ function tickRunBadges() {
     clearInterval(runClock);
     runClock = null;
   }
+  tickSetupBadges();
+}
+const setupOf = (ticketId) => runner.setup?.find((s) => s.ticket_id === ticketId);
+const setupText = (s) => {
+  const n = Math.max(0, Math.floor((Date.now() - Date.parse(s.started_at)) / 1000));
+  return `setting up ${n < 60 ? `${n}s` : `${Math.floor(n / 60)}m${String(n % 60).padStart(2, '0')}s`}`;
+};
+const setupTitle = (s) => s.output || 'No output yet';
+const setupBadge = (s) => h('span', { class: 'badge run setup', title: setupTitle(s) }, setupText(s));
+let setupClock = null;
+function tickSetupBadges() {
+  const any = runner.setup?.length > 0;
+  if (any && !setupClock) setupClock = setInterval(async () => {
+    try {
+      runner = await api('GET', '/runner');
+    } catch {}
+    for (const b of document.querySelectorAll('.card .badge.setup')) {
+      const s = setupOf(Number(b.closest('.card').dataset.id));
+      if (!s) continue;
+      b.textContent = setupText(s);
+      b.title = setupTitle(s);
+    }
+    if (!runner.setup?.length) tickSetupBadges();
+  }, 2000);
+  if (!any && setupClock) {
+    clearInterval(setupClock);
+    setupClock = null;
+  }
 }
 
 function card(t) {
@@ -198,7 +226,7 @@ function card(t) {
     ...(t.tags ? t.tags.split(' ').map((g) => badge(g, 'tag')) : []),
     t.template === 'housekeeping' && badge('housekeeping'),
     live(t.id).length > 0 && badge(runText(live(t.id)[0]), 'run'),
-    !live(t.id).length && runner.setup?.includes(t.id) && badge('setting up', 'run'),
+    !live(t.id).length && setupOf(t.id) && setupBadge(setupOf(t.id)),
     t.flags.needs_human && badge('needs human', 'flag'),
     t.flags.blocked && badge('blocked', 'blocked'),
     t.flags.blocked_on_deps && badge(`waits on #${t.depends_on.join(', #')}`, 'hold'),

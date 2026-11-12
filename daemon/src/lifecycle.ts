@@ -9,7 +9,7 @@ import { FEEDBACK, PERMISSION, permissionOf, readTicket, transaction, type Ticke
 import { branchName, git, gitNotRun, hasBranch, isAncestor, notStarted, syncWorktree, worktreePath } from './git.js';
 import { audit, revoke, type Role } from './grants.js';
 import { cleanTicket } from './janitor.js';
-import { cancelSetup, killSession, launch, launchRoot, prepareWorktree, SetupCancelled, sessions, sessionsOf, settingUp, transcriptSize, type Session } from './launcher.js';
+import { cancelSetup, killSession, launch, launchRoot, prepareWorktree, SetupCancelled, sessions, sessionsOf, settingUp, setupProgress, transcriptSize, type Session } from './launcher.js';
 import { freeMemory, mark } from './memlog.js';
 import { ahead, enqueue, merge, push, pushRelease, upstream } from './merge.js';
 import { lastLines } from './pty.js';
@@ -912,7 +912,7 @@ export function runnerState(b: Board) {
   const restart = b.restart === 'failed' ? 'failed' : b.shell && b.shutdown ? 'self' : 'manual';
   const r = runner(b);
   const ids = running(b);
-  return { ...r, concurrency: limit(b), running: ids, setup: ids.filter(settingUp), left: cs.length, backlog: n, stale: b.stale ?? false, unpushed: b.unpushed ?? 0,
+  return { ...r, concurrency: limit(b), running: ids, setup: ids.filter(settingUp).map(setupProgress), left: cs.length, backlog: n, stale: b.stale ?? false, unpushed: b.unpushed ?? 0,
     ...(b.release && { release: { pending: true, ...b.release } }), ...(b.stale === 'daemon' && { hold: { finish: toFinish(b), terminals: terminals(), restart } }), ...(b.gitError && { gitError: b.gitError }), ...(b.lowMemory && { lowMemory: { ...b.lowMemory, waiting: testersWaiting() } }) };
 }
 
