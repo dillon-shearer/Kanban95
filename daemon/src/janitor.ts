@@ -3,7 +3,7 @@ import { execFile } from 'node:child_process';
 import { existsSync, readdirSync, rmSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
-import { git, removeWorktree, unlinkLinks, worktreePath, worktreesRoot } from './git.js';
+import { git, oldWorktreesRoot, removeWorktree, unlinkLinks, worktreePath, worktreesRoot } from './git.js';
 import { audit, revoke } from './grants.js';
 import { outputDir, outputPath, saveOutput } from './output.js';
 import { killTree, sessions } from './launcher.js';
@@ -64,19 +64,21 @@ export function sweep(b: Board): Promise<void> {
   const processes = sweepProcesses(b).catch(() => {});
 
   const wtRoot = worktreesRoot(repo);
+  const oldRoot = oldWorktreesRoot(repo);
   const legacy = join(repo, '.worktrees'); // the old layout's worktrees, under the repo: removed once, then the empty directory
-  if (existsSync(wtRoot) || existsSync(legacy)) {
+  const roots = [...new Set([wtRoot, oldRoot, legacy])];
+  if (roots.some((r) => existsSync(r))) {
     // Forget registrations whose directory is already gone. A failure here (git itself refused to start with EPERM once, in a
     // loaded full test run) is audited and the sweep goes on: inside start() a throw left the daemon never listening.
     try { git(repo, 'worktree', 'prune'); } catch (e) { log(db, null, 'janitor.worktree', { prune: true, error: message(e) }, 'error'); }
   }
-  for (const root of [wtRoot, legacy]) {
+  for (const root of roots) {
     if (!existsSync(root)) continue;
     for (const name of readdirSync(root)) {
       const id = Number(/^t-(\d+)$/.exec(name)?.[1]);
       if (!id || live.some((s) => s.ticketId === id)) continue;
       const t = db.prepare('SELECT 1 FROM tickets WHERE id = ?').get(id);
-      // An unmerged or reopened ticket's worktree in the old layout stays too; its next launch moves it to the new root (createWorktree).
+      // An unmerged or reopened ticket's worktree stays wherever it is; one under the repo is moved out by its next launch (createWorktree).
       if (t && landed(db, id) === null) continue;
       const ticket = t ? id : null;
       const path = join(root, name);
@@ -94,11 +96,12 @@ export function sweep(b: Board): Promise<void> {
       }
     }
   }
-  if (existsSync(legacy) && readdirSync(legacy).length === 0) {
-    const error = remove(repo, legacy); // OneDrive may still hold it: left for the next sweep
-    log(db, null, 'janitor.worktree', { path: legacy, error }, error ? 'error' : 'ok');
+  for (const root of roots.filter((r) => r !== wtRoot)) {
+    if (!existsSync(root) || readdirSync(root).length > 0) continue;
+    const error = remove(repo, root); // OneDrive may still hold it: left for the next sweep
+    log(db, null, 'janitor.worktree', { path: root, error }, error ? 'error' : 'ok');
   }
-  sweepRoots(b, dirname(wtRoot));
+  for (const all of new Set([dirname(wtRoot), dirname(oldRoot)])) sweepRoots(b, all);
 
   const sessRoot = join(repo, '.kanban95', 'sessions');
   if (existsSync(sessRoot)) {
