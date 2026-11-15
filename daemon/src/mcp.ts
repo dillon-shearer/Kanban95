@@ -579,20 +579,21 @@ export const TOOLS: Record<string, Tool<z.ZodRawShape>> = {
 
   post_deliverable: tool({
     description:
-      'Put a link to a finished output folder or file in the operator\x27s Inbox, under a ticket, with a title. Call it for each file or folder the operator has to open, kept in the inbox folder your brief names; ' +
-      'merges and file changes post nothing by themselves. folder is an absolute path to an existing folder or file: in the main checkout, ' +
+      'Put a link to a file or folder in the operator\x27s Inbox, with a title. This is how any agent hands the operator something to open: post every file or folder you make for the operator, kept in the inbox folder your brief names; ' +
+      'merges and file changes post nothing by themselves. A worker or tester posts under its own ticket; a planner or operator may name any ticket or none. folder is an absolute path to an existing folder or file: in the main checkout, ' +
       'or outside the repo (a data root, an export folder). Not your worktree: it is removed after the merge. The operator opens it with Open folder (a file opens its folder). ' +
       'A second post of the same path replaces its entry. A path that is not absolute or does not exist is refused. Returns the entry.',
-    access: { worker: 'own', operator: 'any' },
+    access: { planner: 'any or none', worker: 'own', tester: 'own', operator: 'any or none' },
     level: 3,
     input: {
-      ticket_id: ticketId,
+      ticket_id: z.number().int().positive().optional()
+        .describe('Ticket id. Worker and tester grants are bound to one ticket and may omit it; a planner or operator may omit it to post with no ticket.'),
       title: z.string().min(1).describe('What the folder or file holds, one line.'),
       folder: z.string().min(1).describe('Absolute path to an existing folder or file.'),
     },
     run(c, a) {
-      const id = (c.ticket = own(c, a.ticket_id));
-      readTicket(c.db, id);
+      const id = (c.ticket = unbound(c.as) && a.ticket_id === undefined ? c.grant.ticket_id : own(c, a.ticket_id));
+      if (id !== null) readTicket(c.db, id);
       return postDeliverable(c.db, a.folder, id, a.title);
     },
   }),
