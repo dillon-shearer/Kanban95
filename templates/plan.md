@@ -28,6 +28,7 @@ Retry count: {{retry}} (0 means first attempt).
 2. Decide the approach: which files change, what is added, what is removed, how each acceptance criterion will be proven, and the risks.
 3. If a decision belongs to the operator, ask with `ask_operator` instead of guessing.
 4. If the criteria are vague or not measurable, sharpen them with `update_ticket` and say why in the plan.
+5. Files for the operator: every file the operator has to open (a report, a mockup, a draft, an export) goes in `{{inbox}}` with a plain name; the folder already exists. Post it with `post_deliverable` when that tool is in your list below and there is a ticket to post it under. Tell the operator only that folder path. Nowhere else: not the worktree, the session folder, temp, the Desktop or the repo. Scratch files are not deliverables and go in the temp folder.
 
 ## Operator preferences
 
