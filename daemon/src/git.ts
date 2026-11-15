@@ -1,9 +1,9 @@
-// One git worktree per ticket: <board home>/worktrees/<repo key>/t-<id> on branch ticket/<id>, forked from the repo's current branch.
+// One git worktree per ticket: <data folder>/worktrees/<repo key>/t-<id> on branch ticket/<id>, forked from the repo's current branch.
 import { execFileSync } from 'node:child_process';
 import { appendFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, realpathSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { INNER_GITIGNORE } from './db.js';
-import { localHome, repoKey } from './settings.js';
+import { dataHome, localHome, repoKey } from './settings.js';
 
 export type GitCap = { ms: number; spent: boolean };
 let cap: GitCap | undefined;
@@ -50,14 +50,20 @@ export function gitNotRun(e: unknown): boolean {
 }
 
 /**
- * Where a repo's ticket worktrees live: `<local home>/worktrees/<basename>-<hash of the canonical path>`, never under the
+ * Where a repo's ticket worktrees live: `<data folder>/worktrees/<basename>-<hash of the canonical path>`, never under the
  * repo. A repo in a synced folder (OneDrive) would otherwise upload every worktree's `npm ci`, get throttled, and lock files
- * so a worktree could not be removed. The key is settings.ts `repoKey`.
+ * so a worktree could not be removed. The key is settings.ts `repoKey`. Through `dataHome()`, so a missing data folder is
+ * refused, not recreated empty.
  */
 export function worktreesRoot(repo: string): string {
-  return join(localHome(), 'worktrees', repoKey(repo));
+  return join(dataHome(), 'worktrees', repoKey(repo));
 }
-export const worktreePath = (repo: string, ticketId: number) => join(worktreesRoot(repo), `t-${ticketId}`);
+export const oldWorktreesRoot = (repo: string) => join(localHome(), 'worktrees', repoKey(repo));
+export function worktreePath(repo: string, ticketId: number): string {
+  const path = join(worktreesRoot(repo), `t-${ticketId}`);
+  const old = join(oldWorktreesRoot(repo), `t-${ticketId}`);
+  return !existsSync(join(path, '.git')) && existsSync(join(old, '.git')) ? old : path;
+}
 export const branchName = (ticketId: number) => `ticket/${ticketId}`;
 
 const SAFE_ENV = ['.env.example', '.env.sample', '.env.template'];

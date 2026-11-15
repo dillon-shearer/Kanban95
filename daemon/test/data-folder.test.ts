@@ -45,7 +45,7 @@ describe('data folder pointer', () => {
       expect(existsSync(join(data, 'brain.db'))).toBe(true);
       expect(existsSync(join(localHome(), 'brain.db'))).toBe(false);
       expect(existsSync(join(localHome(), 'projects.json'))).toBe(false);
-      expect(worktreesRoot(repo).startsWith(join(localHome(), 'worktrees'))).toBe(true);
+      expect(worktreesRoot(repo).startsWith(join(data, 'worktrees'))).toBe(true);
     } finally {
       await srv.close();
     }
