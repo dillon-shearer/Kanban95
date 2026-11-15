@@ -1273,8 +1273,8 @@ async function loadModels() {
   models = (await api('GET', '/config/models?scope=project')).value;
 }
 
-// UI zoom, 80% to 200% in 10% steps. The body's CSS zoom scales the terminals' text as well (xterm measures its cells after
-// zoom), so their fontSize stays put and they only refit.
+// UI zoom, 80% to 200% in 10% steps. The body's CSS zoom scales the terminals' text as well (the zoom scales xterm's
+// cells), so their fontSize stays put and they only refit.
 const ZOOMS = Array.from({ length: 13 }, (_, i) => (8 + i) / 10);
 function applyZoom(f) {
   setZoom(f);
