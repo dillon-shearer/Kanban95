@@ -317,9 +317,14 @@ function codexRollout(cwd: string, started: number): string | undefined {
   return undefined;
 }
 
+/** The session's transcript (Claude Code) or rollout (Codex), while there is one. */
+export function transcriptFile(s: Pick<Session, 'cli' | 'cwd' | 'sessionId' | 'started'>): string | undefined {
+  return s.cli === 'claude' ? s.sessionId && claudeTranscript(s.sessionId) || undefined : codexRollout(s.cwd, s.started);
+}
+
 /** The size in bytes of the session's transcript (Claude Code) or rollout (Codex), or -1 while there is none. Silence watch (lifecycle). */
 export function transcriptSize(s: Pick<Session, 'cli' | 'cwd' | 'sessionId' | 'started'>): number {
-  const f = s.cli === 'claude' ? s.sessionId && claudeTranscript(s.sessionId) : codexRollout(s.cwd, s.started);
+  const f = transcriptFile(s);
   try {
     return f ? statSync(f).size : -1;
   } catch {

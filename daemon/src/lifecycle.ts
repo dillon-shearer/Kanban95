@@ -9,7 +9,7 @@ import { FEEDBACK, PERMISSION, permissionOf, readTicket, transaction, type Ticke
 import { branchName, git, gitNotRun, hasBranch, isAncestor, notStarted, syncWorktree, worktreePath } from './git.js';
 import { audit, revoke, type Role } from './grants.js';
 import { cleanTicket } from './janitor.js';
-import { cancelSetup, killSession, launch, launchRoot, prepareWorktree, SetupCancelled, sessions, sessionsOf, settingUp, setupProgress, transcriptSize, type Session } from './launcher.js';
+import { cancelSetup, killSession, launch, launchRoot, prepareWorktree, SetupCancelled, sessions, sessionsOf, settingUp, setupProgress, transcriptFile, transcriptSize, type Session } from './launcher.js';
 import { freeMemory, mark } from './memlog.js';
 import { ahead, enqueue, merge, push, pushRelease, upstream } from './merge.js';
 import { lastLines } from './pty.js';
@@ -28,7 +28,7 @@ export type Event =
   | 'answer' // the operator answers over REST
   | 'typed'
   | 'exit' // the agent's pty exited without a move_ticket, or its launch failed
-  | 'silent' // the agent's transcript gained no line for idle_minutes (the silence watch)
+  | 'silent' // the agent's transcript gained no line for idle_minutes (the silence watch), or it stopped once more after its nudges (NUDGE)
   | 'woke' // a silent agent's transcript grew again
   | 'merged' // the merge queue's verdict
   | 'conflict' // the base would not merge into the worktree (on submit or in the merge queue), or the worktree was dirty
@@ -296,6 +296,15 @@ export function typed(b: Board, s: Session, line = '') {
   changed(id);
 }
 
+/**
+ * Text, then Enter as its own write: Claude Code reads one burst as a paste, where \r is a newline, not Enter.
+ * ponytail: fixed 300 ms gap, a very slow pty may still merge the two; upgrade is to wait for the echo before Enter.
+ */
+function typeLine(s: Session, text: string) {
+  s.pty.write(text);
+  setTimeout(() => s.pty.write('\r'), 300);
+}
+
 type Note = { role: Role | 'operator'; kind: 'question' | 'answer' | 'failure'; body: string };
 
 /**
@@ -369,12 +378,7 @@ export function apply(b: Board, id: number, event: Event, x: { note?: Note; answ
       case 'enqueue_merge': if (!blocked) queueMerge(b, id); break;
       case 'note': break; // written above, in the transaction
       case 'answer_pty':
-        // Text, then Enter as its own write: Claude Code reads one burst as a paste, where \r is a newline, not Enter.
-        // ponytail: fixed 300 ms gap, a very slow pty may still merge the two; upgrade is to wait for the echo before Enter.
-        for (const s of sessionsOf(id)) {
-          s.pty.write(menuChoice(b, id, oneLine(x.answer ?? '')));
-          setTimeout(() => s.pty.write('\r'), 300);
-        }
+        for (const s of sessionsOf(id)) typeLine(s, menuChoice(b, id, oneLine(x.answer ?? '')));
         break;
       case 'chord': case 'ding': case 'done': events.emit('event', { sound: e, ticket: id }); break;
       case 'remove_worktree': pending.push(cleanTicket(b, id, ticketBase(b.repo, t.tags))); break;
@@ -522,7 +526,64 @@ export const SILENCE = { every: 60_000, minute: 60_000 };
  * CLAUDE_PROMPT question). Keyed by the session, not its key: a key is a run id, which a second board in the same process (the
  * tests) hands out again, and an entry left by the first would date the new session's silence from the old one's start.
  */
-const heard = new WeakMap<Session, { size: number; at: number; note?: number; prompt?: boolean }>();
+const heard = new WeakMap<Session, { size: number; at: number; note?: number; prompt?: boolean; checked?: number; nudges?: number }>();
+
+/**
+ * The nudge (docs/LIFECYCLE.md → Silent agents → Nudge): a Claude Code worker or tester that ended its turn with its ticket open.
+ * `quiet`: how long its transcript must stay unchanged first. `max`: nudges per run; the next stop flags it. Tests shorten quiet.
+ */
+export const NUDGE = { quiet: 120_000, max: 2 };
+export const NUDGE_LINE = {
+  worker: 'Your ticket is still open. Continue with the work. If something blocks you, ask with ask_operator.',
+  tester: 'Your ticket is still open. Continue with the testing and finish with report_test. If something blocks you, ask with ask_operator.',
+};
+
+type Entry = { type?: string; isSidechain?: boolean; message?: { content?: unknown; stop_reason?: string | null } };
+const blocks = (e: Entry | undefined) => (Array.isArray(e?.message?.content) ? e.message.content : []) as { type?: string; tool_use_id?: string; content?: unknown }[];
+
+/**
+ * Whether a Claude Code transcript ends in a turn the agent ended itself: its last user or assistant entry is an assistant message
+ * with no tool call, and every background command or subagent it started (a tool result saying so) has sent its task-notification.
+ */
+export function turnEnded(text: string) {
+  let last: Entry | undefined;
+  const running = new Set<string>();
+  for (const line of text.split('\n')) {
+    let e: Entry;
+    try {
+      e = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if ((e?.type !== 'user' && e?.type !== 'assistant') || e.isSidechain) continue;
+    last = e;
+    for (const c of blocks(e)) {
+      if (c.type === 'tool_result' && c.tool_use_id && /running in background with ID|Async agent launched/.test(JSON.stringify(c.content ?? ''))) running.add(c.tool_use_id);
+    }
+  }
+  for (const [, id] of text.matchAll(/<tool-use-id>([^<]+)<\/tool-use-id>/g)) running.delete(id);
+  return last?.type === 'assistant' && !running.size && last.message?.stop_reason !== 'tool_use' && !blocks(last).some((c) => c.type === 'tool_use');
+}
+
+/** True when the session ended its turn with its ticket open (`turnEnded`) and was nudged or, past NUDGE.max, flagged. */
+function nudge(b: Board, s: Session, h: { at: number; note?: number; checked?: number; nudges?: number }, size: number, now: number) {
+  if (s.cli !== 'claude' || size < 0 || size === h.checked || now - h.at < NUDGE.quiet) return false;
+  h.checked = size;
+  const column = s.phase === 'test' ? 'testing' : s.phase === 'execute' ? 'in_progress' : undefined;
+  if (readTicket(b.db, s.ticketId!).status !== column) return false;
+  const f = transcriptFile(s);
+  if (!f || !turnEnded(readFileSync(f, 'utf8'))) return false;
+  h.nudges = (h.nudges ?? 0) + 1;
+  if (h.nudges <= NUDGE.max) {
+    typeLine(s, s.role === 'tester' ? NUDGE_LINE.tester : NUDGE_LINE.worker);
+    return true;
+  }
+  const tail = lastLines(s.scrollback(), 10).join('\n') || '(nothing)';
+  const body = `agent stopped ${NUDGE.max + 1} times without finishing: it ended its turn with the ticket still open after ${NUDGE.max} nudges. ` +
+    `Last lines of its terminal:\n\`\`\`\n${tail}\n\`\`\``;
+  h.note = apply(b, s.ticketId!, 'silent', { note: { role: s.role, kind: 'failure', body } }).noteId;
+  return true;
+}
 
 /**
  * Claude Code's own yes/no menu. A few of its safety checks still raise it under --dangerously-skip-permissions, and no
@@ -625,6 +686,7 @@ function listen(b: Board) {
         }
         Object.assign(h, { size, at: now, note: undefined, prompt: false });
       } else if (flagged) h.at = now;
+      else if (nudge(b, s, h, size, now)) continue;
       else if (now - h.at >= limit * SILENCE.minute) {
         const mins = Math.round((now - h.at) / SILENCE.minute);
         const tail = lastLines(s.scrollback(), 10).join('\n') || '(nothing)';
