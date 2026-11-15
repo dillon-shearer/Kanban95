@@ -3,11 +3,11 @@ import { execFile, execFileSync, spawn, type ChildProcess } from 'node:child_pro
 import { randomUUID } from 'node:crypto';
 import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir, userInfo } from 'node:os';
-import { join, relative, resolve } from 'node:path';
+import { dirname, join, relative, resolve } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import type { IPty } from 'node-pty';
 import { buildContext, startRun } from './context.js';
-import { createWorktree, git, worktreesRoot } from './git.js';
+import { createWorktree, git, worktreePath, worktreesRoot } from './git.js';
 import { mint, revoke, type Role } from './grants.js';
 import { mark, who } from './memlog.js';
 import { saveOutput } from './output.js';
@@ -382,7 +382,7 @@ function spawnSession(d: Daemon, o: RunSettings & { sessionId?: string; resume?:
       // No commit or PR trailer (CLAUDE.md), held by the board now that the operator's own attribution setting is not loaded.
       if (unattended(r.role)) writeFileSync(settingsPath, JSON.stringify(BOARD_SETTINGS), { mode: 0o600 });
     }
-    const wtRoot = worktreesRoot(repo);
+    const wtRoot = r.ticketId === null ? worktreesRoot(repo) : dirname(worktreePath(repo, r.ticketId));
     const [cmd, ...args] = buildArgv({ ...o, role: r.role, repo: resolve(repo), wtRoot, promptPath, mcpConfigPath, settingsPath, mcpUrl, cwd: r.cwd });
     if (o.cli === 'claude') preTrustClaude(db, r.ticketId, r.ticketId === null ? repo : wtRoot);
     // KANBAN95_AGENT makes `npm run dev` and the shell binary refuse to start: an agent must not open the board on the operator's desktop.

@@ -4,7 +4,7 @@ import { chmodSync, copyFileSync, existsSync, readFileSync, renameSync, writeFil
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
-import { worktreesRoot } from './git.js';
+import { oldWorktreesRoot, worktreesRoot } from './git.js';
 import { audit } from './grants.js';
 
 /** Claude Code's state file; it lives under CLAUDE_CONFIG_DIR when that is set. */
@@ -72,14 +72,14 @@ export function trustStatus(db: DatabaseSync, repo: string) {
 
 /**
  * Settings → Agents → Clear Claude trust: removes `hasTrustDialogAccepted` from the entries the board writes for this repo (its
- * worktrees root and the repo root) and nothing else (Claude Code keeps other per-folder state there). The next Claude launch
+ * worktrees root, the old one under the local home, and the repo root) and nothing else (Claude Code keeps other per-folder state there). The next Claude launch
  * writes it again; clearing is for when the board is no longer used here.
  */
 export function untrustClaude(db: DatabaseSync, repo: string) {
   const file = claudeState();
   if (!existsSync(file)) return;
   const j = JSON.parse(readFileSync(file, 'utf8'));
-  const keys = [claudeKey(worktreesRoot(repo)), claudeKey(repo)].filter((k) => j.projects?.[k]?.hasTrustDialogAccepted !== undefined);
+  const keys = [...new Set([worktreesRoot(repo), oldWorktreesRoot(repo), repo].map(claudeKey))].filter((k) => j.projects?.[k]?.hasTrustDialogAccepted !== undefined);
   if (!keys.length) return;
   for (const key of keys) delete j.projects[key].hasTrustDialogAccepted;
   save(file, j);
