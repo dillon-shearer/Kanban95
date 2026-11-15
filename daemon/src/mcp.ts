@@ -494,6 +494,7 @@ export const TOOLS: Record<string, Tool<z.ZodRawShape>> = {
     description:
       'Ask the human operator a question you cannot resolve from the ticket, the brain or the code. The ticket is flagged needs_human and the operator is alerted; ' +
       'the answer is typed into your session as one line and kept as a note on the ticket. Until it is answered, move_ticket to testing is refused: wait for it. Ask once with full context and the options you see, rather than many small questions. ' +
+      'When the operator has to open files, name one absolute folder that holds them all; never list repo-relative or worktree paths. ' +
       'Refused for a question asking the operator to raise the ticket\x27s agent level or read all (use request_permission), and while your request_permission waits for its answer. ' +
       'The answer ends with the ticket\x27s agent level in brackets and whether it changed. Returns the question id.',
     access: { worker: 'own', tester: 'own' },
