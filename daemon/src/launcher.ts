@@ -7,13 +7,13 @@ import { dirname, join, relative, resolve } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import type { IPty } from 'node-pty';
 import { buildContext, startRun } from './context.js';
-import { createWorktree, git, worktreePath, worktreesRoot } from './git.js';
+import { createWorktree, git, unlinkLinks, worktreePath, worktreesRoot } from './git.js';
 import { mint, revoke, type Role } from './grants.js';
 import { mark, who } from './memlog.js';
 import { saveOutput } from './output.js';
 import { childEnv, cmdSafe, lastLines, spawnPty } from './pty.js';
 import { fill, loadTemplate, TEMPLATES, type TicketTemplate } from './templates.js';
-import { BadConfig, readConfig, type Cli, type Effort } from './settings.js';
+import { BadConfig, dataHome, readConfig, repoKey, type Cli, type Effort } from './settings.js';
 import { operatorMcpServers } from './extra-mcp.js';
 import { preTrustClaude } from './trust.js';
 
@@ -132,6 +132,23 @@ export const sessionsOf = (ticketId: number) => [...sessions.values()].filter((s
 
 const sessionDir = (repo: string, key: number) => join(repo, '.kanban95', 'sessions', String(key));
 
+export const tempRoot = (repo: string) => join(dataHome(), 'tmp', repoKey(repo));
+
+function makeTemp(repo: string, name: string) {
+  const dir = join(tempRoot(repo), name);
+  mkdirSync(dir, { recursive: true });
+  return { dir, env: { TEMP: dir, TMP: dir, TMPDIR: dir } };
+}
+
+export function removeTempDir(repo: string, dir: string): string | undefined {
+  try {
+    unlinkLinks(repo, dir);
+    rmSync(dir, { recursive: true, force: true });
+  } catch (e) {
+    return (e as Error).message;
+  }
+}
+
 /** Owner-only: mode 0700 on POSIX; on Windows inheritance is cut and only the current user is granted access. */
 function privateDir(dir: string) {
   mkdirSync(dir, { recursive: true, mode: 0o700 });
@@ -197,7 +214,7 @@ export function prepareWorktree(repo: string, ticketId: number, command?: string
     if (me.cancelled) throw new SetupCancelled('worktree_setup was cancelled');
     const { done, marker, path } = first ?? setupDone(repo, ticketId, command, base);
     if (done || !command) return;
-    return runSetup(me, command, path, marker, timeoutMs);
+    return runSetup(me, command, path, marker, timeoutMs, repo, ticketId);
   });
   me.closed = run.then(() => {}, () => {}).finally(() => {
     if (setups.get(ticketId) === me) setups.delete(ticketId);
@@ -212,10 +229,11 @@ function setupDone(repo: string, ticketId: number, command?: string, base?: stri
   return { done: !command || existsSync(marker), marker, path: wt.path };
 }
 
-function runSetup(me: Setup, command: string, cwd: string, marker: string, timeoutMs: number) {
+function runSetup(me: Setup, command: string, cwd: string, marker: string, timeoutMs: number, repo: string, ticketId: number) {
+  const tmp = makeTemp(repo, `setup-${ticketId}`);
   return new Promise<void>((ok, fail) => {
     // Detached on POSIX so the shell leads its own process group, which killTree ends whole.
-    const child = spawn(command, { cwd, env: childEnv({ KANBAN95_AGENT: '1' }), shell: true, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, detached: process.platform !== 'win32' });
+    const child = spawn(command, { cwd, env: childEnv({ KANBAN95_AGENT: '1', ...tmp.env }), shell: true, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, detached: process.platform !== 'win32' });
     me.child = child;
     let timedOut = false;
     const timer = setTimeout(() => {
@@ -248,7 +266,7 @@ function runSetup(me: Setup, command: string, cwd: string, marker: string, timeo
       const tail = me.out.split(/\r?\n/).filter((l) => l.trim()).slice(-SETUP_TAIL).join('\n');
       fail(new Error(`worktree_setup "${command}" failed (${timedOut ? `timed out after ${timeoutMs / 1000} s` : code ?? signal}) in ${cwd}; last output:\n${tail || '(none)'}`));
     });
-  });
+  }).finally(() => removeTempDir(repo, tmp.dir));
 }
 
 /**
@@ -356,6 +374,7 @@ function spawnSession(d: Daemon, o: RunSettings & { sessionId?: string; resume?:
   const grant = mint(db, { ticket: r.ticketId, role: r.role, ttlMs: GRANT_TTL_MS });
   const key = r.runId ?? -grant.id;
   const dir = sessionDir(repo, key);
+  let tmp: string | undefined;
   const teardown = (scrollback: string | null) => {
     try {
       if (r.runId !== null) db.prepare("UPDATE runs SET ended_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?").run(r.runId);
@@ -363,6 +382,7 @@ function spawnSession(d: Daemon, o: RunSettings & { sessionId?: string; resume?:
       if (r.runId !== null && scrollback !== null) saveOutput(repo, r.runId, scrollback);
     } finally {
       rmSync(dir, { recursive: true, force: true });
+      if (tmp) removeTempDir(repo, tmp);
     }
   };
 
@@ -387,11 +407,14 @@ function spawnSession(d: Daemon, o: RunSettings & { sessionId?: string; resume?:
     const wtRoot = r.ticketId === null ? worktreesRoot(repo) : dirname(worktreePath(repo, r.ticketId));
     const [cmd, ...args] = buildArgv({ ...o, role: r.role, repo: resolve(repo), wtRoot, promptPath, mcpConfigPath, settingsPath, mcpUrl, cwd: r.cwd });
     if (o.cli === 'claude') preTrustClaude(db, r.ticketId, r.ticketId === null ? repo : wtRoot);
+    const temp = makeTemp(repo, String(key));
+    tmp = temp.dir;
     // KANBAN95_AGENT makes `npm run dev` and the shell binary refuse to start: an agent must not open the board on the operator's desktop.
     // A 5 min cache TTL writes at 1.25x instead of the subscription's 1 h at 2x; an unattended session rarely idles 5 min
     // (8 of 2,161 measured call gaps). Interactive sessions keep the 1 h TTL, since they wait on the operator.
     const env = childEnv({
       KANBAN95_AGENT: '1',
+      ...temp.env,
       ...(o.cli === 'codex' ? { [TOKEN_ENV]: grant.token } : {}),
       ...(o.cli === 'claude' && unattended(r.role) ? { CLAUDE_CODE_PROMPT_CACHE_TTL: '5m' } : {}),
     });
