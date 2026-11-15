@@ -6,8 +6,8 @@ import type { DatabaseSync } from 'node:sqlite';
 import { git, oldWorktreesRoot, removeWorktree, unlinkLinks, worktreePath, worktreesRoot } from './git.js';
 import { audit, revoke } from './grants.js';
 import { outputDir, outputPath, saveOutput } from './output.js';
-import { killTree, sessions } from './launcher.js';
-import { readProjects, repoKey } from './settings.js';
+import { killTree, removeTempDir, sessions, settingUp, tempRoot } from './launcher.js';
+import { missingHome, readProjects, repoKey } from './settings.js';
 
 const SCROLLBACK_DAYS = 30;
 export const SWEEP_MS = 24 * 60 * 60 * 1000;
@@ -109,6 +109,16 @@ export function sweep(b: Board): Promise<void> {
       if (sessions.has(Number(name))) continue;
       const error = remove(repo, join(sessRoot, name));
       log(db, null, 'janitor.session', { dir: join(sessRoot, name), error }, error ? 'error' : 'ok');
+    }
+  }
+
+  const tmpRoot = missingHome() ? undefined : tempRoot(repo);
+  if (tmpRoot && existsSync(tmpRoot)) {
+    for (const name of readdirSync(tmpRoot)) {
+      const setup = Number(/^setup-(\d+)$/.exec(name)?.[1]);
+      if (setup ? settingUp(setup) : sessions.has(Number(name))) continue;
+      const error = removeTempDir(repo, join(tmpRoot, name));
+      log(db, null, 'janitor.tmp', { dir: join(tmpRoot, name), error }, error ? 'error' : 'ok');
     }
   }
 
