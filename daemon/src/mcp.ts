@@ -579,7 +579,7 @@ export const TOOLS: Record<string, Tool<z.ZodRawShape>> = {
 
   post_deliverable: tool({
     description:
-      'Put a link to a finished output folder or file in the operator\x27s Inbox, under a ticket, with a title. Call it only when the operator asks for an Inbox entry; ' +
+      'Put a link to a finished output folder or file in the operator\x27s Inbox, under a ticket, with a title. Call it for each file or folder the operator has to open, kept in the inbox folder your brief names; ' +
       'merges and file changes post nothing by themselves. folder is an absolute path to an existing folder or file: in the main checkout, ' +
       'or outside the repo (a data root, an export folder). Not your worktree: it is removed after the merge. The operator opens it with Open folder (a file opens its folder). ' +
       'A second post of the same path replaces its entry. A path that is not absolute or does not exist is refused. Returns the entry.',

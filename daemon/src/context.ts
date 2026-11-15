@@ -1,12 +1,14 @@
 // Builds the exact context an agent is given for a ticket. Everything else is pull (get_ticket, brain_search).
 import { execFileSync } from 'node:child_process';
+import { mkdirSync } from 'node:fs';
+import { join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { brainSearch, FEEDBACK, readTicket } from './api.js';
 import { attachments } from './attachments.js';
 import { worktreesRoot } from './git.js';
 import type { Role } from './grants.js';
 import { TOOLS } from './mcp.js';
-import { configPath, readPreferences, readSnippets } from './settings.js';
+import { configPath, dataHome, readPreferences, readSnippets, repoKey } from './settings.js';
 import { fill, loadTemplate, TEMPLATES, type Ctx, type TicketTemplate } from './templates.js';
 
 const BRAIN_LIMIT = 8;
@@ -27,6 +29,15 @@ interface ContextOpts {
   /** The daemon's port and the session's CLI: `{{context}}`, how to call GET /api/context for this ticket. */
   port?: number;
   cli?: string;
+  /** A brainstorm or operator session's grant id: its inbox is `session-<id>`. Without it a ticketless context has no inbox. */
+  session?: number;
+}
+
+/** <data folder>/inbox/<repo key>/<name>: where an agent puts the files the operator opens. Created here, never deleted by the board. */
+export function inboxDir(repo: string, name: string): string {
+  const dir = join(dataHome(), 'inbox', repoKey(repo), name);
+  mkdirSync(dir, { recursive: true });
+  return dir;
 }
 
 function contextLine(id: number, { port, cli }: ContextOpts): string {
@@ -113,7 +124,7 @@ export function gitDiff(worktree: string, base: string, chars = DIFF_CHARS): str
   return `${stat}\n\n${body}`.trimEnd();
 }
 
-/** A null ticket is a brainstorm or operator session: tools only, nothing pushed. `mission` is the operator terminal's, set by its launcher. */
+/** A null ticket is a brainstorm or operator session: tools and its inbox only, nothing pushed. `mission` is the operator terminal's, set by its launcher. */
 export function buildContext(db: DatabaseSync, repo: string, ticketId: number | null, role: Role, opts: ContextOpts = {}): Ctx {
   const tools = Object.entries(TOOLS)
     .filter(([, t]) => role in t.access)
@@ -121,7 +132,10 @@ export function buildContext(db: DatabaseSync, repo: string, ticketId: number | 
     .join('\n');
   const preferences = orNone(withSnippets(readPreferences(repo), snippetsOn(repo)));
   const worktrees = worktreesRoot(repo);
-  if (ticketId === null) return { ticket: '(none)', criteria: '(none)', brain: '(none)', notes: '(none)', retry: '0', diff: '', tools, base: '(none)', preferences, mission: '(none)', worktrees, ready: '(none)', context: '(none)' };
+  if (ticketId === null) {
+    const inbox = opts.session === undefined ? '(none)' : inboxDir(repo, `session-${opts.session}`);
+    return { ticket: '(none)', criteria: '(none)', brain: '(none)', notes: '(none)', retry: '0', diff: '', tools, base: '(none)', preferences, mission: '(none)', worktrees, ready: '(none)', context: '(none)', inbox };
+  }
 
   const t = readTicket(db, ticketId);
   let diff = '';
@@ -143,6 +157,7 @@ export function buildContext(db: DatabaseSync, repo: string, ticketId: number | 
     worktrees,
     ready: '(none)',
     context: contextLine(t.id, opts),
+    inbox: inboxDir(repo, String(t.id)),
   };
 }
 

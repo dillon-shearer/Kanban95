@@ -11,6 +11,7 @@ import { MIGRATIONS_DIR, migrate } from '../src/db.ts';
 import { worktreesRoot } from '../src/git.ts';
 import { mint, verify } from '../src/grants.ts';
 import { buildArgv, killTree, sessions, type ArgvIn, type Session } from '../src/launcher.ts';
+import { dataHome, repoKey } from '../src/settings.ts';
 import { start } from '../src/server.ts';
 import { fill, loadTemplate, render, VARS, type Ctx } from '../src/templates.ts';
 import { fakeCli } from './fake-cli.ts';
@@ -246,6 +247,9 @@ describe('POST /api/brainstorm', () => {
     const notes = 'Login keeps failing.\nKeep {{brain}} & $1 as typed.';
     const seeded = await (await post('/brainstorm', { mission: notes })).json();
     expect(prompt(seeded)).toContain(`## Starting notes\n\n${notes}\n`);
+    const inbox = join(dataHome(), 'inbox', repoKey(repo), `session-${sessions.get(seeded.id)!.grantId}`);
+    expect(prompt(seeded)).toContain(`\`${inbox}\``);
+    expect(existsSync(inbox)).toBe(true);
     await end(sessions.get(seeded.id)!);
     const blank = await (await post('/brainstorm', { mission: ' \n ' })).json();
     expect(prompt(blank)).toContain('## Starting notes\n\n(none)\n');
