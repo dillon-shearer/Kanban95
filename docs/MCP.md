@@ -202,7 +202,7 @@ Full-text search the project brain and the global brain together, best match fir
 
 ### ask_operator
 
-Ask the human operator a question you cannot resolve from the ticket, the brain or the code. The ticket is flagged needs_human and the operator is alerted; the answer is typed into your session as one line and kept as a note on the ticket. Until it is answered, move_ticket to testing is refused: wait for it. Ask once with full context and the options you see, rather than many small questions. When the operator has to open files, name one absolute folder that holds them all; never list repo-relative or worktree paths. Refused for a question asking the operator to raise the ticket's agent level or read all (use request_permission), and while your request_permission waits for its answer. The answer ends with the ticket's agent level in brackets and whether it changed. Returns the question id.
+Ask the human operator a question you cannot resolve from the ticket, the brain or the code. The ticket is flagged needs_human and the operator is alerted; the answer is typed into your session as one line and kept as a note on the ticket. Until it is answered, move_ticket to testing is refused: wait for it. Ask once with full context and the options you see, rather than many small questions. Refused for a question asking the operator to raise the ticket's agent level or read all (use request_permission), and while your request_permission waits for its answer. The answer ends with the ticket's agent level in brackets and whether it changed. Returns the question id.
 
 | argument | type | required | description |
 |---|---|---|---|
@@ -242,7 +242,7 @@ Record the structured result of testing a ticket against its acceptance criteria
 
 ### post_deliverable
 
-Put a link to a finished output folder or file in the operator's Inbox, under a ticket, with a title. Call it only when the operator asks for an Inbox entry; merges and file changes post nothing by themselves. folder is an absolute path to an existing folder or file: in the main checkout, or outside the repo (a data root, an export folder). Not your worktree: it is removed after the merge. The operator opens it with Open folder (a file opens its folder). A second post of the same path replaces its entry. A path that is not absolute or does not exist is refused. Returns the entry.
+Put a link to a finished output folder or file in the operator's Inbox, under a ticket, with a title. Call it for each file or folder the operator has to open, kept in the inbox folder your brief names; merges and file changes post nothing by themselves. folder is an absolute path to an existing folder or file: in the main checkout, or outside the repo (a data root, an export folder). Not your worktree: it is removed after the merge. The operator opens it with Open folder (a file opens its folder). A second post of the same path replaces its entry. A path that is not absolute or does not exist is refused. Returns the entry.
 
 | argument | type | required | description |
 |---|---|---|---|

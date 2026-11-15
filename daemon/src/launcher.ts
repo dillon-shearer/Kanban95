@@ -339,17 +339,19 @@ export function launch(d: Daemon, o: { ticketId: number; template: TicketTemplat
  */
 export function launchRoot(d: Daemon, o: RunSettings & { template: 'brainstorm' | 'operator'; mission?: string; ready?: string }): Session {
   const { role } = TEMPLATES[o.template];
-  const ctx = buildContext(d.db, d.repo, null, role);
   const text = loadTemplate(d.repo, o.template);
   // A repo copy older than the {{mission}} slot would drop the operator's text without a word.
   if (o.mission && !/\{\{\s*mission\s*\}\}/.test(text)) throw new BadConfig(`${o.template}.md has no {{mission}}: reset it in Settings → Prompts`);
-  if (o.mission) ctx.mission = o.mission;
-  if (o.ready) ctx.ready = o.ready;
-  const prompt = fill(text, ctx);
+  const prompt = (grantId: number) => {
+    const ctx = buildContext(d.db, d.repo, null, role, { session: grantId });
+    if (o.mission) ctx.mission = o.mission;
+    if (o.ready) ctx.ready = o.ready;
+    return fill(text, ctx);
+  };
   return spawnSession(d, o, { runId: null, ticketId: null, role, phase: o.template, cwd: d.repo, prompt });
 }
 
-function spawnSession(d: Daemon, o: RunSettings & { sessionId?: string; resume?: boolean }, r: { runId: number | null; ticketId: number | null; role: Role; phase: string; cwd: string; prompt: string }): Session {
+function spawnSession(d: Daemon, o: RunSettings & { sessionId?: string; resume?: boolean }, r: { runId: number | null; ticketId: number | null; role: Role; phase: string; cwd: string; prompt: string | ((grantId: number) => string) }): Session {
   const { db, repo } = d;
   const grant = mint(db, { ticket: r.ticketId, role: r.role, ttlMs: GRANT_TTL_MS });
   const key = r.runId ?? -grant.id;
@@ -373,7 +375,7 @@ function spawnSession(d: Daemon, o: RunSettings & { sessionId?: string; resume?:
     const promptPath = join(dir, 'prompt.md');
     const mcpConfigPath = join(dir, 'mcp.json');
     const settingsPath = join(dir, 'settings.json');
-    writeFileSync(promptPath, r.prompt, { mode: o.cli === 'claude' ? 0o600 : 0o644 });
+    writeFileSync(promptPath, typeof r.prompt === 'string' ? r.prompt : r.prompt(grant.id), { mode: o.cli === 'claude' ? 0o600 : 0o644 });
     if (o.cli === 'claude') {
       const extra = operatorMcpServers(readConfig('settings', repo).mcp_servers, r.cwd, repo);
       const cfg = { mcpServers: { ...extra, kanban95: { type: 'http', url: mcpUrl, headers: { Authorization: `Bearer ${grant.token}` } } } };
