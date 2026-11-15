@@ -7,6 +7,7 @@ import { agentsMap, askShell, attentionMap, focusProject, hostedMap, keyOk, miss
 import { attachmentDir, attachments, MAX_ATTACHMENT, safeName, saveAttachment } from './attachments.js';
 import { hasOutput, readOutput } from './output.js';
 import { dismissDeliverable, listDeliverables, openDeliverable } from './deliverables.js';
+import { addFeedback, dropFeedback, incorporateFeedback, listFeedback, parseReport, type Report } from './feedback.js';
 import { BRAIN_BODY_MAX, BRAIN_RANK, isConstraintError, SCOPES, type Brains, type Scope } from './db.js';
 import { hasBranch, ticketDiff } from './git.js';
 import { audit, revoke, verify } from './grants.js';
@@ -493,6 +494,28 @@ const routes: [method: string, path: RegExp, mutation: string | null, handler: (
     }
     return { status: 204 };
   }],
+  ['GET', /^\/api\/feedback$/, null, ({ db }) => ({ status: 200, body: listFeedback(db) })],
+  ['POST', /^\/api\/feedback\/(\d+)\/incorporate$/, 'feedback.incorporate', ({ board, db, params }) => {
+    let id: number;
+    try {
+      id = transaction(db, () => incorporateFeedback(db, Number(params[0])));
+    } catch (e) {
+      throw new HttpError(409, (e as Error).message);
+    }
+    changed(id);
+    tick(board);
+    return { status: 201, body: readTicket(db, id) };
+  }],
+  ['POST', /^\/api\/feedback\/(\d+)\/drop$/, 'feedback.drop', ({ db, body, params }) => {
+    if (typeof body.reason !== 'string' || !body.reason.trim()) throw new HttpError(400, 'reason must be a non-empty string');
+    try {
+      dropFeedback(db, Number(params[0]), body.reason.trim());
+    } catch (e) {
+      throw new HttpError(409, (e as Error).message);
+    }
+    changed(null);
+    return { status: 204 };
+  }],
   ['POST', /^\/api\/brain$/, 'brain.add', ({ board, body }) => {
     const { title, body: text, tags = '' } = brainFields(body, false);
     return { status: 201, body: brainAdd(brains(board), scopeOf(body.scope), { title: title!, body: text!, tags }, null) };
@@ -949,6 +972,38 @@ export function fileTicket(db: DatabaseSync, f: { from: string; title: string; b
   const id = Number(r.lastInsertRowid);
   audit(db, { grant_id: null, ticket_id: id, tool: 'boards.file', args: { from: f.from, title: f.title }, outcome: 'ok' });
   return id;
+}
+
+export async function receiveFeedback(board: Board, req: IncomingMessage, res: ServerResponse): Promise<void> {
+  if (req.method !== 'POST') return reply(res, { status: 405, body: { error: 'method not allowed' } });
+  if (!keyOk(req.headers['x-k95-key'])) return reply(res, { status: 401, body: { error: 'unauthorized' } });
+  const { db } = board;
+  let f: Json = {};
+  try {
+    const raw = await readRaw(req, FILING_MAX, `body over ${FILING_MAX / 1024} KB`);
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw.toString('utf8'));
+    } catch {
+      throw new HttpError(400, 'body is not JSON');
+    }
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) throw new HttpError(400, 'body must be an object');
+    f = parsed as Json;
+    let r: Report;
+    try {
+      r = parseReport(f);
+    } catch (e) {
+      throw new HttpError(400, (e as Error).message);
+    }
+    const out = addFeedback(db, r);
+    audit(db, { grant_id: null, ticket_id: null, tool: 'boards.feedback', args: { from: r.from, title: r.title, feedback: out.id }, outcome: 'ok' });
+    changed(null);
+    reply(res, { status: 201, body: out });
+  } catch (e) {
+    const status = e instanceof HttpError ? e.status : 500;
+    audit(db, { grant_id: null, ticket_id: null, tool: 'boards.feedback', args: { from: f.from, title: f.title }, outcome: 'error' });
+    reply(res, { status, body: { error: status === 500 ? 'internal error' : (e as Error).message } });
+  }
 }
 
 export async function receiveFiling(board: Board, req: IncomingMessage, res: ServerResponse): Promise<void> {

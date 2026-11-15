@@ -12,6 +12,7 @@ import { BRAIN_BODY_MAX, openDb, SCOPES } from './db.js';
 import { attachments } from './attachments.js';
 import { fileOn, registeredBoard } from './boards.js';
 import { postDeliverable } from './deliverables.js';
+import { addFeedback, FAILURE_MODES, FEEDBACK_DETAILS_MAX, FEEDBACK_TYPES, TASK_CATEGORIES, type Report } from './feedback.js';
 import { audit, live, verify, type Grant, type Role } from './grants.js';
 import { answer, apply, changed, openQuestion, OPERATOR_TERMINAL, PROMPT_ASK, Refused, tick, type Board } from './lifecycle.js';
 import { EFFORT, readConfig, same, uncatalogued } from './settings.js';
@@ -218,6 +219,67 @@ export const TOOLS: Record<string, Tool<z.ZodRawShape>> = {
       try {
         db.exec('PRAGMA busy_timeout = 5000');
         return { project: name, started: true, ticket: readTicket(db, fileTicket(db, f)) };
+      } finally {
+        db.close();
+      }
+    },
+  }),
+
+  send_feedback: tool({
+    description:
+      'Report a problem with Kanban95, the CLI or your own handling of the work to the operator\x27s Feedback inbox. File it yourself at a high-signal moment: ' +
+      'the operator is frustrated with how you or the board handled something; a tool or board failure you can reproduce was just resolved or abandoned; a missing capability blocked a reasonable request; ' +
+      'or you notice your own behaviour went wrong (a confident answer you had to retract, stopping short and handing work back, scope beyond the ask, too many questions or subagents, wrong tone). ' +
+      'It never interrupts the session: do not announce it, ask about it or wait on it, and carry on. File at most one report per distinct issue per session. Nothing is acted on until the operator incorporates it into a ticket. ' +
+      'details are labelled bullets in this order, one to three lines each, no narrative: "- What happened:" (observed vs expected, exact short error text), ' +
+      '"- What the operator said:" (their exact words quoted, never paraphrased into something stronger, or "Operator did not comment; observed by the agent."), ' +
+      '"- Repro:" (minimal steps), "- Evidence:" (ticket ids, run ids, file paths relative to the repo, times; leave out when there are none), ' +
+      'and "- Cause:" only for a root cause you verified. Everything comes from the session: invent nothing, leave unknowns out rather than guess. ' +
+      'No secrets, tokens or keys, no paths under the home folder, and no names: refer to people by role (the operator, a teammate). ' +
+      'failure_mode only when the report is about agent behaviour; omit it for a pure product bug. ' +
+      'The source board and ticket are added for you. It goes to the board named by feedback_board in settings.json (default Kanban95), or to this board when that one is not registered. ' +
+      'An open report with the same title is grouped with it and its count goes up. Returns the board, the item id, its count and whether it was grouped.',
+    access: { planner: 'yes', worker: 'yes', tester: 'yes', operator: 'yes' },
+    input: {
+      type: z.enum(FEEDBACK_TYPES).describe('bug, idea or missing_capability.'),
+      title: z.string().min(1).max(200).describe('Short, specific one-line summary. Reuse the wording of an earlier report on the same issue so they group.'),
+      area: z.string().max(100).default('').describe('The part of Kanban95 or the CLI it is about (a tool, window, template, the merge queue), or empty when unclear.'),
+      failure_mode: z.enum(FAILURE_MODES).optional().describe('For agent behaviour only: the closest mode, or other.'),
+      task_category: z.enum(TASK_CATEGORIES).optional().describe('What kind of task the session was doing, or other.'),
+      details: z.string().min(1).max(FEEDBACK_DETAILS_MAX).refine((d) => /what happened:/i.test(d), 'details must hold the "- What happened:" bullet')
+        .describe('Labelled bullets in the order above: What happened, What the operator said, Repro, Evidence, Cause (only if verified).'),
+    },
+    async run(c, a) {
+      const ref = c.grant.ticket_id ?? (c.grant.role === 'operator' ? 'operator' : 'brainstorm');
+      const r: Report = {
+        from: `${basename(c.board.repo)} #${ref} (${c.grant.role})`,
+        type: a.type, title: a.title.trim(), area: a.area.trim(), failure_mode: a.failure_mode ?? '', task_category: a.task_category ?? '', details: a.details.trim(),
+      };
+      let target: ReturnType<typeof registeredBoard> | null = null;
+      let fallback: string | undefined;
+      try {
+        target = registeredBoard(readConfig('settings', c.board.repo).feedback_board);
+      } catch (e) {
+        fallback = `${(e as Error).message}; kept on this board`;
+      }
+      if (!target || same(target.repo, c.board.repo)) {
+        const out = transaction(c.db, () => addFeedback(c.db, r));
+        changed(null);
+        return { project: basename(c.board.repo), ...out, ...(fallback && { note: fallback }) };
+      }
+      const { repo, name, entry, names } = target;
+      if (entry) return { project: name, ...(await fileOn(entry, name, r, 'feedback') as object) };
+      let db: DatabaseSync;
+      try {
+        db = openDb(repo);
+      } catch (e) {
+        throw new Error(`${name} could not be started: ${(e as Error).message}. Registered boards: ${names}`);
+      }
+      try {
+        db.exec('PRAGMA busy_timeout = 5000');
+        const out = transaction(db, () => addFeedback(db, r));
+        audit(db, { grant_id: null, ticket_id: null, tool: 'boards.feedback', args: { from: r.from, title: r.title, feedback: out.id }, outcome: 'ok' });
+        return { project: name, ...out };
       } finally {
         db.close();
       }

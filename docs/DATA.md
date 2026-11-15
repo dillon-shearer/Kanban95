@@ -44,6 +44,7 @@ Living document. Update it in the same change that alters the schema.
     - `test`: the test phase's default, as `{model, effort}`
 - `~/.kanban95/settings.json`: absent means all defaults. Written by Settings after a schema check. No secrets. Keys:
   - `concurrency` (an integer 1 to 10, default 3: how many tickets the runner keeps running, `docs/LIFECYCLE.md` → The runner)
+  - `feedback_board` (a project folder name or absolute path from `projects.json`, default `Kanban95`: Settings → Agents → Feedback board. Where `send_feedback` reports go; when it is not registered they stay on the board they came from, `docs/MCP.md` → send_feedback)
   - `housekeeping` (`auto`: boolean, default true; `every`: a positive integer, default 10)
   - `idle_minutes` (a positive integer, default 20: how long a running agent's transcript may gain no line before its ticket is flagged, `docs/LIFECYCLE.md` → Silent agents)
   - `mcp_servers` (an array of server names, default `[]`: Settings → Agents → Extra MCP servers. Each is copied from the operator's Claude Code config into every Claude session's `mcp.json`; `kanban95` is refused, `docs/CLIS.md` → Extra MCP servers)
@@ -148,6 +149,9 @@ The REST API presents `read_all` as a boolean, the three flags as `flags: { need
 ### deliverables
 `(folder TEXT PK, ticket_id, title, merged_at)`: one Inbox entry per path an agent posted with the `post_deliverable` MCP tool. Merges add no rows; rows from before that change hold a folder relative to the repo root and still open. `post_deliverable` upserts one row for an absolute path to an existing folder or file, in the repo or outside it (a data root), stored resolved; a missing or relative path is refused. A second post of the same path overwrites the row (ticket, title, time). `merged_at` is the time of the post. `ticket_id` is not a foreign key and `title` is a copy, so the entry outlives the ticket. Dismiss deletes the row. A rendered recording is posted by the daemon with a null `ticket_id` (nullable since `011-deliverables-no-ticket.sql`) and the title `Recording <stamp> <speed>x`, `<stamp>` being the recording folder's name. Added in `010-deliverables.sql`; `daemon/src/deliverables.ts`.
 
+### feedback
+`(id, type, title, area, failure_mode, task_category, details, sources, count, status, reason, ticket_id, created_at, updated_at)`: the Feedback inbox, one row per issue an agent reported with `send_feedback`. `type` is `bug`, `idea` or `missing_capability`; `area`, `failure_mode` and `task_category` are empty when not given. `sources` holds one `<board folder> #<ticket or brainstorm or operator> (<role>)` line per report. A report whose title matches an `open` row (case, spacing and a trailing period ignored) adds 1 to `count`, a line to `sources` and its details under `--- Also reported from <source>` instead of a new row. `status` is `open`, `incorporated` (`ticket_id` is the Backlog ticket made from it; not a foreign key) or `dropped` (`reason` says why). Closed rows are kept and never grouped with again. Added in `012-feedback.sql`; `daemon/src/feedback.ts`.
+
 ### notes
 | column | type | notes |
 |---|---|---|
@@ -213,6 +217,8 @@ A grant is live when `revoked_at IS NULL AND expires_at > now`. Rows are kept af
   - `config.write`
   - `deliverables.dismiss`
   - `deliverables.open`
+  - `feedback.drop`
+  - `feedback.incorporate`
   - `grants.revoke`
   - `operator.launch`
   - `recording.mode`
@@ -235,6 +241,7 @@ A grant is live when `revoked_at IS NULL AND expires_at > now`. Rows are kept af
   - `voice.download`
 - MCP: the tool name (`create_ticket`, `move_ticket`, ..., see `docs/MCP.md`).
 - Board, all with a null grant:
+  - `boards.feedback` (a `send_feedback` report written on this board for another board, over `POST /api/boards/feedback` or straight into a board that was not running)
   - `janitor.grant` (`docs/LIFECYCLE.md`)
   - `janitor.run` (`docs/LIFECYCLE.md`)
   - `janitor.scrollback` (`docs/LIFECYCLE.md`)

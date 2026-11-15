@@ -19,6 +19,7 @@ A refused call returns a tool error whose text says why and, for `move_ticket`, 
 | create_ticket | yes | yes, Backlog follow-up, no model/effort/targets | no | yes |
 | bootstrap_board | once per board | no | no | once per board |
 | file_on_board | yes | yes; own board as create_ticket | other boards only | yes |
+| send_feedback | yes | yes | yes | yes |
 | update_ticket | any ticket | own and its edit targets, body/criteria only; its Backlog follow-ups, title/body/criteria/tags/depends_on | no | any ticket |
 | delete_ticket | Backlog, no notes or runs | its Backlog follow-ups | no | Backlog, no notes or runs |
 | set_model | any | no | no | any |
@@ -87,6 +88,19 @@ File a ticket on another Kanban95 board registered on this machine, for a bug or
 | body | string | default `""` | What is wrong or missing and how you hit it, markdown. |
 | criteria | string | default `""` | Acceptance criteria, one checkable statement per line. |
 | tags | string[] | no | Grouping tags, each lowercase a-z, 0-9 and - only. |
+
+### send_feedback
+
+Report a problem with Kanban95, the CLI or your own handling of the work to the operator's Feedback inbox. File it yourself at a high-signal moment: the operator is frustrated with how you or the board handled something; a tool or board failure you can reproduce was just resolved or abandoned; a missing capability blocked a reasonable request; or you notice your own behaviour went wrong (a confident answer you had to retract, stopping short and handing work back, scope beyond the ask, too many questions or subagents, wrong tone). It never interrupts the session: do not announce it, ask about it or wait on it, and carry on. File at most one report per distinct issue per session. Nothing is acted on until the operator incorporates it into a ticket. details are labelled bullets in this order, one to three lines each, no narrative: "- What happened:" (observed vs expected, exact short error text), "- What the operator said:" (their exact words quoted, never paraphrased into something stronger, or "Operator did not comment; observed by the agent."), "- Repro:" (minimal steps), "- Evidence:" (ticket ids, run ids, file paths relative to the repo, times; leave out when there are none), and "- Cause:" only for a root cause you verified. Everything comes from the session: invent nothing, leave unknowns out rather than guess. No secrets, tokens or keys, no paths under the home folder, and no names: refer to people by role (the operator, a teammate). failure_mode only when the report is about agent behaviour; omit it for a pure product bug. The source board and ticket are added for you. It goes to the board named by feedback_board in settings.json (default Kanban95), or to this board when that one is not registered. An open report with the same title is grouped with it and its count goes up. Returns the board, the item id, its count and whether it was grouped.
+
+| argument | type | required | description |
+|---|---|---|---|
+| type | bug \| idea \| missing_capability | yes | bug, idea or missing_capability. |
+| title | string | yes | Short, specific one-line summary. Reuse the wording of an earlier report on the same issue so they group. |
+| area | string | default `""` | The part of Kanban95 or the CLI it is about (a tool, window, template, the merge queue), or empty when unclear. |
+| failure_mode | instruction_following \| destructive_actions \| code_quality \| repetition_and_looping \| model_regression \| overconfidence_and_hallucination \| context_and_memory \| overeager \| over_correction \| stopping_short \| dispute_or_decline \| subagent_overspawn \| tone_or_preachiness \| excessive_questions \| unwanted_scope \| other | no | For agent behaviour only: the closest mode, or other. |
+| task_category | code_edit \| debug \| explain \| plan \| shell \| search \| review \| other | no | What kind of task the session was doing, or other. |
+| details | string | yes | Labelled bullets in the order above: What happened, What the operator said, Repro, Evidence, Cause (only if verified). |
 
 ### update_ticket
 
