@@ -31,11 +31,12 @@ const tickets = new Map();
 let sessions = [];
 let inbox = [];
 let deliverables = [];
+let feedback = [];
 let runner = { on: false, concurrency: 3, running: [], left: 0, backlog: 0, unpushed: 0 }; // GET /api/runner: the Run button and its status-bar line
 let models = null; // models.json this board runs on (this repo's copy, else the global file), for the cards' default model and effort
 // Sounds stay off until /config/settings loads: listen() starts first, and a ding in that gap ignored the operator's choice.
 // `terminals` is absent until then too, so no session is opened or passed over before the operator's phases are known.
-const SETTINGS = { paths: {}, sounds: { merge: false, attention: false, done: false }, voice: { backend: 'local', mode: 'push' }, housekeeping: { auto: true, every: 10 }, recording: { enabled: false, ffmpeg: '', monitor: 0, fps: 60, quality: 'high', speed: 10, output: '', keepRaw: true }, idle_minutes: 20, zoom: 1, push_after_merge: true, sleepAfterMinutes: 30, concurrency: 3, updateCheck: true, release: false, workers_read: 'deps', mcp_servers: [], startup: 'last' };
+const SETTINGS = { paths: {}, sounds: { merge: false, attention: false, done: false }, voice: { backend: 'local', mode: 'push' }, housekeeping: { auto: true, every: 10 }, recording: { enabled: false, ffmpeg: '', monitor: 0, fps: 60, quality: 'high', speed: 10, output: '', keepRaw: true }, idle_minutes: 20, zoom: 1, push_after_merge: true, sleepAfterMinutes: 30, concurrency: 3, updateCheck: true, release: false, workers_read: 'deps', mcp_servers: [], feedback_board: 'Kanban95', startup: 'last' };
 let settings = { ...SETTINGS };
 let recording = { state: 'idle', mode: 'regular', started: null, elapsed: 0, speed: 10, progress: null, output: null, error: null, fastStretches: 0 };
 let recTick = null;
@@ -61,7 +62,7 @@ async function refreshTicket(id) {
   }
 }
 async function refreshShared() {
-  [sessions, inbox, deliverables, runner] = await Promise.all([api('GET', '/sessions'), api('GET', '/inbox'), api('GET', '/deliverables'), api('GET', '/runner')]);
+  [sessions, inbox, deliverables, runner, feedback] = await Promise.all([api('GET', '/sessions'), api('GET', '/inbox'), api('GET', '/deliverables'), api('GET', '/runner'), api('GET', '/feedback')]);
   openNewTerminals();
   taskbar();
   tickRunBadges();
@@ -1251,6 +1252,32 @@ function openInbox() {
   draw();
 }
 
+// ---- feedback ----
+
+function openFeedback() {
+  const w = open('feedback', { title: 'Feedback', w: 560, h: 400, persist: true, icon: 'inbox', onClose: () => views.delete('feedback') });
+  if (w.body.firstChild) return;
+  let shown = null;
+  const draw = () => {
+    const ids = feedback.map((f) => `${f.id}@${f.count}`).join();
+    if (ids === shown) return;
+    shown = ids;
+    w.body.replaceChildren(...(feedback.length ? feedback.map((f) => {
+      const reason = h('input', { type: 'text', size: 40, placeholder: 'Reason to drop' });
+      const facts = [f.type, f.area, f.failure_mode, f.task_category].filter(Boolean).join(' · ');
+      const incorporate = async () => say(`Feedback is now #${(await api('POST', `/feedback/${f.id}/incorporate`)).id} in Backlog.`);
+      return h('fieldset', { class: 'k95-feedback', 'data-feedback': f.id }, h('legend', {}, `${f.count > 1 ? `(${f.count}) ` : ''}${f.title}`),
+        h('div', { class: 'note-head' }, `${facts} · from ${f.sources.split('\n').join(', ')} · ${fmt(f.updated_at)}`), h('pre', {}, f.details),
+        h('div', { class: 'field-row' },
+          h('button', { onclick: () => act(incorporate) }, 'Incorporate'),
+          reason,
+          h('button', { onclick: () => act(() => api('POST', `/feedback/${f.id}/drop`, { reason: reason.value }), 'Dropped.') }, 'Drop')));
+    }) : [h('p', {}, 'No feedback.')]));
+  };
+  views.set('feedback', draw);
+  draw();
+}
+
 // ---- settings ----
 
 // GET returns the file as written: a sound it does not name (no file, or one from before that sound) takes the schema's default, on,
@@ -1638,6 +1665,7 @@ function openSettings(tab) {
         const at = h('input', { type: 'number', id: 'concurrency', min: 1, max: 10, step: 1, value: s.concurrency });
         const reads = h('select', { id: 'workers-read' }, [['deps', 'own ticket and dependencies'], ['all', 'all tickets']].map(([v, l]) => h('option', { value: v, selected: s.workers_read === v }, l)));
         const mcp = h('input', { type: 'text', id: 'mcp-servers', 'data-mic': 'off', size: 44, value: s.mcp_servers.join(', '), placeholder: 'e.g. figma' });
+        const fbBoard = h('input', { type: 'text', id: 'feedback-board', 'data-mic': 'off', size: 44, value: s.feedback_board });
         const saveRunner = () => act(async () => {
           Object.assign(s, await putSettings(scope, { concurrency: Number(at.value) }));
           runner = await api('GET', '/runner');
@@ -1657,6 +1685,10 @@ function openSettings(tab) {
             h('div', { class: 'field-row' }, h('label', { for: 'mcp-servers' }, 'Servers'), mcp),
             h('p', {}, 'Names from your Claude Code config (claude mcp list), comma separated. Every Claude session on this board loads them next to the board server.'),
             h('button', { onclick: () => put({ mcp_servers: mcp.value.split(',').map((n) => n.trim()).filter(Boolean) }) }, 'Save')),
+          h('fieldset', {}, h('legend', {}, 'Feedback board'),
+            h('div', { class: 'field-row' }, h('label', { for: 'feedback-board' }, 'Board'), fbBoard),
+            h('p', {}, 'Where send_feedback reports go: a project folder name or path from Start > Projects. When it is not registered, reports stay on the board they came from.'),
+            h('button', { onclick: () => put({ feedback_board: fbBoard.value.trim() }) }, 'Save')),
           h('fieldset', {}, h('legend', {}, 'Silent agents'),
             h('div', { class: 'field-row' }, h('label', { for: 'idle-minutes' }, 'Flag an agent whose transcript is quiet for (minutes)'), idle),
             h('p', {}, 'Keep it above the 10 min tool timeout, so a long test run is not flagged.'),
@@ -2044,6 +2076,7 @@ function closeEnded() {
 const START = [
   { label: 'Board', run: openBoard },
   { label: 'Inbox', run: openInbox },
+  { get label() { return feedback.length ? `Feedback (${feedback.length})` : 'Feedback'; }, run: openFeedback },
   { label: 'Brain', run: openBrain },
   { label: 'Settings', run: () => openSettings() },
   { label: 'Notepad', run: openNotepad },

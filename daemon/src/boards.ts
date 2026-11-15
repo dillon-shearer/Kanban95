@@ -4,6 +4,7 @@ import { execFile, spawn } from 'node:child_process';
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
+import type { Report } from './feedback.js';
 import { boardHome, dataHome, gone, localHome, normal, readProjects, same } from './settings.js';
 
 interface Entry { pid: number; repo: string; port: number; started: string; shell: number | null; agents: number; attention: number; key?: string }
@@ -119,11 +120,11 @@ export function registeredBoard(project: string): { repo: string; name: string; 
   return { repo, name, entry, names };
 }
 
-export async function fileOn(entry: Entry, name: string, f: Filing): Promise<unknown> {
+export async function fileOn(entry: Entry, name: string, f: Filing | Report, route: 'file' | 'feedback' = 'file'): Promise<unknown> {
   if (!entry.key) throw new Error(`${name} runs an older Kanban95 that cannot take a filed ticket`);
   let r: Response;
   try {
-    r = await fetch(`http://127.0.0.1:${entry.port}/api/boards/file`, {
+    r = await fetch(`http://127.0.0.1:${entry.port}/api/boards/${route}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-K95-Key': entry.key },
       body: JSON.stringify(f),
@@ -133,7 +134,7 @@ export async function fileOn(entry: Entry, name: string, f: Filing): Promise<unk
     throw new Error(`${name} did not answer: ${(e as Error).message}`);
   }
   const out = await r.json().catch(() => ({})) as { error?: string };
-  if (!r.ok) throw new Error(`${name} refused the ticket (${r.status}): ${out.error ?? r.statusText}`);
+  if (!r.ok) throw new Error(`${name} refused the ${route === 'file' ? 'ticket' : 'feedback'} (${r.status}): ${out.error ?? r.statusText}`);
   return out;
 }
 
