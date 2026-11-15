@@ -35,7 +35,7 @@ A refused call returns a tool error whose text says why and, for `move_ticket`, 
 | answer_question | no | no | no | any |
 | request_permission | no | own | own | no |
 | report_test | no | no | own | no |
-| post_deliverable | no | own | no | any |
+| post_deliverable | any or none | own | own | any or none |
 | report_cleanup | no | own | no | any |
 
 "own" means the ticket the grant was minted for; a worker or tester may omit `ticket_id` and may not name another ticket. A planner or operator grant has no ticket and must pass `ticket_id`.
@@ -256,11 +256,11 @@ Record the structured result of testing a ticket against its acceptance criteria
 
 ### post_deliverable
 
-Put a link to a finished output folder or file in the operator's Inbox, under a ticket, with a title. Call it for each file or folder the operator has to open, kept in the inbox folder your brief names; merges and file changes post nothing by themselves. folder is an absolute path to an existing folder or file: in the main checkout, or outside the repo (a data root, an export folder). Not your worktree: it is removed after the merge. The operator opens it with Open folder (a file opens its folder). A second post of the same path replaces its entry. A path that is not absolute or does not exist is refused. Returns the entry.
+Put a link to a file or folder in the operator's Inbox, with a title. This is how any agent hands the operator something to open: post every file or folder you make for the operator, kept in the inbox folder your brief names; merges and file changes post nothing by themselves. A worker or tester posts under its own ticket; a planner or operator may name any ticket or none. folder is an absolute path to an existing folder or file: in the main checkout, or outside the repo (a data root, an export folder). Not your worktree: it is removed after the merge. The operator opens it with Open folder (a file opens its folder). A second post of the same path replaces its entry. A path that is not absolute or does not exist is refused. Returns the entry.
 
 | argument | type | required | description |
 |---|---|---|---|
-| ticket_id | integer | no | Ticket id. Worker and tester grants are bound to one ticket and may omit it; a planner or operator must give it. |
+| ticket_id | integer | no | Ticket id. Worker and tester grants are bound to one ticket and may omit it; a planner or operator may omit it to post with no ticket. |
 | title | string | yes | What the folder or file holds, one line. |
 | folder | string | yes | Absolute path to an existing folder or file. |
 

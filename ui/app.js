@@ -1048,6 +1048,9 @@ function openNewTerminals() {
  * again shortly after its agent reports (submit, pass, fail). One the operator moved closes too, whoever opened it. One that
  * was revoked or died stays open, marked ended.
  */
+const MAC = /Mac/.test(navigator.platform);
+const copyKey = (e, selected) => e.key.toLowerCase() === 'c' && !e.altKey && (MAC ? e.metaKey && !e.ctrlKey && !e.shiftKey && selected : e.ctrlKey && e.shiftKey && !e.metaKey);
+
 function openTerminal(s, auto = false) {
   seen.add(s.id);
   const host = [...terms.entries()].find(([, x]) => x.s.id === s.id);
@@ -1066,7 +1069,7 @@ function openTerminal(s, auto = false) {
       i = j;
     }
   };
-  const term = new Terminal({ fontFamily: 'Consolas, "Courier New", monospace', fontSize: 13, scrollback: 5000, scrollOnEraseInDisplay: !!s.setup });
+  const term = new Terminal({ fontFamily: 'Consolas, "Courier New", monospace', fontSize: 13, scrollback: 5000, scrollOnEraseInDisplay: !!s.setup, macOptionClickForcesSelection: true });
   const fit = new FitAddon();
   const ro = new ResizeObserver(() => fit.fit());
   // Spoken words are typed into the agent's terminal without Enter; the operator presses it.
@@ -1129,6 +1132,11 @@ function openTerminal(s, auto = false) {
   // Ctrl+- goes as 0x1f, as a native terminal sends it (Ctrl+_), and Ctrl+= and Ctrl+0, which have no byte, are swallowed.
   term.attachCustomKeyEventHandler((e) => {
     if (projectKey(e) !== undefined) return false;
+    if (copyKey(e, term.hasSelection())) {
+      e.preventDefault();
+      if (e.type === 'keydown' && term.hasSelection()) navigator.clipboard.writeText(term.getSelection()).catch((err) => say(err.message));
+      return false;
+    }
     if (!e.ctrlKey || e.altKey || !['-', '=', '+', '0'].includes(e.key)) return true;
     e.preventDefault();
     if (e.type === 'keydown' && e.key === '-') send({ data: '\x1f' });
@@ -1300,8 +1308,8 @@ async function loadModels() {
   models = (await api('GET', '/config/models?scope=project')).value;
 }
 
-// UI zoom, 80% to 200% in 10% steps. The body's CSS zoom scales the terminals' text as well (xterm measures its cells after
-// zoom), so their fontSize stays put and they only refit.
+// UI zoom, 80% to 200% in 10% steps. The body's CSS zoom scales the terminals' text as well (the zoom scales xterm's
+// cells), so their fontSize stays put and they only refit.
 const ZOOMS = Array.from({ length: 13 }, (_, i) => (8 + i) / 10);
 function applyZoom(f) {
   setZoom(f);

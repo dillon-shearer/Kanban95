@@ -96,6 +96,17 @@ describe('templates', () => {
     }
   });
 
+  it('the unattended ticket templates end with the turn-ending rule naming the four early stops and the wanted stops; terminals with the operator do not', () => {
+    for (const [name, done] of [['execute', 'move_ticket'], ['housekeeping', 'move_ticket'], ['test', 'report_test']] as const) {
+      const out = render(repo, name, ctx);
+      const section = out.slice(out.indexOf('## How your turn ends'));
+      expect(out.lastIndexOf('\n## '), name).toBe(out.indexOf('\n## How your turn ends'));
+      for (const stop of ['One:', 'Two:', 'Three:', 'Four:', `After \`${done}\``, '`ask_operator` or `request_permission`']) expect(section, `${name}: ${stop}`).toContain(stop);
+      expect(section, name).toMatch(/^[\x20-\x7e\n]*$/);
+    }
+    for (const name of ['brainstorm', 'operator'] as TemplateName[]) expect(render(repo, name, ctx), name).not.toContain('How your turn ends');
+  });
+
   it('inserts values literally: a placeholder inside a value is not expanded', () => {
     writeFileSync(tpl('execute'), '{{brain}}|{{ticket}}');
     expect(render(repo, 'execute', { ...ctx, brain: '{{ticket}} {{transcript}} $&' })).toBe('{{ticket}} {{transcript}} $&|<ticket>');
