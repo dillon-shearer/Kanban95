@@ -200,12 +200,14 @@ Drag a card to any column to put it there by hand (docs/LIFECYCLE.md → Moves b
 | Ctrl+Shift+N | New operator terminal |
 | Ctrl+Shift+\ | Start, pause or resume the recording (the tray's Rec button; only with `recording.enabled`, not inside a terminal) |
 | Ctrl+Shift+Space | Switch the recording between regular and fast (the tray's speed button; only while recording, not while paused, not inside a terminal) |
+| Shift+drag | in a terminal, select text even while the agent takes the mouse (Option+drag on macOS); a drag without Shift stays the agent's |
+| Ctrl+Shift+C | in a terminal, copy the selected text; the agent gets nothing (Cmd+C on macOS when text is selected) |
 | Ctrl+= or Ctrl++ | Zoom the whole UI in by 10% (up to 200%) |
 | Ctrl+- | Zoom out by 10% (down to 80%) |
 | Ctrl+0 | Zoom back to 100% |
 | F11 | Full screen on and off (also Start → Full screen): the board takes the whole monitor it is on, over the Windows taskbar. Switching boards keeps it full screen on Windows; on macOS a switch leaves full screen (press F11 again). Works inside a terminal too |
 
-The switch keys (Ctrl+Tab, Ctrl+Shift+Tab, Ctrl+1 to Ctrl+9) go over the boards hosted in this window in Settings → Projects order, act only while it hosts more than one, and work inside a terminal too. Inside a terminal every other key goes to the agent instead: Esc interrupts Claude Code, Ctrl+L clears its screen. The zoom keys do not zoom there: Ctrl+- reaches the agent as Ctrl+_ does in a native terminal, and Ctrl+= and Ctrl+0 do nothing. Click a title bar or the desktop first to zoom.
+The switch keys (Ctrl+Tab, Ctrl+Shift+Tab, Ctrl+1 to Ctrl+9) go over the boards hosted in this window in Settings → Projects order, act only while it hosts more than one, and work inside a terminal too. Inside a terminal every other key goes to the agent instead: Esc interrupts Claude Code, Ctrl+L clears its screen. The zoom keys do not zoom there: Ctrl+- reaches the agent as Ctrl+_ does in a native terminal, and Ctrl+= and Ctrl+0 do nothing. Click a title bar or the desktop first to zoom. Ctrl+Shift+C stays with the board too: it copies a Shift+drag selection, so copying works in any session, ended or hung. Plain Ctrl+C still goes to the agent. There is no paste key; right-click paste is the app's.
 
 ## Zoom
 
