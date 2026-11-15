@@ -68,13 +68,24 @@ const commit = (file, text) => {
 };
 const line = () => new Promise((ok) => process.stdin.setEncoding('utf8').once('data', (d) => ok(d.replace(/[\\r\\n]+$/, ''))));
 console.log('FAKE ' + model);
-if (brief.startsWith('# Test') && model !== 'hang') {
+if (brief.startsWith('# Test') && model !== 'hang' && model !== 'stops') {
   if (model === 'escalate') await call('set_model', { model: 'work-big', effort: 'high' });
   const passed = model === 'pass';
   const tested = execFileSync('git', ['log', '-1', '--format=%s'], { encoding: 'utf8' }).trim();
   await call('report_test', { passed, summary: (passed ? 'every criterion passes' : 'criterion 1 fails') + ' (tested: ' + tested + ')' });
 } else if (model === 'silent') {
   process.exit(0);
+} else if (model === 'stops') {
+  // An agent that ends its turn with a report and no tool call, and again after each line typed into it (the nudge).
+  const say = (text) => transcript && appendFileSync(transcript, JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text }], stop_reason: 'end_turn' } }) + '\\n');
+  say('progress report');
+  process.stdin.setEncoding('utf8').on('data', (d) => {
+    for (const l of d.split(/[\\r\\n]+/).filter(Boolean)) {
+      console.log('TYPED ' + l);
+      if (transcript) appendFileSync(transcript, JSON.stringify({ type: 'user', message: { role: 'user', content: l } }) + '\\n');
+      say('another report');
+    }
+  });
 } else if (model === 'chatty' || model === 'nap') {
   // chatty: a transcript line every 100 ms, like an agent at work. nap: quiet for 1.5 s first, then the same.
   if (model === 'nap') await new Promise((r) => setTimeout(r, 1500));

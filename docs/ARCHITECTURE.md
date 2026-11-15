@@ -29,7 +29,7 @@ Living document. Update it in the same change that alters the shape described he
   - `grants.ts` mints, verifies, revokes bearer grants and writes audit rows (`docs/SECURITY.md`).
   - `janitor.ts` removes worktrees, branches, session dirs, session temp folders, grants and old run output nobody needs any more, and keeps `board.db` and its WAL small.
   - `launcher.ts` launches an agent (worktree, run row, grant, session dir, temp folder, argv, pty) and tears it down (see Launch below).
-  - `lifecycle.ts` is the ticket state machine: one table of transitions, `apply(board, ticket, event)`, the runner's `tick` and the silence watch that flags an agent whose transcript stopped growing (`docs/LIFECYCLE.md`).
+  - `lifecycle.ts` is the ticket state machine: one table of transitions, `apply(board, ticket, event)`, the runner's `tick` and the silence watch that flags an agent whose transcript stopped growing and nudges a Claude Code worker or tester that ended its turn with its ticket open (`docs/LIFECYCLE.md`).
   - `limits.ts` asks each CLI for its account's usage limits and caches them 5 minutes (`docs/OPERATOR.md` → Limits).
   - `mcp.ts` is the agent-facing MCP server at `/mcp`: one table of tools, each with a description, a role access cell and a handler, enforced per grant and audited per call.
   - `mcp-doc.ts` renders `docs/MCP.md` from the `mcp.ts` tool table.
