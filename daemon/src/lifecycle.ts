@@ -422,7 +422,7 @@ function spawn(b: Board, id: number, template: 'execute' | 'housekeeping' | 'tes
     const go = () => void launch({ ...b, onExit: (s) => exited(b, s) }, { ticketId: id, template, resume, base, ...settings });
     const me = ++spawnCount;
     spawns.set(id, me);
-    const setup = prepareWorktree(b.repo, id, worktreeSetup(b.repo), undefined, base);
+    const setup = prepareWorktree(b.repo, id, worktreeSetup(b.repo), undefined, base, worktreeSetupShared(b.repo));
     if (!setup) return go();
     const after = async () => {
       await setup;
@@ -850,6 +850,14 @@ const repoConfig = (repo: string) => (existsSync(repoConfigPath(repo)) ? JSON.pa
 function worktreeSetup(repo: string): string | undefined {
   const c = repoConfig(repo).worktree_setup;
   if (c !== undefined && (typeof c !== 'string' || !c.trim())) throw new BadConfig(`${repoConfigPath(repo)} worktree_setup must be a non-empty string`);
+  return c;
+}
+
+function worktreeSetupShared(repo: string): string[] {
+  const c = repoConfig(repo).worktree_setup_shared;
+  if (c === undefined) return [];
+  const ok = (f: unknown) => typeof f === 'string' && f.trim() && !isAbsolute(f) && !f.split(/[\\/]/).includes('..');
+  if (!Array.isArray(c) || !c.every(ok)) throw new BadConfig(`${repoConfigPath(repo)} worktree_setup_shared must be a list of file paths inside the repo`);
   return c;
 }
 

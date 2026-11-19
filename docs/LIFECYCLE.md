@@ -271,6 +271,19 @@ A non-zero exit, a command that will not start or one still running after 15 min
 
 A setup is cancelled with its whole tree (`killTree`) when its ticket is restarted, reset, moved or deleted, and when the daemon closes; `close()` waits for its shell to end (`killAll`). A cancelled setup writes no marker and flags nothing. A new setup for the same ticket waits until the earlier one has ended, so two never run in one worktree. Each spawn takes a generation; a setup that ends after a newer spawn of its ticket starts nothing and flags nothing, so it cannot launch an old phase or the settings captured before a Restart. An absent key runs nothing; a key that is not a non-empty string is a launch failure naming it.
 
+### Shared setup
+
+On a slow drive the setup is most of a launch: on a USB hard disk formatted exFAT, `npm ci` for this repo took 104 s per worktree against 7 s on an internal NTFS SSD (2026-11-19), because it writes about 5 500 small files. `.kanban95/config.json` `worktree_setup_shared` (`docs/DATA.md`) lists the files that decide the setup's result. With it the command runs once for all worktrees (`sharedSetup` in `daemon/src/launcher.ts`, `daemon/test/setup-shared.test.ts`):
+
+- The board copies the listed files from the main checkout into the worktrees root (`<data folder>/worktrees/<repo key>/`, the parent of every `t-<id>`) and runs the command there. A stamp, `<root>/.kanban95-setup`, holds a hash of the command and those files.
+- A new worktree whose own copies of the files hash to the stamp runs nothing: its marker is written at once. Node finds `<root>/node_modules` by looking up the folder tree, and npm puts every parent's `node_modules/.bin` on a script's `PATH`. Nothing is linked and the worktree holds no `node_modules`.
+- When the main checkout's files no longer match the stamp, the next launch runs the command in the root again, but only while no agent session works in a worktree under the root: a running test may hold the old files open. Until then a new worktree runs the command in itself, as without the key.
+- A worktree whose files differ from the stamp (a ticket branch that changed the lock file, a ticket base with other dependencies) runs the command in itself. A dependency an agent installs in its worktree lands in the worktree's own `node_modules`, which wins over the shared one.
+- Launches wait for a shared run in progress; its output shows in the terminal of the ticket that started it. A failed or cancelled shared run leaves no stamp, so the next launch runs it again.
+- The janitor leaves the shared files alone (it removes `t-<id>` folders only). They go with the root when the repo is no longer a registered project and holds no worktree.
+
+Use the key only for a setup whose result is found from a parent folder (Node's `node_modules`). The main checkout keeps its own install.
+
 ### Sync: the base merged into the worktree
 
 A ticket's worktree forks from the base at launch and never pulls it back in by itself, so with several agents running the first branch to land makes the others stale. `syncWorktree` in `daemon/src/git.ts` runs `git merge --no-edit -m "Merge <base> into ticket/<id>" <base>` inside the ticket's worktree, where `<base>` is the branch the main checkout has. The commit lands on the ticket branch, authored by the repo's git identity (the operator). It runs twice:

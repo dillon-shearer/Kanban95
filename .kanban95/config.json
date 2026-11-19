@@ -1,3 +1,4 @@
 {
-  "worktree_setup": "npm ci"
+  "worktree_setup": "npm ci",
+  "worktree_setup_shared": ["package.json", "package-lock.json"]
 }
