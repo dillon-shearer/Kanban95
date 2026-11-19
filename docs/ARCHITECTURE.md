@@ -350,7 +350,7 @@ The copies follow the shipped defaults unless edited. Each copy or reset records
 ## Repo map
 
 ```
-package.json      npm workspace root: build / test / dev scripts
+package.json      every dependency, and the build / test / dev scripts (no npm workspaces)
 daemon/           src/ (see Daemon above):
                     api.ts
                     attachments.ts
@@ -525,6 +525,7 @@ Gotchas collected while the board was built. Each one cost a phase some time.
 - exFAT keeps no file modes, so after a checkout made on Windows every file can show as modified. On start on macOS, `guardFileMode` (`git.ts`) reads the volume type (`df -P` then `diskutil info`) and sets `core.fileMode false` in the repo when it is unset and the volume is not APFS or HFS, with one stderr line. It does nothing on Windows or Linux and never overrides a value already set. Tests pass the volume check in as an argument.
 - A tracked file missing from the working tree blocks every launch (`createWorktree` refuses a dirty base). The refusal counts the changes by kind and names the restore command: `git checkout -- <paths>` for up to 10 unstaged paths, `git checkout -- .` above that.
 - On Windows, git refuses a repo on exFAT as "dubious ownership" (the volume records no owner) and the board used to stop with `launch failed: no git repo with a commit ... safe.directory`. `initRepo` now calls `trustUnownedVolume` (`git.ts`), which trusts it for the board's git and its agents only (`docs/SECURITY.md` → Git trust on exFAT or FAT). Nothing is written to `~/.gitconfig`, so a reinstall or a new machine needs no setup. Running git by hand in that repo still needs `safe.directory` or `GIT_CONFIG_*` set.
+- exFAT holds no symlinks or junctions, and ticket worktrees live in the data folder, which may be on exFAT. An npm workspace makes `npm ci` link the package into `node_modules`, so `worktree_setup` failed with `EISDIR ... symlink` and every ticket stopped at launch. So the repo has no workspaces: every dependency is in the root `package.json` and the root scripts run the daemon's with `npm --prefix daemon`. Do not add a workspace, a `file:` dependency or anything else that `npm ci` links.
 - macOS mounts an NTFS drive read-only. A board whose repo or data folder is on one stops at start with "unable to open database file" (`openDb`: board.db in WAL mode cannot create its `-wal`/`-shm`). exFAT works on both systems; WAL, `settings.lock` and the voice download all work on it.
 - Probing a second shell beside a live board on macOS: set `KANBAN95_HOME` and `KANBAN95_SHELL_LOG` to scratch paths, or the probe's failures land in `~/Library/Logs/Kanban95/shell.log` and read as the operator's. `npm run dev` and the shell binary itself refuse while `KANBAN95_AGENT` is set (every agent's pty has it), so an agent cannot open a board window; probing the shell is the operator's. The installed shell can be probed by running `/Applications/Kanban95.app/Contents/MacOS/kanban95-shell <repo>` directly, with `KANBAN95_UPDATE_URL` for a local `latest.json`.
 

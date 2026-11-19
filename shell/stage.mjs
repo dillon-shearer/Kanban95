@@ -82,8 +82,6 @@ function stageApp(root) {
     cpSync(resolve(root, p), resolve(app, p), { recursive: true });
   }
   execSync('npm ci --omit=dev --ignore-scripts --no-audit --no-fund', { cwd: app, stdio: 'inherit' });
-  // The workspace link points back at daemon/: a junction the bundler would follow in a loop, and nothing imports it.
-  rmSync(resolve(app, 'node_modules/@kanban95'), { recursive: true, force: true });
   if (process.platform !== 'win32') {
     const prebuilds = resolve(app, 'node_modules/node-pty/prebuilds');
     for (const dir of readdirSync(prebuilds)) {

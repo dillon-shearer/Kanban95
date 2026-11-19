@@ -285,6 +285,7 @@ You can keep the repo and the data folder on one external drive and move it betw
 
 - `._*` and `.DS_Store`: macOS writes a `._<name>` file beside every file and a `.DS_Store` in folders. Keep both lines in the repo's `.gitignore` (Kanban95's own has them) so they never show in `git status` or get committed.
 - File modes: exFAT has none, so every file can look modified. When a board starts on a Mac and the repo is on a volume that is not APFS or HFS, it sets `core.fileMode false` in the repo if you have not set it, and logs one line. On Windows nothing changes.
+- Links: exFAT cannot hold symlinks or junctions, so a project whose `worktree_setup` makes them (npm workspaces, pnpm) stops every ticket at launch with `EISDIR ... symlink`. Kanban95 itself uses none.
 - Missing files: if tracked files are missing or changed in the main checkout, each launch fails and the status bar says how many are deleted or modified and the command to put them back (`git checkout -- <paths>`, run in the repo). Run it, or commit or stash the changes, then launch again.
 - If git prints `non-monotonic index` on every command, delete `.git/objects/pack/._*`.
 

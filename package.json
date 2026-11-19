@@ -5,13 +5,10 @@
   "engines": {
     "node": ">=24"
   },
-  "workspaces": [
-    "daemon"
-  ],
   "scripts": {
-    "build": "npm run build -w daemon",
-    "test": "npm test -w daemon",
-    "test:changed": "npm run test:changed -w daemon --",
+    "build": "npm --prefix daemon run build",
+    "test": "npm --prefix daemon test",
+    "test:changed": "npm --prefix daemon run test:changed --",
     "shot": "npm run build && node daemon/test/shot.ts",
     "shot:mac": "npm run build && node daemon/test/shot-mac.ts",
     "test:shell": "cargo test --manifest-path shell/Cargo.toml",
@@ -19,8 +16,18 @@
     "dev": "node -e \"if (process.env.KANBAN95_AGENT) { console.error('Kanban95 is already running; verify with npm test, not by starting the app.'); process.exit(1) } if (process.platform === 'darwin') for (const a of ['arm64', 'x64']) try { require('fs').chmodSync('node_modules/node-pty/prebuilds/darwin-' + a + '/spawn-helper', 0o755) } catch {}\" && npm run build && cargo run --manifest-path shell/Cargo.toml --",
     "installer": "npm ci && npm run build && node shell/stage.mjs && tauri build --config shell/tauri.bundle.json"
   },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.1",
+    "node-pty": "^1.1.0",
+    "ws": "^8.22.0",
+    "zod": "^4.6.5"
+  },
   "devDependencies": {
     "@tauri-apps/cli": "2.11.5",
-    "playwright": "1.64.0"
+    "@types/node": "^26.6.4",
+    "@types/ws": "^8.18.2",
+    "playwright": "1.64.0",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.3"
   }
 }
