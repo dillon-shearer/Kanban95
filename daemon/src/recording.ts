@@ -71,17 +71,17 @@ export function stretches(marks: Mark[], total: number): { start: number; end: n
 
 const sec = (n: number) => String(Number(n.toFixed(6)));
 
-export function graph(marks: Mark[], totalSeconds: number, speed: number, fps: number): string {
+export function graph(marks: Mark[], totalSeconds: number, speed: number, fps: number, slow = 1): string {
   const parts = stretches(marks, totalSeconds);
   return [
     `[0:v]split=${parts.length}${parts.map((_, i) => `[s${i}]`).join('')}`,
-    ...parts.map((p, i) => `[s${i}]trim=start=${sec(p.start)}:end=${sec(p.end)},setpts=(PTS-STARTPTS)/${p.mode === 'fast' ? `${speed},fps=${fps}` : 1}[v${i}]`),
+    ...parts.map((p, i) => `[s${i}]trim=start=${sec(p.start)}:end=${sec(p.end)},setpts=(PTS-STARTPTS)/${p.mode === 'fast' ? `${speed},fps=${fps}` : slow === 1 ? 1 : `${slow},fps=${fps}`}[v${i}]`),
     `${parts.map((_, i) => `[v${i}]`).join('')}concat=n=${parts.length}:v=1:a=0[out]`,
   ].join(';');
 }
 
-const length = (marks: Mark[], total: number, speed: number) =>
-  stretches(marks, total).reduce((s, p) => s + (p.end - p.start) / (p.mode === 'fast' ? speed : 1), 0);
+const length = (marks: Mark[], total: number, speed: number, slow: number) =>
+  stretches(marks, total).reduce((s, p) => s + (p.end - p.start) / (p.mode === 'fast' ? speed : slow), 0);
 
 type Proc = { proc: ChildProcess; exited: Promise<number | null>; stderr: string[] };
 
@@ -150,7 +150,7 @@ export function folderFor(dir: string, now: Date): string {
   return folder;
 }
 
-type Rec = { folder: string; marks: Mark[]; speed: number; fps: number; segments: Segment[]; args: string[] | null };
+type Rec = { folder: string; marks: Mark[]; speed: number; slow: number; fps: number; segments: Segment[]; args: string[] | null };
 type Capture = Proc & { file: string; stopping: boolean; halted: boolean; closed?: Promise<void> };
 
 // One recording per machine. The daemon recording, paused or rendering owns it and writes <data folder>/recording.json on
@@ -170,7 +170,7 @@ let progress: number | null = null;
 let output: string | null = null;
 let error: string | null = null;
 let sent = 0;
-let rendering: number | null = null;
+let rendering: { speed: number; slow: number } | null = null;
 let checked: string | null = null;
 let here: Board | null = null;
 let poll: NodeJS.Timeout | null = null;
@@ -289,9 +289,9 @@ export async function relay(action: 'mode' | 'pause' | 'resume' | 'stop', body: 
   return out;
 }
 
-function speedOf(repo?: string): number | null {
+function speedOf(repo?: string): { speed: number; slow: number } | null {
   try {
-    return readConfig('settings', repo).recording.speed;
+    return readConfig('settings', repo).recording;
   } catch {
     return null;
   }
@@ -305,7 +305,8 @@ export function view(repo?: string): View {
 }
 
 function local(repo?: string) {
-  return { state, mode: current, started: started?.toISOString() ?? null, elapsed, speed: rec?.speed ?? rendering ?? speedOf(repo), progress, output, error, fastStretches: rec?.marks.filter((m) => m.mode === 'fast').length ?? 0 };
+  const s = rec ?? rendering ?? speedOf(repo);
+  return { state, mode: current, started: started?.toISOString() ?? null, elapsed, speed: s?.speed ?? null, slow: s?.slow ?? null, progress, output, error, fastStretches: rec?.marks.filter((m) => m.mode === 'fast').length ?? 0 };
 }
 
 function emit() {
@@ -316,7 +317,7 @@ function emit() {
   events.emit('event', { recording: v });
 }
 
-const save = (r: Rec) => writeFileSync(join(r.folder, MARKERS), JSON.stringify({ speed: r.speed, fps: r.fps, marks: r.marks, ...(r.segments.length ? { paused: true, segments: r.segments } : {}) }, null, 2));
+const save = (r: Rec) => writeFileSync(join(r.folder, MARKERS), JSON.stringify({ speed: r.speed, slow: r.slow, fps: r.fps, marks: r.marks, ...(r.segments.length ? { paused: true, segments: r.segments } : {}) }, null, 2));
 const exeOf = (repo?: string) => readConfig('settings', repo).recording.ffmpeg || 'ffmpeg';
 
 function capturing(r: Rec, exe: string, file: string, how: 'start' | 'resume') {
@@ -391,7 +392,7 @@ export async function start(board: Board) {
   } catch (e) {
     throw new Refused(`cannot create ${folder}: ${(e as Error).message}`);
   }
-  const r: Rec = { folder, marks: [{ t: 0, mode: 'regular' }], speed: cfg.speed, fps: cfg.fps, segments: [], args };
+  const r: Rec = { folder, marks: [{ t: 0, mode: 'regular' }], speed: cfg.speed, slow: cfg.slow, fps: cfg.fps, segments: [], args };
   save(r);
   rec = r;
   owner = board;
@@ -494,7 +495,7 @@ export function loadPaused(board: Board) {
         const m = JSON.parse(readFileSync(file, 'utf8'));
         if (m?.paused !== true || !Array.isArray(m.segments) || !m.segments.length || !Array.isArray(m.marks)) continue;
         const at = statSync(file).mtimeMs;
-        if (!found || at > found.at) found = { r: { folder: join(dir, name), marks: m.marks, speed: m.speed, fps: m.fps, segments: m.segments, args: null }, at };
+        if (!found || at > found.at) found = { r: { folder: join(dir, name), marks: m.marks, speed: m.speed, slow: m.slow ?? 1, fps: m.fps, segments: m.segments, args: null }, at };
       } catch {}
     }
   } catch {
@@ -563,12 +564,13 @@ export function stop(repo?: string) {
       emit();
       return;
     }
-    await render(owner!, raw, join(r.folder, MARKERS), readConfig('settings', owner!.repo).recording.speed, elapsed);
+    const { speed, slow } = readConfig('settings', owner!.repo).recording;
+    await render(owner!, raw, join(r.folder, MARKERS), speed, slow, elapsed);
   })();
   return view(repo);
 }
 
-export function renderAgain(board: Board, raw: string, speed: number) {
+export function renderAgain(board: Board, raw: string, speed: number, slow: number) {
   if (starting || state !== 'idle') throw new Refused(state === 'rendering' ? 'a render is running' : state === 'paused' ? PAUSED : 'a recording is running');
   busyElsewhere(foreign());
   const layout = `expected <recording folder>\\${RAW} with ${MARKERS} beside it`;
@@ -582,9 +584,9 @@ export function renderAgain(board: Board, raw: string, speed: number) {
   progress = 0;
   output = null;
   error = null;
-  rendering = speed;
+  rendering = { speed, slow };
   emit();
-  void render(board, raw, markers, speed);
+  void render(board, raw, markers, speed, slow);
   return view(board.repo);
 }
 
@@ -610,20 +612,21 @@ async function repaired(exe: string, raw: string): Promise<{ seconds: number | n
   return { seconds: fixed, tail: [] };
 }
 
-async function render(board: Board, raw: string, markers: string, speed: number, seconds?: number): Promise<void> {
-  rendering = speed;
+async function render(board: Board, raw: string, markers: string, speed: number, slow: number, seconds?: number): Promise<void> {
+  rendering = { speed, slow };
   const folder = dirname(raw);
   try {
     const cfg = readConfig('settings', board.repo).recording;
-    const out = join(dirname(raw), `${Math.round(speed)}x.mp4`);
+    const name = slow === 1 ? `${Math.round(speed)}x` : `${slow}x-${Math.round(speed)}x`;
+    const out = join(dirname(raw), `${name}.mp4`);
     const exe = cfg.ffmpeg || 'ffmpeg';
     const { marks } = JSON.parse(readFileSync(markers, 'utf8')) as { marks: Mark[] };
     const fixed = await repaired(exe, raw);
     const total = fixed.seconds ?? seconds;
     if (!total) throw new Error([`cannot read the length of ${basename(raw)}`, ...fixed.tail].join('\n'));
-    const expected = length(marks, total, speed);
-    note(folder, `render: speed ${speed}x, total ${sec(total)} s`);
-    const p = run(exe, ['-y', '-i', raw, '-filter_complex', graph(marks, total, speed, cfg.fps), '-map', '[out]', '-c:v', 'libx264', '-preset', 'medium', '-crf', String(CRF[cfg.quality]), '-pix_fmt', 'yuv420p', '-movflags', '+faststart', '-an', out], (t) => {
+    const expected = length(marks, total, speed, slow);
+    note(folder, `render: speed ${speed}x${slow === 1 ? '' : `, slow ${slow}x`}, total ${sec(total)} s`);
+    const p = run(exe, ['-y', '-i', raw, '-filter_complex', graph(marks, total, speed, cfg.fps, slow), '-map', '[out]', '-c:v', 'libx264', '-preset', 'medium', '-crf', String(CRF[cfg.quality]), '-pix_fmt', 'yuv420p', '-movflags', '+faststart', '-an', out], (t) => {
       progress = Math.min(1, t / expected);
       if (Date.now() - sent >= PROGRESS_MS) emit();
     });
@@ -635,7 +638,7 @@ async function render(board: Board, raw: string, markers: string, speed: number,
       rmSync(out, { force: true });
       throw new Error(failed(p, code));
     }
-    postDeliverable(board.db, out, null, `Recording ${basename(dirname(raw))} ${Math.round(speed)}x`);
+    postDeliverable(board.db, out, null, `Recording ${basename(dirname(raw))} ${name}`);
     changed(null);
     if (!cfg.keepRaw) for (const f of [raw, markers]) rmSync(f, { force: true });
     output = out;

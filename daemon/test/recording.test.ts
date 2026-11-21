@@ -51,12 +51,12 @@ const get = async () => {
 it('GET /api/recording on a fresh board answers idle', async () => {
   const r = await api('GET', '/recording');
   expect(r.status).toBe(200);
-  expect(await r.json()).toEqual({ state: 'idle', mode: 'regular', started: null, elapsed: 0, speed: 10, progress: null, output: null, error: null, fastStretches: 0 });
+  expect(await r.json()).toEqual({ state: 'idle', mode: 'regular', started: null, elapsed: 0, speed: 10, slow: 1, progress: null, output: null, error: null, fastStretches: 0 });
 });
 
 it('a settings.json without recording yields the recording defaults', () => {
   write({ zoom: 1 });
-  expect(readConfig('settings', repo).recording).toEqual({ enabled: false, ffmpeg: '', monitor: 0, fps: 60, quality: 'high', speed: 10, output: '', keepRaw: true });
+  expect(readConfig('settings', repo).recording).toEqual({ enabled: false, ffmpeg: '', monitor: 0, fps: 60, quality: 'high', speed: 10, slow: 1, output: '', keepRaw: true });
 });
 
 it('refuses a speed under 2, an unknown quality, an fps other than 30 or 60 and a relative output', () => {
