@@ -1,7 +1,7 @@
 // Launches an agent CLI on a ticket: worktree, run row, grant, session dir, argv, pty. Tears it all down on exit or revoke.
 import { execFile, execFileSync, spawn, type ChildProcess } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
-import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { createHash, randomUUID } from 'node:crypto';
+import { closeSync, copyFileSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, readSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir, userInfo } from 'node:os';
 import { dirname, join, relative, resolve } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
@@ -165,7 +165,7 @@ type RunSettings = { cli: Cli; model: string; effort: Effort; path?: string };
 const SETUP_TAIL = 20;
 const SETUP_TIMEOUT_MS = 15 * 60 * 1000;
 
-type Setup = { child?: ChildProcess; cancelled: boolean; closed: Promise<void>; started_at: string; out: string; shown: string; watchers: Set<(d: string) => void> };
+type Setup = { child?: ChildProcess; stop?: () => void; cancelled: boolean; closed: Promise<void>; started_at: string; out: string; shown: string; watchers: Set<(d: string) => void> };
 const setups = new Map<number, Setup>();
 
 export class SetupCancelled extends Error {}
@@ -194,6 +194,7 @@ export function cancelSetup(ticketId: number): Promise<void> {
   if (!s.cancelled) {
     s.cancelled = true;
     if (s.child) void killTree(s.child);
+    s.stop?.();
   }
   return s.closed;
 }
@@ -205,7 +206,7 @@ export function cancelSetup(ticketId: number): Promise<void> {
  * Rejects with the command and its last output lines, or SetupCancelled. A setup still running for the ticket is cancelled
  * and this one waits for its shell to close, so two never run in one worktree.
  */
-export function prepareWorktree(repo: string, ticketId: number, command?: string, timeoutMs = SETUP_TIMEOUT_MS, base?: string): Promise<void> | null {
+export function prepareWorktree(repo: string, ticketId: number, command?: string, timeoutMs = SETUP_TIMEOUT_MS, base?: string, shared: string[] = []): Promise<void> | null {
   const prev = setups.get(ticketId);
   const first = prev || !command ? undefined : setupDone(repo, ticketId, command, base);
   if (!prev && (!command || first!.done)) return null;
@@ -214,7 +215,7 @@ export function prepareWorktree(repo: string, ticketId: number, command?: string
     if (me.cancelled) throw new SetupCancelled('worktree_setup was cancelled');
     const { done, marker, path } = first ?? setupDone(repo, ticketId, command, base);
     if (done || !command) return;
-    return runSetup(me, command, path, marker, timeoutMs, repo, ticketId);
+    return shared.length ? sharedSetup(me, command, path, marker, timeoutMs, repo, ticketId, shared) : runSetup(me, command, path, marker, timeoutMs, repo, ticketId);
   });
   me.closed = run.then(() => {}, () => {}).finally(() => {
     if (setups.get(ticketId) === me) setups.delete(ticketId);
@@ -229,7 +230,34 @@ function setupDone(repo: string, ticketId: number, command?: string, base?: stri
   return { done: !command || existsSync(marker), marker, path: wt.path };
 }
 
-function runSetup(me: Setup, command: string, cwd: string, marker: string, timeoutMs: number, repo: string, ticketId: number) {
+const sharedTurns = new Map<string, Promise<void>>();
+
+const setupKey = (dir: string, command: string, files: string[]) =>
+  files.reduce((h, f) => h.update('\0').update(existsSync(join(dir, f)) ? readFileSync(join(dir, f)) : ''), createHash('sha256').update(command)).digest('hex');
+
+async function sharedSetup(me: Setup, command: string, cwd: string, marker: string, timeoutMs: number, repo: string, ticketId: number, files: string[]) {
+  const root = dirname(cwd);
+  const stamp = join(root, '.kanban95-setup');
+  const have = () => (existsSync(stamp) ? readFileSync(stamp, 'utf8') : '');
+  const turn = (sharedTurns.get(root) ?? Promise.resolve()).then(() => {
+    if (me.cancelled) throw new SetupCancelled('worktree_setup was cancelled');
+    const want = setupKey(repo, command, files);
+    if (have() === want || (have() && [...sessions.values()].some((s) => dirname(s.cwd) === root))) return;
+    rmSync(stamp, { force: true });
+    for (const f of files) {
+      if (!existsSync(join(repo, f))) continue;
+      mkdirSync(dirname(join(root, f)), { recursive: true });
+      copyFileSync(join(repo, f), join(root, f));
+    }
+    return runSetup(me, command, root, stamp, timeoutMs, repo, ticketId, want);
+  });
+  sharedTurns.set(root, turn.catch(() => {}));
+  await Promise.race([turn, new Promise<never>((_, fail) => (me.stop = () => fail(new SetupCancelled('worktree_setup was cancelled'))))]);
+  if (setupKey(cwd, command, files) !== have()) return runSetup(me, command, cwd, marker, timeoutMs, repo, ticketId);
+  writeFileSync(marker, command);
+}
+
+function runSetup(me: Setup, command: string, cwd: string, marker: string, timeoutMs: number, repo: string, ticketId: number, mark = command) {
   const tmp = makeTemp(repo, `setup-${ticketId}`);
   return new Promise<void>((ok, fail) => {
     // Detached on POSIX so the shell leads its own process group, which killTree ends whole.
@@ -260,7 +288,7 @@ function runSetup(me: Setup, command: string, cwd: string, marker: string, timeo
       clearTimeout(timer);
       if (me.cancelled) return fail(new SetupCancelled('worktree_setup was cancelled'));
       if (code === 0 && !timedOut) {
-        writeFileSync(marker, command);
+        writeFileSync(marker, mark);
         return ok();
       }
       const tail = me.out.split(/\r?\n/).filter((l) => l.trim()).slice(-SETUP_TAIL).join('\n');

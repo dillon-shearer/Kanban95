@@ -2,8 +2,9 @@ import './home.ts';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { start } from '../src/server.ts';
 
@@ -47,7 +48,7 @@ describe('POST /api/restart from an installed layout', () => {
   it('builds nothing, answers that no shell is present, and exits 75', async () => {
     // What shell/stage.mjs ships: built daemon, no daemon/src. Staged inside node_modules so its imports resolve there by
     // walking up, with no link to clean up.
-    const app = mkdtempSync(join(ROOT, 'node_modules', '.k95-app-'));
+    const app = mkdtempSync(join(dirname(dirname(createRequire(import.meta.url).resolve('ws/package.json'))), '.k95-app-'));
     temps.push(app);
     for (const p of ['package.json', 'daemon/dist', 'daemon/migrations', 'daemon/package.json', 'daemon/voice-model.json', 'templates']) cpSync(join(ROOT, p), join(app, p), { recursive: true });
     const secret = 'b'.repeat(64);
