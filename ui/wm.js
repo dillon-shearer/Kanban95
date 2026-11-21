@@ -116,7 +116,9 @@ const shapes = (id) => wins.get(id)?.tile || ACTION.includes(id);
 let size = screen();
 addEventListener('resize', () => {
   const [w0, h0] = size;
-  size = screen();
+  const now = screen();
+  if (!now[0] || !now[1]) return;
+  size = now;
   if (!w0 || !h0 || (size[0] === w0 && size[1] === h0)) return;
   const [fx, fy] = [size[0] / w0, size[1] / h0];
   for (const w of wins.values()) {
