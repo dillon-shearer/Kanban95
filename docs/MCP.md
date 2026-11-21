@@ -36,6 +36,7 @@ A refused call returns a tool error whose text says why and, for `move_ticket`, 
 | request_permission | no | own | own | no |
 | report_test | no | no | own | no |
 | post_deliverable | any or none | own | own | any or none |
+| read_office_file | yes | yes | yes | yes |
 | report_cleanup | no | own | no | any |
 
 "own" means the ticket the grant was minted for; a worker or tester may omit `ticket_id` and may not name another ticket. A planner or operator grant has no ticket and must pass `ticket_id`.
@@ -263,6 +264,14 @@ Put a link to a file or folder in the operator's Inbox, with a title. This is ho
 | ticket_id | integer | no | Ticket id. Worker and tester grants are bound to one ticket and may omit it; a planner or operator may omit it to post with no ticket. |
 | title | string | yes | What the folder or file holds, one line. |
 | folder | string | yes | Absolute path to an existing folder or file. |
+
+### read_office_file
+
+Read the text of an Office file the operator points at, for a session with no shell (Read and Grep cannot open these). path is the absolute path of a .docx, .xlsx, .pptx file anywhere on disk. Returns Markdown: a .docx gives its paragraphs one per line and each table as | cell | rows; a .xlsx gives each sheet under ## Sheet: <name> as a table with column letters and row numbers, dates as YYYY-MM-DD, and a formula with no saved value as =formula; a .pptx gives each slide under ## Slide <n>. Images, charts, comments, headers and footers are left out. Read only: the file is never written, moved or deleted. Refused: a relative path, any other extension, a folder, a file over 50 MB, an encrypted file. Text past 200000 characters is cut and truncated is true.
+
+| argument | type | required | description |
+|---|---|---|---|
+| path | string | yes | Absolute path of the .docx, .xlsx or .pptx file. |
 
 ### report_cleanup
 

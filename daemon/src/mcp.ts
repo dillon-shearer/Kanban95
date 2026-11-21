@@ -12,6 +12,7 @@ import { BRAIN_BODY_MAX, openDb, SCOPES } from './db.js';
 import { attachments } from './attachments.js';
 import { fileOn, registeredBoard } from './boards.js';
 import { postDeliverable } from './deliverables.js';
+import { MAX_OFFICE_FILE, MAX_OFFICE_TEXT, OFFICE_EXTS, readOffice } from './office.js';
 import { addFeedback, FAILURE_MODES, FEEDBACK_DETAILS_MAX, FEEDBACK_TYPES, TASK_CATEGORIES, type Report } from './feedback.js';
 import { audit, live, verify, type Grant, type Role } from './grants.js';
 import { answer, apply, changed, openQuestion, OPERATOR_TERMINAL, PROMPT_ASK, Refused, tick, type Board } from './lifecycle.js';
@@ -657,6 +658,22 @@ export const TOOLS: Record<string, Tool<z.ZodRawShape>> = {
       const id = (c.ticket = unbound(c.as) && a.ticket_id === undefined ? c.grant.ticket_id : own(c, a.ticket_id));
       if (id !== null) readTicket(c.db, id);
       return postDeliverable(c.db, a.folder, id, a.title);
+    },
+  }),
+
+  read_office_file: tool({
+    description:
+      `Read the text of an Office file the operator points at, for a session with no shell (Read and Grep cannot open these). path is the absolute path of a ${OFFICE_EXTS.join(', ')} file anywhere on disk. ` +
+      'Returns Markdown: a .docx gives its paragraphs one per line and each table as | cell | rows; a .xlsx gives each sheet under ## Sheet: <name> as a table with column letters and row numbers, dates as YYYY-MM-DD, ' +
+      'and a formula with no saved value as =formula; a .pptx gives each slide under ## Slide <n>. Images, charts, comments, headers and footers are left out. ' +
+      `Read only: the file is never written, moved or deleted. Refused: a relative path, any other extension, a folder, a file over ${MAX_OFFICE_FILE >> 20} MB, an encrypted file. ` +
+      `Text past ${MAX_OFFICE_TEXT} characters is cut and truncated is true.`,
+    access: { planner: 'yes', worker: 'yes', tester: 'yes', operator: 'yes' },
+    input: {
+      path: z.string().min(1).describe('Absolute path of the .docx, .xlsx or .pptx file.'),
+    },
+    run(_c, a) {
+      return readOffice(a.path);
     },
   }),
 
