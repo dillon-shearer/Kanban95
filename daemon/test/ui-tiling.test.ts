@@ -71,4 +71,30 @@ describe('ui-tiling', { timeout: 60_000 }, () => {
     await until(() => inRow(['t-b', 't-a']), 't-a back in the grid after t-b');
     await page.evaluate(`import('/wm.js').then((m) => { m.close('t-a'); m.close('t-b'); })`);
   });
+
+  it('tiles two windows the board opens side by side left of the Board and Notepad at zoom 1.8', async () => {
+    await page.send('Emulation.setDeviceMetricsOverride', { width: 1920, height: 1011, deviceScaleFactor: 1, mobile: false });
+    await until(() => page.evaluate('innerWidth === 1920'), 'the 1920 px viewport');
+    await page.evaluate(`new Promise(requestAnimationFrame).then(() => import('/wm.js')).then((m) => {
+      m.setZoom(1.8);
+      for (const [id, x, y, w, h] of [['notepad', 614, 351, 453, 213], ['board', 616, 0, 451, 377]]) {
+        m.focus(id);
+        Object.assign(document.querySelector('[data-win="' + id + '"]').style, { left: x + 'px', top: y + 'px', width: w + 'px', height: h + 'px' });
+      }
+      for (const id of ['t-d', 't-e']) m.open(id, { title: id, w: 760, h: 440, tile: true, background: true });
+    })`);
+    const boxes = () => page.evaluate<{ x: number; y: number; r: number; b: number }[]>(`['t-d', 't-e', 'board', 'notepad', 'icons']
+      .map((id) => document.querySelector('[data-win="' + id + '"]') ?? document.getElementById(id))
+      .map((el) => ({ x: el.offsetLeft, y: el.offsetTop, r: el.offsetLeft + el.offsetWidth, b: el.offsetTop + el.offsetHeight }))`);
+    const tiled = async () => {
+      const [d, e, board, notepad, icons] = await boxes();
+      const apart = (a: typeof d, o: typeof d) => a.r <= o.x || o.r <= a.x || a.b <= o.y || o.b <= a.y;
+      return d.y === 0 && e.y === 0 && d.x >= icons.r && d.r <= e.x && e.r <= notepad.x && [d, e].every((t) => apart(t, board) && apart(t, notepad));
+    };
+    await sleep(300);
+    const ok = await tiled();
+    await page.evaluate(`import('/wm.js').then((m) => { m.close('t-d'); m.close('t-e'); m.setZoom(1); })`);
+    await page.send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 720, deviceScaleFactor: 1, mobile: false });
+    expect(ok).toBe(true);
+  });
 });
