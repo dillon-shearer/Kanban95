@@ -79,6 +79,7 @@ const xtermSize = async (s: Session): Promise<Size | null> => {
 const resized = (s: Session, before: Size | null) =>
   until(async () => {
     const x = await xtermSize(s);
+    if (!x) s.pty.write('D');
     return x && (x[0] !== before?.[0] || x[1] !== before?.[1]);
   }, 'the terminal to refit');
 const mouse = (type: string, p: Point, button = 'left') =>

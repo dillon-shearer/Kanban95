@@ -97,4 +97,89 @@ describe('ui-tiling', { timeout: 60_000 }, () => {
     await page.send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 720, deviceScaleFactor: 1, mobile: false });
     expect(ok).toBe(true);
   });
+
+  type Box = { x: number; y: number; r: number; b: number };
+  const ids = (n: number) => Array.from({ length: n }, (_, i) => `z-${i}`);
+  const boxesOf = (list: string[]) => page.evaluate<Box[]>(`${JSON.stringify(list)}
+    .map((id) => document.querySelector('[data-win="' + id + '"]') ?? document.getElementById(id))
+    .map((el) => ({ x: el.offsetLeft, y: el.offsetTop, r: el.offsetLeft + el.offsetWidth, b: el.offsetTop + el.offsetHeight }))`);
+  const apart = (a: Box, o: Box) => a.r <= o.x || o.r <= a.x || a.b <= o.y || o.b <= a.y;
+  const zoomed = async (action: [string, number, number, number, number][]) => {
+    await page.send('Emulation.setDeviceMetricsOverride', { width: 1920, height: 1011, deviceScaleFactor: 1, mobile: false });
+    await until(() => page.evaluate('innerWidth === 1920'), 'the 1920 px viewport');
+    await page.evaluate(`new Promise(requestAnimationFrame).then(() => import('/wm.js')).then((m) => {
+      m.setZoom(1.8);
+      for (const [id, x, y, w, h] of ${JSON.stringify(action)}) {
+        m.focus(id);
+        Object.assign(document.querySelector('[data-win="' + id + '"]').style, { left: x + 'px', top: y + 'px', width: w + 'px', height: h + 'px' });
+      }
+    })`);
+  };
+  const unzoom = async () => {
+    await page.evaluate(`import('/wm.js').then((m) => { m.setZoom(1); for (const id of ['board', 'notepad']) m.minimize(id); })`);
+    await page.send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 720, deviceScaleFactor: 1, mobile: false });
+    await until(() => page.evaluate('innerWidth === 1280'), 'the 1280 px viewport');
+  };
+  const openAll = (list: string[]) => page.evaluate(`import('/wm.js').then((m) => { for (const id of ${JSON.stringify(list)}) m.open(id, { title: id, w: 760, h: 440, tile: true, background: true }); })`);
+  const closeAll = (list: string[]) => page.evaluate(`import('/wm.js').then((m) => { for (const id of ${JSON.stringify(list)}) m.close(id); })`);
+  /** Every window in `list` ends left of `edge`, right of the icons, and none overlaps another or any of `others`. */
+  const fits = async (list: string[], others: string[]) => {
+    const [icons, ...rest] = await boxesOf(['icons', ...others, ...list]);
+    const action = rest.slice(0, others.length);
+    const tiled = rest.slice(others.length);
+    const edge = Math.min(...action.map((a) => a.x));
+    return tiled.every((t, i) => t.x >= icons.r && t.r <= edge && action.every((a) => apart(t, a))
+      && tiled.every((o, j) => i === j || apart(t, o)));
+  };
+
+  for (const n of [3, 8]) {
+    it(`keeps ${n} tiled windows inside a 534 px region left of the Board at zoom 1.8, none overlapping`, async () => {
+      await zoomed([['notepad', 614, 351, 453, 213], ['board', 616, 0, 451, 377]]);
+      await openAll(ids(n));
+      await sleep(300);
+      const ok = await fits(ids(n), ['board', 'notepad']);
+      await closeAll(ids(n));
+      await unzoom();
+      expect(ok).toBe(true);
+    });
+  }
+
+  it('keeps tiled windows off the Board when the region is under 240 px', async () => {
+    await zoomed([['notepad', 614, 351, 453, 213], ['board', 200, 0, 451, 377]]);
+    await openAll(ids(3));
+    await sleep(300);
+    const ok = await fits(ids(3), ['board']);
+    await closeAll(ids(3));
+    await unzoom();
+    expect(ok).toBe(true);
+  });
+
+  it('opens a 13th tiled window inside the terminal region', async () => {
+    await zoomed([['notepad', 614, 351, 453, 213], ['board', 616, 0, 451, 377]]);
+    await openAll(ids(13));
+    await sleep(300);
+    const [icons, board, notepad, last] = await boxesOf(['icons', 'board', 'notepad', 'z-12']);
+    const H = await page.evaluate<number>(`document.getElementById('desktop').clientHeight`);
+    await closeAll(ids(13));
+    await unzoom();
+    expect(last.x).toBeGreaterThanOrEqual(icons.r);
+    expect(last.r).toBeLessThanOrEqual(Math.min(board.x, notepad.x));
+    expect(last.y).toBeGreaterThanOrEqual(0);
+    expect(last.b).toBeLessThanOrEqual(H);
+  });
+
+  it('lays out 5 windows as 3 on top and 2 below at the full width with the action windows minimized', async () => {
+    await page.evaluate(`import('/wm.js').then((m) => { for (const id of ['board', 'inbox', 'notepad']) if (m.isOpen(id)) m.minimize(id); })`);
+    await openAll(ids(5));
+    const rows = async () => {
+      const { region: { L, W }, wins } = await geometry(ids(5));
+      const top = wins.slice(0, 3);
+      const low = wins.slice(3);
+      const near = (a: number, b: number) => Math.abs(a - b) <= 1;
+      return top.every((r, i) => r.y === 0 && near(r.x, L + (i * (W - L)) / 3) && near(r.w, (W - L) / 3))
+        && low.every((r, i) => r.y > 0 && near(r.x, L + (i * (W - L)) / 2) && near(r.w, (W - L) / 2));
+    };
+    await until(rows, '3 on top, 2 below');
+    await closeAll(ids(5));
+  });
 });
