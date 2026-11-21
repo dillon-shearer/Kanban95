@@ -53,6 +53,6 @@ describe('ui-settings-recording', { timeout: 60_000 }, () => {
     await page.evaluate(`window.k95Sent = null; const f = window.fetch; window.fetch = (u, o) => { if (String(u).endsWith('/recording/render')) window.k95Sent = JSON.parse(o.body); return f(u, o); }`);
     await page.evaluate(`document.querySelector('#rec-raw').value = 'C:/nope/raw.mkv'; document.querySelector('#rec-render-speed').value = '3'; document.querySelector('#rec-render').click()`);
     await until(() => page.evaluate(`!!window.k95Sent`), 'the render request');
-    expect(await page.evaluate(`window.k95Sent`)).toEqual({ raw: 'C:/nope/raw.mkv', speed: 3 });
+    expect(await page.evaluate(`window.k95Sent`)).toEqual({ raw: 'C:/nope/raw.mkv', speed: 3, slow: 1 });
   });
 });

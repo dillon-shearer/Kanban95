@@ -36,9 +36,9 @@ let runner = { on: false, concurrency: 3, running: [], left: 0, backlog: 0, unpu
 let models = null; // models.json this board runs on (this repo's copy, else the global file), for the cards' default model and effort
 // Sounds stay off until /config/settings loads: listen() starts first, and a ding in that gap ignored the operator's choice.
 // `terminals` is absent until then too, so no session is opened or passed over before the operator's phases are known.
-const SETTINGS = { paths: {}, sounds: { merge: false, attention: false, done: false }, voice: { backend: 'local', mode: 'push' }, housekeeping: { auto: true, every: 10 }, recording: { enabled: false, ffmpeg: '', monitor: 0, fps: 60, quality: 'high', speed: 10, output: '', keepRaw: true }, idle_minutes: 20, zoom: 1, push_after_merge: true, sleepAfterMinutes: 30, concurrency: 3, updateCheck: true, release: false, workers_read: 'deps', mcp_servers: [], feedback_board: 'Kanban95', startup: 'last' };
+const SETTINGS = { paths: {}, sounds: { merge: false, attention: false, done: false }, voice: { backend: 'local', mode: 'push' }, housekeeping: { auto: true, every: 10 }, recording: { enabled: false, ffmpeg: '', monitor: 0, fps: 60, quality: 'high', speed: 10, slow: 1, output: '', keepRaw: true }, idle_minutes: 20, zoom: 1, push_after_merge: true, sleepAfterMinutes: 30, concurrency: 3, updateCheck: true, release: false, workers_read: 'deps', mcp_servers: [], feedback_board: 'Kanban95', startup: 'last' };
 let settings = { ...SETTINGS };
-let recording = { state: 'idle', mode: 'regular', started: null, elapsed: 0, speed: 10, progress: null, output: null, error: null, fastStretches: 0 };
+let recording = { state: 'idle', mode: 'regular', started: null, elapsed: 0, speed: 10, slow: 1, progress: null, output: null, error: null, fastStretches: 0 };
 let recTick = null;
 let limits = null; // GET /api/limits: { rows, errors, fetched_at }, null until the first answer
 const views = new Map(); // open window id → redraw(Set of changed ticket ids | undefined)
@@ -1858,6 +1858,7 @@ async function recordingPanel(p, redraw) {
     const quality = h('select', { id: 'rec-quality' }, [['high', 'High (CRF 18)'], ['medium', 'Medium (CRF 23)'], ['small', 'Small file (CRF 28)']]
       .map(([v, l]) => h('option', { value: v, selected: r.quality === v }, l)));
     const speed = h('input', { type: 'number', id: 'rec-speed', min: 2, max: 60, step: 1, value: r.speed });
+    const slow = h('input', { type: 'number', id: 'rec-slow', min: 1, max: 10, step: 0.5, value: r.slow });
     const output = h('input', { type: 'text', id: 'rec-output', 'data-mic': 'off', size: 40, value: r.output, placeholder: tools.output });
     const keepRaw = h('input', { type: 'checkbox', id: 'rec-keep-raw', checked: r.keepRaw });
     const show = () => {
@@ -1874,7 +1875,7 @@ async function recordingPanel(p, redraw) {
     show();
     const save = () => act(async () => {
       const next = { enabled: enabled.checked, ffmpeg: ffmpeg.value.trim(), monitor: monitor.value === '' ? r.monitor : Number(monitor.value), fps: Number(fps.value),
-        quality: quality.value, speed: Number(speed.value), output: output.value.trim(), keepRaw: keepRaw.checked };
+        quality: quality.value, speed: Number(speed.value), slow: Number(slow.value), output: output.value.trim(), keepRaw: keepRaw.checked };
       Object.assign(r, (await putSettings(scope, { recording: next })).recording);
       tools = await api('GET', '/recording/tools');
       show();
@@ -1887,7 +1888,7 @@ async function recordingPanel(p, redraw) {
       lost,
       h('div', { class: 'field-row' }, h('label', { for: 'rec-fps' }, 'Frame rate'), fps),
       h('div', { class: 'field-row' }, h('label', { for: 'rec-quality' }, 'Quality'), quality),
-      h('div', { class: 'field-row' }, h('label', { for: 'rec-speed' }, 'Fast speed'), speed, 'x'),
+      h('div', { class: 'field-row' }, h('label', { for: 'rec-speed' }, 'Fast speed'), speed, 'x', h('label', { for: 'rec-slow' }, 'Slow speed'), slow, 'x'),
       h('div', { class: 'field-row' }, h('label', { for: 'rec-output' }, 'Output folder'), output, browse(output, 'folder')),
       h('div', { class: 'field-row' }, keepRaw, h('label', { for: 'rec-keep-raw' }, 'Keep the raw recording and markers next to the final video')),
       h('button', { id: 'rec-save', onclick: save }, 'Save'),
@@ -1895,6 +1896,7 @@ async function recordingPanel(p, redraw) {
   }, redraw);
   const raw = h('input', { type: 'text', id: 'rec-raw', 'data-mic': 'off', size: 40, placeholder: '<recording folder>\\raw.mkv' });
   const speed = h('input', { type: 'number', id: 'rec-render-speed', min: 2, max: 60, step: 1, value: settings.recording.speed });
+  const slow = h('input', { type: 'number', id: 'rec-render-slow', min: 1, max: 10, step: 0.5, value: settings.recording.slow });
   const said = h('span', { id: 'rec-render-status' });
   const render = async () => {
     said.textContent = 'Rendering...';
@@ -1904,7 +1906,7 @@ async function recordingPanel(p, redraw) {
       said.textContent = v.error ?? `Done: ${v.output}`;
     };
     try {
-      await api('POST', '/recording/render', { raw: raw.value.trim(), speed: Number(speed.value) });
+      await api('POST', '/recording/render', { raw: raw.value.trim(), speed: Number(speed.value), slow: Number(slow.value) });
     } catch (e) {
       onRecording = null;
       said.textContent = e.message;
@@ -1913,7 +1915,7 @@ async function recordingPanel(p, redraw) {
   p.replaceChildren(...part,
     h('fieldset', {}, h('legend', {}, 'Render again'),
       h('div', { class: 'field-row' }, h('label', { for: 'rec-raw' }, 'Raw recording'), raw, browse(raw, 'file')),
-      h('div', { class: 'field-row' }, h('label', { for: 'rec-render-speed' }, 'Speed'), speed, 'x', h('button', { id: 'rec-render', onclick: render }, 'Render'), said)));
+      h('div', { class: 'field-row' }, h('label', { for: 'rec-render-speed' }, 'Speed'), speed, 'x', h('label', { for: 'rec-render-slow' }, 'Slow'), slow, 'x', h('button', { id: 'rec-render', onclick: render }, 'Render'), said)));
 }
 
 // ---- limits ----
@@ -2140,7 +2142,7 @@ const recTime = () => {
 };
 function recLine() {
   const r = recording;
-  if (r.state === 'recording') return `Recording ${recTime()}, ${r.mode === 'fast' ? `fast ${r.speed}x` : 'regular'} · fast stretches so far: ${r.fastStretches}`;
+  if (r.state === 'recording') return `Recording ${recTime()}, ${r.mode === 'fast' ? `fast ${r.speed}x` : r.slow > 1 ? `regular ${r.slow}x` : 'regular'} · fast stretches so far: ${r.fastStretches}`;
   if (r.state === 'paused') return `Paused ${recTime()} · ${r.error ?? `fast stretches so far: ${r.fastStretches}`}`;
   if (r.state === 'rendering') return `Rendering ${Math.round((r.progress ?? 0) * 100)}%`;
   return r.error ?? '';
@@ -2159,8 +2161,8 @@ function paintRec() {
   m.classList.toggle('fast', fast);
   m.classList.toggle('stop', paused);
   m.firstChild.textContent = paused ? '■' : fast ? '▶▶' : '▶';
-  m.lastChild.textContent = paused ? 'Stop' : fast ? `${r.speed}x` : '1x';
-  m.title = paused ? 'Stop and render' : fast ? `Fast ${r.speed}x. Click for regular` : 'Regular speed. Click for fast';
+  m.lastChild.textContent = paused ? 'Stop' : fast ? `${r.speed}x` : `${r.slow ?? 1}x`;
+  m.title = paused ? 'Stop and render' : fast ? `Fast ${r.speed}x. Click for regular` : r.slow > 1 ? `Regular ${r.slow}x. Click for fast` : 'Regular speed. Click for fast';
   const f = document.querySelector('.k95-board .k95-recording');
   if (f) {
     f.textContent = f.title = recLine();
