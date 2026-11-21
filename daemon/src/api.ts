@@ -746,7 +746,10 @@ const routes: [method: string, path: RegExp, mutation: string | null, handler: (
     if (typeof body.raw !== 'string') throw new HttpError(400, 'raw must be a path');
     const speed = body.speed === undefined ? readConfig('settings', board.repo).recording.speed : body.speed;
     if (typeof speed !== 'number' || !Number.isFinite(speed) || speed < 2 || speed > 60) throw new HttpError(400, 'speed must be a number from 2 to 60');
-    return { status: 200, body: renderAgain(board, body.raw, speed) };
+    const slow = body.slow === undefined ? readConfig('settings', board.repo).recording.slow : body.slow;
+    if (typeof slow !== 'number' || !Number.isFinite(slow) || slow < 1 || slow > 10) throw new HttpError(400, 'slow must be a number from 1 to 10');
+    if (slow >= speed) throw new HttpError(400, 'slow must be lower than speed');
+    return { status: 200, body: renderAgain(board, body.raw, speed, slow) };
   }],
   ['GET', /^\/api\/ready$/, null, async ({ board }) => ({ status: 200, body: await readiness(board) })],
   ['GET', /^\/api\/voice$/, null, async () => ({ status: 200, body: await voiceStatus() })],

@@ -45,10 +45,12 @@ const FILES = {
       fps: z.union([z.literal(30), z.literal(60)]).default(60),
       quality: z.enum(['high', 'medium', 'small']).default('high'),
       speed: z.number().min(2).max(60).default(10),
+      slow: z.number().min(1).max(10).default(1),
       output: z.string().refine((p) => p === '' || isAbsolute(p), 'must be empty or an absolute path').default(''),
       keepRaw: z.boolean().default(true),
     }).strict()
-      .default({ enabled: false, ffmpeg: '', monitor: 0, fps: 60, quality: 'high', speed: 10, output: '', keepRaw: true }),
+      .refine((r) => r.slow < r.speed, { path: ['slow'], message: 'must be lower than recording.speed' })
+      .default({ enabled: false, ffmpeg: '', monitor: 0, fps: 60, quality: 'high', speed: 10, slow: 1, output: '', keepRaw: true }),
     // A running agent whose transcript gains no line for this long is flagged (docs/LIFECYCLE.md → Silent agents). Above the
     // 10 min tool timeout, so a long test run is not flagged.
     idle_minutes: z.number().int().min(1).default(20),
