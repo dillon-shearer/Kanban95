@@ -66,7 +66,7 @@ afterAll(() => {
   rmSync(repo, { recursive: true, force: true });
 });
 
-describe('non-forced worktree removal', () => {
+describe.skipIf(!!process.env.K95_NO_LINKS)('non-forced worktree removal', () => {
   it("the janitor keeps a deleted ticket's dirty worktree with its files, symlinks and junctions unchanged", () => {
     const { id, wt } = worktree();
     writeFileSync(join(wt, 'wip.txt'), 'uncommitted');
@@ -98,7 +98,7 @@ describe('non-forced worktree removal', () => {
   });
 });
 
-describe('forced worktree removal', () => {
+describe.skipIf(!!process.env.K95_NO_LINKS)('forced worktree removal', () => {
   it('removes a worktree with a tracked symlink and a junction without reaching through the junction', () => {
     const { id, wt } = worktree();
     writeFileSync(join(wt, 'build.log'), 'left over');

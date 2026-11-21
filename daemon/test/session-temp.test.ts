@@ -99,7 +99,7 @@ describe('session temp folder', () => {
     await s.done;
   });
 
-  it('removing a temp folder unlinks a junction inside it and leaves its target', async () => {
+  it.skipIf(!!process.env.K95_NO_LINKS)('removing a temp folder unlinks a junction inside it and leaves its target', async () => {
     srv = await start({ repo });
     const target = mkdtempSync(join(tmpdir(), 'k95-target-'));
     writeFileSync(join(target, 'keep.txt'), 'keep');
