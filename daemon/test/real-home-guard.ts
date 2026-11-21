@@ -5,7 +5,7 @@
 // `k95-*` trust entry another worktree's run writes at the same time is not this run's and does not fail it.
 // The run dir is resolved to its long form, so an 8.3 short tmpdir() (CI's RUNNER~1) never reaches a test's paths.
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -19,8 +19,34 @@ const keys = () => {
 };
 const traces = () => ({ bak: existsSync(`${state}.kanban95.bak`), board: existsSync(join(homedir(), '.kanban95')) });
 
+function linkable(dir: string): boolean {
+  const probe = mkdtempSync(join(dir, 'k95-probe-'));
+  try {
+    symlinkSync(probe, join(probe, 'link'), 'junction');
+    return true;
+  } catch {
+    return false;
+  } finally {
+    rmSync(probe, { recursive: true, force: true });
+  }
+}
+
+function runBase(inherited: string, os: string): { base: string; links: boolean } {
+  if (linkable(inherited)) return { base: inherited, links: true };
+  if (inherited !== os && existsSync(os) && linkable(os)) return { base: os, links: true };
+  return { base: inherited, links: false };
+}
+
+const osTemp = () => (process.platform === 'win32' ? join(process.env.LOCALAPPDATA ?? '', 'Temp') : '/tmp');
+
 export default function setup() {
-  const run = realpathSync.native(mkdtempSync(join(tmpdir(), 'k95-run-')));
+  const { base, links } = runBase(tmpdir(), osTemp());
+  if (base !== tmpdir()) console.log(`test temp: ${tmpdir()} cannot hold a junction, using ${base}`);
+  if (!links) {
+    process.env.K95_NO_LINKS = '1';
+    console.log(`skipping the junction and symlink tests: neither ${tmpdir()} nor ${osTemp()} can hold a junction`);
+  }
+  const run = realpathSync.native(mkdtempSync(join(base, 'k95-run-')));
   process.env.TEMP = process.env.TMP = process.env.TMPDIR = run;
   process.env.PSModuleAnalysisCachePath = join(run, 'ModuleAnalysisCache');
   const mine = resolve(run).replaceAll('\\', '/') + '/'; // Claude Code's key form (trust.ts)

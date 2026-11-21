@@ -58,7 +58,7 @@ afterAll(() => {
   rmSync(repo, { recursive: true, force: true });
 });
 
-describe('removing a worktree with links into the main checkout', () => {
+describe.skipIf(!!process.env.K95_NO_LINKS)('removing a worktree with links into the main checkout', () => {
   it('unlinks a node_modules junction at the root and removes the worktree', () => {
     const id = ticket(true);
     const wt = createWorktree(repo, id).path;
