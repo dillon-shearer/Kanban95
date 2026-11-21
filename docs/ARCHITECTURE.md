@@ -36,6 +36,7 @@ Living document. Update it in the same change that alters the shape described he
   - `mcp-doc.ts` renders `docs/MCP.md` from the `mcp.ts` tool table.
   - `memlog.ts` appends free memory and each live session's process-tree working set to `.kanban95/memory.log` every 30 s, plus a line per launch, kill and merge (`docs/DATA.md`).
   - `merge.ts` is the one serialized merge queue.
+  - `office.ts` reads the text of a .docx, .xlsx or .pptx as Markdown for the `read_office_file` tool: a small zip reader on `node:zlib` and a regex walk of the part XML, read only, no dependency.
   - `output.ts` writes and reads each ended run's terminal output, gzipped, in `.kanban95/output/`.
   - `pick.ts` is the native file or folder dialog the shell opens for the page: one open request per daemon, its token, its result and its 5-minute timeout (Hosted boards, `pick=`).
   - `pty.ts` spawns the CLI in a pseudo-terminal with an env allowlist (the launcher replaces `TEMP`, `TMP` and `TMPDIR` with the session's temp folder) and keeps a scrollback capped at 2000 lines and 2 MiB.
@@ -368,6 +369,7 @@ daemon/           src/ (see Daemon above):
                     mcp-doc.ts
                     memlog.ts
                     merge.ts
+                    office.ts
                     pty.ts
                     ready.ts
                     requirements.ts

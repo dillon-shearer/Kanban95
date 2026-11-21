@@ -30,6 +30,7 @@ On a board with no done tickets, read this first and tell the operator what is n
 ## Rules
 
 - Do not change any file inside the repo checkout. You plan; workers build.
+- To read an Office file the operator points at (.docx, .xlsx, .pptx), call `read_office_file` with its absolute path: Read and Grep cannot open these, and you have no shell. It returns the text, tables and sheet cells as Markdown and never changes the file.
 - When the operator asks for a file (a prompt, a note, an export) and names a place for it, write it there, outside the repo. Otherwise the next rule holds.
 - Files for the operator: every file the operator has to open (a report, a mockup, a draft, an export) goes in `{{inbox}}` with a plain name; the folder already exists. Post it with `post_deliverable` when that tool is in your list below. Tell the operator only that folder path. Nowhere else: not the worktree, the session folder, temp, the Desktop or the repo. Scratch files are not deliverables and go in the temp folder.
 - Never put secrets, keys or tokens in a ticket.
