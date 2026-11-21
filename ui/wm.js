@@ -39,29 +39,35 @@ export function setZoom(f) {
 // ---- terminal slots ----
 // The terminal region is the desktop between the desktop icons and the action column: from just right of the icon column, so
 // the icons always show, to the left edge of the leftmost open, non-minimized, non-maximized window in ACTION (the desktop's
-// right edge when none is open, or when that leaves less than MIN_REGION px), full height. The grid always fits what is shown:
+// right edge when none is open), full height. The grid always fits what is shown:
 // its members are the tiled windows (opened with `tile`) that are shown (not minimized, not maximized) and not free, packed
 // into slots 0..n-1 in reading order, in the order of the slot each last held, new ones after. The grid is the first SLOTS
-// row whose count covers n. The last row's members share the full region width (5 → 3 on top, 2 below at half the width
-// each), so there is never a hole. Every change that adds or removes a member repacks: open, close,
+// row whose count covers n, with no more columns than fit MIN_WIDTH (.k95-win's min-width) each: a narrower region gets
+// fewer columns and more rows, and one under MIN_REGION one column, with the windows' min-width lowered to the region when
+// it is under MIN_WIDTH, so a terminal never spills onto the action column. The last row's members share the full region
+// width (5 → 3 on top, 2 below at half the width each), so there is never a hole. Every change that adds or removes a member repacks: open, close,
 // minimize, restore, maximize, unmaximize, drag-out, rejoin, and a change of the region.
 // Dragged by its title bar or resized from an edge, a tiled window is free: it stays where it was left and the rest repack. A click inside it, a repack while the pointer is down, or a
 // release without a press on its title bar or edge never frees it; a double-click on its title bar makes it a member again, after
-// the others. Past the last row's count a window is not tiled: it stays where it opened (`place`) and joins when one
-// leaves. `setTiling(false)` (Settings → Board,
+// the others. Past the last row's count a window is not tiled: it is placed inside the region at most the region's size
+// (`place`) and joins when one leaves. `setTiling(false)` (Settings → Board,
 // `terminals.tile`) stops tiling: terminals open at the least-covered spot and stay where they are dragged.
 // To change the arrangement, edit SLOTS: [up to n windows, columns, rows], ascending n. [8, 4, 2] keeps 7 and 8 to two rows
 // (4 + 3, 4 + 4); 10 and 11 are 4 + 4 + 2 and 4 + 4 + 3.
 export const SLOTS = [[1, 1, 1], [2, 2, 1], [3, 3, 1], [4, 2, 2], [6, 3, 2], [8, 4, 2], [9, 3, 3], [12, 4, 3]];
 const ACTION = ['board', 'inbox', 'notepad'];
 const MIN_REGION = 240;
+const MIN_WIDTH = 220;
 
 let tiling = null;
 let tileOn = true;
 /** Turns terminal slots on (every tiled window, free or not, joins the grid now) or off (they stay where they are). */
 export function setTiling(on) {
   tileOn = on;
-  if (on) for (const w of wins.values()) w.free = false;
+  for (const w of wins.values()) {
+    if (on) w.free = false;
+    else if (w.tile) w.el.style.minWidth = '';
+  }
   retile();
 }
 /** Packs the grid's members into slots 0..n-1 of the grid for n in the current region. */
@@ -74,22 +80,32 @@ function retile() {
   const L = icons ? icons.offsetLeft + icons.offsetWidth + 4 : 0;
   const shown = (el) => !el.hidden && !el.classList.contains('max');
   const edge = Math.min(W, ...ACTION.map((id) => wins.get(id)?.el).filter((el) => el && shown(el)).map((el) => el.offsetLeft));
-  const R = edge - L < MIN_REGION ? W : edge;
+  const R = Math.max(edge, L + 1);
   // A window coming back to the slot it last held goes ahead of the one packed into it meanwhile; new ones (no slot) go last.
   const list = [...wins.values()].filter((w) => w.tile && !w.free && shown(w.el))
     .sort((a, b) => (a.slot ?? Infinity) - (b.slot ?? Infinity) || a.packed - b.packed);
   for (const w of wins.values()) w.packed = false;
   const members = list.slice(0, SLOTS.at(-1)[0]);
-  for (const w of list.slice(members.length)) w.slot = null; // stays where it opened until one leaves
+  for (const w of list.slice(members.length)) {
+    w.slot = null; // stays in the region where it opened until one leaves
+    const el = w.el;
+    if (el.offsetLeft >= L && el.offsetLeft + el.offsetWidth <= R && el.offsetTop + el.offsetHeight <= H) continue;
+    const [ww, hh] = [Math.min(el.offsetWidth, R - L), Math.min(el.offsetHeight, H)];
+    const p = place(ww, hh, L, R);
+    Object.assign(el.style, { left: `${p.x}px`, top: `${p.y}px`, width: `${ww}px`, height: `${hh}px`, minWidth: ww < MIN_WIDTH ? `${ww}px` : '' });
+  }
   members.forEach((w, i) => Object.assign(w, { slot: i, packed: true, before: undefined }));
   if (!members.length) return;
-  const [, cols, rows] = SLOTS.find(([n]) => n >= members.length);
+  const fit = R - L < MIN_REGION ? 1 : Math.max(1, Math.floor((R - L) / MIN_WIDTH));
+  let [, cols, rows] = SLOTS.find(([n]) => n >= members.length);
+  if (cols > fit) [cols, rows] = [fit, Math.ceil(members.length / fit)];
   for (const { el, slot } of members) {
     const [c, r] = [slot % cols, Math.floor(slot / cols)];
     const across = Math.min(cols, members.length - r * cols); // the last row stretches to the full width
     const x = L + Math.round((c * (R - L)) / across);
     const y = Math.round((r * H) / rows);
-    Object.assign(el.style, { left: `${x}px`, top: `${y}px`, width: `${L + Math.round(((c + 1) * (R - L)) / across) - x}px`, height: `${Math.round(((r + 1) * H) / rows) - y}px` });
+    const w = L + Math.round(((c + 1) * (R - L)) / across) - x;
+    Object.assign(el.style, { left: `${x}px`, top: `${y}px`, width: `${w}px`, height: `${Math.round(((r + 1) * H) / rows) - y}px`, minWidth: w < MIN_WIDTH ? `${w}px` : '' });
   }
 }
 /** retile() once things settle: a drag of the Board moves the region many times a second. */
@@ -259,7 +275,10 @@ export function open(id, { title, w = 480, h: height = 320, persist = false, til
   el.addEventListener('pointerup', () => {
     const { before } = win;
     win.before = undefined;
-    if (tile && before && !el.classList.contains('max') && JSON.stringify(rect(el)) !== before) Object.assign(win, { slot: null, free: true });
+    if (tile && before && !el.classList.contains('max') && JSON.stringify(rect(el)) !== before) {
+      Object.assign(win, { slot: null, free: true });
+      el.style.minWidth = '';
+    }
     save();
     if (shapes(id)) retileSoon();
   });
@@ -274,22 +293,21 @@ export function open(id, { title, w = 480, h: height = 320, persist = false, til
 }
 
 /**
- * Where a w×h window with no saved geometry opens: of the desktop corners and a grid stepping by half a window, the spot
+ * Where a w×h window with no saved geometry opens, between x `L` and `R` (the whole desktop width by default): of the corners and a grid stepping by half a window, the spot
  * that overlaps the least total area of the open, non-minimized windows; on a tie the top-most, then left-most.
  * With room that is a free spot; on a full desktop, the least covered one.
  */
 // ponytail: O(candidates × windows), about (2·W/w)·(2·H/h) candidates, so ~50 × a few dozen windows; fine for a desktop.
 // A free-rectangle search would find gaps off the half-window grid if windows ever get many or small.
-function place(w, h) {
-  const W = desktop.clientWidth;
+function place(w, h, L = 0, R = desktop.clientWidth) {
   const H = desktop.clientHeight;
-  const mx = Math.max(0, W - w);
+  const mx = Math.max(L, R - w);
   const my = Math.max(0, H - h);
   const boxes = [...wins.values()].filter((o) => !o.el.hidden)
     .map(({ el }) => [el.offsetLeft, el.offsetTop, el.offsetLeft + el.offsetWidth, el.offsetTop + el.offsetHeight]);
-  const xs = new Set([0, mx]);
+  const xs = new Set([L, mx]);
   const ys = new Set([0, my]);
-  for (let x = 0; x < mx; x += w / 2) xs.add(Math.round(x));
+  for (let x = L; x < mx; x += w / 2) xs.add(Math.round(x));
   for (let y = 0; y < my; y += h / 2) ys.add(Math.round(y));
   let best = null;
   for (const y of [...ys].sort((a, b) => a - b)) {
